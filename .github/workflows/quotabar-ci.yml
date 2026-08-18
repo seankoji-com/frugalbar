@@ -1,10 +1,21 @@
 # QuotaBar — Swift build & test workflow
 #
-# Runs on GitHub-hosted macOS runners. A previous revision pointed this at a
-# self-hosted pool labelled [self-hosted, macOS, ARM64, mac]; no runner in the
-# org carries the `macOS` or `mac` labels, so every job queued indefinitely and
-# CI never executed once. If a self-hosted macOS pool is provisioned later,
-# switch `runs-on` back — but only after confirming the labels exist.
+# Runs on the org's self-hosted macOS pool.
+#
+# Why not `macos-latest`: this repo is private, so GitHub-hosted macOS minutes
+# are billed at a 10x multiplier, and the account currently rejects those jobs
+# ("recent account payments have failed or your spending limit needs to be
+# increased"). The self-hosted pool is the working path.
+#
+# Why the labels matter: an earlier revision targeted this same label set while
+# **no runner carried `macOS` or `mac`**, so every job queued until it expired
+# and CI never executed once. Before changing `runs-on`, confirm the labels
+# exist:
+#
+#   gh api -X GET orgs/seankoji-com/actions/runners \
+#     --jq '.runners[] | "\(.name) \(.status) \([.labels[].name]|join(","))"'
+#
+# To provision more: see the `mac-runners` skill (`--macos` for native runners).
 
 name: QuotaBar CI
 
@@ -31,7 +42,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build & Test (macOS)
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS, ARM64, mac]
     # A hung job must fail, not queue forever.
     timeout-minutes: 20
     defaults:
@@ -46,16 +57,21 @@ jobs:
           xcode-select -p
           swift --version
 
-      # Warnings are how this project's defects announced themselves last time;
-      # treat them as failures so the zero-warning state cannot silently rot.
+      # Warnings are how this project's defects announced themselves; treat
+      # them as failures so the zero-warning state cannot silently rot.
       - name: Build (warnings are errors)
         run: swift build -c debug -Xswiftc -warnings-as-errors
 
       - name: Run tests
         run: swift test -c debug --parallel
 
-      # Tests must be hermetic. Re-running them proves there is no ordering or
-      # clock dependence — a formatter that truncated instead of rounding used
-      # to fail roughly one run in four.
+      # Tests must be hermetic. Re-running proves there is no ordering or clock
+      # dependence — a formatter that truncated instead of rounding used to
+      # fail roughly one run in four.
       - name: Re-run tests (flake check)
         run: swift test -c debug --parallel
+
+      # Self-hosted runners persist state between jobs; don't leak build output.
+      - name: Clean workspace
+        if: always()
+        run: rm -rf .build
