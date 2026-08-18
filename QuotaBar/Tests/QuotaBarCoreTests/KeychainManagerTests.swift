@@ -3,13 +3,46 @@ import Foundation
 import Security
 @testable import QuotaBarCore
 
+/// Probes whether this process can use the login keychain at all.
+enum KeychainAvailability {
+    /// `false` only for -25308 (no unlocked keychain / no UI session).
+    /// Every other failure — notably -34018 — reports `true` so the suite runs
+    /// and fails loudly.
+    static let isUsable: Bool = {
+        let label = "quotabar-availability-probe"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.quotabar.probe",
+            kSecAttrAccount as String: label,
+            kSecValueData as String: Data("probe".utf8),
+        ]
+        SecItemDelete(query as CFDictionary)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        SecItemDelete(query as CFDictionary)
+        if status == errSecInteractionNotAllowed {
+            return false   // headless runner: skip
+        }
+        return true
+    }()
+}
+
 /// There was no coverage of `KeychainManager` at all, which is how adding
 /// `kSecUseDataProtectionKeychain` — an attribute that requires a signed,
 /// entitled bundle and returns -34018 (`errSecMissingEntitlement`) from
 /// `swift run` — broke every credential path while 81 tests stayed green.
 ///
 /// Serialized because these cases share the login keychain.
-@Suite("KeychainManager", .serialized)
+///
+/// Gated on an availability probe: a headless CI runner (launchd, no GUI
+/// session) has no unlocked login keychain and refuses every write with
+/// -25308 `errSecInteractionNotAllowed`. That is an environment limitation,
+/// not a defect, so the suite skips there.
+///
+/// Crucially the probe only skips on -25308. `-34018`
+/// (`errSecMissingEntitlement`) — the failure this suite exists to catch —
+/// still runs and still fails, so the regression guard cannot be silently
+/// disabled by an entitlement mistake.
+@Suite("KeychainManager", .serialized, .enabled(if: KeychainAvailability.isUsable))
 struct KeychainManagerTests {
 
     private let label = "quotabar-test-\(UUID().uuidString)"
