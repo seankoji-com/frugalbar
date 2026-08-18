@@ -31,7 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
-            rootView: PopoverRootView(store: store)
+            rootView: PopoverRootView(
+                store: store,
+                onOpenSettings: { [weak self] in self?.openSettings() }
+            )
         )
         self.popover = popover
 
@@ -56,6 +59,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await BackgroundScheduler.shared.stop()
             if let token { await BackgroundScheduler.shared.removeHandler(token) }
         }
+    }
+
+    func openSettings() {
+        popover?.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = settingsWindow {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "QuotaBar Preferences"
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SettingsView())
+        self.settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func applyStatusItemPresentation() {
