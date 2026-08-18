@@ -70,4 +70,22 @@ struct ResetCountdownBadgeTests {
         #expect(!out.hasSuffix("m"))
         #expect(!out.hasSuffix("s"))
     }
+
+    @Test("sub-second positive duration reports 1s, never 0s")
+    func subSecondPositive() {
+        #expect(ResetCountdownBadge.format(inSeconds(0.2), now: now) == "1s")
+        #expect(ResetCountdownBadge.description(inSeconds(0.2), now: now) == "Resets in 1 second")
+    }
+
+    @Test("59.6s rolls into minutes branch rather than producing 60s")
+    func fiftyNinePointSixSeconds() {
+        #expect(ResetCountdownBadge.format(inSeconds(59.6), now: now) == "1m")
+        #expect(ResetCountdownBadge.description(inSeconds(59.6), now: now) == "Resets in 1 minute")
+    }
+
+    @Test("boundary just before a day rolls into absolute date")
+    func justUnderOneDay() {
+        let out = ResetCountdownBadge.format(inSeconds(86399.6), now: now)
+        #expect(!out.contains("24h"))
+    }
 }

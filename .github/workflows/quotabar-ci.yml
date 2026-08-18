@@ -50,7 +50,7 @@ jobs:
         working-directory: QuotaBar
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Show toolchain
         run: |

@@ -29,15 +29,10 @@ public final class KeychainManager: Sendable {
     public func set(key: String, label: String) throws {
         guard let data = key.data(using: .utf8) else { throw KeychainError.invalidData }
 
-        // Delete existing first
-        try? delete(label: label)
-
         let query: [String: Any] = [
             kSecClass as String:              kSecClassGenericPassword,
             kSecAttrService as String:        service,
             kSecAttrAccount as String:        label,
-            kSecValueData as String:          data,
-            kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             // Never sync a credential to iCloud.
             //
             // NOTE: kSecUseDataProtectionKeychain is deliberately *not* set.
@@ -47,10 +42,25 @@ public final class KeychainManager: Sendable {
             // all. Add it together with proper .app signing, not before.
             kSecAttrSynchronizable as String: false,
         ]
+        let attributes: [String: Any] = [
+            kSecValueData as String:          data,
+            kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
 
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw KeychainError.unknown(status)
+        var addQuery = query
+        for (k, v) in attributes { addQuery[k] = v }
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+
+        switch addStatus {
+        case errSecSuccess:
+            return
+        case errSecDuplicateItem:
+            let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            guard updateStatus == errSecSuccess else {
+                throw KeychainError.unknown(updateStatus)
+            }
+        default:
+            throw KeychainError.unknown(addStatus)
         }
     }
 
@@ -141,6 +151,7 @@ public enum CredentialStore {
         let out = Pipe()
         task.standardOutput = out
         task.standardError = Pipe()   // don't inherit stderr into the app's log
+        task.standardInput = FileHandle.nullDevice
 
         // `run()` throws when the binary cannot be launched. The previous code
         // used `try?` and then read `terminationStatus` regardless — which
@@ -154,6 +165,12 @@ public enum CredentialStore {
         // Read before waiting: waiting first can deadlock if the child fills
         // the pipe buffer.
         let data = out.fileHandleForReading.readDataToEndOfFile()
+        
+        // Kill the process if it hasn't exited within 5 seconds.
+        let deadline = DispatchTime.now() + 5
+        DispatchQueue.global().asyncAfter(deadline: deadline) { [task] in
+            if task.isRunning { task.terminate() }
+        }
         task.waitUntilExit()
         guard task.terminationStatus == 0 else { return nil }
 

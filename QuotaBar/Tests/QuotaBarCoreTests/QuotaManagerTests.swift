@@ -6,12 +6,22 @@ import Foundation
 
 /// Counts invocations without touching a wall clock — safe for asserting
 /// "fetched exactly once" style expectations.
-private actor InvocationCounter {
-    private(set) var value = 0
+private final class InvocationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+
     @discardableResult
     func increment() -> Int {
-        value += 1
-        return value
+        lock.lock()
+        defer { lock.unlock() }
+        _value += 1
+        return _value
     }
 }
 
@@ -32,7 +42,7 @@ private struct StubProvider: QuotaProvider {
     let behavior: Behavior
 
     func fetchSnapshot() async throws -> QuotaSnapshot {
-        await counter?.increment()
+        counter?.increment()
         switch behavior {
         case .succeed(let urgency):
             return QuotaSnapshot(
@@ -100,7 +110,7 @@ struct QuotaManagerTests {
         )
         _ = await manager.refresh()
         _ = await manager.refresh()
-        let count = await counter.value
+        let count = counter.value
         #expect(count == 1)
     }
 
@@ -115,7 +125,7 @@ struct QuotaManagerTests {
         )
         _ = await manager.refresh()
         _ = await manager.forceRefresh()
-        let count = await counter.value
+        let count = counter.value
         #expect(count == 2)
     }
 
@@ -135,7 +145,7 @@ struct QuotaManagerTests {
         async let b = manager.refresh()
         async let c = manager.refresh()
         _ = await (a, b, c)
-        let count = await counter.value
+        let count = counter.value
         #expect(count == 1)
     }
 
@@ -180,5 +190,26 @@ struct QuotaManagerTests {
         _ = await manager.forceRefresh()
         let worst = await manager.worstUrgency()
         #expect(worst == .critical)
+    }
+
+    @Test("transient provider error preserves existing measured cache entry")
+    func transientErrorPreservesMeasuredCache() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            providerFactory: {
+                let call = counter.increment()
+                if call == 1 {
+                    return [StubProvider(vendorId: .claude, behavior: .succeed(.warning))]
+                } else {
+                    return [StubProvider(vendorId: .claude, behavior: .throwError(.badResponse))]
+                }
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .measured(.warning))
+
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .measured(.warning))
     }
 }

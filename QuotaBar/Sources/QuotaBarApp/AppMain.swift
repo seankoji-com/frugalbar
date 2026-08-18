@@ -83,7 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(description)
 
         // Unreadable providers are a decoration, never a replacement icon.
-        button.title = MenuBarPresentation.showsUnavailableBadge(for: summary) ? " ·" : ""
+        // The unavailable badge is reported via the accessibility label and
+        // tooltip rather than a text suffix, which caused width jitter on a
+        // variableLength status item as providers toggled between states.
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -105,6 +107,6 @@ struct QuotaBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        Settings { EmptyView() }
+        Settings { SettingsView() }
     }
 }

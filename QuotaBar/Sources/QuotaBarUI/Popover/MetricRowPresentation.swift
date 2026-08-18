@@ -56,7 +56,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         case .count(let remaining, let limit, _):
             "\(remaining.formatted())/\(limit.formatted())"
         case .currency(let balance, let limit, let spent, let code):
-            limit.map { "\(currency(balance, code)) of \(currency($0, code))" }
+            limit.map { "\(currency(balance, code)) left of \(currency($0, code))" }
                 ?? currency(spent ?? balance, code)
         case .subscription(let tierName, _):
             tierName

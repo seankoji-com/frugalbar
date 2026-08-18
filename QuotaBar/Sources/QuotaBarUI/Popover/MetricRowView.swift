@@ -59,7 +59,7 @@ struct MetricRowView: View {
                 .truncationMode(.tail)
                 .layoutPriority(1)
 
-            if showsReset {
+            if showsReset, snapshot.resetsAt != nil {
                 Text(p.resetLabel)
                     .font(.caption2)
                     .monospacedDigit()
