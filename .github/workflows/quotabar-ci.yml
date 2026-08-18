@@ -1,11 +1,10 @@
 # QuotaBar — Swift build & test workflow
 #
-# Builds the QuotaBar Swift package and runs all tests.
-# Uses the on-demand macOS native runner pool on carey-mac
-# (see wiki: services/github-runners.md § macOS pool).
-# If the mac pool is unavailable, switch to macos-latest.
-#
-# To provision: ssh carey-mac '~/repos/mac-runners-provision.sh 2 --macos'
+# Runs on GitHub-hosted macOS runners. A previous revision pointed this at a
+# self-hosted pool labelled [self-hosted, macOS, ARM64, mac]; no runner in the
+# org carries the `macOS` or `mac` labels, so every job queued indefinitely and
+# CI never executed once. If a self-hosted macOS pool is provisioned later,
+# switch `runs-on` back — but only after confirming the labels exist.
 
 name: QuotaBar CI
 
@@ -14,20 +13,27 @@ on:
     branches: [main, quotabar-swift-prototype]
     paths:
       - "QuotaBar/**"
+      - ".github/workflows/quotabar-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "QuotaBar/**"
+      - ".github/workflows/quotabar-ci.yml"
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build & Test (macOS)
-    runs-on: [self-hosted, macOS, ARM64, mac]
+    runs-on: macos-latest
+    # A hung job must fail, not queue forever.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: QuotaBar
@@ -35,16 +41,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Select Xcode
+      - name: Show toolchain
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer 2>/dev/null \
-            || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcode-select -p
+          swift --version
 
-      - name: Show Swift version
-        run: swift --version
-
-      - name: Build (debug)
-        run: swift build -c debug
+      # Warnings are how this project's defects announced themselves last time;
+      # treat them as failures so the zero-warning state cannot silently rot.
+      - name: Build (warnings are errors)
+        run: swift build -c debug -Xswiftc -warnings-as-errors
 
       - name: Run tests
+        run: swift test -c debug --parallel
+
+      # Tests must be hermetic. Re-running them proves there is no ordering or
+      # clock dependence — a formatter that truncated instead of rounding used
+      # to fail roughly one run in four.
+      - name: Re-run tests (flake check)
         run: swift test -c debug --parallel

@@ -5,10 +5,10 @@ import Foundation
 @Suite("consumptionFraction")
 struct ConsumptionFractionTests {
 
-    private func snapshot(_ metric: MetricType) -> QuotaSnapshot {
+    private func snapshot(_ metric: MetricType, status: ProviderStatus = .healthy) -> QuotaSnapshot {
         QuotaSnapshot(
             id: "t", vendorId: .githubRest, displayName: "t",
-            category: .developerLimits, metric: metric, status: .healthy,
+            category: .developerLimits, metric: metric, status: status,
             resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
         )
     }
@@ -26,45 +26,88 @@ struct ConsumptionFractionTests {
         #expect(snapshot(.count(remaining: 100, limit: 100, unitName: "u")).consumptionFraction == 0.0)
     }
 
-    @Test("count with a zero limit does not divide by zero")
+    @Test("count with a zero limit has no denominator, so no fraction — not a fake 0%")
     func countZeroLimit() {
-        #expect(snapshot(.count(remaining: 0, limit: 0, unitName: "u")).consumptionFraction == 0.0)
+        #expect(snapshot(.count(remaining: 0, limit: 0, unitName: "u")).consumptionFraction == nil)
     }
 
     @Test("currency inverts balance against limit (allow floating point)")
-    func currency() {
+    func currency() throws {
         let m = MetricType.currency(balance: 5, limit: 20, spent: 15, currencyCode: "USD")
-        let frac = snapshot(m).consumptionFraction ?? 0
+        let frac = try #require(snapshot(m).consumptionFraction)
         #expect(abs(frac - 0.75) < 0.001)
     }
 
-    @Test("currency without a limit reports no consumption")
+    @Test("currency without a limit reports no consumption fraction, not zero")
     func currencyNoLimit() {
         let m = MetricType.currency(balance: 5, limit: nil, spent: nil, currencyCode: "USD")
-        #expect(snapshot(m).consumptionFraction == 0.0)
+        #expect(snapshot(m).consumptionFraction == nil)
+    }
+
+    @Test("currency with a zero limit reports no consumption fraction, not a divide-by-zero")
+    func currencyZeroLimit() {
+        let m = MetricType.currency(balance: 5, limit: 0, spent: 5, currencyCode: "USD")
+        #expect(snapshot(m).consumptionFraction == nil)
     }
 
     @Test("subscription has no consumption dimension (nil)")
     func subscription() {
         #expect(snapshot(.subscription(tierName: "Pro", renewalDate: nil)).consumptionFraction == nil)
     }
+
+    @Test("an unmeasured status yields nil regardless of the underlying metric")
+    func unmeasuredStatusYieldsNil() {
+        let m = MetricType.percentage(usedFraction: 0.9, displayDetails: nil)
+        #expect(snapshot(m, status: .unavailable(.notConfigured)).consumptionFraction == nil)
+        #expect(snapshot(m, status: .rateLimited(retryAfter: nil)).consumptionFraction != nil) // rateLimited is still "measured" confidence
+    }
 }
 
 @Suite("ProviderStatus")
 struct ProviderStatusTests {
 
-    @Test("severity order")
-    func severity() {
-        #expect(ProviderStatus.healthy.severity == 0)
-        #expect(ProviderStatus.warning.severity == 1)
-        #expect(ProviderStatus.critical.severity == 2)
-        #expect(ProviderStatus.unauthenticated.severity == 3)
-        #expect(ProviderStatus.unsupported("x").severity == 3)
-        #expect(ProviderStatus.rateLimited(retryAfter: nil).severity == 3)
-        #expect(ProviderStatus.networkError("x").severity == 3)
+    @Test("urgency ordering")
+    func urgencyOrdering() {
+        #expect(Urgency.none < .warning)
+        #expect(Urgency.warning < .critical)
     }
 
-    @Test("unsupported equality by reason")
+    @Test("measured urgency passes through")
+    func measuredUrgency() {
+        #expect(ProviderStatus.measured(.warning).urgency == .warning)
+        #expect(ProviderStatus.healthy.urgency == .none)
+        #expect(ProviderStatus.warning.urgency == .warning)
+        #expect(ProviderStatus.critical.urgency == .critical)
+    }
+
+    @Test("unavailable never carries urgency, however severe the underlying reason")
+    func unavailableHasNoUrgency() {
+        #expect(ProviderStatus.unavailable(.credentialRejected).urgency == .none)
+        #expect(ProviderStatus.unauthenticated.urgency == .none)
+        #expect(ProviderStatus.unsupported("x").urgency == .none)
+    }
+
+    @Test("rateLimited is always critical urgency")
+    func rateLimitedIsCritical() {
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).urgency == .critical)
+    }
+
+    @Test("confidence: measured and rateLimited are measured, unavailable is not")
+    func confidence() {
+        #expect(ProviderStatus.healthy.confidence == .measured)
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).confidence == .measured)
+        #expect(ProviderStatus.unauthenticated.confidence == .unavailable)
+        #expect(ProviderStatus.unsupported("x").confidence == .unavailable)
+    }
+
+    @Test("unavailableReason surfaces only on .unavailable")
+    func unavailableReasonAccessor() {
+        #expect(ProviderStatus.unauthenticated.unavailableReason == .notConfigured)
+        #expect(ProviderStatus.healthy.unavailableReason == nil)
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).unavailableReason == nil)
+    }
+
+    @Test("unsupported equality is by reason string")
     func unsupportedEquality() {
         #expect(ProviderStatus.unsupported("a") == ProviderStatus.unsupported("a"))
         #expect(ProviderStatus.unsupported("a") != ProviderStatus.unsupported("b"))

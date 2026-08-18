@@ -2,33 +2,72 @@ import Testing
 import Foundation
 @testable import QuotaBarUI
 
-@Suite("ResetCountdownBadge.format")
+/// All cases pass an explicit `now` so nothing races the wall clock.
+/// The previous suite built dates from `Date()` and truncated, which made
+/// `description_minutes` fail roughly one run in four.
+@Suite("ResetCountdownBadge")
 struct ResetCountdownBadgeTests {
+
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private func inSeconds(_ s: TimeInterval) -> Date { now.addingTimeInterval(s) }
 
     @Test("nil renders as an em dash")
     func nilDate() {
-        #expect(ResetCountdownBadge.format(nil) == "—")
+        #expect(ResetCountdownBadge.format(nil, now: now) == "—")
+        #expect(ResetCountdownBadge.description(nil, now: now) == "—")
     }
 
     @Test("a past date reads as Now")
     func past() {
-        #expect(ResetCountdownBadge.format(Date().addingTimeInterval(-60)) == "Now")
+        #expect(ResetCountdownBadge.format(inSeconds(-60), now: now) == "Now")
+        #expect(ResetCountdownBadge.description(inSeconds(-1), now: now) == "Resets now")
     }
 
-    @Test("sub-minute renders in seconds")
+    @Test("seconds")
     func seconds() {
-        #expect(ResetCountdownBadge.format(Date().addingTimeInterval(30)).hasSuffix("s"))
+        #expect(ResetCountdownBadge.format(inSeconds(30), now: now) == "30s")
     }
 
-    @Test("sub-hour renders in minutes")
+    /// The regression that made the old suite flaky: 179.97s must round to 3m,
+    /// not truncate to 2m.
+    @Test("just under three minutes rounds to 3m, it does not truncate to 2m")
+    func roundsRatherThanTruncates() {
+        #expect(ResetCountdownBadge.format(inSeconds(179.97), now: now) == "3m")
+        #expect(ResetCountdownBadge.description(inSeconds(179.97), now: now) == "Resets in 3 minutes")
+    }
+
+    @Test("exact minutes")
     func minutes() {
-        #expect(ResetCountdownBadge.format(Date().addingTimeInterval(600)).hasSuffix("m"))
+        #expect(ResetCountdownBadge.format(inSeconds(180), now: now) == "3m")
+        #expect(ResetCountdownBadge.format(inSeconds(600), now: now) == "10m")
     }
 
-    @Test("sub-day renders hours and minutes")
-    func hours() {
-        let out = ResetCountdownBadge.format(Date().addingTimeInterval(3 * 3600 + 300))
-        #expect(out.contains("h"))
-        #expect(out.contains("m"))
+    @Test("one minute is singular")
+    func singularMinute() {
+        #expect(ResetCountdownBadge.description(inSeconds(60), now: now) == "Resets in 1 minute")
+    }
+
+    /// Rounding must never produce "60m" — that belongs in the hours branch.
+    /// The old suite accepted "60m" as a valid answer to paper over a flake.
+    @Test("59m30s does not round up into a bogus 60m")
+    func neverReportsSixtyMinutes() {
+        let out = ResetCountdownBadge.format(inSeconds(3570), now: now)
+        #expect(out == "59m")
+        #expect(out != "60m")
+    }
+
+    @Test("hours and minutes")
+    func hoursMinutes() {
+        #expect(ResetCountdownBadge.format(inSeconds(3600), now: now) == "1h 0m")
+        #expect(ResetCountdownBadge.format(inSeconds(3660), now: now) == "1h 1m")
+        #expect(ResetCountdownBadge.format(inSeconds(3 * 3600 + 300), now: now) == "3h 5m")
+    }
+
+    @Test("beyond a day falls back to an absolute date")
+    func absolute() {
+        let out = ResetCountdownBadge.format(inSeconds(3 * 86400), now: now)
+        #expect(out != "—")
+        #expect(!out.hasSuffix("m"))
+        #expect(!out.hasSuffix("s"))
     }
 }

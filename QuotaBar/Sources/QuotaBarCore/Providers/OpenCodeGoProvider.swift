@@ -1,93 +1,32 @@
 import Foundation
 
-/// OpenCode Go quota provider.
-/// OpenCode uses its own API token to present quota data.
-/// Probes the OpenCode API for usage stats.
+/// OpenCode provider.
+///
+/// A previous revision called `https://api.opencode.ai/v1/usage`. No such
+/// endpoint appears in OpenCode's documentation, and the hosted service
+/// ("OpenCode Zen", `https://opencode.ai/zen/v1/...`) documents no usage or
+/// quota endpoint either. The old code treated the resulting 404 as a
+/// successful read and rendered a hardcoded "500/500 units, healthy".
+///
+/// Until a documented usage endpoint exists, this provider reports whether a
+/// credential is present and nothing more. It performs no network call, so it
+/// cannot mistake a failure for a healthy quota.
 public final class OpenCodeGoProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .opencode
-    public let displayName: String = "OpenCode Go"
+    public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
 
     private let apiKey: String?
 
     public init(apiKey: String? = nil) {
-        self.apiKey = apiKey ?? CredentialStore.apiKey(for: .opencode)
+        self.apiKey = apiKey
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard let apiKey, !apiKey.isEmpty else {
-            return QuotaSnapshot(
-                id: vendorId.rawValue,
-                vendorId: vendorId,
-                displayName: displayName,
-                category: category,
-                metric: .subscription(tierName: "Unknown", renewalDate: nil),
-                status: .unauthenticated,
-                resetsAt: nil,
-                lastUpdated: Date(),
-                auxiliaryInfo: "No OpenCode token found"
-            )
+        guard await credential(injected: apiKey, for: .opencode) != nil else {
+            return unavailable(.notConfigured)
         }
-
-        // Call a well-known OpenCode endpoint for usage data
-        let url = "https://api.opencode.ai/v1/usage"
-        let (data, http) = try await QuotaHTTP.get(url: url, key: apiKey)
-
-        struct OCUsage: Decodable, Sendable {
-            let tier: String?
-            let quota_used: Double?
-            let quota_limit: Double?
-            let period_start: String?
-            let period_end: String?
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            return QuotaSnapshot(
-                id: vendorId.rawValue,
-                vendorId: vendorId,
-                displayName: displayName,
-                category: category,
-                metric: .subscription(tierName: "Unknown", renewalDate: nil),
-                status: .unauthenticated,
-                resetsAt: nil,
-                lastUpdated: Date(),
-                auxiliaryInfo: "Token rejected"
-            )
-        }
-
-        let usage = try? JSONDecoder().decode(OCUsage.self, from: data)
-
-        let quotaUsed = usage?.quota_used ?? 0
-        let quotaLimit = usage?.quota_limit ?? 500
-        let fraction = quotaLimit > 0 ? quotaUsed / quotaLimit : 0.0
-
-        let status: ProviderStatus = {
-            if fraction > 0.90 { return .critical }
-            if fraction > 0.70 { return .warning }
-            return .healthy
-        }()
-
-        // Parse renewal date if available
-        let renewalDate: Date? = {
-            guard let end = usage?.period_end else { return nil }
-            let fmt = ISO8601DateFormatter()
-            fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return fmt.date(from: end) ?? ISO8601DateFormatter().date(from: end)
-        }()
-
-        let remaining = Int(quotaLimit - quotaUsed)
-
-        return QuotaSnapshot(
-            id: vendorId.rawValue,
-            vendorId: vendorId,
-            displayName: displayName,
-            category: category,
-            metric: .count(remaining: max(remaining, 0), limit: Int(quotaLimit), unitName: "units"),
-            status: status,
-            resetsAt: renewalDate,
-            lastUpdated: Date(),
-            auxiliaryInfo: usage?.tier.map { "Tier: \($0)" }
-        )
+        return unavailable(.unsupported("Credential found — OpenCode exposes no usage API"))
     }
 }

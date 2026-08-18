@@ -1,8 +1,13 @@
 import SwiftUI
 import QuotaBarCore
 
-/// Header bar: app name, overall health, last-updated timestamp, manual refresh button.
+/// Header bar: app name, aggregate health, staleness, manual refresh.
+///
+/// Health and readability are reported separately. "2 not readable" is not the
+/// same claim as "2 critical", and collapsing them is what let a stale token
+/// mask an exhausted quota in the previous revision.
 struct HeaderSummaryView: View {
+
     let summary: SystemHealthSummary
     let isRefreshing: Bool
     let onRefresh: () -> Void
@@ -10,68 +15,97 @@ struct HeaderSummaryView: View {
     var body: some View {
         HStack(spacing: 6) {
             Text("QuotaBar")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.caption)
+                .fontWeight(.semibold)
 
-            Spacer()
+            Spacer(minLength: 4)
 
-            // Overall health indicator
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(overallColor)
-                    .frame(width: 6, height: 6)
+            Label {
+                Text(healthText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: healthSymbol)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .imageScale(.small)
+                    .foregroundStyle(healthColor)
+            }
+            .labelStyle(.titleAndIcon)
 
-                Text(overallText)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
+            if let oldest = summary.oldestReading {
+                Text(elapsed(oldest))
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .help("Oldest reading in view")
             }
 
-            // Last updated
-            if let last = summary.lastUpdated {
-                Text(formattedElapsed(last))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-
-            // Refresh button
             Button(action: onRefresh) {
-                Image(systemName: isRefreshing ? "arrow.clockwise.circle.fill" : "arrow.clockwise")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                    .animation(
+                        isRefreshing
+                            ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                            : .default,
+                        value: isRefreshing
+                    )
             }
             .buttonStyle(.plain)
             .disabled(isRefreshing)
+            .accessibilityLabel(isRefreshing ? "Refreshing" : "Refresh now")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(Color.primary.opacity(0.04))
+        .background(.quaternary.opacity(0.4))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("QuotaBar. \(healthText)")
     }
 
-    private var overallColor: Color {
-        switch summary.overallStatus {
-        case .healthy: .green
-        case .warning: .orange
-        case .critical, .rateLimited: .red
-        case .unauthenticated, .networkError: .gray
-        case .unsupported: Color(nsColor: .tertiaryLabelColor)
+    // MARK: - Aggregate presentation
+
+    private var healthSymbol: String {
+        guard summary.hasAnyReading else { return "minus.circle" }
+        switch summary.worstUrgency {
+        case .none:     return "checkmark.circle.fill"
+        case .warning:  return "exclamationmark.circle.fill"
+        case .critical: return "exclamationmark.octagon.fill"
         }
     }
 
-    private var overallText: String {
-        if summary.errorCount > 0 { return "\(summary.errorCount) errors" }
-        switch summary.overallStatus {
-        case .healthy: return "All systems normal"
-        case .warning: return "\(summary.warningCount) warnings"
-        case .critical: return "\(summary.criticalCount) critical"
-        case .rateLimited: return "Rate limited"
-        case .unauthenticated, .networkError: return "Errors"
-        case .unsupported: return "Unsupported"
+    private var healthColor: Color {
+        guard summary.hasAnyReading else { return .secondary }
+        switch summary.worstUrgency {
+        case .none:     return .green
+        case .warning:  return .orange
+        case .critical: return .red
         }
     }
 
-    private func formattedElapsed(_ date: Date) -> String {
-        let interval = abs(date.timeIntervalSinceNow)
-        if interval < 60 { return "\(Int(interval))s" }
-        if interval < 3600 { return "\(Int(interval / 60))m" }
-        return "\(Int(interval / 3600))h"
+    private var healthText: String {
+        var parts: [String] = []
+        if summary.hasAnyReading {
+            switch summary.worstUrgency {
+            case .none:     parts.append("All quotas healthy")
+            case .warning:  parts.append("\(summary.warningCount) running low")
+            case .critical: parts.append("\(summary.criticalCount) critical")
+            }
+        } else {
+            parts.append("No readings")
+        }
+        if summary.unavailableCount > 0 {
+            parts.append("\(summary.unavailableCount) not readable")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func elapsed(_ date: Date) -> String {
+        let interval = max(0, -date.timeIntervalSinceNow)
+        if interval < 60 { return "\(Int(interval.rounded()))s" }
+        if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
+        return "\(Int((interval / 3600).rounded()))h"
     }
 }

@@ -2,73 +2,110 @@ import Testing
 import Foundation
 @testable import QuotaBarCore
 
+private func snapshot(
+    vendor: VendorIdentifier,
+    status: ProviderStatus,
+    lastUpdated: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) -> QuotaSnapshot {
+    QuotaSnapshot(
+        id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+        category: .aiSubscriptions,
+        metric: .subscription(tierName: "x", renewalDate: nil),
+        status: status,
+        resetsAt: nil, lastUpdated: lastUpdated, auxiliaryInfo: nil
+    )
+}
+
 struct SystemHealthSummaryTests {
 
     @Test func summary_emptyInput() {
         let summary = SystemHealthSummary.compute(from: [])
-        #expect(summary.overallStatus == .healthy)
+        #expect(summary.worstUrgency == .none)
         #expect(summary.healthyCount == 0)
+        #expect(summary.unavailableCount == 0)
         #expect(summary.totalProviders == 0)
-        #expect(summary.lastUpdated == nil)
+        #expect(summary.oldestReading == nil)
+        #expect(summary.hasAnyReading == false)
     }
 
-    @Test func summary_allHealthy() {
-        let snaps = [
-            QuotaSnapshot.mock(vendorId: .opencode, status: .healthy),
-            QuotaSnapshot.mock(vendorId: .gemini, status: .healthy),
-        ]
+    @Test("6 measured-healthy plus 1 unavailable never inflates worstUrgency")
+    func summary_healthyProvidersPlusOneUnavailable() {
+        var snaps = (0..<6).map { i in
+            snapshot(vendor: VendorIdentifier.allCases[i % VendorIdentifier.allCases.count], status: .healthy)
+        }
+        snaps.append(snapshot(vendor: .claude, status: .unavailable(.notConfigured)))
+
         let summary = SystemHealthSummary.compute(from: snaps)
-        #expect(summary.overallStatus == .healthy)
-        #expect(summary.healthyCount == 2)
-        #expect(summary.errorCount == 0)
-        #expect(summary.totalProviders == 2)
+        #expect(summary.worstUrgency == .none)
+        #expect(summary.unavailableCount == 1)
+        #expect(summary.healthyCount == 6)
+        #expect(summary.totalProviders == 7)
+        #expect(summary.hasAnyReading == true)
     }
 
-    @Test func summary_warningTakesPriority() {
+    @Test("a critical provider alongside an unavailable one yields worstUrgency critical")
+    func summary_criticalWithUnavailable() {
         let snaps = [
-            QuotaSnapshot.mock(vendorId: .opencode, status: .healthy),
-            QuotaSnapshot.mock(vendorId: .gemini, status: .warning),
+            snapshot(vendor: .claude, status: .critical),
+            snapshot(vendor: .gemini, status: .unavailable(.offline)),
         ]
         let summary = SystemHealthSummary.compute(from: snaps)
-        #expect(summary.overallStatus == .warning)
-        #expect(summary.warningCount == 1)
-    }
-
-    @Test func summary_criticalTakesPriority() {
-        let snaps = [
-            QuotaSnapshot.mock(vendorId: .opencode, status: .healthy),
-            QuotaSnapshot.mock(vendorId: .gemini, status: .warning),
-            QuotaSnapshot.mock(vendorId: .claude, status: .critical),
-        ]
-        let summary = SystemHealthSummary.compute(from: snaps)
-        #expect(summary.overallStatus == .critical)
+        #expect(summary.worstUrgency == .critical)
         #expect(summary.criticalCount == 1)
+        #expect(summary.unavailableCount == 1)
     }
 
-    @Test func summary_errorCounts() {
-        let snaps = [
-            QuotaSnapshot.mock(vendorId: .opencode, status: .unauthenticated),
-            QuotaSnapshot.mock(vendorId: .claude, status: .unsupported("no API")),
-            QuotaSnapshot.mock(vendorId: .gemini, status: .networkError("timeout")),
-        ]
-        let summary = SystemHealthSummary.compute(from: snaps)
-        #expect(summary.errorCount == 3)
-        #expect(summary.totalProviders == 3)
+    @Test("warning takes priority over healthy but not over critical")
+    func summary_warningVsCritical() {
+        let mixed = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .claude, status: .healthy),
+            snapshot(vendor: .gemini, status: .warning),
+        ])
+        #expect(mixed.worstUrgency == .warning)
+
+        let withCritical = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .claude, status: .healthy),
+            snapshot(vendor: .gemini, status: .warning),
+            snapshot(vendor: .opencode, status: .critical),
+        ])
+        #expect(withCritical.worstUrgency == .critical)
     }
 
-    @Test func summary_mixedStatus() {
+    @Test("a rateLimited provider counts as critical urgency, not unavailable")
+    func summary_rateLimitedCountsAsCritical() {
+        let summary = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .openrouter, status: .rateLimited(retryAfter: nil)),
+        ])
+        #expect(summary.worstUrgency == .critical)
+        #expect(summary.criticalCount == 1)
+        #expect(summary.unavailableCount == 0)
+    }
+
+    @Test("oldestReading picks the oldest timestamp, not the newest or the last one seen")
+    func summary_oldestReadingPicksOldest() {
+        let oldest = Date(timeIntervalSince1970: 1_000)
+        let middle = Date(timeIntervalSince1970: 2_000)
+        let newest = Date(timeIntervalSince1970: 3_000)
+
+        // Deliberately ordered so the newest is last and the oldest is in the
+        // middle — a naive "keep the last one" or "keep the first one"
+        // implementation would get this wrong.
         let snaps = [
-            QuotaSnapshot.mock(vendorId: .opencode, status: .healthy),
-            QuotaSnapshot.mock(vendorId: .gemini, status: .warning),
-            QuotaSnapshot.mock(vendorId: .claude, status: .unsupported("no API")),
-            QuotaSnapshot.mock(vendorId: .copilot, status: .critical),
+            snapshot(vendor: .claude, status: .healthy, lastUpdated: middle),
+            snapshot(vendor: .gemini, status: .healthy, lastUpdated: oldest),
+            snapshot(vendor: .opencode, status: .healthy, lastUpdated: newest),
         ]
         let summary = SystemHealthSummary.compute(from: snaps)
-        // .unsupported has severity 3, .critical has severity 2 — unsupported wins
-        #expect(summary.overallStatus.severity == 3)
-        #expect(summary.healthyCount == 1)
-        #expect(summary.warningCount == 1)
-        #expect(summary.errorCount == 1)
-        #expect(summary.totalProviders == 4)
+        #expect(summary.oldestReading == oldest)
+    }
+
+    @Test("hasAnyReading is false when every provider is unavailable")
+    func summary_hasAnyReadingFalseWhenAllUnavailable() {
+        let summary = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .claude, status: .unauthenticated),
+            snapshot(vendor: .gemini, status: .unsupported("no API")),
+        ])
+        #expect(summary.hasAnyReading == false)
+        #expect(summary.unavailableCount == 2)
     }
 }

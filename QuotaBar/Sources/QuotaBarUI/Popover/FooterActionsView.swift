@@ -9,24 +9,24 @@ struct FooterActionsView: View {
         HStack {
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 10))
+                    .font(.caption2)
                 Text("Preferences")
-                    .font(.system(size: 10))
+                    .font(.caption2)
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
+            .foregroundStyle(.secondary)
 
             Spacer()
 
             Button(action: onQuit) {
-                Text("Quit QuotaBar")
-                    .font(.system(size: 10))
+                Text("Quit")
+                    .font(.caption2)
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.primary.opacity(0.03))
+        .background(.quaternary.opacity(0.3))
     }
 }

@@ -9,31 +9,89 @@ public protocol QuotaProvider: Sendable {
     func fetchSnapshot() async throws -> QuotaSnapshot
 }
 
+extension QuotaProvider {
+    /// Returns the injected credential if there is one, otherwise resolves it
+    /// from the credential store off the cooperative thread pool.
+    func credential(injected: String?, for vendor: VendorIdentifier) async -> String? {
+        if let injected { return injected.isEmpty ? nil : injected }
+        let discovered = await CredentialStore.apiKeyAsync(for: vendor)
+        return (discovered?.isEmpty ?? true) ? nil : discovered
+    }
+
+    /// Convenience for the common "we cannot read this vendor" outcome.
+    func unavailable(_ reason: UnavailableReason) -> QuotaSnapshot {
+        QuotaManager.unavailableSnapshot(for: self, reason: reason)
+    }
+}
+
 // MARK: - Shared HTTP utilities
 
-enum QuotaHTTP {
+public enum QuotaHTTP {
 
-    static let session: URLSession = {
+    /// The session used for all provider requests.
+    ///
+    /// A task-local so tests can substitute a `URLProtocol`-backed session for
+    /// the duration of a call — `QuotaHTTP.$session.withValue(stub) { ... }`.
+    /// Task-locals propagate into child tasks, so this reaches providers
+    /// running inside `QuotaManager`'s `TaskGroup`.
+    @TaskLocal public static var session: URLSession = QuotaHTTP.makeDefaultSession()
+
+    public static func makeDefaultSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 4.0
+        cfg.timeoutIntervalForResource = 8.0
         cfg.waitsForConnectivity = false
+        cfg.httpAdditionalHeaders = ["User-Agent": "QuotaBar/1.0"]
         return URLSession(configuration: cfg)
-    }()
+    }
 
-    static func get(url: String, headers: [String: String] = [:], key: String? = nil) async throws -> (Data, HTTPURLResponse) {
-        guard let u = URL(string: url) else { throw URLError(.badURL) }
+    /// How a vendor expects its credential to be presented.
+    public enum Auth: Sendable {
+        case none
+        case bearer(String)
+        /// A dedicated header, e.g. Google's `x-goog-api-key`.
+        /// Preferred over a query parameter: query strings leak into proxy
+        /// logs, error descriptions, and crash reports.
+        case header(name: String, value: String)
+    }
+
+    /// Performs a GET and returns the body plus status code.
+    /// Throws `ProviderError` with a classified reason — never raw error text,
+    /// which can embed a request URL and therefore a credential.
+    public static func get(
+        url: String,
+        headers: [String: String] = [:],
+        auth: Auth = .none
+    ) async throws -> (Data, HTTPURLResponse) {
+        guard let u = URL(string: url) else { throw ProviderError.badResponse }
         var req = URLRequest(url: u)
         req.httpMethod = "GET"
-        if let key {
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        switch auth {
+        case .none:
+            break
+        case .bearer(let token):
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case .header(let name, let value):
+            req.setValue(value, forHTTPHeaderField: name)
         }
         for (k, v) in headers {
             req.setValue(v, forHTTPHeaderField: k)
         }
+
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
+            throw ProviderError.badResponse
         }
         return (data, http)
+    }
+
+    /// Maps an HTTP status to a failure reason, or nil when the response is OK.
+    public static func failureReason(for status: Int) -> UnavailableReason? {
+        switch status {
+        case 200...299: nil
+        case 401, 403:  .credentialRejected
+        default:        .badResponse
+        }
     }
 }

@@ -1,79 +1,53 @@
 import Foundation
 
-/// GitHub Copilot subscription provider.
-/// Uses gh auth token + /copilot_internal/v2/token to probe entitlement.
-/// Falls back to /user endpoint for basic plan info.
+/// GitHub Copilot provider.
+///
+/// GitHub publishes no REST endpoint that reports an individual user's own
+/// Copilot premium-request quota. Every documented Copilot metrics endpoint is
+/// scoped to `/orgs/{org}/...` or `/enterprises/{enterprise}/...` and requires
+/// org or enterprise admin rights.
+///
+/// A previous revision called `/copilot_internal/v2/token`. That path is an
+/// undocumented internal endpoint used by GitHub's own clients; it is not part
+/// of any published API, can change without notice, and returns a live access
+/// token we have no need for. It has been removed.
+///
+/// We validate the token against the documented `/user` endpoint and report
+/// the account, but we do not claim a quota we cannot read.
 public final class GitHubCopilotProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .copilot
-    public let displayName: String = "GitHub Copilot"
+    public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
 
     private let token: String?
 
     public init(token: String? = nil) {
-        self.token = token ?? CredentialStore.apiKey(for: .copilot)
+        self.token = token
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard let token, !token.isEmpty else {
-            return QuotaSnapshot(
-                id: vendorId.rawValue,
-                vendorId: vendorId,
-                displayName: displayName,
-                category: category,
-                metric: .subscription(tierName: "Unknown", renewalDate: nil),
-                status: .unauthenticated,
-                resetsAt: nil,
-                lastUpdated: Date(),
-                auxiliaryInfo: "No GitHub token available"
-            )
+        guard let resolved = await credential(injected: token, for: .copilot) else {
+            return unavailable(.notConfigured)
         }
 
-        // Try /user for display info
-        let userURL = "https://api.github.com/user"
-        let headers = ["Accept": "application/vnd.github+json"]
-        let (userData, _) = try await QuotaHTTP.get(url: userURL, headers: headers, key: token)
-        struct GHUser: Decodable, Sendable {
-            let login: String
-            let plan: Plan?
-            struct Plan: Decodable, Sendable {
-                let name: String
-            }
-        }
-        let user = try? JSONDecoder().decode(GHUser.self, from: userData)
+        let (data, http) = try await QuotaHTTP.get(
+            url: "https://api.github.com/user",
+            headers: ["Accept": "application/vnd.github+json"],
+            auth: .bearer(resolved)
+        )
 
-        // Try /copilot_internal/v2/token for the real copilot access token
-        let copilotURL = "https://api.github.com/copilot_internal/v2/token"
-        let (cpData, cpHttp) = try await QuotaHTTP.get(url: copilotURL, headers: headers, key: token)
-
-        struct CtrlToken: Decodable, Sendable {
-            let token: String?
-            let expires_at: Int?
-            let error: String?
-            let error_description: String?
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
+            return unavailable(reason)
         }
 
-        let ctrl = try? JSONDecoder().decode(CtrlToken.self, from: cpData)
+        struct GHUser: Decodable, Sendable { let login: String }
+        guard let user = try? JSONDecoder().decode(GHUser.self, from: data) else {
+            return unavailable(.badResponse)
+        }
 
-        let tierName: String = user?.plan?.name ?? "Individual"
-        let isActive = cpHttp.statusCode == 200 && ctrl?.token != nil
-        let status: ProviderStatus = {
-            if cpHttp.statusCode == 401 || cpHttp.statusCode == 403 { return .unauthenticated }
-            guard isActive else { return .warning }
-            return .healthy
-        }()
-
-        return QuotaSnapshot(
-            id: vendorId.rawValue,
-            vendorId: vendorId,
-            displayName: displayName,
-            category: category,
-            metric: .subscription(tierName: "\(tierName)\(isActive ? " • Active" : "")", renewalDate: nil),
-            status: status,
-            resetsAt: nil,
-            lastUpdated: Date(),
-            auxiliaryInfo: isActive ? nil : (ctrl?.error_description ?? "Copilot token unavailable")
+        return unavailable(
+            .unsupported("Signed in as \(user.login) — no individual quota API")
         )
     }
 }

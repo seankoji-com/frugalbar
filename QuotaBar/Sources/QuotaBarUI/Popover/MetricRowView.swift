@@ -1,101 +1,79 @@
 import SwiftUI
 import QuotaBarCore
 
-/// A single high-density row showing one provider's status with micro progress bar.
+/// A single high-density row showing one provider's status.
+///
+/// Layout budget: the popover is 340pt wide and this row carries 16pt of
+/// horizontal padding, so its content must fit 324pt. The previous revision
+/// summed to 356pt and clipped on every launch. Widths here are proportional
+/// rather than fixed so the row also survives larger Dynamic Type sizes.
 struct MetricRowView: View {
+
     let snapshot: QuotaSnapshot
 
-    private var statusColor: Color {
-        switch snapshot.status {
-        case .healthy:        .green
-        case .warning:        .orange
-        case .critical:       .red
-        case .unauthenticated: .gray
-        case .unsupported:    Color(nsColor: .tertiaryLabelColor)
-        case .rateLimited:    .red
-        case .networkError:   .gray
+    @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 64
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Bar and reset columns are the first things to go when text grows.
+    private var showsBar: Bool { !typeSize.isAccessibilitySize }
+    private var showsReset: Bool { !typeSize.isAccessibilitySize }
+
+    // MARK: - Derived presentation
+
+    private var p: MetricRowPresentation { MetricRowPresentation(snapshot: snapshot) }
+
+    private var urgencyColor: Color {
+        switch p.urgency {
+        case .none:     .green
+        case .warning:  .orange
+        case .critical: .red
         }
     }
 
-    private var progressColor: Color? {
-        guard let frac = snapshot.consumptionFraction else { return nil }
-        if frac > 0.90 { return .red }
-        if frac > 0.70 { return .orange }
-        return .green
-    }
-
-    private var fractionLabel: String {
-        switch snapshot.metric {
-        case .percentage(let used, _):
-            return "\(Int(used * 100))%"
-        case .count(let remaining, let limit, _):
-            return "\(remaining)/\(limit)"
-        case .currency(let balance, let limit, _, let code):
-            let bd = NSDecimalNumber(decimal: balance).doubleValue
-            if let limit {
-                let ld = NSDecimalNumber(decimal: limit).doubleValue
-                return "\(formatCurrency(bd, code))/\(formatCurrency(ld, code))"
-            }
-            return formatCurrency(bd, code)
-        case .subscription(let tierName, _):
-            return tierName
-        }
-    }
-
-    private func formatCurrency(_ val: Double, _ code: String) -> String {
-        let fmt = NumberFormatter()
-        fmt.numberStyle = .currency
-        fmt.currencyCode = code
-        return fmt.string(from: NSNumber(value: val)) ?? "\(val)"
-    }
-
-    private var resetText: String {
-        guard case .unsupported = snapshot.status else {
-            return ResetCountdownBadge.format(snapshot.resetsAt)
-        }
-        return "—"
-    }
-
-    private var auxiliaryHint: String? {
-        if case .unsupported = snapshot.status {
-            return snapshot.auxiliaryInfo
-        }
-        return nil
-    }
+    // MARK: - Body
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             StatusIndicatorDot(status: snapshot.status)
-                .frame(width: 8)
 
             Text(snapshot.displayName)
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 110, alignment: .leading)
+                .font(.caption)
+                .fontWeight(.medium)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let progressColor {
-                MicroProgressBar(fraction: snapshot.consumptionFraction ?? 0, statusColor: progressColor)
-                    .frame(width: 80)
-            } else {
-                // Unsupported or subscription — show a muted placeholder
-                Text(auxiliaryHint ?? fractionLabel)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
-                    .frame(width: 80, alignment: .leading)
-                    .lineLimit(1)
+            if showsBar {
+                MicroProgressBar(fraction: p.fraction, statusColor: urgencyColor)
+                    .frame(width: barWidth)
             }
 
-            Text(fractionLabel)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundColor(progressColor ?? Color(nsColor: .tertiaryLabelColor))
-                .frame(width: 60, alignment: .trailing)
+            Text(p.valueLabel)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .foregroundStyle(
+                    p.isMeasured ? urgencyColor : Color.secondary
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
-            Text(resetText)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.secondary)
-                .frame(width: 50, alignment: .trailing)
+            if showsReset {
+                Text(p.resetLabel)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
-        .frame(height: 24)
         .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(minHeight: 24)
+        .contentShape(Rectangle())
+        .help(p.accessibilityLabel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(p.accessibilityLabel)
+        .accessibilityAddTraits(p.urgency == .critical ? .isSelected : [])
     }
 }

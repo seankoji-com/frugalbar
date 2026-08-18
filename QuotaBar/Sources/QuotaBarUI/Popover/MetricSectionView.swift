@@ -9,10 +9,12 @@ struct MetricSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(category.rawValue)
-                .font(.system(size: 9, weight: .bold, design: .default))
+                .font(.caption2)
+                .fontWeight(.bold)
                 .kerning(0.8)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .textCase(.uppercase)
+                .accessibilityAddTraits(.isHeader)
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
                 .padding(.bottom, 2)

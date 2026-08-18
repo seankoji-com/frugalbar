@@ -40,6 +40,9 @@ public final class KeychainManager: Sendable {
             kSecAttrAccount as String:        label,
             kSecValueData as String:          data,
             kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            // Modern keychain semantics, and never sync a credential to iCloud.
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
         ]
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -55,6 +58,8 @@ public final class KeychainManager: Sendable {
             kSecAttrAccount as String:        label,
             kSecReturnData as String:         true,
             kSecMatchLimit as String:         kSecMatchLimitOne,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
         ]
 
         var result: AnyObject?
@@ -76,6 +81,8 @@ public final class KeychainManager: Sendable {
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: label,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -88,46 +95,76 @@ public final class KeychainManager: Sendable {
 
 public enum CredentialStore {
 
-    /// Returns the API key for a given vendor label, checking Keychain and known file paths.
+    /// Whether to consult local CLI config files and the `gh` binary when the
+    /// Keychain has no entry.
+    ///
+    /// Off by default. Silent credential discovery is incompatible with the
+    /// App Sandbox (which forbids `Process` and reads outside the container),
+    /// and harvesting tokens the user never explicitly offered is a poor
+    /// default for a product that asks to be trusted with credentials.
+    /// Settings exposes this as an explicit opt-in.
+    public static let cliDiscoveryDefaultsKey = "QuotaBarEnableCLIDiscovery"
+
+    public static var isCLIDiscoveryEnabled: Bool {
+        UserDefaults.standard.bool(forKey: cliDiscoveryDefaultsKey)
+    }
+
+    /// Returns the API key for a vendor: Keychain first, then — only when the
+    /// user has opted in — known CLI config locations.
     public static func apiKey(for vendor: VendorIdentifier) -> String? {
-        // Try keychain first (use a synchronous helper)
-        if let kc = Self.readFromKeychain(label: vendor.rawValue), !kc.isEmpty {
+        if let kc = try? KeychainManager.shared.get(label: vendor.rawValue), !kc.isEmpty {
             return kc
         }
-        // Fallback: discover from known CLI configs
+        guard isCLIDiscoveryEnabled else { return nil }
         return discoverFromCLI(vendor: vendor)
     }
 
-    private static func readFromKeychain(label: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String:              kSecClassGenericPassword,
-            kSecAttrService as String:        "com.quotabar.keys",
-            kSecAttrAccount as String:        label,
-            kSecReturnData as String:         true,
-            kSecMatchLimit as String:         kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess else { return nil }
-        guard let data = result as? Data, let string = String(data: data, encoding: .utf8) else { return nil }
-        return string
+    /// Locations Homebrew and the system install `gh` into. `/usr/bin/env` is
+    /// deliberately not used: it resolves through an inherited `PATH`, which a
+    /// GUI app does not have (launchd gives it `/usr/bin:/bin:/usr/sbin:/sbin`),
+    /// and which is user-writable — so it decides *which* binary runs.
+    private static let ghCandidatePaths = [
+        "/opt/homebrew/bin/gh",
+        "/usr/local/bin/gh",
+        "/usr/bin/gh",
+    ]
+
+    static func runGhAuthToken() -> String? {
+        guard let ghPath = ghCandidatePaths.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else { return nil }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: ghPath)
+        task.arguments = ["auth", "token"]
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()   // don't inherit stderr into the app's log
+
+        // `run()` throws when the binary cannot be launched. The previous code
+        // used `try?` and then read `terminationStatus` regardless — which
+        // raises an uncatchable NSException on an unlaunched Process.
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        // Read before waiting: waiting first can deadlock if the child fills
+        // the pipe buffer.
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return nil }
+
+        let token = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return token?.isEmpty == false ? token : nil
     }
 
     private static func discoverFromCLI(vendor: VendorIdentifier) -> String? {
         switch vendor {
         case .githubRest, .githubGraphql:
-            // gh auth token
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            task.arguments = ["gh", "auth", "token"]
-            let out = Pipe()
-            task.standardOutput = out
-            try? task.run()
-            task.waitUntilExit()
-            guard task.terminationStatus == 0 else { return nil }
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return token?.isEmpty == false ? token : nil
+            return runGhAuthToken()
 
         case .opencode:
             // ~/.local/share/opencode/auth.json
@@ -177,4 +214,27 @@ public enum CredentialStore {
             return Self.apiKey(for: .githubRest)
         }
     }
+}
+
+extension CredentialStore {
+    /// Async accessor for use from provider `fetchSnapshot()`.
+    ///
+    /// `apiKey(for:)` is synchronous and does blocking work — a Keychain call,
+    /// file reads, and potentially a subprocess. Calling it directly from an
+    /// async context parks a cooperative-pool thread, and with seven providers
+    /// fetching concurrently that can starve the pool. This hops to a
+    /// dedicated background queue instead.
+    static func apiKeyAsync(for vendor: VendorIdentifier) async -> String? {
+        await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                continuation.resume(returning: apiKey(for: vendor))
+            }
+        }
+    }
+
+    private static let credentialQueue = DispatchQueue(
+        label: "com.quotabar.credentials",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 }

@@ -1,17 +1,29 @@
 import Foundation
 
-/// Cache policy with stale-while-revalidate semantics.
+/// Cache and timing policy for quota fetches.
 public struct CachePolicy: Sendable {
-    public let cacheTTL: TimeInterval           // Time before cached entry is considered stale
-    public let backgroundRefreshInterval: TimeInterval  // How often to refresh in background
+    /// How long a completed fetch stays authoritative. Within this window the
+    /// popover renders cached values instantly instead of refetching.
+    public let cacheTTL: TimeInterval
+    /// Background poll cadence.
+    public let backgroundRefreshInterval: TimeInterval
+    /// Hard wall-clock ceiling for a single provider's entire fetch, including
+    /// credential resolution and any multi-request work.
+    public let perProviderTimeout: TimeInterval
 
     public static let `default` = CachePolicy(
-        cacheTTL: 30,               // 30 seconds — fast UI update on popover open
-        backgroundRefreshInterval: 120  // 2 minutes background polling
+        cacheTTL: 30,                    // popover opens are instant within 30s
+        backgroundRefreshInterval: 120,  // 2 minute background poll
+        perProviderTimeout: 6            // > URLSession's 4s per-request budget
     )
 
-    public init(cacheTTL: TimeInterval, backgroundRefreshInterval: TimeInterval) {
+    public init(
+        cacheTTL: TimeInterval,
+        backgroundRefreshInterval: TimeInterval,
+        perProviderTimeout: TimeInterval = 6
+    ) {
         self.cacheTTL = cacheTTL
         self.backgroundRefreshInterval = backgroundRefreshInterval
+        self.perProviderTimeout = perProviderTimeout
     }
 }
