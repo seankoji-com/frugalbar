@@ -88,22 +88,22 @@ public struct SettingsView: View {
 
     private func loadKeys() {
         Task {
-            claudeKey = (try? await KeychainManager.shared.get(label: VendorIdentifier.claude.rawValue)) ?? ""
-            geminiKey = (try? await KeychainManager.shared.get(label: VendorIdentifier.gemini.rawValue)) ?? ""
-            openRouterKey = (try? await KeychainManager.shared.get(label: VendorIdentifier.openrouter.rawValue)) ?? ""
-            githubPat = (try? await KeychainManager.shared.get(label: VendorIdentifier.githubRest.rawValue)) ?? ""
-            openCodeToken = (try? await KeychainManager.shared.get(label: VendorIdentifier.opencode.rawValue)) ?? ""
+            claudeKey = (try? KeychainManager.shared.get(label: VendorIdentifier.claude.rawValue)) ?? ""
+            geminiKey = (try? KeychainManager.shared.get(label: VendorIdentifier.gemini.rawValue)) ?? ""
+            openRouterKey = (try? KeychainManager.shared.get(label: VendorIdentifier.openrouter.rawValue)) ?? ""
+            githubPat = (try? KeychainManager.shared.get(label: VendorIdentifier.githubRest.rawValue)) ?? ""
+            openCodeToken = (try? KeychainManager.shared.get(label: VendorIdentifier.opencode.rawValue)) ?? ""
         }
     }
 
     private func saveKeys() {
         Task {
             do {
-                try await KeychainManager.shared.set(key: claudeKey, label: VendorIdentifier.claude.rawValue)
-                try await KeychainManager.shared.set(key: geminiKey, label: VendorIdentifier.gemini.rawValue)
-                try await KeychainManager.shared.set(key: openRouterKey, label: VendorIdentifier.openrouter.rawValue)
-                try await KeychainManager.shared.set(key: githubPat, label: VendorIdentifier.githubRest.rawValue)
-                try await KeychainManager.shared.set(key: openCodeToken, label: VendorIdentifier.opencode.rawValue)
+                try KeychainManager.shared.set(key: claudeKey, label: VendorIdentifier.claude.rawValue)
+                try KeychainManager.shared.set(key: geminiKey, label: VendorIdentifier.gemini.rawValue)
+                try KeychainManager.shared.set(key: openRouterKey, label: VendorIdentifier.openrouter.rawValue)
+                try KeychainManager.shared.set(key: githubPat, label: VendorIdentifier.githubRest.rawValue)
+                try KeychainManager.shared.set(key: openCodeToken, label: VendorIdentifier.opencode.rawValue)
                 await MainActor.run { statusMessage = "Keys saved to Keychain" }
             } catch {
                 await MainActor.run { statusMessage = "Error: \(error.localizedDescription)" }

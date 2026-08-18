@@ -103,11 +103,11 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var consumptionFraction: Double {
         switch metric {
         case .percentage(let used, _):
-            min(max(used, 0.0), 1.0)
-        case .count(let remaining, let limit):
+            return min(max(used, 0.0), 1.0)
+        case .count(let remaining, let limit, _):
             guard limit > 0 else { return 0.0 }
-            1.0 - (Double(remaining) / Double(limit))
-        case .currency(let balance, let limit, _):
+            return 1.0 - (Double(remaining) / Double(limit))
+        case .currency(let balance, let limit, _, _):
             if let limit, limit > 0 {
                 let ld = NSDecimalNumber(decimal: limit).doubleValue
                 let bd = NSDecimalNumber(decimal: balance).doubleValue

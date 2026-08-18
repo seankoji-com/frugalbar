@@ -20,7 +20,7 @@ enum QuotaHTTP {
         return URLSession(configuration: cfg)
     }()
 
-    static func get(url: String, headers: [String: String] = [:], key: String?) async throws -> (Data, HTTPURLResponse) {
+    static func get(url: String, headers: [String: String] = [:], key: String? = nil) async throws -> (Data, HTTPURLResponse) {
         guard let u = URL(string: url) else { throw URLError(.badURL) }
         var req = URLRequest(url: u)
         req.httpMethod = "GET"

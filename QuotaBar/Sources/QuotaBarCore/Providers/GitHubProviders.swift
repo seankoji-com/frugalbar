@@ -32,7 +32,7 @@ public final class GitHubRestProvider: QuotaProvider, Sendable {
             let resources: Resources
         }
 
-        let decoded = try JSONDecoder().decode(Response.self, from: decoded)
+        let decoded = try JSONDecoder().decode(Response.self, from: data)
 
         let remaining = decoded.resources.core.remaining
         let limit = decoded.resources.core.limit

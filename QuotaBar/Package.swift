@@ -13,31 +13,30 @@ let package = Package(
         .target(
             name: "QuotaBarCore",
             dependencies: [],
-            swiftSettings: [.swiftLanguageVersion(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
         // --- SwiftUI popover + MenuBar ---
         .target(
             name: "QuotaBarUI",
             dependencies: ["QuotaBarCore"],
-            swiftSettings: [.swiftLanguageVersion(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
         // --- App entry point (NSApplication + MenuBarExtra) ---
         .executableTarget(
             name: "QuotaBarApp",
             dependencies: ["QuotaBarCore", "QuotaBarUI"],
-            resources: [.process("Resources")],
-            swiftSettings: [.swiftLanguageVersion(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
         // --- Tests ---
         .testTarget(
             name: "QuotaBarCoreTests",
             dependencies: ["QuotaBarCore"],
-            swiftSettings: [.swiftLanguageVersion(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
         .testTarget(
             name: "QuotaBarUITests",
             dependencies: ["QuotaBarUI"],
-            swiftSettings: [.swiftLanguageVersion(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
     ]
 )

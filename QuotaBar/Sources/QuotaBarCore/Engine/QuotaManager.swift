@@ -63,11 +63,7 @@ public actor QuotaManager {
             return await existing.value
         }
 
-        let task = Task { [weak self] in
-            guard let self else { return [:] }
-            let results = await self.parallelFetch()
-            return results
-        }
+        let task = Task { await self.parallelFetch() }
         activeTask = task
         let result = await task.value
         activeTask = nil
@@ -167,7 +163,7 @@ public struct SystemHealthSummary: Sendable {
             if snap.status.severity > worst.severity {
                 worst = snap.status
             }
-            if let lu = last.map({ snap.lastUpdated > $0 }) ?? true {
+            if last.map({ snap.lastUpdated > $0 }) ?? true {
                 last = snap.lastUpdated
             }
         }

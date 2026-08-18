@@ -19,7 +19,7 @@ public enum KeychainError: Error, Sendable, LocalizedError {
     }
 }
 
-public actor KeychainManager {
+public final class KeychainManager: Sendable {
 
     public static let shared = KeychainManager()
     private let service = "com.quotabar.keys"

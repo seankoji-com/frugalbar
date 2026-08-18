@@ -12,6 +12,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
+        // produces a bare executable, so set the accessory policy explicitly too.
+        NSApp.setActivationPolicy(.accessory)
+
         // Create status item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem?.button?.image = NSImage(systemSymbolName: "gauge.with.needle", accessibilityDescription: "QuotaBar")
@@ -38,7 +42,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Initial fetch
         Task {
             _ = await QuotaManager.shared.refresh()
-            await updateStatusItem()
+            updateStatusItem()
         }
     }
 
@@ -51,7 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // Refresh cache on open
             Task {
                 _ = await QuotaManager.shared.forceRefresh()
-                await updateStatusItem()
+                updateStatusItem()
             }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
