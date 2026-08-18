@@ -1,8 +1,11 @@
 # QuotaBar — Swift build & test workflow
 #
 # Builds the QuotaBar Swift package and runs all tests.
-# Runs on any push/PR to main and on the quotabar branch.
-# Uses GitHub-hosted macOS runners (Swift 6 / Xcode 16+).
+# Uses the on-demand macOS native runner pool on carey-mac
+# (see wiki: services/github-runners.md § macOS pool).
+# If the mac pool is unavailable, switch to macos-latest.
+#
+# To provision: ssh carey-mac '~/repos/mac-runners-provision.sh 2 --macos'
 
 name: QuotaBar CI
 
@@ -24,7 +27,7 @@ concurrency:
 jobs:
   build-and-test:
     name: Build & Test (macOS)
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS, ARM64, mac]
     defaults:
       run:
         working-directory: QuotaBar
@@ -32,9 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Select Xcode version
+      - name: Select Xcode
         run: |
-          # Use the latest available Xcode that ships Swift 6
           sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer 2>/dev/null \
             || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
