@@ -12,14 +12,19 @@ import QuotaBarCore
 public struct PopoverRootView: View {
 
     @State private var store: QuotaStore
+    private let onOpenSettings: (@MainActor () -> Void)?
 
     /// Wide enough for the row budget in `MetricRowView` (324pt of content).
     static let popoverWidth: CGFloat = 340
     /// Only engaged when content genuinely cannot fit, e.g. accessibility sizes.
     static let maxContentHeight: CGFloat = 520
 
-    public init(store: QuotaStore = QuotaStore()) {
+    public init(
+        store: QuotaStore = QuotaStore(),
+        onOpenSettings: (@MainActor () -> Void)? = nil
+    ) {
         _store = State(initialValue: store)
+        self.onOpenSettings = onOpenSettings
     }
 
     public var body: some View {
@@ -41,10 +46,12 @@ public struct PopoverRootView: View {
             Divider()
 
             FooterActionsView(
-                onOpenSettings: { 
-                    // Open the Settings scene window. Available since macOS 14;
-                    // we target 15+.
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                onOpenSettings: {
+                    if let onOpenSettings {
+                        onOpenSettings()
+                    } else {
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
                 },
                 onQuit: { NSApp.terminate(nil) }
             )
