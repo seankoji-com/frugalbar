@@ -81,7 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             case .critical, .rateLimited:
                 iconName = "gauge.with.needle"
                 iconColor = .systemRed
-            case .unauthenticated, .networkError:
+            case .unauthenticated, .networkError, .unsupported:
                 iconName = "exclamationmark.triangle.fill"
                 iconColor = .systemGray
             }

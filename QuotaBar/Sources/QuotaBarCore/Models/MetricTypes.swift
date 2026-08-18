@@ -41,6 +41,7 @@ public enum ProviderStatus: Sendable, Equatable {
     case warning       // usage > 70%  or credit < 25%
     case critical      // usage > 90%  or credit < 10%
     case unauthenticated
+    case unsupported(String)  // provider has no real data source; reason explains why
     case rateLimited(retryAfter: Date?)
     case networkError(String)
 
@@ -50,6 +51,7 @@ public enum ProviderStatus: Sendable, Equatable {
         case .warning:          1
         case .critical:         2
         case .unauthenticated:  3
+        case .unsupported:      3
         case .rateLimited:      3
         case .networkError:     3
         }
@@ -100,7 +102,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     }
 
     /// 0.0 … 1.0 fraction *consumed* (0 = empty, 1 = full)
-    public var consumptionFraction: Double {
+    /// Returns nil for providers that don't report measurable usage (subscriptions, unsupported).
+    public var consumptionFraction: Double? {
         switch metric {
         case .percentage(let used, _):
             return min(max(used, 0.0), 1.0)
@@ -115,7 +118,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
             }
             return 0.0
         case .subscription:
-            return 0.0
+            return nil
         }
     }
 }

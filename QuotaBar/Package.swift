@@ -9,25 +9,21 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
-        // --- Core domain (no UI) ---
         .target(
             name: "QuotaBarCore",
             dependencies: [],
             swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
-        // --- SwiftUI popover + MenuBar ---
         .target(
             name: "QuotaBarUI",
             dependencies: ["QuotaBarCore"],
             swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
-        // --- App entry point (NSApplication + MenuBarExtra) ---
         .executableTarget(
             name: "QuotaBarApp",
             dependencies: ["QuotaBarCore", "QuotaBarUI"],
             swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
         ),
-        // --- Tests ---
         .testTarget(
             name: "QuotaBarCoreTests",
             dependencies: ["QuotaBarCore"],

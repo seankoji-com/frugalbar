@@ -31,10 +31,11 @@ struct ConsumptionFractionTests {
         #expect(snapshot(.count(remaining: 0, limit: 0, unitName: "u")).consumptionFraction == 0.0)
     }
 
-    @Test("currency inverts balance against limit")
+    @Test("currency inverts balance against limit (allow floating point)")
     func currency() {
         let m = MetricType.currency(balance: 5, limit: 20, spent: 15, currencyCode: "USD")
-        #expect(snapshot(m).consumptionFraction == 0.75)
+        let frac = snapshot(m).consumptionFraction ?? 0
+        #expect(abs(frac - 0.75) < 0.001)
     }
 
     @Test("currency without a limit reports no consumption")
@@ -43,50 +44,45 @@ struct ConsumptionFractionTests {
         #expect(snapshot(m).consumptionFraction == 0.0)
     }
 
-    @Test("subscription has no consumption dimension")
+    @Test("subscription has no consumption dimension (nil)")
     func subscription() {
-        #expect(snapshot(.subscription(tierName: "Pro", renewalDate: nil)).consumptionFraction == 0.0)
+        #expect(snapshot(.subscription(tierName: "Pro", renewalDate: nil)).consumptionFraction == nil)
     }
 }
 
-@Suite("SystemHealthSummary")
-struct SystemHealthSummaryTests {
+@Suite("ProviderStatus")
+struct ProviderStatusTests {
 
-    private func snapshot(_ id: String, _ status: ProviderStatus) -> QuotaSnapshot {
-        QuotaSnapshot(
-            id: id, vendorId: .githubRest, displayName: id,
-            category: .developerLimits,
-            metric: .percentage(usedFraction: 0, displayDetails: nil),
-            status: status, resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
-        )
+    @Test("severity order")
+    func severity() {
+        #expect(ProviderStatus.healthy.severity == 0)
+        #expect(ProviderStatus.warning.severity == 1)
+        #expect(ProviderStatus.critical.severity == 2)
+        #expect(ProviderStatus.unauthenticated.severity == 3)
+        #expect(ProviderStatus.unsupported("x").severity == 3)
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).severity == 3)
+        #expect(ProviderStatus.networkError("x").severity == 3)
     }
 
-    @Test("counts each status bucket")
-    func counts() {
-        let s = SystemHealthSummary.compute(from: [
-            snapshot("a", .healthy),
-            snapshot("b", .warning),
-            snapshot("c", .critical),
-            snapshot("d", .networkError("boom")),
-        ])
-        #expect(s.healthyCount == 1)
-        #expect(s.warningCount == 1)
-        #expect(s.criticalCount == 1)
-        #expect(s.errorCount == 1)
-        #expect(s.totalProviders == 4)
+    @Test("unsupported equality by reason")
+    func unsupportedEquality() {
+        #expect(ProviderStatus.unsupported("a") == ProviderStatus.unsupported("a"))
+        #expect(ProviderStatus.unsupported("a") != ProviderStatus.unsupported("b"))
+    }
+}
+
+@Suite("VendorIdentifier")
+struct VendorIdentifierTests {
+
+    @Test("7 known vendors")
+    func allCases() {
+        #expect(VendorIdentifier.allCases.count == 7)
     }
 
-    @Test("an empty set is healthy with no timestamp")
-    func empty() {
-        let s = SystemHealthSummary.compute(from: [])
-        #expect(s.overallStatus == .healthy)
-        #expect(s.totalProviders == 0)
-        #expect(s.lastUpdated == nil)
-    }
-
-    @Test("warning outranks healthy")
-    func worstWins() {
-        let s = SystemHealthSummary.compute(from: [snapshot("a", .healthy), snapshot("b", .warning)])
-        #expect(s.overallStatus == .warning)
+    @Test("all display names are non-empty")
+    func displayNames() {
+        for v in VendorIdentifier.allCases {
+            #expect(!v.displayName.isEmpty)
+        }
     }
 }

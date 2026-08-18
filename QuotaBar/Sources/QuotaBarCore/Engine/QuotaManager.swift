@@ -158,7 +158,7 @@ public struct SystemHealthSummary: Sendable {
             case .healthy: h += 1
             case .warning: w += 1
             case .critical, .rateLimited: c += 1
-            case .unauthenticated, .networkError: e += 1
+            case .unauthenticated, .networkError, .unsupported: e += 1
             }
             if snap.status.severity > worst.severity {
                 worst = snap.status

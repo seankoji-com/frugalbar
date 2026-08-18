@@ -1,0 +1,48 @@
+# QuotaBar — Swift build & test workflow
+#
+# Builds the QuotaBar Swift package and runs all tests.
+# Runs on any push/PR to main and on the quotabar branch.
+# Uses GitHub-hosted macOS runners (Swift 6 / Xcode 16+).
+
+name: QuotaBar CI
+
+on:
+  push:
+    branches: [main, quotabar-swift-prototype]
+    paths:
+      - "QuotaBar/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "QuotaBar/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: QuotaBar
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode version
+        run: |
+          # Use the latest available Xcode that ships Swift 6
+          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer 2>/dev/null \
+            || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build -c debug
+
+      - name: Run tests
+        run: swift test -c debug --parallel

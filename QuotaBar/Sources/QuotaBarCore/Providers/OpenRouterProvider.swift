@@ -17,6 +17,20 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        guard let apiKey, !apiKey.isEmpty else {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .currency(balance: 0, limit: nil, spent: nil, currencyCode: "USD"),
+                status: .unauthenticated,
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: "No OpenRouter API key"
+            )
+        }
+
         let url = "https://openrouter.ai/api/v1/auth/key"
         let (data, http) = try await QuotaHTTP.get(url: url, key: apiKey)
         struct Response: Decodable, Sendable {

@@ -16,6 +16,20 @@ public final class GitHubRestProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        guard let token, !token.isEmpty else {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .count(remaining: 0, limit: 60, unitName: "req/hr"),
+                status: .unauthenticated,
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: "No GitHub token available"
+            )
+        }
+
         let url = "https://api.github.com/rate_limit"
         let headers = ["Accept": "application/vnd.github+json"]
         let (data, http) = try await QuotaHTTP.get(url: url, headers: headers, key: token)
@@ -74,6 +88,20 @@ public final class GitHubGraphQLProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        guard let token, !token.isEmpty else {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .count(remaining: 0, limit: 5000, unitName: "pts/hr"),
+                status: .unauthenticated,
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: "No GitHub token available"
+            )
+        }
+
         let url = "https://api.github.com/rate_limit"
         let headers = ["Accept": "application/vnd.github+json"]
         let (data, http) = try await QuotaHTTP.get(url: url, headers: headers, key: token)

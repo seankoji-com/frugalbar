@@ -28,7 +28,7 @@ struct MenuBarStatusView: View {
         case .warning:        "gauge.with.needle"
         case .critical:       "gauge.with.needle"
         case .rateLimited:    "exclamationmark.arrow.trianglehead.counterclockwise"
-        case .unauthenticated, .networkError: "exclamationmark.triangle.fill"
+        case .unauthenticated, .networkError, .unsupported: "exclamationmark.triangle.fill"
         }
     }
 
@@ -38,7 +38,7 @@ struct MenuBarStatusView: View {
         case .warning:        .orange
         case .critical:       .red
         case .rateLimited:    .red
-        case .unauthenticated, .networkError: .gray
+        case .unauthenticated, .networkError, .unsupported: .gray
         }
     }
 }

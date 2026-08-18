@@ -34,7 +34,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // List available models to probe auth + infer tier
         let url = "https://generativelanguage.googleapis.com/v1beta/models?key=\(apiKey)"
 
-        let (data, http) = try await QuotaHTTP.get(url: url)
+        let (data, http) = try await QuotaHTTP.get(url: url, key: nil)
 
         struct GLMList: Decodable, Sendable {
             let models: [GLModel]?
@@ -62,7 +62,6 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         // Check for Gemini 2.5 Pro (paid tier) vs free models
         let hasProModel = gl?.models?.contains(where: { $0.name.contains("gemini-2.5-pro") }) ?? false
-        let tierName = hasProModel ? "Advanced (paid tier)" : "Free tier"
 
         // Approximate remaining daily quota from typical free/pro limits
         let dailyLimit = hasProModel ? 1500 : 60

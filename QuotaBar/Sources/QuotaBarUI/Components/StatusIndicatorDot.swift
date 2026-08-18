@@ -11,6 +11,7 @@ struct StatusIndicatorDot: View {
         case .warning:        .orange
         case .critical:       .red
         case .unauthenticated: .gray
+        case .unsupported:    Color(nsColor: .tertiaryLabelColor)
         case .rateLimited:    .red
         case .networkError:   .gray
         }

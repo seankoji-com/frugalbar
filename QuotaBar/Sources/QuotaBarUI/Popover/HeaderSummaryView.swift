@@ -52,6 +52,7 @@ struct HeaderSummaryView: View {
         case .warning: .orange
         case .critical, .rateLimited: .red
         case .unauthenticated, .networkError: .gray
+        case .unsupported: Color(nsColor: .tertiaryLabelColor)
         }
     }
 
@@ -63,6 +64,7 @@ struct HeaderSummaryView: View {
         case .critical: return "\(summary.criticalCount) critical"
         case .rateLimited: return "Rate limited"
         case .unauthenticated, .networkError: return "Errors"
+        case .unsupported: return "Unsupported"
         }
     }
 

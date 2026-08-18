@@ -11,13 +11,14 @@ struct MetricRowView: View {
         case .warning:        .orange
         case .critical:       .red
         case .unauthenticated: .gray
+        case .unsupported:    Color(nsColor: .tertiaryLabelColor)
         case .rateLimited:    .red
         case .networkError:   .gray
         }
     }
 
-    private var progressColor: Color {
-        let frac = snapshot.consumptionFraction
+    private var progressColor: Color? {
+        guard let frac = snapshot.consumptionFraction else { return nil }
         if frac > 0.90 { return .red }
         if frac > 0.70 { return .orange }
         return .green
@@ -49,7 +50,17 @@ struct MetricRowView: View {
     }
 
     private var resetText: String {
-        ResetCountdownBadge.format(snapshot.resetsAt)
+        guard case .unsupported = snapshot.status else {
+            return ResetCountdownBadge.format(snapshot.resetsAt)
+        }
+        return "—"
+    }
+
+    private var auxiliaryHint: String? {
+        if case .unsupported = snapshot.status {
+            return snapshot.auxiliaryInfo
+        }
+        return nil
     }
 
     var body: some View {
@@ -62,12 +73,21 @@ struct MetricRowView: View {
                 .frame(width: 110, alignment: .leading)
                 .lineLimit(1)
 
-            MicroProgressBar(fraction: snapshot.consumptionFraction, statusColor: progressColor)
-                .frame(width: 80)
+            if let progressColor {
+                MicroProgressBar(fraction: snapshot.consumptionFraction ?? 0, statusColor: progressColor)
+                    .frame(width: 80)
+            } else {
+                // Unsupported or subscription — show a muted placeholder
+                Text(auxiliaryHint ?? fractionLabel)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: 80, alignment: .leading)
+                    .lineLimit(1)
+            }
 
             Text(fractionLabel)
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundColor(progressColor)
+                .foregroundColor(progressColor ?? Color(nsColor: .tertiaryLabelColor))
                 .frame(width: 60, alignment: .trailing)
 
             Text(resetText)

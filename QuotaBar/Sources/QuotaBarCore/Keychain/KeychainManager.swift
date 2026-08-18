@@ -90,12 +90,27 @@ public enum CredentialStore {
 
     /// Returns the API key for a given vendor label, checking Keychain and known file paths.
     public static func apiKey(for vendor: VendorIdentifier) -> String? {
-        // Try keychain first
-        if let kc = try? KeychainManager.shared.get(label: vendor.rawValue), !kc.isEmpty {
+        // Try keychain first (use a synchronous helper)
+        if let kc = Self.readFromKeychain(label: vendor.rawValue), !kc.isEmpty {
             return kc
         }
         // Fallback: discover from known CLI configs
         return discoverFromCLI(vendor: vendor)
+    }
+
+    private static func readFromKeychain(label: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String:              kSecClassGenericPassword,
+            kSecAttrService as String:        "com.quotabar.keys",
+            kSecAttrAccount as String:        label,
+            kSecReturnData as String:         true,
+            kSecMatchLimit as String:         kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        guard let data = result as? Data, let string = String(data: data, encoding: .utf8) else { return nil }
+        return string
     }
 
     private static func discoverFromCLI(vendor: VendorIdentifier) -> String? {
