@@ -87,12 +87,17 @@ public actor QuotaManager {
     /// Bypasses the cache entirely. Used by the manual refresh button.
     public func forceRefresh() async -> [VendorIdentifier: QuotaSnapshot] {
         lastCompleteFetch = nil
-        return await fetchDeduplicated()
+        return await fetchDeduplicated(force: true)
     }
 
     // MARK: Private
 
-    private func fetchDeduplicated() async -> [VendorIdentifier: QuotaSnapshot] {
+    private func fetchDeduplicated(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
+        if force {
+            activeTask?.cancel()
+            activeTask = nil
+        }
+
         // Join an in-flight fetch rather than starting a second one.
         if let existing = activeTask {
             return await existing.value
@@ -135,10 +140,14 @@ public actor QuotaManager {
 
         let now = Date()
         for (id, snap) in results {
-            cache[id] = CacheEntry(snapshot: snap, fetchedAt: now)
+            // Keep the old cache entry if a previously successful provider now fails transiently
+            // so we don't wipe out the measured reading.
+            if snap.status.confidence == .measured || cache[id] == nil {
+                cache[id] = CacheEntry(snapshot: snap, fetchedAt: now)
+            }
         }
         lastCompleteFetch = now
-        return results
+        return cache.mapValues(\.snapshot)
     }
 
     /// Builds the placeholder shown when a provider could not be read.

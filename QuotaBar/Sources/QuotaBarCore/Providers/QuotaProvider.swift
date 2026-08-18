@@ -103,6 +103,7 @@ public enum QuotaHTTP {
         switch status {
         case 200...299: nil
         case 401, 403:  .credentialRejected
+        case 429:       .rateLimited(retryAfter: nil)
         default:        .badResponse
         }
     }

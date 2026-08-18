@@ -136,10 +136,14 @@ public struct SettingsView: View {
         isVerifying = true
         defer { isVerifying = false }
 
+        var githubPatChanged = false
+
         for slot in Self.slots {
             let new = (entered[slot.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let old = loaded[slot.id] ?? ""
             guard new != old else { continue }
+            
+            if slot.id == .githubRest { githubPatChanged = true }
 
             do {
                 if new.isEmpty {
@@ -159,7 +163,7 @@ public struct SettingsView: View {
         // GitHub's PAT backs three providers; keep them in step. A partial
         // sync must be reported — otherwise the GraphQL and Copilot rows keep
         // serving a revoked token with no field to fix it in.
-        if let pat = loaded[.githubRest] {
+        if githubPatChanged, let pat = loaded[.githubRest] {
             let failures = applyGitHubTokenToLinkedVendors(pat)
             if !failures.isEmpty {
                 perKeyStatus[.githubRest] = "Saved, but could not sync to \(failures.joined(separator: ", "))"

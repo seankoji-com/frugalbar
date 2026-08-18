@@ -178,6 +178,15 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
+    @Test("429 maps to rate limited")
+    func openRouter429RateLimited() async throws {
+        let provider = OpenRouterProvider(apiKey: "key-123")
+        let snap = try await withStubbedHTTP({ _ in canned(status: 429, body: "{}") }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: nil)))
+    }
+
     @Test("500 maps to bad response")
     func openRouterServerError() async throws {
         let provider = OpenRouterProvider(apiKey: "key-123")

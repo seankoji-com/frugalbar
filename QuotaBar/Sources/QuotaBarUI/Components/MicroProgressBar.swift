@@ -16,24 +16,26 @@ struct MicroProgressBar: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.15))
-                    .frame(height: 4)
-
-                if let clamped {
+        if fraction != nil {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(statusColor)
-                        // Keep a sliver visible at very low values so the bar
-                        // reads as "nearly empty" rather than "not rendered".
-                        .frame(width: max(geo.size.width * clamped, clamped > 0 ? 2 : 0), height: 4)
-                        .animation(.easeOut(duration: 0.3), value: clamped)
+                        .fill(Color.secondary.opacity(0.15))
+                        .frame(height: 4)
+
+                    if let clamped {
+                        Capsule()
+                            .fill(statusColor)
+                            // Keep a sliver visible at very low values so the bar
+                            // reads as "nearly empty" rather than "not rendered".
+                            .frame(width: max(geo.size.width * clamped, clamped > 0 ? 2 : 0), height: 4)
+                            .animation(.easeOut(duration: 0.3), value: clamped)
+                    }
                 }
+                .frame(height: geo.size.height, alignment: .center)
             }
-            .frame(height: geo.size.height, alignment: .center)
+            .frame(height: 4)
+            .accessibilityHidden(true)   // the row supplies the spoken label
         }
-        .frame(height: 4)
-        .accessibilityHidden(true)   // the row supplies the spoken label
     }
 }

@@ -27,7 +27,7 @@ actor GitHubRateLimitFetcher {
     }
 
     private var cached: (payload: Payload, at: Date, token: String)?
-    private var inFlight: [String: Task<Payload, Error>] = [:]
+    private var inFlight: [String: Task<(Payload, Date), Error>] = [:]
     private let coalesceWindow: TimeInterval = 5
 
     /// Returns the payload and the instant it was actually fetched, so a
@@ -41,10 +41,11 @@ actor GitHubRateLimitFetcher {
         // Keyed by token: joining another token's request would hand back the
         // wrong account's limits.
         if let existing = inFlight[token] {
-            return (try await existing.value, Date())
+            let (payload, at) = try await existing.value
+            return (payload, at)
         }
 
-        let task = Task<Payload, Error> {
+        let task = Task<(Payload, Date), Error> {
             let (data, http) = try await QuotaHTTP.get(
                 url: "https://api.github.com/rate_limit",
                 headers: ["Accept": "application/vnd.github+json"],
@@ -56,15 +57,14 @@ actor GitHubRateLimitFetcher {
             guard let decoded = try? JSONDecoder().decode(Payload.self, from: data) else {
                 throw ProviderError.badResponse
             }
-            return decoded
+            return (decoded, Date())
         }
         inFlight[token] = task
         defer { if inFlight[token] == task { inFlight[token] = nil } }
 
-        let payload = try await task.value
-        let now = Date()
-        cached = (payload, now, token)
-        return (payload, now)
+        let (payload, at) = try await task.value
+        cached = (payload, at, token)
+        return (payload, at)
     }
 
     /// Test hook — drops memoised state between cases.

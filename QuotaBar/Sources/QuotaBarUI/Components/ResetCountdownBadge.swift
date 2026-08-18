@@ -13,9 +13,13 @@ public enum ResetCountdownBadge {
         let interval = date.timeIntervalSince(now)
         guard interval > 0 else { return "Now" }
 
-        switch interval {
+        // Round once, then branch on rounded value to avoid straddling thresholds.
+        let totalSeconds = Int(interval.rounded())
+        switch totalSeconds {
+        case ..<1:
+            return "1s"   // never show "0s"
         case ..<60:
-            return "\(Int(interval.rounded()))s"
+            return "\(totalSeconds)s"
         case ..<3600:
             return "\(minutesRounded(interval))m"
         case ..<86400:
@@ -32,9 +36,12 @@ public enum ResetCountdownBadge {
         let interval = date.timeIntervalSince(now)
         guard interval > 0 else { return "Resets now" }
 
-        switch interval {
+        let totalSeconds = Int(interval.rounded())
+        switch totalSeconds {
+        case ..<1:
+            return "Resets in 1 second"
         case ..<60:
-            return "Resets in \(Int(interval.rounded())) seconds"
+            return "Resets in \(totalSeconds) seconds"
         case ..<3600:
             let m = minutesRounded(interval)
             return "Resets in \(m) minute\(m == 1 ? "" : "s")"
@@ -59,9 +66,13 @@ public enum ResetCountdownBadge {
         return (totalMinutes / 60, totalMinutes % 60)
     }
 
-    private static func absoluteDay(_ date: Date) -> String {
+    private static let dayFormatter: DateFormatter = {
         let df = DateFormatter()
         df.setLocalizedDateFormatFromTemplate("MMMd")
-        return df.string(from: date)
+        return df
+    }()
+
+    private static func absoluteDay(_ date: Date) -> String {
+        dayFormatter.string(from: date)
     }
 }

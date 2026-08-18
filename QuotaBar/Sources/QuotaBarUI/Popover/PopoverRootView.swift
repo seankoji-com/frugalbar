@@ -12,7 +12,6 @@ import QuotaBarCore
 public struct PopoverRootView: View {
 
     @State private var store: QuotaStore
-    @State private var showSettings = false
 
     /// Wide enough for the row budget in `MetricRowView` (324pt of content).
     static let popoverWidth: CGFloat = 340
@@ -42,7 +41,11 @@ public struct PopoverRootView: View {
             Divider()
 
             FooterActionsView(
-                onOpenSettings: { showSettings = true },
+                onOpenSettings: { 
+                    // Open the Settings scene window. Available since macOS 14;
+                    // we target 15+.
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                },
                 onQuit: { NSApp.terminate(nil) }
             )
         }
@@ -51,9 +54,6 @@ public struct PopoverRootView: View {
             // Background polling is subscribed once by the app delegate, which
             // owns the store. Registering here too ran every tick twice.
             await store.load()
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
         }
     }
 
