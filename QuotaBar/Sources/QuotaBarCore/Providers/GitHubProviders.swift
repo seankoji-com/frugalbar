@@ -27,16 +27,22 @@ actor GitHubRateLimitFetcher {
     }
 
     private var cached: (payload: Payload, at: Date, token: String)?
-    private var inFlight: Task<Payload, Error>?
+    private var inFlight: [String: Task<Payload, Error>] = [:]
     private let coalesceWindow: TimeInterval = 5
 
-    func rateLimits(token: String) async throws -> Payload {
+    /// Returns the payload and the instant it was actually fetched, so a
+    /// coalesced read is not reported as fresher than it is.
+    func rateLimits(token: String) async throws -> (payload: Payload, fetchedAt: Date) {
         if let cached,
            cached.token == token,
            Date().timeIntervalSince(cached.at) < coalesceWindow {
-            return cached.payload
+            return (cached.payload, cached.at)
         }
-        if let inFlight { return try await inFlight.value }
+        // Keyed by token: joining another token's request would hand back the
+        // wrong account's limits.
+        if let existing = inFlight[token] {
+            return (try await existing.value, Date())
+        }
 
         let task = Task<Payload, Error> {
             let (data, http) = try await QuotaHTTP.get(
@@ -52,18 +58,19 @@ actor GitHubRateLimitFetcher {
             }
             return decoded
         }
-        inFlight = task
-        defer { if inFlight == task { inFlight = nil } }
+        inFlight[token] = task
+        defer { if inFlight[token] == task { inFlight[token] = nil } }
 
         let payload = try await task.value
-        cached = (payload, Date(), token)
-        return payload
+        let now = Date()
+        cached = (payload, now, token)
+        return (payload, now)
     }
 
     /// Test hook — drops memoised state between cases.
     func reset() {
         cached = nil
-        inFlight = nil
+        inFlight.removeAll()
     }
 }
 
@@ -72,7 +79,8 @@ actor GitHubRateLimitFetcher {
 private func rateLimitSnapshot(
     provider: any QuotaProvider,
     rate: GitHubRateLimitFetcher.Rate,
-    unitName: String
+    unitName: String,
+    fetchedAt: Date
 ) -> QuotaSnapshot {
     // An authenticated GraphQL allowance is 5000; unauthenticated it is 0.
     // A zero limit is not "100% consumed", it means there is no allowance to
@@ -94,7 +102,7 @@ private func rateLimitSnapshot(
         metric: .count(remaining: rate.remaining, limit: rate.limit, unitName: unitName),
         status: .measured(urgency),
         resetsAt: Date(timeIntervalSince1970: TimeInterval(rate.reset)),
-        lastUpdated: Date(),
+        lastUpdated: fetchedAt,
         auxiliaryInfo: nil
     )
 }
@@ -120,8 +128,9 @@ public final class GitHubRestProvider: QuotaProvider, Sendable {
         guard let resolved = await credential(injected: token, for: .githubRest) else {
             return unavailable(.notConfigured)
         }
-        let payload = try await GitHubRateLimitFetcher.shared.rateLimits(token: resolved)
-        return rateLimitSnapshot(provider: self, rate: payload.resources.core, unitName: "req/hr")
+        let result = try await GitHubRateLimitFetcher.shared.rateLimits(token: resolved)
+        return rateLimitSnapshot(provider: self, rate: result.payload.resources.core,
+                                 unitName: "req/hr", fetchedAt: result.fetchedAt)
     }
 }
 
@@ -143,10 +152,11 @@ public final class GitHubGraphQLProvider: QuotaProvider, Sendable {
         guard let resolved = await credential(injected: token, for: .githubGraphql) else {
             return unavailable(.notConfigured)
         }
-        let payload = try await GitHubRateLimitFetcher.shared.rateLimits(token: resolved)
-        guard let graphql = payload.resources.graphql else {
+        let result = try await GitHubRateLimitFetcher.shared.rateLimits(token: resolved)
+        guard let graphql = result.payload.resources.graphql else {
             return unavailable(.badResponse)
         }
-        return rateLimitSnapshot(provider: self, rate: graphql, unitName: "pts/hr")
+        return rateLimitSnapshot(provider: self, rate: graphql,
+                                 unitName: "pts/hr", fetchedAt: result.fetchedAt)
     }
 }

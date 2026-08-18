@@ -65,6 +65,9 @@ public enum UnavailableReason: Sendable, Equatable {
     case offline                  // transport failure
     case timedOut
     case badResponse              // non-2xx, or a body we could not parse
+    /// Vendor throttled us. A 429 on a metadata endpoint says nothing about
+    /// the user's quota, so this is an absence of a reading — not an emergency.
+    case rateLimited(retryAfter: Date?)
 
     public var headline: String {
         switch self {
@@ -74,6 +77,7 @@ public enum UnavailableReason: Sendable, Equatable {
         case .offline:            "Offline"
         case .timedOut:           "Timed out"
         case .badResponse:        "Unexpected response"
+        case .rateLimited:        "Rate limited"
         }
     }
 
@@ -86,6 +90,7 @@ public enum UnavailableReason: Sendable, Equatable {
         case .offline:            "Check your connection"
         case .timedOut:           "Vendor slow — will retry"
         case .badResponse:        "Vendor returned unexpected data"
+        case .rateLimited:        "Vendor throttling — will retry"
         }
     }
 }
@@ -95,8 +100,6 @@ public enum ProviderStatus: Sendable, Equatable {
     case measured(Urgency)
     /// We have no reading. This is informational, never an emergency.
     case unavailable(UnavailableReason)
-    /// We have a real reading and the vendor is throttling us.
-    case rateLimited(retryAfter: Date?)
 
     // Convenience constructors that keep call sites readable.
     public static var healthy: ProviderStatus { .measured(.none) }
@@ -106,21 +109,23 @@ public enum ProviderStatus: Sendable, Equatable {
     public static func unsupported(_ reason: String) -> ProviderStatus {
         .unavailable(.unsupported(reason))
     }
+    public static func rateLimited(retryAfter: Date?) -> ProviderStatus {
+        .unavailable(.rateLimited(retryAfter: retryAfter))
+    }
 
     /// Quota pressure only. An unreadable provider contributes `.none` — it is
     /// surfaced through `confidence`, not by masking a real emergency.
     public var urgency: Urgency {
         switch self {
         case .measured(let u):  u
-        case .rateLimited:      .critical
         case .unavailable:      .none
         }
     }
 
     public var confidence: Confidence {
         switch self {
-        case .measured, .rateLimited: .measured
-        case .unavailable:            .unavailable
+        case .measured:    .measured
+        case .unavailable: .unavailable
         }
     }
 

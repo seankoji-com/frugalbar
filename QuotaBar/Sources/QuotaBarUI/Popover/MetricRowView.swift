@@ -74,6 +74,5 @@ struct MetricRowView: View {
         .help(p.accessibilityLabel)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(p.accessibilityLabel)
-        .accessibilityAddTraits(p.urgency == .critical ? .isSelected : [])
     }
 }

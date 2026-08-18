@@ -12,15 +12,18 @@ React/Vite mock-up, kept for reference only.
 cd QuotaBar && swift run
 ```
 
-Add credentials via **Preferences → API Keys**. Each key is verified against
-the vendor when you save it, so a bad paste fails there rather than showing up
-later as an unexplained blank row.
+Add credentials via **Preferences → API Keys**. GitHub, OpenRouter and Gemini
+keys are exercised against the vendor when you save, so a bad paste fails there
+rather than showing up later as an unexplained blank row. OpenCode has no
+endpoint to check against, so it reports "Saved — cannot be verified".
 
 ## Build & test
 
 ```bash
-cd QuotaBar && swift build && swift test
+cd QuotaBar && swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
 ```
+
+That is exactly what CI runs.
 
 ## What it can actually measure
 
@@ -38,8 +41,9 @@ number in a tool you use to decide whether to start a long job.
 | OpenCode | credential presence only | No gauge — OpenCode publishes no usage API |
 | Claude | — | No gauge — Anthropic publishes no subscription quota API |
 
-Three providers give a real gauge today. The other four are shown so you know
-they're configured, not so you can read a quota off them.
+Two providers give a real gauge on a default install; OpenRouter makes a third
+when its key has a spend cap, which is not the default. The rest are shown so
+you know they're configured, not so you can read a quota off them.
 
 **Why OpenRouter is conditional:** `/auth/key` returns `limit`, which is the
 spend cap *on that key* and is `null` when the key is uncapped. It is not your
@@ -68,5 +72,5 @@ Prototype. `swift run` produces a bare executable, not a signed `.app` — there
 is no bundling, code-signing, notarisation or update mechanism yet, and no
 threshold notifications. See the PR discussion for the roadmap.
 
-CI runs `swift build -warnings-as-errors` and the test suite twice (to catch
-flakes) on GitHub-hosted macOS runners.
+CI runs `swift build -Xswiftc -warnings-as-errors` and the test suite twice (to
+catch flakes) on GitHub-hosted macOS runners.

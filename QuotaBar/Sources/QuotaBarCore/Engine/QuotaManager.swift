@@ -197,9 +197,12 @@ public struct SystemHealthSummary: Sendable {
                 }
                 worst = max(worst, snap.status.urgency)
             }
-            // Staleness is defined by the *oldest* reading, not the newest —
-            // the newest hides a provider that stopped updating an hour ago.
-            if oldest.map({ snap.lastUpdated < $0 }) ?? true {
+            // Staleness is defined by the *oldest* successful reading. The
+            // newest hides a provider that stopped updating an hour ago, and
+            // unavailable placeholders are stamped "now", which would reset
+            // the badge to 0s at the moment data stopped arriving.
+            if snap.status.confidence == .measured,
+               oldest.map({ snap.lastUpdated < $0 }) ?? true {
                 oldest = snap.lastUpdated
             }
         }

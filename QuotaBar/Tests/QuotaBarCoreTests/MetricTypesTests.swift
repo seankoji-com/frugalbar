@@ -59,7 +59,10 @@ struct ConsumptionFractionTests {
     func unmeasuredStatusYieldsNil() {
         let m = MetricType.percentage(usedFraction: 0.9, displayDetails: nil)
         #expect(snapshot(m, status: .unavailable(.notConfigured)).consumptionFraction == nil)
-        #expect(snapshot(m, status: .rateLimited(retryAfter: nil)).consumptionFraction != nil) // rateLimited is still "measured" confidence
+        // A 429 is an absent reading, not a 90%-consumed quota. Rendering the
+        // placeholder metric here is exactly the fabrication this model exists
+        // to prevent.
+        #expect(snapshot(m, status: .rateLimited(retryAfter: nil)).consumptionFraction == nil)
     }
 }
 
@@ -87,15 +90,20 @@ struct ProviderStatusTests {
         #expect(ProviderStatus.unsupported("x").urgency == .none)
     }
 
-    @Test("rateLimited is always critical urgency")
-    func rateLimitedIsCritical() {
-        #expect(ProviderStatus.rateLimited(retryAfter: nil).urgency == .critical)
+    @Test("rateLimited carries no urgency — a 429 is an absent reading, not an emergency")
+    func rateLimitedIsNotUrgent() {
+        // A 429 on a metadata endpoint says nothing about the user's quota.
+        // Treating it as critical turned the whole menu bar red on zero data.
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).urgency == .none)
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).confidence == .unavailable)
     }
 
-    @Test("confidence: measured and rateLimited are measured, unavailable is not")
+    @Test("confidence: only a parsed reading counts as measured")
     func confidence() {
         #expect(ProviderStatus.healthy.confidence == .measured)
-        #expect(ProviderStatus.rateLimited(retryAfter: nil).confidence == .measured)
+        #expect(ProviderStatus.warning.confidence == .measured)
+        #expect(ProviderStatus.critical.confidence == .measured)
+        #expect(ProviderStatus.rateLimited(retryAfter: nil).confidence == .unavailable)
         #expect(ProviderStatus.unauthenticated.confidence == .unavailable)
         #expect(ProviderStatus.unsupported("x").confidence == .unavailable)
     }
@@ -104,7 +112,9 @@ struct ProviderStatusTests {
     func unavailableReasonAccessor() {
         #expect(ProviderStatus.unauthenticated.unavailableReason == .notConfigured)
         #expect(ProviderStatus.healthy.unavailableReason == nil)
-        #expect(ProviderStatus.rateLimited(retryAfter: nil).unavailableReason == nil)
+        let retry = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(ProviderStatus.rateLimited(retryAfter: retry).unavailableReason
+                == .rateLimited(retryAfter: retry))
     }
 
     @Test("unsupported equality is by reason string")

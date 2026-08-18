@@ -127,9 +127,11 @@ public struct SettingsView: View {
         entered = current
     }
 
-    /// Writes only what changed, deletes what was cleared, then proves each key
-    /// works by making a real call — so a truncated paste fails here, where the
-    /// user can fix it, rather than as an unexplained grey row later.
+    /// Writes only what changed and deletes what was cleared. Where the vendor
+    /// has an endpoint to check against, the key is then exercised for real, so
+    /// a truncated paste fails here — where the user can fix it — rather than
+    /// as an unexplained blank row later. Vendors with no such endpoint report
+    /// "Saved — cannot be verified" rather than implying a check happened.
     private func saveAndVerify() async {
         isVerifying = true
         defer { isVerifying = false }
@@ -154,29 +156,45 @@ public struct SettingsView: View {
             }
         }
 
-        // GitHub's PAT backs three providers; keep them in step.
+        // GitHub's PAT backs three providers; keep them in step. A partial
+        // sync must be reported — otherwise the GraphQL and Copilot rows keep
+        // serving a revoked token with no field to fix it in.
         if let pat = loaded[.githubRest] {
-            try? applyGitHubTokenToLinkedVendors(pat)
-        }
-    }
-
-    private func applyGitHubTokenToLinkedVendors(_ pat: String) throws {
-        for vendor in [VendorIdentifier.githubGraphql, .copilot] {
-            if pat.isEmpty {
-                try? KeychainManager.shared.delete(label: vendor.rawValue)
-            } else {
-                try KeychainManager.shared.set(key: pat, label: vendor.rawValue)
+            let failures = applyGitHubTokenToLinkedVendors(pat)
+            if !failures.isEmpty {
+                perKeyStatus[.githubRest] = "Saved, but could not sync to \(failures.joined(separator: ", "))"
             }
         }
     }
 
+    /// Returns the display names of any linked vendors that could not be synced.
+    private func applyGitHubTokenToLinkedVendors(_ pat: String) -> [String] {
+        var failed: [String] = []
+        for vendor in [VendorIdentifier.githubGraphql, .copilot] {
+            do {
+                if pat.isEmpty {
+                    try KeychainManager.shared.delete(label: vendor.rawValue)
+                } else {
+                    try KeychainManager.shared.set(key: pat, label: vendor.rawValue)
+                }
+            } catch {
+                failed.append(vendor.displayName)   // continue; don't abort the rest
+            }
+        }
+        return failed
+    }
+
     private func verify(_ vendor: VendorIdentifier, key: String) async -> String {
-        let provider: any QuotaProvider = switch vendor {
-        case .githubRest:  GitHubRestProvider(token: key)
-        case .openrouter:  OpenRouterProvider(apiKey: key)
-        case .gemini:      GeminiQuotaProvider(apiKey: key)
-        case .opencode:    OpenCodeGoProvider(apiKey: key)
-        default:           GitHubRestProvider(token: key)
+        // OpenCode publishes no endpoint to verify against, so its provider
+        // makes no call. Reporting "Key accepted" would be a claim we cannot
+        // support. Any vendor not listed here is likewise unverifiable — the
+        // default must not silently verify against GitHub.
+        let provider: any QuotaProvider
+        switch vendor {
+        case .githubRest:  provider = GitHubRestProvider(token: key)
+        case .openrouter:  provider = OpenRouterProvider(apiKey: key)
+        case .gemini:      provider = GeminiQuotaProvider(apiKey: key)
+        default:           return "Saved — cannot be verified"
         }
 
         guard let snapshot = try? await provider.fetchSnapshot() else {
@@ -187,6 +205,7 @@ public struct SettingsView: View {
         case .notConfigured:      return "Empty"
         case .offline, .timedOut: return "Could not reach the vendor"
         case .badResponse:        return "Unexpected response"
+        case .rateLimited:        return "Vendor is throttling — try again shortly"
         case .unsupported:        return "Key accepted"
         case nil:                 return "Key accepted"
         }
@@ -202,6 +221,8 @@ public struct SettingsView: View {
             return "Unlock your Keychain and try again"
         case errSecUserCanceled:
             return "Keychain access was declined"
+        case errSecMissingEntitlement:
+            return "Requires a signed app bundle — see README"
         default:
             return "Keychain error \(status)"
         }

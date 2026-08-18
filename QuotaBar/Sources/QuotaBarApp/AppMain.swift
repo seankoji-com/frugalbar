@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// neither has to rebuild the other to see new data.
     private let store = QuotaStore()
     private var schedulerToken: UUID?
-    private var observationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
@@ -36,8 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.popover = popover
 
+        // One owner for status item redraws.
+        store.onSummaryChange = { [weak self] _ in
+            self?.applyStatusItemPresentation()
+        }
         applyStatusItemPresentation()
-        observeStore()
 
         Task {
             await store.load()
@@ -49,33 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        observationTask?.cancel()
         let token = schedulerToken
         Task {
             await BackgroundScheduler.shared.stop()
             if let token { await BackgroundScheduler.shared.removeHandler(token) }
-        }
-    }
-
-    /// Redraws the status item whenever the store's summary changes.
-    private func observeStore() {
-        observationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                // Re-arm observation each time the tracked value changes.
-                await withCheckedContinuation { continuation in
-                    withObservationTracking {
-                        _ = self.store.summary
-                    } onChange: {
-                        continuation.resume()
-                    }
-                }
-                // `onChange` fires *before* the mutation lands, so yield once
-                // to read the new value rather than the one we just observed.
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                self.applyStatusItemPresentation()
-            }
         }
     }
 

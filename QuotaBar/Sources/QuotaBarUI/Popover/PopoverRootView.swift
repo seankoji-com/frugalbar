@@ -48,8 +48,9 @@ public struct PopoverRootView: View {
         }
         .frame(width: Self.popoverWidth)
         .task {
+            // Background polling is subscribed once by the app delegate, which
+            // owns the store. Registering here too ran every tick twice.
             await store.load()
-            await store.startObservingBackgroundRefresh()
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()

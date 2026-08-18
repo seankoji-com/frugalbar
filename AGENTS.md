@@ -10,10 +10,10 @@ what has actually gone wrong before.
 ## Commands
 
 ```bash
-cd QuotaBar && swift build -Xswiftc -warnings-as-errors && swift test
+cd QuotaBar && swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
 ```
 
-CI runs exactly this, then re-runs the tests to catch flakes.
+CI runs exactly this, then re-runs the tests once more to catch flakes.
 
 ## Invariants
 
@@ -35,9 +35,14 @@ the menu bar icon. `Confidence` (did we get a reading) is a decoration. An
 unreadable provider must never outrank a critical quota — that inversion made
 the icon a permanent grey error triangle for every user.
 
-Adding a `ProviderStatus` case means checking every `switch` over it:
-`MetricRowPresentation`, `StatusIndicatorDot`, `MenuBarPresentation`,
-`HeaderSummaryView`, `SystemHealthSummary.compute`.
+Beware: the UI switches on `Urgency`/`Confidence`, **not** on `ProviderStatus`.
+So adding a `ProviderStatus` case compiles everywhere and silently maps to an
+existing bucket via `urgency`/`confidence` in `MetricTypes.swift` — that is
+exactly how a 429 came to render as a critical quota. Adding a case means
+deciding both axes there, deliberately.
+
+Adding an `UnavailableReason` case *does* force updates: `headline`, `remedy`
+(`MetricTypes.swift`), and `SettingsView.verify`.
 
 **Credentials never reach user-facing or persisted fields.** Send keys in
 headers, never query strings. Never put `error.localizedDescription` in a
@@ -51,6 +56,10 @@ every "provider test" silently passed without exercising any parsing.
 
 **Never assert on a duration derived from `Date()`.** Pass an explicit `now`.
 `Int(179.97 / 60)` is 2, which made one test fail ~25% of runs.
+
+**Don't add Keychain attributes that need entitlements.** `kSecUseDataProtectionKeychain`
+returns -34018 from `swift run`, silently breaking every credential path. It can
+only go in alongside a signed, entitled `.app`.
 
 ## UI constraints
 

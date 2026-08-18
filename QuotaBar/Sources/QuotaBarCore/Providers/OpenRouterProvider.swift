@@ -37,13 +37,10 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         )
 
         if http.statusCode == 429 {
-            return QuotaSnapshot(
-                id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
-                category: category,
-                metric: .subscription(tierName: "Rate limited", renewalDate: nil),
-                status: .rateLimited(retryAfter: Self.retryAfter(from: http)),
-                resetsAt: Self.retryAfter(from: http), lastUpdated: Date(), auxiliaryInfo: nil
-            )
+            // A 429 on this metadata endpoint tells us nothing about the
+            // user's credit balance, so it is an absent reading rather than a
+            // critical quota.
+            return unavailable(.rateLimited(retryAfter: Self.retryAfter(from: http)))
         }
         if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
             return unavailable(reason)

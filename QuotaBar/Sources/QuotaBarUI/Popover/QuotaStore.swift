@@ -17,8 +17,15 @@ public final class QuotaStore {
     public private(set) var summary: SystemHealthSummary = .compute(from: [])
     public private(set) var isRefreshing = false
 
+    /// Called on the main actor whenever `summary` changes.
+    ///
+    /// A plain callback rather than observation plumbing: there is exactly one
+    /// owner (the AppDelegate, which redraws the status item), and it is set
+    /// once at construction. This is not the shared-mutable-callback pattern
+    /// that previously let the popover clobber the menu bar's refresh handler.
+    public var onSummaryChange: (@MainActor (SystemHealthSummary) -> Void)?
+
     private let manager: QuotaManager
-    private var schedulerToken: UUID?
 
     public init(manager: QuotaManager = .shared) {
         self.manager = manager
@@ -46,21 +53,6 @@ public final class QuotaStore {
         let snaps = await manager.sortedSnapshots()
         self.snapshots = snaps
         self.summary = SystemHealthSummary.compute(from: snaps)
-    }
-
-    /// Subscribes to background polls. Uses the scheduler's additive handler
-    /// registry, so this cannot displace another component's handler.
-    public func startObservingBackgroundRefresh() async {
-        guard schedulerToken == nil else { return }
-        schedulerToken = await BackgroundScheduler.shared.addHandler { [weak self] in
-            guard let self else { return }
-            await self.load()
-        }
-    }
-
-    public func stopObservingBackgroundRefresh() async {
-        guard let token = schedulerToken else { return }
-        await BackgroundScheduler.shared.removeHandler(token)
-        schedulerToken = nil
+        onSummaryChange?(self.summary)
     }
 }

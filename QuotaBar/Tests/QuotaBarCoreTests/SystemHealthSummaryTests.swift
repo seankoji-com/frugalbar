@@ -71,14 +71,26 @@ struct SystemHealthSummaryTests {
         #expect(withCritical.worstUrgency == .critical)
     }
 
-    @Test("a rateLimited provider counts as critical urgency, not unavailable")
-    func summary_rateLimitedCountsAsCritical() {
+    @Test("a rateLimited provider is unavailable, and cannot redden the menu bar")
+    func summary_rateLimitedIsUnavailable() {
         let summary = SystemHealthSummary.compute(from: [
             snapshot(vendor: .openrouter, status: .rateLimited(retryAfter: nil)),
         ])
-        #expect(summary.worstUrgency == .critical)
-        #expect(summary.criticalCount == 1)
-        #expect(summary.unavailableCount == 0)
+        #expect(summary.worstUrgency == .none)
+        #expect(summary.criticalCount == 0)
+        #expect(summary.unavailableCount == 1)
+        #expect(summary.hasAnyReading == false)
+    }
+
+    @Test("a throttled provider does not mask a genuinely healthy fleet")
+    func summary_rateLimitedDoesNotMaskHealth() {
+        let summary = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .openrouter, status: .rateLimited(retryAfter: nil)),
+            snapshot(vendor: .githubRest, status: .measured(.none)),
+        ])
+        #expect(summary.worstUrgency == .none)
+        #expect(summary.healthyCount == 1)
+        #expect(summary.unavailableCount == 1)
     }
 
     @Test("oldestReading picks the oldest timestamp, not the newest or the last one seen")

@@ -4,14 +4,12 @@ import Security
 // MARK: - Keychain wrapper (macOS Security framework)
 
 public enum KeychainError: Error, Sendable, LocalizedError {
-    case duplicateEntry
     case unknown(OSStatus)
     case itemNotFound
     case invalidData
 
     public var errorDescription: String? {
         switch self {
-        case .duplicateEntry: "Keychain entry already exists"
         case .unknown(let s): "Keychain error \(s)"
         case .itemNotFound:   "No matching keychain item found"
         case .invalidData:    "Invalid keychain data"
@@ -40,8 +38,13 @@ public final class KeychainManager: Sendable {
             kSecAttrAccount as String:        label,
             kSecValueData as String:          data,
             kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            // Modern keychain semantics, and never sync a credential to iCloud.
-            kSecUseDataProtectionKeychain as String: true,
+            // Never sync a credential to iCloud.
+            //
+            // NOTE: kSecUseDataProtectionKeychain is deliberately *not* set.
+            // It requires a code-signed bundle with an application-identifier
+            // entitlement; from `swift run` SecItemAdd returns -34018
+            // (errSecMissingEntitlement) and no credential can be stored at
+            // all. Add it together with proper .app signing, not before.
             kSecAttrSynchronizable as String: false,
         ]
 
@@ -58,7 +61,6 @@ public final class KeychainManager: Sendable {
             kSecAttrAccount as String:        label,
             kSecReturnData as String:         true,
             kSecMatchLimit as String:         kSecMatchLimitOne,
-            kSecUseDataProtectionKeychain as String: true,
             kSecAttrSynchronizable as String: false,
         ]
 
@@ -81,7 +83,6 @@ public final class KeychainManager: Sendable {
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: label,
-            kSecUseDataProtectionKeychain as String: true,
             kSecAttrSynchronizable as String: false,
         ]
         let status = SecItemDelete(query as CFDictionary)
