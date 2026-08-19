@@ -1,34 +1,23 @@
-# QuotaBar — Swift build & test workflow
+# FrugalBar — Swift build & test workflow
 #
-# Runs on the org's self-hosted macOS pool.
-#
-# Why not `macos-latest`: this repo is private, so GitHub-hosted macOS minutes
-# are billed at a 10x multiplier, and the account currently rejects those jobs
-# ("recent account payments have failed or your spending limit needs to be
-# increased"). The self-hosted pool is the working path.
-#
-# Why the labels matter: an earlier revision targeted this same label set while
-# **no runner carried `macOS` or `mac`**, so every job queued until it expired
-# and CI never executed once. Before changing `runs-on`, confirm the labels
-# exist:
-#
-#   gh api -X GET orgs/seankoji-com/actions/runners \
-#     --jq '.runners[] | "\(.name) \(.status) \([.labels[].name]|join(","))"'
-#
-# To provision more: see the `mac-runners` skill (`--macos` for native runners).
+# Runs on GitHub-hosted macOS (macos-14 / Apple Silicon).
 
-name: QuotaBar CI
+name: FrugalBar CI
 
 on:
   push:
-    branches: [main, quotabar-swift-prototype]
+    branches: [main]
     paths:
-      - "QuotaBar/**"
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
       - ".github/workflows/quotabar-ci.yml"
   pull_request:
     branches: [main]
     paths:
-      - "QuotaBar/**"
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
       - ".github/workflows/quotabar-ci.yml"
   workflow_dispatch:
 
@@ -42,12 +31,8 @@ permissions:
 jobs:
   build-and-test:
     name: Build & Test (macOS)
-    runs-on: [self-hosted, macOS, ARM64, mac]
-    # A hung job must fail, not queue forever.
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: QuotaBar
+    runs-on: macos-14
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +56,3 @@ jobs:
       - name: Re-run tests (flake check)
         run: swift test -c debug --parallel
 
-      # Self-hosted runners persist state between jobs; don't leak build output.
-      - name: Clean workspace
-        if: always()
-        run: rm -rf .build
