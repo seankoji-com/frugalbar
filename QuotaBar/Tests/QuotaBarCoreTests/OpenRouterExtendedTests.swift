@@ -280,7 +280,7 @@ struct OpenRouterExtendedTests {
 
     // MARK: - Currency metric shape
 
-    @Test("capped key returns currency metric with balance, limit and spent")
+    @Test("capped key returns currency metric with balance, limit and spent converted to AUD")
     func cappedKeyCurrencyMetric() async throws {
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
@@ -292,13 +292,13 @@ struct OpenRouterExtendedTests {
             Issue.record("expected .currency, got \(snap.metric)")
             return
         }
-        #expect(limit == 10)
-        #expect(balance == 6.5)  // limit_remaining
-        #expect(spent == 3.5)
-        #expect(code == "USD")
+        #expect(limit == Decimal(10 * OpenRouterProvider.usdToAudRate))
+        #expect(balance == Decimal(6.5 * OpenRouterProvider.usdToAudRate))  // limit_remaining
+        #expect(spent == Decimal(3.5 * OpenRouterProvider.usdToAudRate))
+        #expect(code == "AUD")
     }
 
-    @Test("uncapped key returns currency metric with nil limit and spent as usage")
+    @Test("uncapped key returns currency metric in AUD with nil limit and spent as usage")
     func uncappedKeyCurrencyMetric() async throws {
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
@@ -306,13 +306,14 @@ struct OpenRouterExtendedTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        guard case .currency(let balance, let limit, let spent, _) = snap.metric else {
+        guard case .currency(let balance, let limit, let spent, let code) = snap.metric else {
             Issue.record("expected .currency, got \(snap.metric)")
             return
         }
         #expect(limit == nil)
-        #expect(spent == 12.34)
-        // balance should equal spent when uncapped
-        #expect(balance == 12.34)
+        #expect(spent == Decimal(12.34 * OpenRouterProvider.usdToAudRate))
+        #expect(balance == Decimal(12.34 * OpenRouterProvider.usdToAudRate))
+        #expect(code == "AUD")
     }
 }
+

@@ -223,16 +223,54 @@ public enum CredentialStore {
             return key
 
         case .claude:
-            // ~/.claude.json — holds OAuth session but no raw API key in typical cases.
-            // In practice Claude Desktop manages its own OAuth.
-            return nil
+            // ~/.claude.json — holds OAuth session and subscription tier
+            let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let oauth = json["oauthAccount"] as? [String: Any]
+            else { return nil }
+
+            if let orgType = oauth["organizationType"] as? String {
+                if orgType.contains("max") { return "Claude Max" }
+                if orgType.contains("pro") { return "Claude Pro" }
+                if orgType.contains("team") { return "Claude Team" }
+            }
+            if let seat = oauth["seatTier"] as? String, !seat.isEmpty {
+                return seat.capitalized
+            }
+            if let billing = oauth["billingType"] as? String, billing == "stripe_subscription" {
+                return "Claude Pro"
+            }
+            return "Active"
 
         case .copilot:
-            // gh auth token is used for Copilot as well
+            // 1. Check ~/.local/share/opencode/auth.json
+            let authUrl = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".local/share/opencode/auth.json")
+            if let data = try? Data(contentsOf: authUrl),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let cop = json["github-copilot"] as? [String: Any],
+               let token = cop["access"] as? String, !token.isEmpty {
+                return token
+            }
+            // 2. Check ~/.config/github-copilot/hosts.json
+            let hostsUrl = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".config/github-copilot/hosts.json")
+            if let data = try? Data(contentsOf: hostsUrl),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                for (_, val) in json {
+                    if let hostDict = val as? [String: Any],
+                       let oauthToken = hostDict["oauth_token"] as? String, !oauthToken.isEmpty {
+                        return oauthToken
+                    }
+                }
+            }
+            // 3. Fallback to gh auth token
             return Self.apiKey(for: .githubRest)
         }
     }
 }
+
 
 extension CredentialStore {
     /// Async accessor for use from provider `fetchSnapshot()`.

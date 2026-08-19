@@ -209,4 +209,47 @@ struct MenuBarPresentationTests {
         ])
         #expect(summary.oldestReading == old)
     }
+
+    @Test("recommendationDetails extracts lowest remaining bar and time left for recommended platform")
+    func recommendationDetailsExtractsLowestQuota() {
+        let gemini = QuotaSnapshot(
+            id: "gemini",
+            vendorId: .gemini,
+            displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.59, label: "5H", resetText: "Resets in 3h 29m"),
+            row2: DualBarMetrics(primaryFraction: 0.04, label: "WK", resetText: "Refreshes in 167h 25m")
+        )
+        let advice = QuotaAdvice(
+            headline: "Use Gemini",
+            message: "Gemini high remaining.",
+            vendorId: .gemini
+        )
+        let summary = SystemHealthSummary.compute(from: [gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini],
+            summary: summary
+        )
+
+        #expect(details.vendorId == .gemini)
+        #expect(details.remainingPctText == "41%")
+        #expect(details.timeLeftText == "3.48hr")
+        #expect(details.displayText == "41% 3.48hr")
+    }
+
+    @Test("formatTimeLeft parses various duration formats")
+    func formatTimeLeftParsesDurations() {
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3.48hr")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 2h 10m") == "2.17hr")
+        #expect(MenuBarPresentation.formatTimeLeft("42m") == "0.70hr")
+        #expect(MenuBarPresentation.formatTimeLeft("4d 6h") == "4.2d")
+    }
 }
+

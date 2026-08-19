@@ -34,8 +34,8 @@ public actor QuotaManager {
         [
             ClaudeQuotaProvider(),
             GeminiQuotaProvider(),
-            OpenCodeGoProvider(),
             GitHubCopilotProvider(),
+            OpenCodeGoProvider(),
             OpenRouterProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
@@ -52,13 +52,16 @@ public actor QuotaManager {
     /// Returns all snapshots sorted by the canonical provider order.
     public func sortedSnapshots() -> [QuotaSnapshot] {
         let order: [VendorIdentifier] = [
-            .claude, .gemini, .opencode, .copilot,
+            .claude, .gemini, .copilot, .opencode,
             .openrouter,
             .githubRest, .githubGraphql,
         ]
         let dict = cache.mapValues(\.snapshot)
         return order.compactMap { dict[$0] }
     }
+
+
+
 
     /// Returns true if cache is still fresh.
     public func isCacheFresh() -> Bool {

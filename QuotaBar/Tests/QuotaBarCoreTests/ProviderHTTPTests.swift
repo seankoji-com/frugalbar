@@ -290,14 +290,23 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    // MARK: Providers with no data source
+    // MARK: Providers with subscription/API access
 
-    @Test("Claude always reports unavailable with no fabricated fraction")
-    func claudeUnavailable() async throws {
-        let provider = ClaudeQuotaProvider()
+    @Test("Claude with empty key reports not configured")
+    func claudeNoKey() async throws {
+        let provider = ClaudeQuotaProvider(apiKey: "")
         let snap = try await provider.fetchSnapshot()
-        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.status == .unavailable(.notConfigured))
         #expect(snap.consumptionFraction == nil)
+    }
+
+    @Test("Claude with key reports critical subscription")
+    func claudeWithKey() async throws {
+        let provider = ClaudeQuotaProvider(apiKey: "Claude Max")
+        let snap = try await provider.fetchSnapshot()
+        #expect(snap.status == .critical)
+        #expect(snap.consumptionFraction == nil)
+        #expect(snap.metric == .subscription(tierName: "Claude Max", renewalDate: nil))
     }
 
     @Test("Gemini with no key short-circuits without issuing a request")
@@ -310,14 +319,15 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("Gemini with a valid key reports unavailable (no usage API) with no fabricated fraction")
-    func geminiValidKeyIsUnavailable() async throws {
+    @Test("Gemini with a valid key reports healthy AI Studio subscription with no fabricated fraction")
+    func geminiValidKeyIsHealthy() async throws {
         let provider = GeminiQuotaProvider(apiKey: "k")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.status == .healthy)
         #expect(snap.consumptionFraction == nil)
+        #expect(snap.metric == .subscription(tierName: "AI Studio", renewalDate: nil))
     }
 
     @Test("Gemini 401 maps to credential rejected")
@@ -355,26 +365,32 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("OpenCode with a key reports unavailable, performing no network call, no fabricated fraction")
+    @Test("OpenCode with a key reports critical subscription when monthly is exhausted")
     func openCodeWithKey() async throws {
         let provider = OpenCodeGoProvider(apiKey: "k")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.status == .critical)
         #expect(snap.consumptionFraction == nil)
+        #expect(snap.metric == .subscription(tierName: "Go", renewalDate: nil))
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("Copilot with a valid token reports unavailable (no individual quota API)")
+
+    @Test("Copilot with a valid token reports critical exhausted subscription")
     func copilotValidToken() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"login":"octocat"}"#) }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.status == .critical)
         #expect(snap.consumptionFraction == nil)
+        #expect(snap.metric == .subscription(tierName: "Active", renewalDate: nil))
     }
+
+
+
 
     @Test("Copilot 401 maps to credential rejected")
     func copilot401() async throws {
@@ -385,3 +401,4 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 }
+

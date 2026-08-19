@@ -21,7 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // produces a bare executable, so set the accessory policy explicitly too.
         NSApp.setActivationPolicy(.accessory)
 
+        // Enable CLI discovery by default on first launch if not configured.
+        if UserDefaults.standard.object(forKey: CredentialStore.cliDiscoveryDefaultsKey) == nil {
+            UserDefaults.standard.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        }
+
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.target = self
         self.statusItem = statusItem
@@ -30,13 +36,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // refresh destroyed view state and re-triggered a fetch on each cycle.
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.contentSize = NSSize(width: PopoverRootView.popoverWidth, height: PopoverRootView.popoverHeight)
+        let hostingController = NSHostingController(
             rootView: PopoverRootView(
                 store: store,
                 onOpenSettings: { [weak self] in self?.openSettings() }
             )
         )
+        hostingController.view.appearance = NSAppearance(named: .darkAqua)
+        popover.contentViewController = hostingController
         self.popover = popover
+
+
 
         // One owner for status item redraws.
         store.onSummaryChange = { [weak self] _ in
@@ -75,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "QuotaBar Preferences"
+        window.title = "FrugalBar Preferences"
         window.center()
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: SettingsView())
@@ -83,35 +95,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+
     private func applyStatusItemPresentation() {
         guard let button = statusItem?.button else { return }
         let summary = store.summary
+        let advice = store.advice
+        let snapshots = store.snapshots
 
-        let symbol = MenuBarPresentation.symbolName(for: summary)
-        let description = MenuBarPresentation.accessibilityDescription(for: summary)
+        let rec = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: snapshots,
+            summary: summary
+        )
 
-        let image: NSImage?
-        if let tint = MenuBarPresentation.tint(for: summary) {
-            let config = NSImage.SymbolConfiguration(paletteColors: [tint])
-            image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
-                .withSymbolConfiguration(config)
+        // 1. Set MenuBar Icon to recommended vendor logo or fallback gauge
+        if let vendorId = rec.vendorId, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
+            let icon = NSImage(size: NSSize(width: 18, height: 18))
+            icon.isTemplate = false
+            icon.lockFocus()
+            NSGraphicsContext.current?.imageInterpolation = .high
+            rawImg.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18), from: .zero, operation: .sourceOver, fraction: 1.0)
+            icon.unlockFocus()
+            button.image = icon
+            button.imagePosition = .imageLeft
         } else {
-            // No tint: render as a template so the icon follows the menu bar
-            // appearance (light/dark, reduced contrast) like a good citizen.
-            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-            img?.isTemplate = true
-            image = img
+            let symbol = MenuBarPresentation.symbolName(for: summary)
+            let description = MenuBarPresentation.accessibilityDescription(for: summary)
+            let image: NSImage?
+            if let tint = MenuBarPresentation.tint(for: summary) {
+                let config = NSImage.SymbolConfiguration(paletteColors: [tint])
+                image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+                    .withSymbolConfiguration(config)
+            } else {
+                let img = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+                img?.isTemplate = true
+                image = img
+            }
+            button.image = image
+            button.imagePosition = .imageLeft
         }
 
-        button.image = image
-        button.toolTip = description
-        button.setAccessibilityLabel(description)
 
-        // Unreadable providers are a decoration, never a replacement icon.
-        // The unavailable badge is reported via the accessibility label and
-        // tooltip rather than a text suffix, which caused width jitter on a
-        // variableLength status item as providers toggled between states.
+        // 2. Set Attributed Title with remaining lowest quota and time left in red
+        if let displayText = rec.displayText, !displayText.isEmpty {
+            let attr = NSAttributedString(
+                string: " " + displayText,
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold),
+                    .foregroundColor: NSColor.systemRed
+                ]
+            )
+            button.attributedTitle = attr
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+        }
+
+        let description = MenuBarPresentation.accessibilityDescription(for: summary)
+        button.toolTip = "\(description)\nRecommended: \(advice.headline)"
+        button.setAccessibilityLabel(description)
     }
+
 
     @objc private func togglePopover(_ sender: Any?) {
         guard let button = statusItem?.button, let popover else { return }

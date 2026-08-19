@@ -20,22 +20,24 @@ struct MicroProgressBar: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 4)
+                        .fill(Theme.outlineVariant.opacity(0.35))
+                        .frame(height: 5.5)
 
                     if let clamped {
                         Capsule()
                             .fill(statusColor)
                             // Keep a sliver visible at very low values so the bar
                             // reads as "nearly empty" rather than "not rendered".
-                            .frame(width: max(geo.size.width * clamped, clamped > 0 ? 2 : 0), height: 4)
+                            .frame(width: max(geo.size.width * clamped, clamped > 0 ? 4 : 0), height: 5.5)
                             .animation(.easeOut(duration: 0.3), value: clamped)
                     }
                 }
                 .frame(height: geo.size.height, alignment: .center)
             }
-            .frame(height: 4)
+            .frame(height: 5.5)
             .accessibilityHidden(true)   // the row supplies the spoken label
         }
     }
+
 }
+
