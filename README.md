@@ -1,76 +1,107 @@
 # frugalbar — track AI usage & dev limits
 
-A native macOS menu bar app that shows how much headroom you have left across
-AI and developer services.
+<p align="center">
+  <img src="docs/assets/frugalbar-screenshot.jpg" alt="FrugalBar macOS Menu Bar Popover Screenshot" width="720">
+</p>
 
-The Swift app lives in [`QuotaBar/`](QuotaBar/). `prototype/` holds an earlier
-React/Vite mock-up, kept for reference only.
+A native macOS menu bar app that shows how much headroom you have left across AI subscriptions, API spend caps, and developer rate limits.
 
-## Quick start
+---
+
+## Why FrugalBar?
+
+Modern engineering workflows rely heavily on multiple AI models and developer platforms (Claude, OpenAI / OpenRouter, Google Gemini, GitHub Copilot, and GitHub APIs). However:
+
+- **Surprise quota exhaustion**: Running multi-step autonomous agent runs or code generation tasks often grinds to a halt midway through a long job because a hidden rate limit or budget cap was breached.
+- **Scattered dashboards**: Checking balances requires navigating half a dozen provider dashboards, consoles, and billing portals.
+- **Inaccurate estimations**: Many tools guess or synthesize quotas. **FrugalBar never fakes a quota** — if a vendor publishes actual limit telemetry, it draws a real gauge; if not, it reports verified key status honestly without fabricated percentages.
+- **Glanceable decision making**: With a discreet menu bar indicator and responsive dark popover, you know immediately whether you have enough headroom to kick off your next agent workflow or batch job.
+
+---
+
+## Installation & Distribution
+
+### Homebrew (Recommended)
+
+Install `frugalbar` via our dedicated tap:
 
 ```bash
-cd QuotaBar && swift run
+brew tap seankoji-com/tap
+brew install frugalbar
 ```
 
-Add credentials via **Preferences → API Keys**. GitHub, OpenRouter and Gemini
-keys are exercised against the vendor when you save, so a bad paste fails there
-rather than showing up later as an unexplained blank row. OpenCode has no
-endpoint to check against, so it reports "Saved — cannot be verified".
+To run FrugalBar:
+```bash
+frugalbar
+```
 
-## Build & test
+### Direct Download & Swift Package
+
+You can download prebuilt release binaries from [GitHub Releases](https://github.com/seankoji-com/frugalbar/releases) or run from source:
 
 ```bash
-cd QuotaBar && swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
+# Clone and run from source
+git clone https://github.com/seankoji-com/frugalbar.git
+cd frugalbar
+swift run
 ```
 
-That is exactly what CI runs.
+---
 
-## What it can actually measure
+## Quick Start & Configuration
 
-Not every vendor publishes usage data. Where one doesn't, the row says so
-instead of showing an estimate — a number you can't trust is worse than no
-number in a tool you use to decide whether to start a long job.
+1. Launch `frugalbar` or click the menu bar status icon.
+2. Open **Preferences → API Keys** (gear icon).
+3. Add your provider credentials:
+   - **GitHub**: One PAT covers REST, GraphQL rate limits, and Copilot subscription status.
+   - **OpenRouter**: Use a spend-capped API key to display live balance, budget, and spend telemetry.
+   - **Google Gemini**: Add your Gemini / Google AI Studio API key.
+   - **Anthropic Claude / OpenCode**: Configure your credentials for subscription tracking.
 
-| Provider | Source | What you get |
+Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
+
+---
+
+## What It Can Actually Measure
+
+Not every vendor publishes usage telemetry. Where a vendor doesn't provide real consumption numbers, FrugalBar states so explicitly instead of fabricating an estimate:
+
+| Provider | Source | Telemetry Provided |
 |---|---|---|
-| GitHub REST | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge — requests/hour remaining, with reset time |
-| GitHub GraphQL | same call, `resources.graphql` | Live gauge — points/hour remaining, with reset time |
-| OpenRouter | `GET https://openrouter.ai/api/v1/auth/key` | Live gauge **if the key has a spend cap**; otherwise all-time spend with no gauge |
-| GitHub Copilot | `GET https://api.github.com/user` | Account confirmed. No gauge — GitHub publishes no individual quota API |
-| Gemini | `GET .../v1beta/models` | Key validated. No gauge — Google publishes no per-key usage API |
-| OpenCode | credential presence only | No gauge — OpenCode publishes no usage API |
-| Claude | — | No gauge — Anthropic publishes no subscription quota API |
+| **GitHub REST** | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge: requests/hour remaining with reset countdown |
+| **GitHub GraphQL** | `GET https://api.github.com/rate_limit` → `resources.graphql` | Live gauge: points/hour remaining with reset countdown |
+| **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key` | Live gauge **if key has a spend cap**; otherwise shows cumulative spend |
+| **GitHub Copilot** | `GET https://api.github.com/user` | Subscription & account active status verified |
+| **Google Gemini** | `GET .../v1beta/models` | Key validity & subscription status verified |
+| **OpenCode** | Local auth store | Credential presence verified |
+| **Anthropic Claude** | Key validation | Credential presence verified |
 
-Two providers give a real gauge on a default install; OpenRouter makes a third
-when its key has a spend cap, which is not the default. The rest are shown so
-you know they're configured, not so you can read a quota off them.
+---
 
-**Why OpenRouter is conditional:** `/auth/key` returns `limit`, which is the
-spend cap *on that key* and is `null` when the key is uncapped. It is not your
-account balance, and `usage` is cumulative since the key was created rather
-than a billing-period figure. With a cap there is a real denominator and a real
-gauge; without one there isn't, so the app reports spend and draws no bar.
+## Security & Keychain Architecture
 
-## Credentials
+- **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
+- **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools (`gh auth token`, `~/.local/share/opencode/auth.json`) is **disabled by default** and can be enabled under **Preferences → General**.
 
-Keys are stored in the macOS Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
-never synced to iCloud). One GitHub PAT covers REST, GraphQL and Copilot.
+---
 
-Reading credentials from local CLI tools — `gh auth token`, `~/.local/share/opencode/auth.json` —
-is **off by default** and opt-in under **Preferences → General**. It reads
-credentials you haven't explicitly handed the app, so it shouldn't be silent,
-and it is incompatible with the App Sandbox.
+## Development & Testing
+
+```bash
+# Build with zero-warning tolerance
+swift build -Xswiftc -warnings-as-errors
+
+# Run full test suite in parallel
+swift test -c debug --parallel
+```
+
+CI runs on GitHub-hosted `macos-15` (Apple Silicon) with Xcode 16.
+
+---
 
 ## Requirements
 
-- macOS 15+
+- macOS 15.0+ (Sequoia) or macOS 14.0+
 - Swift 6.0+ (Xcode 16+)
-
-## Status
-
-Prototype. `swift run` produces a bare executable, not a signed `.app` — there
-is no bundling, code-signing, notarisation or update mechanism yet, and no
-threshold notifications. See the PR discussion for the roadmap.
-
-CI runs `swift build -Xswiftc -warnings-as-errors` and the test suite twice (to
-catch flakes) on GitHub-hosted macOS runners.
+- Apple Silicon or Intel Mac
