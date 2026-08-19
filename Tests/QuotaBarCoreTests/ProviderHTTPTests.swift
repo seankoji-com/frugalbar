@@ -400,5 +400,59 @@ struct ProviderHTTPTests {
         }
         #expect(snap.status == .unavailable(.credentialRejected))
     }
+
+    // MARK: Extended Claude & OpenCode Tests
+
+    @Test("Claude parses live organization and usage payload")
+    func claudeLiveTelemetryParsing() async throws {
+        let orgJSON = """
+        [{"uuid": "org-12345", "name": "Anthropic Org"}]
+        """
+        let usageJSON = """
+        {
+            "five_hour": { "utilization": 0.42, "resets_at": "2026-08-19T20:00:00Z" },
+            "seven_day": { "utilization": 0.88, "resets_at": "2026-08-23T09:00:00Z" }
+        }
+        """
+
+        let snap = try await withStubbedHTTP({ req in
+            let url = req.url?.absoluteString ?? ""
+            if url.contains("/organizations/") && url.contains("/usage") {
+                return canned(status: 200, body: usageJSON)
+            } else if url.contains("/organizations") {
+                return canned(status: 200, body: orgJSON)
+            }
+            return canned(status: 404, body: "{}")
+        }) {
+            let provider = ClaudeQuotaProvider(apiKey: "sk-ant-sid01-test-session-cookie")
+            return try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.vendorId == .claude)
+        #expect(snap.row1?.primaryFraction == 0.42)
+        #expect(snap.row2?.primaryFraction == 0.88)
+        #expect(snap.status == .critical)
+    }
+
+    @Test("Claude detects Pro and Team tiers accurately")
+    func claudeTierDetection() async throws {
+        let proProvider = ClaudeQuotaProvider(apiKey: "sk-ant-api03-pro-key")
+        let proSnap = try await proProvider.fetchSnapshot()
+        #expect(proSnap.planName?.contains("Claude Pro") == true)
+
+        let teamProvider = ClaudeQuotaProvider(apiKey: "sk-ant-api03-team-key")
+        let teamSnap = try await teamProvider.fetchSnapshot()
+        #expect(teamSnap.planName?.contains("Claude Team") == true)
+    }
+
+    @Test("OpenCode with key returns dual-bar metrics")
+    func openCodeMetrics() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "oc_live_test_key_123")
+        let snap = try await provider.fetchSnapshot()
+        #expect(snap.vendorId == .opencode)
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row3?.label == "MO")
+    }
 }
 
