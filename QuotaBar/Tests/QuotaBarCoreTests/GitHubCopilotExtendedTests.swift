@@ -97,7 +97,7 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.status == ProviderStatus.unavailable(UnavailableReason.badResponse))
     }
 
-    @Test("valid user response returns unsupported with login name")
+    @Test("valid user response returns healthy subscription")
     func validUserResponse() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in
@@ -105,13 +105,15 @@ struct GitHubCopilotExtendedTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status.confidence == .unavailable)
-        if case .unsupported(let detail) = snap.status.unavailableReason {
-            #expect(detail.contains("octocat"))
-        } else {
-            Issue.record("expected .unsupported with login name")
-        }
+        #expect(snap.status == .critical)
+        #expect(snap.consumptionFraction == nil)
+        #expect(snap.metric == .subscription(tierName: "Active", renewalDate: nil))
+        #expect(snap.auxiliaryInfo?.contains("octocat") == true)
+
+
+
     }
+
 
     @Test("empty token short-circuits without network request")
     func emptyTokenNoRequest() async throws {

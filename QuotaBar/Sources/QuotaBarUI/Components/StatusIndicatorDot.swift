@@ -21,21 +21,20 @@ struct StatusIndicatorDot: View {
     }
 
     private var tint: Color {
-        if status.confidence == .unavailable { return .secondary }
+        if status.confidence == .unavailable { return Theme.outline }
         switch status.urgency {
-        case .none:     return .green
-        case .warning:  return .orange
-        case .critical: return .red
+        case .none:     return Theme.secondary
+        case .warning:  return Theme.tertiary
+        case .critical: return Theme.error
         }
     }
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.caption2)
-            .fontWeight(.semibold)
-            .imageScale(.small)
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(tint)
-            .frame(width: 12)
+            .frame(width: 14)
             .accessibilityHidden(true)   // the row supplies the spoken label
     }
 }
+

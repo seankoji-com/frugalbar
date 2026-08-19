@@ -17,6 +17,9 @@ public struct SettingsView: View {
     }
 
     private static let slots: [KeySlot] = [
+        .init(id: .claude, label: "Claude session",
+              placeholder: "Claude Max / Pro / session",
+              note: "Discovered from ~/.claude.json when CLI discovery is on."),
         .init(id: .githubRest, label: "GitHub PAT",
               placeholder: "ghp_… or gho_…",
               note: "Used for REST, GraphQL and Copilot."),
@@ -25,10 +28,10 @@ public struct SettingsView: View {
               note: "Gauge shown only when the key has a spend cap."),
         .init(id: .gemini, label: "Gemini key",
               placeholder: "AIzaSy…",
-              note: "Validates the key; Google exposes no usage figure."),
+              note: "Validates against Google AI Studio."),
         .init(id: .opencode, label: "OpenCode token",
               placeholder: "oc_live_…",
-              note: "Presence only; OpenCode exposes no usage API."),
+              note: "Enables OpenCode Go monitoring."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -102,11 +105,12 @@ public struct SettingsView: View {
             Section {
                 Toggle("Read credentials from local CLI tools", isOn: $cliDiscovery)
                 Text("""
-                     When on, QuotaBar may run `gh auth token` and read \
+                     When on, FrugalBar may run `gh auth token` and read \
                      ~/.local/share/opencode/auth.json if the Keychain has no \
                      entry for a provider. Off by default: this reads \
                      credentials you have not explicitly given the app.
                      """)
+
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } header: {
@@ -189,16 +193,15 @@ public struct SettingsView: View {
     }
 
     private func verify(_ vendor: VendorIdentifier, key: String) async -> String {
-        // OpenCode publishes no endpoint to verify against, so its provider
-        // makes no call. Reporting "Key accepted" would be a claim we cannot
-        // support. Any vendor not listed here is likewise unverifiable — the
-        // default must not silently verify against GitHub.
         let provider: any QuotaProvider
         switch vendor {
+        case .claude:      provider = ClaudeQuotaProvider(apiKey: key)
         case .githubRest:  provider = GitHubRestProvider(token: key)
         case .openrouter:  provider = OpenRouterProvider(apiKey: key)
         case .gemini:      provider = GeminiQuotaProvider(apiKey: key)
-        default:           return "Saved — cannot be verified"
+        case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
+        case .copilot:     provider = GitHubCopilotProvider(token: key)
+        case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 
         guard let snapshot = try? await provider.fetchSnapshot() else {
@@ -214,6 +217,7 @@ public struct SettingsView: View {
         case nil:                 return "Key accepted"
         }
     }
+
 
     /// Turns an OSStatus into something a user can act on.
     private static func keychainAdvice(for error: Error) -> String {

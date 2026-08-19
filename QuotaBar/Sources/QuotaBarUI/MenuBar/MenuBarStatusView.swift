@@ -1,14 +1,145 @@
 import SwiftUI
+import AppKit
 import QuotaBarCore
 
-/// Chooses the menu bar glyph and tint for an aggregate summary.
-///
-/// The governing rule: **only quota pressure changes the icon.** Providers we
-/// cannot read are reported as a decoration, never by replacing the icon.
-/// The previous revision ranked "unreadable" above "critical", so a provider
-/// with no data source pinned the icon to a permanent error state and made a
-/// genuinely exhausted quota impossible to display.
+/// Chooses the menu bar glyph, recommended platform logo, and remaining quota metrics for the menu bar.
 public enum MenuBarPresentation {
+
+    public struct RecommendationDetails: Sendable {
+        public let vendorId: VendorIdentifier?
+        public let lowestRemainingFraction: Double?
+        public let remainingPctText: String?
+        public let timeLeftText: String?
+        public let displayText: String?
+        public let isUrgent: Bool
+
+        public init(
+            vendorId: VendorIdentifier?,
+            lowestRemainingFraction: Double?,
+            remainingPctText: String?,
+            timeLeftText: String?,
+            displayText: String?,
+            isUrgent: Bool
+        ) {
+            self.vendorId = vendorId
+            self.lowestRemainingFraction = lowestRemainingFraction
+            self.remainingPctText = remainingPctText
+            self.timeLeftText = timeLeftText
+            self.displayText = displayText
+            self.isUrgent = isUrgent
+        }
+    }
+
+    public static func recommendationDetails(
+        advice: QuotaAdvice,
+        snapshots: [QuotaSnapshot],
+        summary: SystemHealthSummary
+    ) -> RecommendationDetails {
+        var targetVendor = advice.vendorId
+        if targetVendor == nil {
+            targetVendor = snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.urgency == .none })?.vendorId
+                ?? snapshots.first(where: { $0.category == .aiSubscriptions })?.vendorId
+        }
+
+        guard let vendorId = targetVendor,
+              let snapshot = snapshots.first(where: { $0.vendorId == vendorId }) else {
+            return RecommendationDetails(
+                vendorId: nil,
+                lowestRemainingFraction: nil,
+                remainingPctText: nil,
+                timeLeftText: nil,
+                displayText: nil,
+                isUrgent: summary.worstUrgency == .critical
+            )
+        }
+
+
+        // Find the bar with the lowest remaining capacity (highest primaryFraction)
+        var lowestRemaining = 1.0
+        var matchingResetText: String? = nil
+        var foundBar = false
+
+        for bar in snapshot.bars {
+            let used = bar.primaryFraction
+            let remaining = max(0.0, min(1.0, 1.0 - used))
+            if !foundBar || remaining < lowestRemaining {
+                lowestRemaining = remaining
+                matchingResetText = bar.resetText
+                foundBar = true
+            }
+        }
+
+        if !foundBar {
+            if let fraction = snapshot.consumptionFraction {
+                lowestRemaining = max(0.0, min(1.0, 1.0 - fraction))
+                matchingResetText = nil
+                foundBar = true
+            }
+        }
+
+        let remainingInt = Int((lowestRemaining * 100).rounded())
+        let remainingPctStr = "\(remainingInt)%"
+
+        let timeLeftStr = formatTimeLeft(matchingResetText)
+
+        let displayParts: [String] = [remainingPctStr, timeLeftStr].compactMap { $0 }
+        let displayText = displayParts.isEmpty ? nil : displayParts.joined(separator: " ")
+
+        return RecommendationDetails(
+            vendorId: vendorId,
+            lowestRemainingFraction: foundBar ? lowestRemaining : nil,
+            remainingPctText: remainingPctStr,
+            timeLeftText: timeLeftStr,
+            displayText: displayText,
+            isUrgent: true
+        )
+    }
+
+    public static func formatTimeLeft(_ text: String?) -> String? {
+        guard let text = text, !text.isEmpty else { return nil }
+        let lower = text.lowercased()
+
+        // 1. Look for days and hours: e.g. "4d 22h", "4d 6h", "13d"
+        if let range = lower.range(of: #"(\d+)\s*d(\s*(\d+)\s*h)?"#, options: .regularExpression) {
+            let match = String(lower[range])
+            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
+            if let d = Double(parts.first ?? "") {
+                if parts.count > 1, let h = Double(parts[1]), h > 0 {
+                    let totalD = d + (h / 24.0)
+                    return String(format: "%.1fd", totalD)
+                } else {
+                    return String(format: "%.0fd", d)
+                }
+            }
+        }
+
+        // 2. Look for hours and minutes: e.g. "3h 29m", "167h 25m", "1h 05m", "2h 10m"
+        if let range = lower.range(of: #"(\d+)\s*h(\s*(\d+)\s*m)?"#, options: .regularExpression) {
+            let match = String(lower[range])
+            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
+            if let h = Double(parts.first ?? "") {
+                if parts.count > 1, let m = Double(parts[1]), m > 0 {
+                    let totalH = h + (m / 60.0)
+                    return String(format: "%.2fhr", totalH)
+                } else {
+                    return String(format: "%.0fhr", h)
+                }
+            }
+        }
+
+        // 3. Look for minutes only: e.g. "42m"
+        if let range = lower.range(of: #"(\d+)\s*m"#, options: .regularExpression) {
+            let match = String(lower[range])
+            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
+            if let m = Double(parts.first ?? "") {
+                let totalH = m / 60.0
+                return String(format: "%.2fhr", totalH)
+            }
+        }
+
+        return nil
+    }
+
 
     public static func symbolName(for summary: SystemHealthSummary) -> String {
         guard summary.hasAnyReading else { return "gauge.with.dots.needle.bottom.0percent" }
@@ -37,7 +168,7 @@ public enum MenuBarPresentation {
     }
 
     public static func accessibilityDescription(for summary: SystemHealthSummary) -> String {
-        var parts: [String] = ["QuotaBar"]
+        var parts: [String] = ["FrugalBar"]
         if summary.hasAnyReading {
             switch summary.worstUrgency {
             case .none:     parts.append("all quotas healthy")
@@ -52,4 +183,6 @@ public enum MenuBarPresentation {
         }
         return parts.joined(separator: ", ")
     }
+
 }
+

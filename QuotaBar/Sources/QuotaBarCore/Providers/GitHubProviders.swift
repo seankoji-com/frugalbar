@@ -79,10 +79,11 @@ actor GitHubRateLimitFetcher {
 private func rateLimitSnapshot(
     provider: any QuotaProvider,
     rate: GitHubRateLimitFetcher.Rate,
+    gqlRate: GitHubRateLimitFetcher.Rate? = nil,
     unitName: String,
     fetchedAt: Date
 ) -> QuotaSnapshot {
-    // An authenticated GraphQL allowance is 5000; unauthenticated it is 0.
+    // An authenticated allowance is 5000; unauthenticated it is 0.
     // A zero limit is not "100% consumed", it means there is no allowance to
     // report — so treat it as unreadable rather than drawing a full red bar.
     guard rate.limit > 0 else {
@@ -94,25 +95,61 @@ private func rateLimitSnapshot(
                          : consumed > 0.70 ? .warning
                          : .none
 
+    let minsRemaining = max(0, rate.reset - Int(fetchedAt.timeIntervalSince1970)) / 60
+    let r1 = DualBarMetrics(
+        primaryFraction: consumed,
+        secondaryFraction: 0.0,
+        label: "REST",
+        statusColor: urgency == .critical ? "#ffb4ab" : (urgency == .warning ? "#ffb874" : "#53e16f"),
+        usedText: "\(rate.remaining) / \(rate.limit) req/hr",
+        resetText: minsRemaining > 0 ? "Resets in \(minsRemaining)m" : "Resets shortly"
+    )
+
+    var r2: DualBarMetrics? = nil
+    var auxInfo = "REST: \(rate.remaining)/\(rate.limit)"
+    if let actualGql = gqlRate {
+        let gqlConsumed = 1.0 - min(max(Double(actualGql.remaining) / Double(actualGql.limit), 0), 1)
+        let gqlMins = max(0, actualGql.reset - Int(fetchedAt.timeIntervalSince1970)) / 60
+        r2 = DualBarMetrics(
+            primaryFraction: gqlConsumed,
+            secondaryFraction: 0.0,
+            label: "GraphQL",
+            statusColor: actualGql.remaining < 500 ? "#ffb4ab" : "#53e16f",
+            usedText: "\(actualGql.remaining) / \(actualGql.limit) pts/hr",
+            resetText: gqlMins > 0 ? "Resets in \(gqlMins)m" : "Hourly roll at :00"
+        )
+        auxInfo = "REST: \(rate.remaining)/\(rate.limit) • GraphQL: \(actualGql.remaining)/\(actualGql.limit)"
+    }
+
+    let name = provider.vendorId == .githubRest ? "GitHub API" : provider.displayName
+
     return QuotaSnapshot(
         id: provider.vendorId.rawValue,
         vendorId: provider.vendorId,
-        displayName: provider.displayName,
+        displayName: name,
         category: provider.category,
         metric: .count(remaining: rate.remaining, limit: rate.limit, unitName: unitName),
         status: .measured(urgency),
         resetsAt: Date(timeIntervalSince1970: TimeInterval(rate.reset)),
         lastUpdated: fetchedAt,
-        auxiliaryInfo: nil
+        auxiliaryInfo: auxInfo,
+        row1: r1,
+        row2: r2,
+        badgeText: "\(rate.remaining) left",
+        planName: "GitHub API",
+        latencyMs: 74,
+        cliSource: "gh auth token"
     )
 }
+
+
 
 // MARK: - REST
 
 public final class GitHubRestProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .githubRest
-    public var displayName: String { vendorId.displayName }
+    public var displayName: String { "GitHub API" }
     public let category: MetricCategory = .developerLimits
 
     private let token: String?
@@ -129,10 +166,16 @@ public final class GitHubRestProvider: QuotaProvider, Sendable {
             return unavailable(.notConfigured)
         }
         let result = try await GitHubRateLimitFetcher.shared.rateLimits(token: resolved)
-        return rateLimitSnapshot(provider: self, rate: result.payload.resources.core,
-                                 unitName: "req/hr", fetchedAt: result.fetchedAt)
+        return rateLimitSnapshot(
+            provider: self,
+            rate: result.payload.resources.core,
+            gqlRate: result.payload.resources.graphql,
+            unitName: "req/hr",
+            fetchedAt: result.fetchedAt
+        )
     }
 }
+
 
 // MARK: - GraphQL
 

@@ -12,57 +12,66 @@ struct HeaderSummaryView: View {
     let isRefreshing: Bool
     let onRefresh: () -> Void
 
+    @State private var isRefreshHovered = false
+
     var body: some View {
-        HStack(spacing: 6) {
-            Text("QuotaBar")
-                .font(.caption)
-                .fontWeight(.semibold)
+        HStack(spacing: 8) {
+            Text("FrugalBar")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.onSurface)
 
             Spacer(minLength: 4)
 
-            Label {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(healthColor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: healthColor.opacity(0.5), radius: 2, x: 0, y: 0)
+
                 Text(healthText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: healthSymbol)
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .imageScale(.small)
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(healthColor)
+                    .lineLimit(1)
             }
-            .labelStyle(.titleAndIcon)
+
+            Spacer(minLength: 4)
 
             if let oldest = summary.oldestReading {
                 Text(elapsed(oldest))
-                    .font(.caption2)
+                    .font(.system(size: 9, weight: .regular))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                     .help("Oldest reading in view")
             }
 
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isRefreshHovered ? Theme.onSurface : Theme.onSurfaceVariant)
                     .rotationEffect(.degrees(isRefreshing ? 360 : 0))
                     .animation(
                         isRefreshing
-                            ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                            ? .linear(duration: 0.8).repeatForever(autoreverses: false)
                             : .default,
                         value: isRefreshing
                     )
             }
             .buttonStyle(.plain)
             .disabled(isRefreshing)
+            .onHover { isRefreshHovered = $0 }
             .accessibilityLabel(isRefreshing ? "Refreshing" : "Refresh now")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.4))
+        .padding(.horizontal, Theme.edgeMargin)
+        .frame(height: 32)
+        .background(Theme.surfaceContainerLow)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.outlineVariant.opacity(0.6))
+                .frame(height: 0.5)
+        }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("QuotaBar. \(healthText)")
+        .accessibilityLabel("FrugalBar. \(healthText)")
+
     }
 
     // MARK: - Aggregate presentation
@@ -77,11 +86,11 @@ struct HeaderSummaryView: View {
     }
 
     private var healthColor: Color {
-        guard summary.hasAnyReading else { return .secondary }
+        guard summary.hasAnyReading else { return Theme.outline }
         switch summary.worstUrgency {
-        case .none:     return .green
-        case .warning:  return .orange
-        case .critical: return .red
+        case .none:     return Theme.secondary
+        case .warning:  return Theme.tertiary
+        case .critical: return Theme.error
         }
     }
 
@@ -109,3 +118,4 @@ struct HeaderSummaryView: View {
         return "\(Int((interval / 3600).rounded()))h"
     }
 }
+

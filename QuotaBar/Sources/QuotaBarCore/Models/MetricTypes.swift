@@ -22,7 +22,32 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .githubGraphql: "GitHub GraphQL"
         }
     }
+
+    public var accentColorHex: String {
+        switch self {
+        case .claude:        "#d97757"
+        case .gemini:        "#3b82f6"
+        case .opencode:      "#d47b00"
+        case .copilot:       "#6e7681"
+        case .openrouter:    "#d47b00"
+        case .githubRest:    "#ffb4ab"
+        case .githubGraphql: "#ffb4ab"
+        }
+    }
+
+    public var iconSymbol: String {
+        switch self {
+        case .claude:        "sparkles"
+        case .gemini:        "sparkle"
+        case .opencode:      "chevron.left.forwardslash.chevron.right"
+        case .copilot:       "curlybraces"
+        case .openrouter:    "arrow.triangle.branch"
+        case .githubRest:    "network"
+        case .githubGraphql: "point.3.connected.trianglepath.dotted"
+        }
+    }
 }
+
 
 // MARK: - Metric types
 
@@ -143,6 +168,50 @@ public enum MetricCategory: String, Sendable, CaseIterable, Codable {
     case developerLimits     = "Developer Limits"
 }
 
+
+// MARK: - Dual-bar burndown metrics
+
+public struct DualBarMetrics: Sendable, Equatable {
+    public var primaryFraction: Double          // 0.0 to 1.0 (actual quota consumed)
+    public var expectedPaceFraction: Double?     // Pro-rata expected fraction elapsed in window (0.0 to 1.0)
+    public var secondaryFraction: Double?       // delta / surge burndown fraction
+    public var label: String                    // e.g. "5H", "WK", "REST", "GraphQL"
+    public var statusColor: String?
+    public var usedText: String?
+    public var resetText: String?
+
+    public init(
+        primaryFraction: Double,
+        expectedPaceFraction: Double? = nil,
+        secondaryFraction: Double? = nil,
+        label: String,
+        statusColor: String? = nil,
+        usedText: String? = nil,
+        resetText: String? = nil
+    ) {
+        self.primaryFraction = primaryFraction
+        self.expectedPaceFraction = expectedPaceFraction
+        self.secondaryFraction = secondaryFraction
+        self.label = label
+        self.statusColor = statusColor
+        self.usedText = usedText
+        self.resetText = resetText
+    }
+
+    /// Difference between actual consumption and pro-rata expected target.
+    /// Positive = burning faster than pro-rata pace (over budget).
+    /// Negative = burning slower than pro-rata pace (healthy buffer).
+    public var burndownDelta: Double {
+        let target = expectedPaceFraction ?? (label == "5H" ? 0.40 : (label == "WK" ? 0.45 : 0.50))
+        return primaryFraction - target
+    }
+
+    public var isAboveProrataPace: Bool {
+        burndownDelta > 0.04
+    }
+}
+
+
 // MARK: - Quota snapshot (the core value type)
 
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
@@ -156,6 +225,19 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let lastUpdated: Date
     public let auxiliaryInfo: String?
 
+    public var row1: DualBarMetrics?
+    public var row2: DualBarMetrics?
+    public var row3: DualBarMetrics?
+    public var badgeText: String?
+    public var planName: String?
+    public var latencyMs: Int?
+    public var keyMasked: String?
+    public var cliSource: String?
+
+    public var bars: [DualBarMetrics] {
+        [row1, row2, row3].compactMap { $0 }
+    }
+
     public init(
         id: String,
         vendorId: VendorIdentifier,
@@ -165,7 +247,14 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         status: ProviderStatus,
         resetsAt: Date?,
         lastUpdated: Date,
-        auxiliaryInfo: String?
+        auxiliaryInfo: String?,
+        row1: DualBarMetrics?,
+        row2: DualBarMetrics?,
+        badgeText: String? = nil,
+        planName: String? = nil,
+        latencyMs: Int? = nil,
+        keyMasked: String? = nil,
+        cliSource: String? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -176,7 +265,88 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.resetsAt = resetsAt
         self.lastUpdated = lastUpdated
         self.auxiliaryInfo = auxiliaryInfo
+        self.row1 = row1
+        self.row2 = row2
+        self.row3 = nil
+        self.badgeText = badgeText
+        self.planName = planName
+        self.latencyMs = latencyMs
+        self.keyMasked = keyMasked
+        self.cliSource = cliSource
     }
+
+    public init(
+        id: String,
+        vendorId: VendorIdentifier,
+        displayName: String,
+        category: MetricCategory,
+        metric: MetricType,
+        status: ProviderStatus,
+        resetsAt: Date?,
+        lastUpdated: Date,
+        auxiliaryInfo: String?,
+        row1: DualBarMetrics? = nil,
+        row2: DualBarMetrics? = nil,
+        row3: DualBarMetrics? = nil,
+        badgeText: String? = nil,
+        planName: String? = nil,
+        latencyMs: Int? = nil,
+        keyMasked: String? = nil,
+        cliSource: String? = nil
+    ) {
+        self.id = id
+        self.vendorId = vendorId
+        self.displayName = displayName
+        self.category = category
+        self.metric = metric
+        self.status = status
+        self.resetsAt = resetsAt
+        self.lastUpdated = lastUpdated
+        self.auxiliaryInfo = auxiliaryInfo
+        self.row1 = row1
+        self.row2 = row2
+        self.row3 = row3
+        self.badgeText = badgeText
+        self.planName = planName
+        self.latencyMs = latencyMs
+        self.keyMasked = keyMasked
+        self.cliSource = cliSource
+    }
+
+
+
+    /// Short display name for compact row header (e.g. "Claude", "Gemini", "Copilot").
+    public var shortVendorName: String {
+        switch vendorId {
+        case .claude:        return "Claude"
+        case .gemini:        return "Gemini"
+        case .opencode:      return "OpenCode"
+        case .copilot:       return "Copilot"
+        case .openrouter:    return "OpenRouter"
+        case .githubRest, .githubGraphql: return "GitHub"
+        }
+    }
+
+    /// Short plan name for compact row subtitle (e.g. "Max x20", "AI Pro", "Business", "Go").
+    public var shortPlanName: String {
+        if vendorId == .openrouter { return "" }
+        if let plan = planName, !plan.isEmpty {
+            if plan.contains("20x") || plan.contains("Max") { return "Max x20" }
+            if plan.contains("Pro") || plan.contains("Premium") || plan.contains("Studio") { return "AI Pro" }
+            if plan.contains("Business") || plan.contains("Individual") { return "Business" }
+            if plan.contains("Go") { return "Go" }
+            if plan.contains("Key") || plan.contains("Prepaid") { return "Key API" }
+        }
+        switch vendorId {
+        case .claude:        return "Max x20"
+        case .gemini:        return "AI Pro"
+        case .copilot:       return "Business"
+        case .opencode:      return "Go"
+        case .openrouter:    return ""
+        case .githubRest, .githubGraphql: return "API Limits"
+        }
+    }
+
 
     /// 0.0 … 1.0 fraction *consumed* (0 = empty, 1 = full).
     ///
@@ -203,3 +373,5 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
     }
 }
+
+

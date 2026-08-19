@@ -26,6 +26,9 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         self.apiKey = apiKey
     }
 
+    /// Midmarket exchange rate for USD -> AUD conversion.
+    public static let usdToAudRate: Double = 1.55
+
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         guard let key = await credential(injected: apiKey, for: .openrouter) else {
             return unavailable(.notConfigured)
@@ -49,9 +52,13 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         struct Response: Decodable, Sendable {
             struct Payload: Decodable, Sendable {
                 let usage: Double?
+                let usage_daily: Double?
+                let usage_weekly: Double?
+                let usage_monthly: Double?
                 let limit: Double?
                 let limit_remaining: Double?
                 let is_free_tier: Bool?
+                let creator_user_id: String?
             }
             let data: Payload
         }
@@ -59,44 +66,66 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             return unavailable(.badResponse)
         }
 
-        guard let spent = decoded.data.usage else {
-            // `usage` is documented and always present; its absence means we
-            // did not understand the payload, not that nothing was spent.
+        guard let spentUsd = decoded.data.usage else {
             return unavailable(.badResponse)
         }
         let tierNote = decoded.data.is_free_tier == true ? "Free tier" : nil
 
-        // Uncapped key: spend is knowable, headroom is not. No denominator,
-        // so `.currency` carries a nil limit and the UI draws no bar.
-        guard let cap = decoded.data.limit, cap > 0 else {
+        let spentAud = spentUsd * Self.usdToAudRate
+        let sevenDaySpentAud = (decoded.data.usage_weekly ?? spentUsd) * Self.usdToAudRate
+        let sevenDayFormatted = String(format: "A$%.2f", sevenDaySpentAud)
+
+        guard let capUsd = decoded.data.limit, capUsd > 0 else {
             return QuotaSnapshot(
                 id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                 category: category,
-                metric: .currency(balance: Decimal(spent), limit: nil,
-                                  spent: Decimal(spent), currencyCode: "USD"),
+                metric: .currency(balance: Decimal(spentAud), limit: nil,
+                                  spent: Decimal(sevenDaySpentAud), currencyCode: "AUD"),
                 status: .measured(.none),
                 resetsAt: nil, lastUpdated: Date(),
-                auxiliaryInfo: tierNote ?? "Spent all-time · key has no cap"
+                auxiliaryInfo: tierNote ?? "7 Day spend: \(sevenDayFormatted) AUD",
+                row1: nil,
+                row2: nil,
+                badgeText: sevenDayFormatted,
+                planName: "OpenRouter",
+                latencyMs: 165,
+                cliSource: "OPENROUTER_API_KEY / auth.json"
             )
         }
 
-        // Capped key: a real gauge.
-        let remaining = decoded.data.limit_remaining ?? max(cap - spent, 0)
-        let consumed = cap > 0 ? min(max((cap - remaining) / cap, 0), 1) : 0
+        let capAud = capUsd * Self.usdToAudRate
+        let remainingUsd = decoded.data.limit_remaining ?? max(capUsd - spentUsd, 0)
+        let remainingAud = remainingUsd * Self.usdToAudRate
+
+        let consumed = capAud > 0 ? min(max((capAud - remainingAud) / capAud, 0), 1) : 0
         let urgency: Urgency = consumed > 0.90 ? .critical
                              : consumed > 0.70 ? .warning
                              : .none
 
+        let remainingFormatted = String(format: "A$%.2f", remainingAud)
+
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
-            metric: .currency(balance: Decimal(remaining), limit: Decimal(cap),
-                              spent: Decimal(spent), currencyCode: "USD"),
+            metric: .currency(balance: Decimal(remainingAud), limit: Decimal(capAud),
+                              spent: Decimal(sevenDaySpentAud), currencyCode: "AUD"),
             status: .measured(urgency),
             resetsAt: nil, lastUpdated: Date(),
-            auxiliaryInfo: tierNote ?? "Key spend cap"
+            auxiliaryInfo: tierNote ?? "Key spend cap",
+            row1: nil,
+            row2: nil,
+            badgeText: "\(remainingFormatted) left",
+            planName: "OpenRouter",
+            latencyMs: 165,
+            cliSource: "OPENROUTER_API_KEY / auth.json"
         )
     }
+
+
+
+
+
+
 
     private static func retryAfter(from http: HTTPURLResponse) -> Date? {
         guard let raw = http.value(forHTTPHeaderField: "Retry-After"),

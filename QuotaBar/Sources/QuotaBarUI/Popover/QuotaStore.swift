@@ -15,6 +15,7 @@ public final class QuotaStore {
 
     public private(set) var snapshots: [QuotaSnapshot] = []
     public private(set) var summary: SystemHealthSummary = .compute(from: [])
+    public private(set) var advice: QuotaAdvice = QuotaAdvice.evaluate(from: [])
     public private(set) var isRefreshing = false
 
     /// Called on the main actor whenever `summary` changes.
@@ -53,6 +54,23 @@ public final class QuotaStore {
         let snaps = await manager.sortedSnapshots()
         self.snapshots = snaps
         self.summary = SystemHealthSummary.compute(from: snaps)
+        self.advice = QuotaAdvice.evaluate(from: snaps)
+        onSummaryChange?(self.summary)
+    }
+
+    /// Live quota simulation update
+    public func updateSnapshotUsage(id: String, fraction: Double) {
+        guard let idx = snapshots.firstIndex(where: { $0.id == id }) else { return }
+        var snap = snapshots[idx]
+        if var r1 = snap.row1 {
+            r1.primaryFraction = fraction
+            snap.row1 = r1
+        }
+        snapshots[idx] = snap
+        self.summary = SystemHealthSummary.compute(from: snapshots)
+        self.advice = QuotaAdvice.evaluate(from: snapshots)
         onSummaryChange?(self.summary)
     }
 }
+
+
