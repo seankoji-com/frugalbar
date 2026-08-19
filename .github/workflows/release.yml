@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-release:
     name: Build Universal Binary & Draft Release
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:

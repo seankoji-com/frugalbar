@@ -1,6 +1,6 @@
 # FrugalBar — Swift build & test workflow
 #
-# Runs on GitHub-hosted macOS (macos-14 / Apple Silicon).
+# Runs on GitHub-hosted macOS (macos-15 / Sequoia / Apple Silicon).
 
 name: FrugalBar CI
 
@@ -31,7 +31,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build & Test (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:
