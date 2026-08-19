@@ -55,7 +55,10 @@ public actor BackgroundScheduler {
             leeway: .seconds(Int(interval * 0.2))   // power-friendly coalescing
         )
         timer.setEventHandler { [weak self] in
-            Task { await self?.fire() }
+            guard let self else { return }
+            Task { [self] in
+                await self.fire()
+            }
         }
         timer.resume()
         self.timer = timer

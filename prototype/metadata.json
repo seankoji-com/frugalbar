@@ -1,6 +1,0 @@
-{
-  "name": "QuotaBar",
-  "description": "Zero-scroll multi-vendor AI quota & rate limit monitor for Claude, Gemini, OpenCode Go, GitHub Copilot, OpenRouter, and GitHub APIs",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

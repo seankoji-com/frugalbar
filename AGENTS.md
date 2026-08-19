@@ -1,7 +1,6 @@
 # Agent notes — frugalbar
 
-Swift package in `QuotaBar/`. Legacy React mock-up in `prototype/` — reference
-only, don't extend it.
+Swift package at repository root.
 
 Structure and type names are discoverable with `ls` and `grep`, so they aren't
 repeated here. What follows is only what you can't derive from the tree, and
@@ -10,7 +9,7 @@ what has actually gone wrong before.
 ## Commands
 
 ```bash
-cd QuotaBar && swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
+swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
 ```
 
 CI runs exactly this, then re-runs the tests once more to catch flakes.

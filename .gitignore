@@ -3,9 +3,7 @@
 *.swp
 *.lock
 .build/
-.build-arm64/
+.swiftpm/
 DerivedData/
-*.xcodeproj/xcuserdata/
-*.xcuserstate
-Pods/
-build/
+*.xcodeproj
+*.xcworkspace

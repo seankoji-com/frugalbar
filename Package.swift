@@ -12,27 +12,27 @@ let package = Package(
         .target(
             name: "QuotaBarCore",
             dependencies: [],
-            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuotaBarUI",
             dependencies: ["QuotaBarCore"],
-            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
             name: "QuotaBarApp",
             dependencies: ["QuotaBarCore", "QuotaBarUI"],
-            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "QuotaBarCoreTests",
             dependencies: ["QuotaBarCore"],
-            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "QuotaBarUITests",
             dependencies: ["QuotaBarUI"],
-            swiftSettings: [.swiftLanguageMode(.v6), .enableUpcomingFeature("StrictConcurrency")]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
 )

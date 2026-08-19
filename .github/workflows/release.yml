@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Universal Binary & Draft Release
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Build Release (ARM64)
+        run: |
+          swift build -c release --arch arm64 -Xswiftc -warnings-as-errors
+          mkdir -p bin
+          cp .build/arm64-apple-macosx/release/QuotaBarApp bin/frugalbar
+          tar -czvf frugalbar-${{ github.ref_name }}-arm64.tar.gz -C bin frugalbar
+          shasum -a 256 frugalbar-${{ github.ref_name }}-arm64.tar.gz > frugalbar-${{ github.ref_name }}-arm64.tar.gz.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            frugalbar-${{ github.ref_name }}-arm64.tar.gz
+            frugalbar-${{ github.ref_name }}-arm64.tar.gz.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
