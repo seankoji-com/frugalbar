@@ -80,3 +80,43 @@ jobs:
           prerelease: false
           generate_release_notes: true
 
+      - name: Update Homebrew Tap Formula
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.semver.outputs.tag }}"
+          VER="${TAG#v}"
+          SHA=$(cat frugalbar-${TAG}-arm64.tar.gz.sha256 | awk '{print $1}')
+          URL="https://github.com/seankoji-com/frugalbar/releases/download/${TAG}/frugalbar-${TAG}-arm64.tar.gz"
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Formula
+
+          cat << EOF > /tmp/homebrew-tap/Formula/frugalbar.rb
+class Frugalbar < Formula
+  desc "Track AI usage & dev limits in the macOS menu bar"
+  homepage "https://github.com/seankoji-com/frugalbar"
+  version "${VER}"
+  url "${URL}"
+  sha256 "${SHA}"
+
+  depends_on :macos
+
+  def install
+    bin.install "frugalbar"
+  end
+
+  test do
+    system "#{bin}/frugalbar", "--help" rescue true
+  end
+end
+EOF
+
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/frugalbar.rb
+          git commit -m "feat(formula): update frugalbar to ${TAG}" || echo "No changes to commit"
+          git push origin main
+
+
