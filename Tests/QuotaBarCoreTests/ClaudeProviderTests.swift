@@ -46,14 +46,15 @@ struct ClaudeProviderTests {
         """.data(using: .utf8)!
 
         let snapshot = try await withSharedStubbedHTTP({ request in
-            if request.url?.absoluteString.contains("/organizations/org-12345/usage") == true {
+            let urlStr = request.url?.absoluteString ?? ""
+            if urlStr.contains("/organizations/") && urlStr.contains("/usage") {
                 return SharedURLProtocolStub.StubResponse(status: 200, headers: [:], body: usageJSON)
-            } else if request.url?.absoluteString.contains("/organizations") == true {
+            } else if urlStr.contains("/organizations") {
                 return SharedURLProtocolStub.StubResponse(status: 200, headers: [:], body: orgJSON)
             }
             return SharedURLProtocolStub.StubResponse(status: 404, headers: [:], body: Data())
         }) {
-            let provider = ClaudeQuotaProvider(apiKey: "sk-ant-sid01-session-cookie-test")
+            let provider = ClaudeQuotaProvider(apiKey: "sk-ant-sid01-test-session-cookie")
             return try await provider.fetchSnapshot()
         }
 
