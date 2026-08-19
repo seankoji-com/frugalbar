@@ -23,12 +23,13 @@ Modern engineering workflows rely heavily on multiple AI models and developer pl
 
 ### Homebrew (Recommended)
 
-Install `frugalbar` via our dedicated tap:
+Install `frugalbar` in a single command:
 
 ```bash
-brew tap seankoji-com/tap
-brew install frugalbar
+brew install seankoji-com/tap/frugalbar
 ```
+
+*(Or tap the repository first: `brew tap seankoji-com/tap && brew install frugalbar`)*
 
 To run FrugalBar:
 ```bash
