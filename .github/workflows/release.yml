@@ -64,7 +64,7 @@ jobs:
         run: |
           swift build -c release --arch arm64 -Xswiftc -warnings-as-errors
           mkdir -p bin
-          cp .build/arm64-apple-macosx/release/QuotaBarApp bin/frugalbar
+          cp .build/arm64-apple-macosx/release/QuotaBar bin/frugalbar
           tar -czvf frugalbar-${{ steps.semver.outputs.tag }}-arm64.tar.gz -C bin frugalbar
           shasum -a 256 frugalbar-${{ steps.semver.outputs.tag }}-arm64.tar.gz > frugalbar-${{ steps.semver.outputs.tag }}-arm64.tar.gz.sha256
 
