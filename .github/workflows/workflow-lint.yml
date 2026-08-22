@@ -1,0 +1,46 @@
+# Workflow linting.
+#
+# The Swift CI workflow used to filter on Sources/Tests/Package.swift, so edits
+# to .github/ never triggered anything. release.yml sat unparseable for three
+# days and three merged PRs because of it. This job watches .github/** and runs
+# actionlint, which catches YAML syntax errors, bad expressions, unknown action
+# inputs, and shellcheck findings inside run: blocks.
+#
+# Kept separate from quotabar-ci.yml because it wants a Linux runner and a
+# docker:// step, not macOS.
+
+name: Workflow Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the same version used locally. The image bundles shellcheck
+      # and pyflakes, so run:/python blocks get linted too.
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
