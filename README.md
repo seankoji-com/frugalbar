@@ -31,9 +31,14 @@ brew install seankoji-com/tap/frugalbar
 
 *(Or tap the repository first: `brew tap seankoji-com/tap && brew install frugalbar`)*
 
-To run FrugalBar:
+To start FrugalBar and have it launch automatically at login:
 ```bash
-frugalbar
+brew services start frugalbar
+```
+
+Or run it directly:
+```bash
+frugalbar &
 ```
 
 ### Direct Download & Swift Package
