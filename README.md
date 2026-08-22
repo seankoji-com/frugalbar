@@ -80,7 +80,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key`, then `GET https://openrouter.ai/api/v1/credits` | Live account credit balance in USD when the key may read it; otherwise that key's USD spend cap |
 | **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports |
 | **GitHub Copilot** | `GET https://api.github.com/copilot_internal/user` with the GitHub OAuth token | Live gauge: premium-interaction and chat allowances, with reset date. Plans billed by token publish no window and say so |
-| **Google Gemini** | `cloudcode-pa.googleapis.com/v1internal` (Google OAuth) | Live Antigravity subscription quota per pool; falls back to an unexpired `antigravity-usage` session when discovery is on |
+| **Google Gemini** | `POST cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (Google OAuth) | Live five-hour and weekly Antigravity windows, plus the paid subscription tier; falls back to an unexpired `antigravity-usage` session when discovery is on |
 | **OpenCode** | `GET https://opencode.ai/zen/go/v1/usage` with the `opencode-go` key | Live gauge: rolling, weekly and monthly Go windows, each with the reset time and whether it is currently blocking |
 | **Anthropic Claude** | `anthropic-ratelimit-unified-*` response headers | Live 5-hour and 7-day quota from the Claude Code OAuth login |
 

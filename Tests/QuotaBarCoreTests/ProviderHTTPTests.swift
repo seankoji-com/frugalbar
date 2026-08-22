@@ -438,17 +438,73 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("Gemini parses live Antigravity model quota")
+    /// Payload captured verbatim from a live authenticated request. The old
+    /// source (`fetchAvailableModels`) exposed one `remainingFraction` per
+    /// model, so the row showed a single bar and silently omitted the weekly
+    /// limit — which was the binding constraint.
+    @Test("Gemini renders both metered windows, shortest first")
     func geminiParsesQuota() async throws {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"},"planInfo":{"planType":"ANTIGRAVITY"}}"#)
+                return canned(body: #"{"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#)
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.94,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro",
+               "buckets":[
+                 {"bucketId":"gemini-weekly","window":"weekly","resetTime":"2099-01-04T00:00:00Z","remainingFraction":0.28312185},
+                 {"bucketId":"gemini-5h","window":"5h","resetTime":"2099-01-01T00:00:00Z","remainingFraction":0.845952}]},
+              {"displayName":"Claude and GPT models",
+               "buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.31}]}]}
+            """#)
         }) { try await provider.fetchSnapshot() }
+
+        // Weekly is 71.7% used, so the provider warns — the pressure that was
+        // invisible while only the five-hour window was read.
+        #expect(snap.status == .measured(.warning))
+        // Shortest window first, as every other provider renders.
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.label == "WK")
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.154048) < 0.000_01)
+        #expect(abs((snap.row2?.primaryFraction ?? 0) - 0.71687815) < 0.000_01)
+        // The badge follows the fuller window, which is the binding one.
+        #expect(snap.badgeText == "28% left")
+        #expect(snap.planName == "Google AI Pro")
+    }
+
+    /// The response also carries a "Claude and GPT models" group — a separate
+    /// Antigravity allowance. Averaging it into a row labelled Gemini would
+    /// report a number for a pool the row does not name.
+    @Test("the third-party model group is not counted as Gemini")
+    func geminiIgnoresThirdPartyGroup() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.01}]},
+              {"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.90}]}]}
+            """#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.bars.count == 1)
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.10) < 0.000_01)
         #expect(snap.status == .healthy)
-        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.06) < 0.000_001)
+    }
+
+    /// Window lengths come from the vendor's own name for the bucket, so a
+    /// pace marker is never placed against a length we assumed.
+    @Test("pace markers use the window length the API names")
+    func geminiWindowLengths() {
+        #expect(GeminiQuotaProvider.windowLength(for: "5h") == QuotaWindow.fiveHours)
+        #expect(GeminiQuotaProvider.windowLength(for: "weekly") == QuotaWindow.week)
+        #expect(GeminiQuotaProvider.windowLength(for: "fortnightly") == nil)
+        #expect(GeminiQuotaProvider.label(for: "5h") == "5H")
+        #expect(GeminiQuotaProvider.label(for: "weekly") == "WK")
+        #expect(GeminiQuotaProvider.label(for: nil) == "AG")
     }
 
     /// The security test previously stubbed a 401 so only the first request
@@ -459,9 +515,12 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
         _ = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+                return canned(body: "{}")
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+            return canned(body: #"""
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5}]}]}
+            """#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(URLProtocolStub.capturedRequests.count == 2)
@@ -471,23 +530,6 @@ struct ProviderHTTPTests {
         }
     }
 
-    /// The menu-bar colour must follow the model closest to its limit, not
-    /// whichever one happens to sort first by name.
-    @Test("Gemini headlines the fullest model, not the alphabetically first")
-    func geminiRanksByUsage() async throws {
-        let provider = GeminiQuotaProvider(accessToken: "token")
-        let snap = try await withStubbedHTTP({ request in
-            if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
-            }
-            return canned(body: #"{"models":{"gemini-3-alpha":{"displayName":"Alpha","quotaInfo":{"remainingFraction":0.90,"resetTime":"2026-08-22T03:30:11Z"}},"gemini-3-zeta":{"displayName":"Zeta","quotaInfo":{"remainingFraction":0.02,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
-        }) { try await provider.fetchSnapshot() }
-
-        #expect(snap.status == .measured(.critical))
-        #expect(snap.row1?.usedText?.contains("Zeta") == true)
-        #expect(snap.badgeText == "2% left")
-    }
-
     /// A well-formed response that simply carries no quota is "nothing to
     /// read", not a malformed payload.
     @Test("Gemini reports no model quota as unsupported, not a bad response")
@@ -495,9 +537,9 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+                return canned(body: "{}")
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Flash"}}}"#)
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h"}]}]}"#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(snap.status.confidence == .unavailable)

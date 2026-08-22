@@ -144,55 +144,19 @@ struct GeminiOAuthErrorTests {
     }
 }
 
-@Suite("Gemini Cloud Code payload shapes")
-struct GeminiPayloadTests {
-
-    private func projectID(from json: String) throws -> String? {
-        try JSONDecoder()
-            .decode(GeminiQuotaProvider.ProjectReference.self, from: Data(json.utf8))
-            .id
-    }
-
-    /// The live API returns this field as a bare string. Decoding it as only
-    /// an object made a perfectly good 200 unparseable, and the row read
-    /// "Unexpected response" with the project id sitting in plain sight.
-    @Test("a project reference decodes whether it is a string or an object")
-    func projectReferenceAcceptsBothShapes() throws {
-        #expect(try projectID(from: #""authentic-answer-268pr""#) == "authentic-answer-268pr")
-        #expect(try projectID(from: #"{"id":"authentic-answer-268pr"}"#) == "authentic-answer-268pr")
-        #expect(try projectID(from: #""""#) == nil)
-        #expect(try projectID(from: #"{"name":"no-id-here"}"#) == nil)
-    }
-
-    /// Mirrors antigravity-usage's own filter, so the row names the models
-    /// their CLI does — and never prices an image or autocomplete-only model
-    /// as though it were the coding pool.
-    @Test("only metered Gemini pools are counted")
-    func modelFilterMatchesTheReference() {
-        #expect(GeminiQuotaProvider.isMeteredModel("gemini-3-flash"))
-        #expect(GeminiQuotaProvider.isMeteredModel("gemini-3.1-pro-high"))
-        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-3.1-flash-image"))
-        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-2.5-flash"))
-        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-3.5-flash-lite"))
-        #expect(!GeminiQuotaProvider.isMeteredModel("chat_gemini-3"))
-        #expect(!GeminiQuotaProvider.isMeteredModel("claude-opus-4-6-thinking"))
-    }
-}
-
-// `.serialized` because the stub below holds its canned bodies in statics —
-// `URLProtocol` subclasses are instantiated by `URLSession`, so there is
-// nowhere else to put them. Without it these tests overwrite each other's
-// responses and all three read whichever body won the race.
 @Suite("Gemini plan labelling", .serialized)
 struct GeminiPlanTests {
 
+    private static let summary = #"""
+    {"groups":[{"displayName":"Gemini Models","buckets":[
+      {"bucketId":"gemini-5h","window":"5h","resetTime":"2099-01-01T00:00:00Z","remainingFraction":0.85}]}]}
+    """#
+
     private func plan(from body: String) async throws -> String? {
         let provider = GeminiQuotaProvider(accessToken: "token")
-        let models = #"""
-        {"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash",
-         "quotaInfo":{"remainingFraction":0.85,"resetTime":"2099-01-01T00:00:00Z"}}}}
-        """#
-        return try await QuotaHTTP.$session.withValue(GeminiStub.session(assist: body, models: models)) {
+        return try await QuotaHTTP.$session.withValue(
+            GeminiStub.session(assist: body, summary: Self.summary)
+        ) {
             try await provider.fetchSnapshot().planName
         }
     }
@@ -203,8 +167,7 @@ struct GeminiPlanTests {
     @Test("the paid subscription is preferred over the Code Assist licence tier")
     func paidTierWins() async throws {
         let body = #"""
-        {"cloudaicompanionProject":"proj-1",
-         "currentTier":{"id":"free-tier","name":"Antigravity"},
+        {"currentTier":{"id":"free-tier","name":"Antigravity"},
          "paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}
         """#
         #expect(try await plan(from: body) == "Google AI Pro")
@@ -212,23 +175,21 @@ struct GeminiPlanTests {
 
     @Test("without a paid tier the reported tier name is used")
     func fallsBackToCurrentTier() async throws {
-        let body = #"""
-        {"cloudaicompanionProject":"proj-1","currentTier":{"id":"free-tier","name":"Antigravity"}}
-        """#
+        let body = #"{"currentTier":{"id":"free-tier","name":"Antigravity"}}"#
         #expect(try await plan(from: body) == "Antigravity")
     }
 
     @Test("no published tier asserts no plan at all")
     func noTierAssertsNothing() async throws {
-        #expect(try await plan(from: #"{"cloudaicompanionProject":"proj-1"}"#) == nil)
+        #expect(try await plan(from: "{}") == nil)
     }
 }
 
-/// Serves the two Cloud Code responses the Gemini provider makes in order.
+/// Serves the two Cloud Code responses the Gemini provider makes.
 private enum GeminiStub {
-    static func session(assist: String, models: String) -> URLSession {
+    static func session(assist: String, summary: String) -> URLSession {
         StubProtocol.assist = assist
-        StubProtocol.models = models
+        StubProtocol.summary = summary
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubProtocol.self]
         return URLSession(configuration: config)
@@ -236,13 +197,13 @@ private enum GeminiStub {
 
     final class StubProtocol: URLProtocol, @unchecked Sendable {
         nonisolated(unsafe) static var assist = ""
-        nonisolated(unsafe) static var models = ""
+        nonisolated(unsafe) static var summary = ""
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
             let path = request.url?.absoluteString ?? ""
-            let body = path.contains("loadCodeAssist") ? Self.assist : Self.models
+            let body = path.contains("loadCodeAssist") ? Self.assist : Self.summary
             let response = HTTPURLResponse(url: request.url!, statusCode: 200,
                                            httpVersion: "HTTP/1.1", headerFields: [:])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

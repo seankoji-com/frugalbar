@@ -1,7 +1,12 @@
 import Foundation
 
-/// Antigravity subscription quota via the Google Cloud Code API. The request
-/// format is derived from antigravity-usage (MIT); no executable is required.
+/// Antigravity subscription quota from the Google Cloud Code API.
+///
+/// Reads `v1internal:retrieveUserQuotaSummary`, the same source the `agy` CLI
+/// uses. It returns the real windows the vendor meters — a five-hour and a
+/// weekly bucket per model group — where `fetchAvailableModels` exposes only a
+/// single `remainingFraction` per model. Using the latter showed one bar and
+/// silently omitted the weekly limit, which was the binding constraint.
 public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public let vendorId: VendorIdentifier = .gemini
     public var displayName: String { vendorId.displayName }
@@ -14,40 +19,27 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     private struct CodeAssist: Decodable {
         struct Plan: Decodable { let planType: String? }
         struct Tier: Decodable { let id: String?; let name: String? }
-        let cloudaicompanionProject: ProjectReference?
         let planInfo: Plan?
         let currentTier: Tier?
         let paidTier: Tier?
     }
 
-    /// `cloudaicompanionProject` is a bare string on some accounts and an
-    /// object on others. Decoding it as only one shape made the whole response
-    /// unparseable — the provider reported "Unexpected response" against a
-    /// perfectly good 200 that contained the project id in plain sight.
-    /// `antigravity-usage` carries an `extractProjectId` helper for the same
-    /// reason.
-    struct ProjectReference: Decodable {
-        let id: String?
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            if let text = try? container.decode(String.self) {
-                id = text.isEmpty ? nil : text
-                return
-            }
-            struct Object: Decodable { let id: String? }
-            id = (try? container.decode(Object.self))?.id
-        }
-    }
-
-    private struct ModelResponse: Decodable {
-        struct Model: Decodable {
-            struct Quota: Decodable { let remainingFraction: Double?; let resetTime: String? }
+    struct QuotaSummary: Decodable, Sendable {
+        struct Group: Decodable, Sendable {
             let displayName: String?
-            let label: String?
-            let quotaInfo: Quota?
+            let description: String?
+            let buckets: [Bucket]?
         }
-        let models: [String: Model]?
+        struct Bucket: Decodable, Sendable {
+            let bucketId: String?
+            let displayName: String?
+            /// "5h", "weekly" — the vendor naming its own window, which is what
+            /// makes an honest pace marker possible.
+            let window: String?
+            let resetTime: String?
+            let remainingFraction: Double?
+        }
+        let groups: [Group]?
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
@@ -67,97 +59,122 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         guard let token = resolvedToken, !token.isEmpty else {
             return unavailable(.notConfigured)
         }
-        let metadata = ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]
-        let encoder = JSONEncoder()
-        let assistBody = try encoder.encode(["metadata": metadata])
-        let (assistData, assistHTTP) = try await QuotaHTTP.post(
-            url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", body: assistBody,
+
+        // The quota summary takes an empty body — it is scoped by the token,
+        // needs no project, and so cannot fail on project resolution.
+        let (data, http) = try await QuotaHTTP.post(
+            url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            body: Data("{}".utf8),
             headers: ["User-Agent": "antigravity"], auth: .bearer(token)
         )
-        if let reason = QuotaHTTP.failureReason(for: assistHTTP.statusCode) { return unavailable(reason) }
-        guard let assist = try? JSONDecoder().decode(CodeAssist.self, from: assistData),
-              let projectID = assist.cloudaicompanionProject?.id, !projectID.isEmpty
-        else { return unavailable(.badResponse) }
-
-        let modelBody = try encoder.encode(["project": projectID])
-        let (modelsData, modelsHTTP) = try await QuotaHTTP.post(
-            url: "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", body: modelBody,
-            headers: ["User-Agent": "antigravity"], auth: .bearer(token)
-        )
-        if let reason = QuotaHTTP.failureReason(for: modelsHTTP.statusCode) { return unavailable(reason) }
-        guard let response = try? JSONDecoder().decode(ModelResponse.self, from: modelsData),
-              let models = response.models
-        else { return unavailable(.badResponse) }
-
-        // 2.5 shares a pooled allowance with the older Gemini API rather than
-        // the Antigravity subscription, so its fraction is not comparable with
-        // the rest and would distort the headline reading. The remaining
-        // exclusions mirror `antigravity-usage`'s own model filter.
-        let readings = models.compactMap { id, model -> (String, Double, Date)? in
-            guard Self.isMeteredModel(id),
-                  let remaining = model.quotaInfo?.remainingFraction, (0...1).contains(remaining),
-                  let resetText = model.quotaInfo?.resetTime, let reset = Self.parseDate(resetText)
-            else { return nil }
-            return (model.displayName ?? model.label ?? id, 1 - remaining, reset)
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
+        guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
+            return unavailable(.badResponse)
         }
-        // A structurally fine response that simply carries no per-model quota
-        // is "this vendor published nothing", not a malformed payload.
+        guard let group = Self.geminiGroup(in: summary) else {
+            return unavailable(.unsupported("Antigravity reported no Gemini quota"))
+        }
+
+        let now = Date()
+        let readings = (group.buckets ?? []).compactMap { Self.reading($0, now: now) }
         guard !readings.isEmpty else {
-            return unavailable(.unsupported("Antigravity reported no model quota"))
+            return unavailable(.unsupported("Antigravity reported no Gemini quota"))
         }
 
-        // The binding constraint is the fullest model, not whichever one sorts
-        // first alphabetically — that made the menu-bar colour an accident of
-        // Google's naming.
-        let ranked = readings.sorted { $0.1 > $1.1 }
-        let primary = ranked[0]
-        // Antigravity meters a shared pool, so most models report the identical
-        // fraction and reset. Three bars of the same number read as three
-        // separate allowances; collapse them to one row per distinct pool.
-        var seen: Set<String> = []
-        let pools = ranked.filter { seen.insert("\(Int(($0.1 * 1000).rounded()))@\($0.2.timeIntervalSince1970)").inserted }
-        let rows = pools.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
-        // Two different tiers live in this response and only one is the
-        // subscription. `currentTier` is the *Code Assist licence* — "free-tier"
-        // for anyone not on a GCP-managed licence, which is almost everyone
-        // with a personal Antigravity subscription. `paidTier` is the plan the
-        // account actually pays for ("Google AI Pro"), and showing the former
-        // told a paying subscriber they were on the free tier.
-        //
-        // Read as current rather than as an advert because the response pairs
-        // it with an upgrade prompt naming the tier *above* it. nil when the
-        // API publishes neither, rather than asserting a plan nobody measured.
-        let plan = assist.paidTier?.name
-            ?? assist.planInfo?.planType
-            ?? assist.currentTier?.name
-        let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
-        let percent = Int((primary.1 * 100).rounded())
+        // Shortest window first, so the row reads 5H then WK like every other
+        // provider rather than in whatever order the API happened to send.
+        let ordered = readings.sorted { $0.windowLength ?? .infinity < $1.windowLength ?? .infinity }
+        let worst = ordered.map(\.used).max() ?? 0
+        let urgency: Urgency = worst > 0.90 ? .critical : worst > 0.70 ? .warning : .none
+
+        // The plan is decoration, so it is fetched best-effort: losing it must
+        // not cost us a reading we already hold.
+        let plan = await Self.plan(token: token)
+
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: plan ?? displayName, renewalDate: nil),
-            status: .measured(urgency), resetsAt: primary.2, lastUpdated: Date(),
-            auxiliaryInfo: "Live Antigravity subscription quota", row1: rows[safe: 0],
-            row2: rows[safe: 1], row3: rows[safe: 2], badgeText: "\(100 - percent)% left",
+            status: .measured(urgency), resetsAt: ordered.first?.reset, lastUpdated: now,
+            auxiliaryInfo: group.description ?? "Live Antigravity subscription quota",
+            row1: ordered[safe: 0].map { $0.bar }, row2: ordered[safe: 1].map { $0.bar },
+            row3: ordered[safe: 2].map { $0.bar },
+            badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: plan, cliSource: "Google OAuth"
         )
     }
 
-    /// Which models represent a metered Antigravity pool. Mirrors
-    /// `antigravity-usage`'s `shouldShowModel`, so the row names the same
-    /// models their CLI does.
-    static func isMeteredModel(_ id: String) -> Bool {
-        let lower = id.lowercased()
-        guard lower.contains("gemini") else { return false }
-        if lower.contains("2.5") { return false }
-        if lower.hasPrefix("chat_") || lower.hasPrefix("tab_") || lower.hasPrefix("rev") { return false }
-        if lower.contains("image") || lower.contains("lite") || lower.contains("mquery") { return false }
-        return true
+    /// The group metering Gemini itself. The response also carries a "Claude
+    /// and GPT models" group — a genuinely separate Antigravity allowance that
+    /// would be a lie to average into a row labelled Gemini.
+    static func geminiGroup(in summary: QuotaSummary) -> QuotaSummary.Group? {
+        summary.groups?.first { group in
+            if group.buckets?.contains(where: { $0.bucketId?.hasPrefix("gemini") == true }) == true {
+                return true
+            }
+            return group.displayName?.lowercased().contains("gemini") == true
+        }
     }
 
-    private static func row(name: String, used: Double, reset: Date) -> DualBarMetrics {
-        DualBarMetrics(primaryFraction: used, label: "AG", statusColor: "#3b82f6",
-                       usedText: "\(name): \(Int((used * 100).rounded()))% used",
-                       resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: reset, relativeTo: Date()))")
+    private struct Reading {
+        let used: Double
+        let reset: Date?
+        let windowLength: TimeInterval?
+        let bar: DualBarMetrics
+    }
+
+    private static func reading(_ bucket: QuotaSummary.Bucket, now: Date) -> Reading? {
+        guard let remaining = bucket.remainingFraction, (0...1).contains(remaining) else { return nil }
+        let used = 1 - remaining
+        let reset = bucket.resetTime.flatMap(parseDate)
+        let length = windowLength(for: bucket.window)
+        let bar = DualBarMetrics(
+            primaryFraction: used,
+            expectedPaceFraction: length.flatMap {
+                DualBarMetrics.proRataPace(resetsAt: reset, windowLength: $0, now: now)
+            },
+            label: label(for: bucket.window),
+            statusColor: "#3b82f6",
+            usedText: "\(Int((used * 100).rounded()))% used",
+            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" }
+        )
+        return Reading(used: used, reset: reset, windowLength: length, bar: bar)
+    }
+
+    /// Window lengths come from the vendor's own name for the bucket, so the
+    /// pace marker is never placed against a length we assumed.
+    static func windowLength(for window: String?) -> TimeInterval? {
+        switch window?.lowercased() {
+        case "5h":     QuotaWindow.fiveHours
+        case "weekly": QuotaWindow.week
+        default:       nil
+        }
+    }
+
+    static func label(for window: String?) -> String {
+        switch window?.lowercased() {
+        case "5h":      "5H"
+        case "weekly":  "WK"
+        case "monthly": "MO"
+        case .some(let other): other.uppercased()
+        case .none:     "AG"
+        }
+    }
+
+    private static func plan(token: String) async -> String? {
+        let body = try? JSONEncoder().encode(
+            ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
+        guard let body,
+              let (data, http) = try? await QuotaHTTP.post(
+                  url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", body: body,
+                  headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
+              (200...299).contains(http.statusCode),
+              let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
+        else { return nil }
+        // Two tiers live in this response and only one is the subscription.
+        // `currentTier` is the Code Assist licence — "free-tier" for almost any
+        // personal account — so showing it told a paying subscriber they were
+        // on the free tier. `paidTier` is what the account actually pays for.
+        return assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name
     }
 
     private static func parseDate(_ text: String) -> Date? {
