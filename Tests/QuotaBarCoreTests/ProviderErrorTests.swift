@@ -131,3 +131,27 @@ struct GeminiOAuthClientTests {
         }
     }
 }
+
+@Suite("Gemini OAuth token errors")
+struct GeminiOAuthErrorTests {
+
+    /// Three rounds of debugging were spent on "sign-in did not complete"
+    /// because Google's own explanation was discarded as a bare badResponse.
+    @Test("Google's error code and description are carried through")
+    func googleErrorIsSurfaced() {
+        let body = Data(#"{"error":"invalid_client","error_description":"Unauthorized"}"#.utf8)
+        let error = GeminiOAuthError(from: body, statusCode: 401)
+        #expect(error.code == "invalid_client")
+        #expect(error.detail == "Unauthorized")
+        #expect(error.summary == "invalid_client — Unauthorized")
+    }
+
+    /// A body that is not the documented error shape still has to say
+    /// something more useful than nothing.
+    @Test("an unparseable error body falls back to the status code")
+    func unparseableErrorFallsBack() {
+        let error = GeminiOAuthError(from: Data("<html>gateway timeout</html>".utf8), statusCode: 504)
+        #expect(error.code == "http_504")
+        #expect(error.summary == "http_504")
+    }
+}

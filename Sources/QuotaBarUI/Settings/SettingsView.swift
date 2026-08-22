@@ -188,6 +188,10 @@ public struct SettingsView: View {
             geminiSignInStatus = "Connected"
         } catch let error as ProviderError where error.reason == .notConfigured {
             geminiSignInStatus = "Add an OAuth client ID and secret above first"
+        } catch let error as GeminiOAuthError {
+            // Google names the misconfiguration; passing it through turns a
+            // silent failure into one the user can act on.
+            geminiSignInStatus = "Google refused the sign-in: \(error.summary)"
         } catch {
             geminiSignInStatus = "Google sign-in did not complete"
         }

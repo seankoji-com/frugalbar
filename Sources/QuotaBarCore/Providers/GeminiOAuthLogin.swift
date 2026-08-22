@@ -1,10 +1,16 @@
 import AppKit
-import CryptoKit
 import Foundation
 import Network
 
-/// Google OAuth authorization-code flow for FrugalBar's desktop client.
+/// Google OAuth authorization-code flow for the configured desktop client.
 /// Tokens are stored only in the macOS Keychain.
+///
+/// Deliberately mirrors the `antigravity-usage` CLI's flow, which is known to
+/// work against this client: an ephemeral loopback port, a bare `/callback`
+/// path, and a plain code exchange. It carries **no PKCE** — the earlier
+/// version added `code_challenge`/`code_verifier`, and sign-in failed at the
+/// exchange with nothing saved. When a reference implementation works and a
+/// variant does not, match the reference.
 public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     public static let shared = GeminiOAuthLogin()
 
@@ -79,7 +85,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     private var continuation: CheckedContinuation<Void, Error>?
     private var timeoutTask: Task<Void, Never>?
     private var state = ""
-    private var verifier = ""
 
     public func signIn() async throws {
         // Refuse before opening a browser: without a client there is nothing to
@@ -92,7 +97,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         guard !alreadyRunning else { throw ProviderError.badResponse }
 
         state = Self.randomURLSafeString()
-        verifier = Self.randomURLSafeString()
 
         // Loopback only. `on: .any` binds every interface, which puts the
         // callback endpoint on the local network for the duration of sign-in.
@@ -152,8 +156,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
             .init(name: "access_type", value: "offline"),
             .init(name: "prompt", value: "consent"),
             .init(name: "state", value: state),
-            .init(name: "code_challenge", value: Self.challenge(for: verifier)),
-            .init(name: "code_challenge_method", value: "S256"),
         ]
         if let url = components.url {
             DispatchQueue.main.async { NSWorkspace.shared.open(url) }
@@ -207,7 +209,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
             "code": code,
             "redirect_uri": Self.redirectURI(port: port),
             "grant_type": "authorization_code",
-            "code_verifier": verifier,
         ], existingRefreshToken: nil)
         try GeminiOAuthSession.save(session)
     }
@@ -244,9 +245,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         Data((0..<32).map { _ in UInt8.random(in: .min ... .max) }).base64URLEncodedString()
     }
 
-    private static func challenge(for verifier: String) -> String {
-        Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
-    }
 }
 
 extension Data {

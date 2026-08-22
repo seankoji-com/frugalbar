@@ -249,8 +249,16 @@ public struct GeminiOAuthSession: Codable, Sendable {
         request.httpBody = encoded
 
         let (data, response) = try await QuotaHTTP.session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let token = try? JSONDecoder().decode(TokenResponse.self, from: data),
+        guard let http = response as? HTTPURLResponse else { throw ProviderError.badResponse }
+        // Google explains itself here — `invalid_client`, `redirect_uri_mismatch`,
+        // `invalid_grant` — and this used to be thrown away as a bare
+        // `badResponse`, which reached the user as "sign-in did not complete"
+        // and cost three rounds of guessing. Only the two error fields are
+        // surfaced; the body of a *successful* response is never touched.
+        guard (200...299).contains(http.statusCode) else {
+            throw GeminiOAuthError(from: data, statusCode: http.statusCode)
+        }
+        guard let token = try? JSONDecoder().decode(TokenResponse.self, from: data),
               !token.access_token.isEmpty
         else { throw ProviderError.badResponse }
 
@@ -262,6 +270,11 @@ public struct GeminiOAuthSession: Codable, Sendable {
         )
     }
 
+    struct ErrorResponse: Decodable {
+        let error: String?
+        let error_description: String?
+    }
+
     private struct TokenResponse: Decodable {
         let access_token: String
         let refresh_token: String?
@@ -271,4 +284,29 @@ public struct GeminiOAuthSession: Codable, Sendable {
 
 private extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+/// What Google said when it refused a token request.
+///
+/// Carries only the `error` / `error_description` pair from a non-2xx
+/// response. Those name the misconfiguration — a wrong secret, an
+/// unregistered redirect, a spent code — and none of them is a credential.
+public struct GeminiOAuthError: Error, Sendable, Equatable {
+    public let code: String
+    public let detail: String
+
+    init(from data: Data, statusCode: Int) {
+        let decoded = try? JSONDecoder().decode(GeminiOAuthSession.ErrorResponse.self, from: data)
+        self.code = decoded?.error ?? "http_\(statusCode)"
+        self.detail = decoded?.error_description ?? ""
+    }
+
+    public init(code: String, detail: String) {
+        self.code = code
+        self.detail = detail
+    }
+
+    public var summary: String {
+        detail.isEmpty ? code : "\(code) — \(detail)"
+    }
 }
