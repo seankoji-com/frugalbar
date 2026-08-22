@@ -41,7 +41,12 @@ public struct SettingsView: View {
     @State private var isVerifying = false
     @State private var isSigningInToGemini = false
     @State private var geminiSignInStatus: String?
-    @AppStorage(CredentialStore.cliDiscoveryDefaultsKey) private var cliDiscovery = false
+    @State private var geminiClientSecret = ""
+    @State private var geminiClientID = ""
+    // Bound to the shared suite, not `.standard`: the toggle must apply to the
+    // app whatever the executable happens to be named.
+    @AppStorage(CredentialStore.cliDiscoveryDefaultsKey, store: CredentialStore.preferences)
+    private var cliDiscovery = false
 
     public init() {}
 
@@ -64,10 +69,19 @@ public struct SettingsView: View {
     private var keysTab: some View {
         Form {
             Section("Gemini") {
+                // The OAuth client is configured here rather than compiled in:
+                // this repository is public, so the secret must never live in
+                // the source tree. Google requires it on the token exchange,
+                // and without it every sign-in failed at the last step.
+                SecureField("Google OAuth client secret", text: $geminiClientSecret)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Google OAuth client ID (optional)", text: $geminiClientID)
+                    .textFieldStyle(.roundedBorder)
+
                 Button("Connect Google account") { Task { await connectGemini() } }
                     .disabled(isSigningInToGemini)
                 if isSigningInToGemini { ProgressView().controlSize(.small) }
-                Text(geminiSignInStatus ?? "Uses Google OAuth to read Antigravity quota. Tokens stay in your Keychain.")
+                Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain. Your Google account must be a listed test user on the client's project while it is unverified.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -139,16 +153,38 @@ public struct SettingsView: View {
         }
         loaded = current
         entered = current
+
+        geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
+        // The secret is never read back for display; the field shows only
+        // whether one is already stored, so reopening Settings cannot leak it.
+        if GeminiOAuthLogin.hasClientSecret(), geminiSignInStatus == nil {
+            geminiSignInStatus = "A client secret is stored. Leave the field blank to keep it."
+        }
     }
 
     private func connectGemini() async {
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
+
+        // Persist the client configuration before signing in: the flow reads
+        // it from the Keychain, so a secret typed but not yet saved would fail
+        // the exchange and look like a rejected sign-in.
+        do {
+            try GeminiOAuthLogin.saveClientConfiguration(
+                clientID: geminiClientID, clientSecret: geminiClientSecret)
+        } catch {
+            geminiSignInStatus = "Could not save the client configuration to the Keychain"
+            return
+        }
+
         do {
             try await GeminiOAuthLogin.shared.signIn()
             geminiSignInStatus = "Connected"
+        } catch let error as ProviderError where error.reason == .notConfigured {
+            // The specific failure that made every sign-in look mysterious.
+            geminiSignInStatus = "Add the Google OAuth client secret above — Google rejects the token exchange without it"
         } catch {
-            geminiSignInStatus = "Google sign-in did not complete"
+            geminiSignInStatus = "Google sign-in did not complete. If Google said \"access blocked\", add this account as a test user on the client's project."
         }
     }
 

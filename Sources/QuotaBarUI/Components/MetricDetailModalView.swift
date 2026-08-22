@@ -2,25 +2,25 @@ import SwiftUI
 import AppKit
 import QuotaBarCore
 
-/// Inspector modal presenting detailed metrics, diagnostics, and test simulation.
+/// Inspector modal presenting detailed metrics and diagnostics.
+///
+/// Carried a "Test Quota Simulation" slider that wrote a made-up fraction into
+/// the live snapshot — which then drove the advice engine and the menu bar
+/// icon. A debug affordance that fabricates the one number this app exists to
+/// report has no business shipping, so it is gone.
 public struct MetricDetailModalView: View {
 
     @State private var snapshot: QuotaSnapshot
     let onClose: () -> Void
-    var onUpdateUsage: ((Double) -> Void)? = nil
 
     @State private var copied = false
-    @State private var sliderValue: Double
 
     public init(
         snapshot: QuotaSnapshot,
-        onClose: @escaping () -> Void,
-        onUpdateUsage: ((Double) -> Void)? = nil
+        onClose: @escaping () -> Void
     ) {
         _snapshot = State(initialValue: snapshot)
         self.onClose = onClose
-        self.onUpdateUsage = onUpdateUsage
-        _sliderValue = State(initialValue: snapshot.row1?.primaryFraction ?? snapshot.consumptionFraction ?? 0.5)
     }
 
     private var accentColor: Color {
@@ -137,15 +137,15 @@ public struct MetricDetailModalView: View {
                 metricCard(
                     title: "5H Window Usage",
                     icon: "clock",
-                    primaryValue: snapshot.row1?.usedText ?? "\(Int(sliderValue * 100))% used",
-                    secondaryValue: snapshot.row1?.resetText ?? (snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "Rolling window")
+                    primaryValue: snapshot.row1?.usedText ?? "—",
+                    secondaryValue: snapshot.row1?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—"
                 )
 
                 metricCard(
                     title: "Weekly Velocity",
                     icon: "cpu",
-                    primaryValue: snapshot.row2?.usedText ?? "Capacity Normal",
-                    secondaryValue: snapshot.row2?.resetText ?? "Active Tier"
+                    primaryValue: snapshot.row2?.usedText ?? "—",
+                    secondaryValue: snapshot.row2?.resetText ?? "—"
                 )
             }
 
@@ -167,48 +167,6 @@ public struct MetricDetailModalView: View {
                     .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
             )
 
-            // Live simulation slider
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Label("Test Quota Simulation", systemImage: "slider.horizontal.3")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Theme.primary)
-
-                    Spacer()
-
-                    Text("\(Int((sliderValue * 100).rounded()))%")
-                        .font(.system(size: 9, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.onSurface)
-                }
-
-                Slider(value: $sliderValue, in: 0...1, step: 0.05) {
-                    Text("Quota")
-                }
-                .accentColor(Theme.primary)
-                .onChange(of: sliderValue) { _, newValue in
-                    onUpdateUsage?(newValue)
-                }
-
-
-                HStack {
-                    Text("0% (Green)")
-                    Spacer()
-                    Text("70% (Amber)")
-                    Spacer()
-                    Text("90%+ (Critical)")
-                }
-                .font(.system(size: 7.5, weight: .regular))
-                .monospaced()
-                .foregroundStyle(Theme.outline)
-            }
-            .padding(8)
-            .background(Color.white.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
-            )
         }
         .padding(12)
     }
@@ -299,7 +257,7 @@ public struct MetricDetailModalView: View {
           "vendor": "\(snapshot.displayName)",
           "category": "\(snapshot.category.rawValue)",
           "status": "\(snapshot.status.confidence == .measured ? "measured" : "unavailable")",
-          "5h_fraction": \(snapshot.row1?.primaryFraction ?? sliderValue),
+          "5h_fraction": \(snapshot.row1.map { String($0.primaryFraction) } ?? "null"),
           "last_updated": "\(snapshot.lastUpdated)"
         }
         """

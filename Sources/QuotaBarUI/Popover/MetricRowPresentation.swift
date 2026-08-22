@@ -56,8 +56,16 @@ public struct MetricRowPresentation: Equatable, Sendable {
         case .count(let remaining, let limit, _):
             "\(remaining.formatted())/\(limit.formatted())"
         case .currency(let balance, let limit, let spent, let code):
-            limit.map { "\(currency(balance, code)) left of \(currency($0, code))" }
-                ?? currency(spent ?? balance, code)
+            // An uncapped key has no "left of" to show. Falling back to
+            // `spent ?? balance` printed the *balance* under a spend label —
+            // real money, described as the wrong thing.
+            if let limit {
+                "\(currency(balance, code)) left of \(currency(limit, code))"
+            } else if let spent {
+                "\(currency(spent, code)) spent"
+            } else {
+                currency(balance, code)
+            }
         case .subscription(let tierName, _):
             tierName
         }
@@ -70,8 +78,13 @@ public struct MetricRowPresentation: Equatable, Sendable {
         case .count(let remaining, let limit, let unit):
             "\(remaining) of \(limit) \(unit) remaining"
         case .currency(let balance, let limit, let spent, let code):
-            limit.map { "\(currency(balance, code)) of \(currency($0, code)) remaining" }
-                ?? "\(currency(spent ?? balance, code)) spent"
+            if let limit {
+                "\(currency(balance, code)) of \(currency(limit, code)) remaining"
+            } else if let spent {
+                "\(currency(spent, code)) spent"
+            } else {
+                "\(currency(balance, code)) balance"
+            }
         case .subscription(let tier, _):
             tier
         }

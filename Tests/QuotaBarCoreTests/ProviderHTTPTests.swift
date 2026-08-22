@@ -148,6 +148,41 @@ struct ProviderHTTPTests {
         #expect(snap.planName == "Plus")
     }
 
+    /// Both windows are real limits, and each is named from the length OpenAI
+    /// reports. Showing only the first, under a label that named neither, drew
+    /// the weekly quota as "PLAN" and hid the 5-hour window entirely.
+    @Test("OpenAI shows both windows and labels each from its own length")
+    func openAIBothWindows() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"plan_type":"plus","rate_limit":{
+              "primary_window":{"used_percent":30,"reset_at":1787891551,"limit_window_seconds":18000},
+              "secondary_window":{"used_percent":92,"reset_at":1788391551,"limit_window_seconds":604800}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 0.30)
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row2?.primaryFraction == 0.92)
+        // Urgency and badge both follow the fuller window, so the menu bar and
+        // the row cannot disagree about which limit is binding.
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "8% left")
+    }
+
+    @Test("an unlabelled OpenAI window falls back rather than guessing a length")
+    func openAIWindowLabels() {
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 18000) == "5H")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 604_800) == "WK")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 2_592_000) == "MO")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 3600) == "1H")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: nil) == "PLAN")
+    }
+
     @Test("OpenAI missing usage data is unavailable rather than a zero-percent reading")
     func openAIMissingUsage() async throws {
         let provider = OpenAIQuotaProvider(accessToken: "session-token")
@@ -502,22 +537,91 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("OpenCode with no local telemetry stays unavailable")
+    /// Body captured verbatim from a live authenticated request, so the
+    /// parsing is pinned to the shape OpenCode actually sends rather than one
+    /// reconstructed from another client's source.
+    @Test("OpenCode reads the Go usage API with the key in a header")
     func openCodeWithKey() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "super-secret-key")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"ok","percent":0,"resetsAt":"2026-08-22T14:39:10.189Z"},
+                      "weekly":{"status":"ok","percent":40,"resetsAt":"2026-08-24T00:00:00.189Z"},
+                      "monthly":{"status":"rate-limited","percent":100,"resetsAt":"2026-08-23T08:36:39.189Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .critical)
+        #expect(snap.row1?.primaryFraction == 0.0)
+        #expect(snap.row1?.label == "ROLL")
+        #expect(snap.row2?.primaryFraction == 0.40)
+        #expect(snap.row3?.primaryFraction == 1.0)
+        #expect(snap.badgeText == "Exhausted")
+        // A blocked window says so, rather than leaving 100% to be inferred.
+        #expect(snap.row3?.usedText?.contains("blocked") == true)
+        // Fractional seconds in `resetsAt` must parse, or every reset is lost.
+        #expect(snap.row2?.resetText != nil)
+
+        let req = try #require(URLProtocolStub.capturedRequests.first)
+        #expect(req.url?.absoluteString == "https://opencode.ai/zen/go/v1/usage")
+        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer super-secret-key")
+        #expect(req.url?.absoluteString.contains("super-secret-key") == false)
+    }
+
+    /// A window OpenCode reports as blocking is critical even when its
+    /// percentage alone would only warn.
+    @Test("a rate-limited window is critical whatever its percentage rounds to")
+    func openCodeBlockedWindow() async throws {
         let provider = OpenCodeGoProvider(apiKey: "k")
-        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"rate-limited","percent":12,"resetsAt":"2026-08-22T14:39:10.189Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .critical)
+        #expect(snap.row1?.primaryFraction == 0.12)
+    }
+
+    /// "rolling" names no window length, so its bar carries no pace marker —
+    /// where "weekly" and "monthly" name their own.
+    @Test("only windows that name their length get a pace marker")
+    func openCodePaceOnlyWhereKnown() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "k")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"ok","percent":10,"resetsAt":"2099-01-01T00:00:00.000Z"},
+                      "weekly":{"status":"ok","percent":20,"resetsAt":"2099-01-01T00:00:00.000Z"},
+                      "monthly":{"status":"ok","percent":30,"resetsAt":"2099-01-01T00:00:00.000Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.row1?.expectedPaceFraction == nil)
+        #expect(snap.row2?.expectedPaceFraction != nil)
+        #expect(snap.row3?.expectedPaceFraction != nil)
+    }
+
+    /// A structurally valid body with no window is "OpenCode published nothing",
+    /// which must never render as a bar at 0%.
+    @Test("OpenCode with no usage window stays unavailable")
+    func openCodeNoWindow() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "k")
+        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"usage":{}}"#) }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status.confidence == .unavailable)
         #expect(snap.consumptionFraction == nil)
-        #expect(URLProtocolStub.requestCount == 0)
+        #expect(snap.row1 == nil)
     }
 
 
     @Test("Copilot with missing quota data stays unavailable")
     func copilotValidToken() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
-        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"login":"octocat"}"#) }) {
+        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"copilot_plan":"business"}"#) }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status.confidence == .unavailable)

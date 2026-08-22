@@ -1,9 +1,14 @@
 import Foundation
 
-/// OpenCode provider.
+/// OpenCode Go subscription usage.
 ///
-/// Reports active OpenCode Go subscription when credentials are present in the
-/// Keychain or CLI config (~/.local/share/opencode/auth.json).
+/// `GET /zen/go/v1/usage`, authenticated with the `opencode-go` API key from
+/// the Keychain or the CLI config (`~/.local/share/opencode/auth.json`).
+///
+/// The previous implementation read `~/.local/share/opencode/usage.json` — a
+/// file OpenCode does not write. It could only ever report "No usage API",
+/// which then let the advice engine treat an exhausted subscription as
+/// unmeasured headroom.
 public final class OpenCodeGoProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .opencode
@@ -16,40 +21,65 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         self.apiKey = apiKey
     }
 
+    /// One window as OpenCode reports it:
+    /// `{"status":"ok","percent":0,"resetsAt":"2026-08-22T14:39:10.189Z"}`.
+    struct Window: Decodable, Sendable {
+        let status: String?
+        let percent: Double?
+        let resetsAt: String?
+
+        /// `percent` is 0…100 — the monthly window reads 100 when spent.
+        var fraction: Double? {
+            guard let percent, percent.isFinite else { return nil }
+            return min(max(percent / 100, 0), 1)
+        }
+
+        /// OpenCode says outright when a window is blocking, which is a better
+        /// signal than inferring it from a rounded percentage.
+        var isBlocked: Bool { status == "rate-limited" }
+
+        var reset: Date? { resetsAt.flatMap(OpenCodeGoProvider.parseDate) }
+    }
+
+    struct Response: Decodable, Sendable {
+        struct Usage: Decodable, Sendable {
+            let rolling: Window?
+            let weekly: Window?
+            let monthly: Window?
+        }
+        let usage: Usage?
+    }
+
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard await credential(injected: apiKey, for: .opencode) != nil else {
+        guard let key = await credential(injected: apiKey, for: .opencode) else {
             return unavailable(.notConfigured)
         }
-        let usagePath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local")
-            .appendingPathComponent("share")
-            .appendingPathComponent("opencode")
-            .appendingPathComponent("usage.json")
 
-        guard let data = try? Data(contentsOf: usagePath),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return unavailable(.unsupported("OpenCode has not written usage data")) }
+        let (data, http) = try await QuotaHTTP.get(
+            url: "https://opencode.ai/zen/go/v1/usage",
+            headers: ["Accept": "application/json"],
+            auth: .bearer(key)
+        )
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
+        guard let response = try? JSONDecoder().decode(Response.self, from: data),
+              let usage = response.usage
+        else { return unavailable(.badResponse) }
 
-        func usage(_ key: String) -> Double? {
-            guard let value = obj[key] as? Double, (0...1).contains(value) else { return nil }
-            return value
-        }
-        let fiveHourUsage = usage("five_hour_used")
-        let weeklyUsage = usage("weekly_used")
-        let monthlyUsage = usage("monthly_used")
-        guard fiveHourUsage != nil || weeklyUsage != nil || monthlyUsage != nil else {
-            return unavailable(.badResponse)
-        }
-        let urgency: Urgency = (monthlyUsage ?? 0) >= 0.95 ? .critical
-            : (fiveHourUsage ?? 0) >= 0.80 || (weeklyUsage ?? 0) >= 0.80 ? .warning : .none
-
-        func row(_ fraction: Double?, _ label: String, _ resetKey: String) -> DualBarMetrics? {
-            guard let fraction else { return nil }
-            let percent = Int((fraction * 100).rounded())
-            return DualBarMetrics(primaryFraction: fraction, label: label, statusColor: "#d47b00",
-                                  usedText: "\(percent)% used", resetText: obj[resetKey] as? String)
+        let windows = [usage.rolling, usage.weekly, usage.monthly]
+        // A structurally valid response carrying no window is "OpenCode
+        // published nothing", not a malformed payload.
+        let measured = windows.compactMap { $0?.fraction }
+        guard let worst = measured.max() else {
+            return unavailable(.unsupported("OpenCode reported no usage window"))
         }
 
+        // A blocked window cannot be used at all, whatever its percentage
+        // rounds to. Otherwise the fullest window sets the pressure.
+        let urgency: Urgency = windows.contains(where: { $0?.isBlocked == true }) || worst >= 0.95
+            ? .critical
+            : worst >= 0.80 ? .warning : .none
+
+        let now = Date()
         return QuotaSnapshot(
             id: vendorId.rawValue,
             vendorId: vendorId,
@@ -57,23 +87,51 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             category: category,
             metric: .subscription(tierName: "Go", renewalDate: nil),
             status: .measured(urgency),
-            resetsAt: nil,
-            lastUpdated: Date(),
-            auxiliaryInfo: "Usage read from local OpenCode telemetry",
-            row1: row(fiveHourUsage, "5H", "five_hour_reset"),
-            row2: row(weeklyUsage, "WK", "weekly_reset"),
-            row3: row(monthlyUsage, "MO", "monthly_reset"),
-            badgeText: monthlyUsage.map { "\(Int(((1 - $0) * 100).rounded()))% left" },
+            resetsAt: usage.rolling?.reset ?? usage.weekly?.reset ?? usage.monthly?.reset,
+            lastUpdated: now,
+            auxiliaryInfo: "Live OpenCode Go subscription quota",
+            // The pace marker needs a window *length*, and this endpoint sends
+            // only a reset time. "weekly" and "monthly" name their own length;
+            // "rolling" names none, so that bar carries no marker rather than
+            // one placed against a length we assumed.
+            row1: Self.row(usage.rolling, "ROLL", length: nil, now: now),
+            row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
+            row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
+            badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: "OpenCode Go",
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"
         )
     }
+
+    private static func row(
+        _ window: Window?,
+        _ label: String,
+        length: TimeInterval?,
+        monthly: Bool = false,
+        now: Date
+    ) -> DualBarMetrics? {
+        guard let window, let fraction = window.fraction else { return nil }
+        let reset = window.reset
+        let windowLength = length ?? (monthly ? reset.flatMap(DualBarMetrics.monthWindowLength(endingAt:)) : nil)
+        return DualBarMetrics(
+            primaryFraction: fraction,
+            expectedPaceFraction: windowLength.flatMap {
+                DualBarMetrics.proRataPace(resetsAt: reset, windowLength: $0, now: now)
+            },
+            label: label,
+            statusColor: window.isBlocked ? "#ffb4ab" : "#d47b00",
+            usedText: "\(Int((fraction * 100).rounded()))% used\(window.isBlocked ? " • blocked" : "")",
+            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" }
+        )
+    }
+
+    /// `resetsAt` carries fractional seconds, which the plain ISO8601 parser
+    /// rejects outright.
+    static func parseDate(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) { return date }
+        return ISO8601DateFormatter().date(from: text)
+    }
 }
-
-
-
-
-
-
-

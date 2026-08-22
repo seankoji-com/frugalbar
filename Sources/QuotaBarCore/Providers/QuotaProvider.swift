@@ -41,9 +41,7 @@ public enum QuotaHTTP {
         // Under a test host, refuse real network I/O rather than silently
         // performing it. A test that forgets to install a stub should fail
         // loudly, not quietly hit a vendor.
-        if NSClassFromString("XCTestCase") != nil
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.environment["SWIFT_TESTING_ENABLED"] != nil {
+        if TestHost.isActive {
             let cfg = URLSessionConfiguration.ephemeral
             cfg.protocolClasses = [BlockedNetworkProtocol.self]
             return URLSession(configuration: cfg)

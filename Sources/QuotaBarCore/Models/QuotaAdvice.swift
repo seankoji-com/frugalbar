@@ -28,6 +28,86 @@ public struct QuotaAdvice: Sendable, Equatable {
         self.vendorId = vendorId
     }
 
+    // MARK: - Candidates
+
+    /// One subscription we actually have a reading for.
+    ///
+    /// The engine is built from these rather than from named vendors. The
+    /// previous version hard-coded Claude and Gemini, so OpenAI and Copilot
+    /// could be at 100% without changing a word of the advice, and every
+    /// `?? 0.0` default let an *unreadable* provider stand in as an empty one.
+    private struct Candidate {
+        let vendorId: VendorIdentifier
+        let name: String
+        /// 0…1 consumed in the fullest window — the binding constraint.
+        let used: Double
+        /// The window that is fullest, for naming the constraint.
+        let bar: DualBarMetrics?
+        let isCritical: Bool
+
+        /// The provider's own verdict counts, but it never rewrites `used`:
+        /// the percentage we print is always the one the vendor published.
+        var isConstrained: Bool { used >= 0.80 || isCritical }
+        var hasHeadroom: Bool { used < 0.70 && !isCritical }
+
+        /// Allowance still worth spending, in a window that is nearly over.
+        ///
+        /// A paid-for subscription window does not roll over, so unspent
+        /// allowance in its final stretch is about to be lost — and burning it
+        /// is free, where OpenRouter credit is not. The "nearly over" test is
+        /// the window's own measured pace, so it scales itself: the last ~75
+        /// minutes of a 5-hour window, the last ~1.7 days of a weekly one.
+        var isExpiringUnspent: Bool {
+            guard used < Self.worthSpending, let pace = bar?.expectedPaceFraction else { return false }
+            return pace >= Self.windowNearlyOver
+        }
+
+        /// Below this much consumed there is a slice worth routing work to.
+        static let worthSpending = 0.95
+        static let windowNearlyOver = 0.75
+    }
+
+    private static func candidates(from snapshots: [QuotaSnapshot]) -> [Candidate] {
+        snapshots.compactMap { snapshot -> Candidate? in
+            guard snapshot.category == .aiSubscriptions,
+                  snapshot.status.confidence == .measured
+            else { return nil }
+            let worstBar = snapshot.bars.max { $0.primaryFraction < $1.primaryFraction }
+            // No bar and no denominator means no reading to reason about. A
+            // provider we cannot measure must not be presented as an option.
+            guard let used = worstBar?.primaryFraction ?? snapshot.consumptionFraction else { return nil }
+            return Candidate(
+                vendorId: snapshot.vendorId,
+                name: snapshot.shortVendorName,
+                used: used,
+                bar: worstBar,
+                isCritical: snapshot.status.urgency == .critical
+            )
+        }
+    }
+
+    /// "Claude 5H at 80% (resets in 42m)" — or "… exhausted" once it is spent.
+    private static func constraintText(_ candidate: Candidate) -> String {
+        let percent = Int((candidate.used * 100).rounded())
+        let label = candidate.bar.map { " \($0.label)" } ?? ""
+        let reset = cleanResetString(candidate.bar?.resetText).map { " (resets in \($0))" } ?? ""
+        if candidate.used >= 0.995 {
+            return "\(candidate.name)\(label) exhausted\(reset)"
+        }
+        return "\(candidate.name)\(label) at \(percent)%\(reset)"
+    }
+
+    private static func list(_ items: [String]) -> String {
+        switch items.count {
+        case 0:  return ""
+        case 1:  return items[0]
+        case 2:  return "\(items[0]) & \(items[1])"
+        default: return "\(items.dropLast().joined(separator: ", ")) & \(items.last!)"
+        }
+    }
+
+    // MARK: - Evaluation
+
     /// Evaluates current snapshots and produces dynamic, actionable advice.
     public static func evaluate(from snapshots: [QuotaSnapshot], now: Date = Date()) -> QuotaAdvice {
         guard !snapshots.isEmpty else {
@@ -41,29 +121,77 @@ public struct QuotaAdvice: Sendable, Equatable {
             )
         }
 
-        let claudeSnap = snapshots.first { $0.vendorId == .claude }
-        let geminiSnap = snapshots.first { $0.vendorId == .gemini }
-        let opencodeSnap = snapshots.first { $0.vendorId == .opencode }
+        // 0. SCENARIO: nothing was readable at all.
+        //
+        // This used to fall through to "All Quotas Healthy" — the summary
+        // asserted headroom for providers it had never once read.
+        guard snapshots.contains(where: { $0.status.confidence == .measured }) else {
+            return QuotaAdvice(
+                headline: "No Quota Readings",
+                message: "None of the \(snapshots.count) configured providers returned a usage reading. Check credentials in Settings.",
+                suggestedAction: "Open Settings",
+                urgency: .none,
+                iconName: "questionmark.circle.fill",
+                iconColorHex: "#adc6ff"
+            )
+        }
+
+        let candidates = Self.candidates(from: snapshots)
+        let constrained = candidates.filter(\.isConstrained).sorted { $0.used > $1.used }
+        let headroom = candidates.filter(\.hasHeadroom).sorted { $0.used < $1.used }
         let openrouterSnap = snapshots.first { $0.vendorId == .openrouter }
         let githubRestSnap = snapshots.first { $0.vendorId == .githubRest }
 
+        // 1. SCENARIO: something is nearly spent. Route around it — or, if
+        //    nothing has headroom left, off the subscriptions entirely.
+        if !constrained.isEmpty {
+            let constraints = list(constrained.map(constraintText))
 
-        let claudeFraction = claudeSnap?.row1?.primaryFraction ?? claudeSnap?.consumptionFraction ?? 0.0
-        let geminiFraction = geminiSnap?.row1?.primaryFraction ?? geminiSnap?.consumptionFraction
-        let opencodeFraction = opencodeSnap?.row1?.primaryFraction ?? opencodeSnap?.consumptionFraction ?? 0.0
-        let githubRestFraction = githubRestSnap?.row1?.primaryFraction ?? githubRestSnap?.consumptionFraction ?? 0.0
+            if let best = headroom.first {
+                let remaining = Int(((1.0 - best.used) * 100).rounded())
+                return QuotaAdvice(
+                    headline: "Use \(best.name)",
+                    message: "\(best.name) has \(remaining)% remaining. \(constraints).",
+                    suggestedAction: "Use \(best.name)",
+                    urgency: .critical,
+                    iconName: "arrow.triangle.swap",
+                    iconColorHex: "#9C52FD",
+                    vendorId: best.vendorId
+                )
+            }
 
-        let isClaudeCritical = claudeSnap?.status.urgency == .critical || claudeFraction >= 0.85
-        let isGeminiCritical = geminiSnap?.status.urgency == .critical || (geminiFraction ?? 0) >= 0.85
-        let isGitHubCritical = githubRestSnap?.status.urgency == .critical || githubRestFraction >= 0.90
+            // Nothing has real headroom — but a window in its final stretch
+            // still holds allowance that is already paid for and about to
+            // expire. Spend that before reaching for metered credit.
+            if let expiring = constrained
+                .filter(\.isExpiringUnspent)
+                .max(by: { ($0.bar?.expectedPaceFraction ?? 0) < ($1.bar?.expectedPaceFraction ?? 0) }) {
+                let remaining = Int(((1.0 - expiring.used) * 100).rounded())
+                let label = expiring.bar.map { " \($0.label)" } ?? ""
+                let reset = cleanResetString(expiring.bar?.resetText)
+                    .map { " and the window resets in \($0)" } ?? ""
+                let others = constrained.filter { $0.vendorId != expiring.vendorId }
+                let rest = others.isEmpty ? "" : " \(list(others.map(constraintText)))."
+                return QuotaAdvice(
+                    headline: "Spend Remaining \(expiring.name)",
+                    message: "\(expiring.name)\(label) has \(remaining)% left\(reset) — use it before it resets, rather than spending OpenRouter credit.\(rest)",
+                    suggestedAction: "Use \(expiring.name)",
+                    urgency: .warning,
+                    iconName: "hourglass.bottomhalf.filled",
+                    iconColorHex: "#ffb874",
+                    vendorId: expiring.vendorId
+                )
+            }
 
-        // 1. SCENARIO: All or most primary AI subscriptions are critical (Red)
-        if isClaudeCritical && isGeminiCritical {
-            let claudeReset = claudeSnap?.row1?.resetText ?? "its next reset"
-            let openrouterBalance = openrouterSnap?.badgeText ?? "check your OpenRouter balance"
+            let balance = openrouterSnap?.badgeText ?? "check your OpenRouter balance"
+            let names = list(constrained.map(\.name))
+            let anchor = constrained.first { cleanResetString($0.bar?.resetText) != nil }
+            let until = anchor.flatMap { candidate -> String? in
+                cleanResetString(candidate.bar?.resetText).map { " until \(candidate.name) resets in \($0)" }
+            } ?? ""
             return QuotaAdvice(
                 headline: "Primary Quotas Exhausted",
-                message: "Claude and Gemini are near capacity. Route urgent tasks to OpenRouter models (\(openrouterBalance)) until Claude resets in \(claudeReset).",
+                message: "\(names) \(constrained.count == 1 ? "is" : "are") near capacity. Route urgent tasks to OpenRouter models (\(balance))\(until).",
                 suggestedAction: "Use OpenRouter Models",
                 urgency: .critical,
                 iconName: "exclamationmark.triangle.fill",
@@ -72,13 +200,25 @@ public struct QuotaAdvice: Sendable, Equatable {
             )
         }
 
-        // 2. SCENARIO: GitHub REST rate limit elevated or critical
-        if isGitHubCritical || githubRestFraction >= 0.70 {
-            let resetDesc = githubRestSnap?.row1?.resetText ?? "hourly"
+        // 2. SCENARIO: GitHub REST rate limit elevated or critical.
+        //
+        // Checked only once no subscription is constrained: a throttled `gh`
+        // is an annoyance, an exhausted coding quota stops the work.
+        // A limit we could not read is not a limit at zero.
+        let githubRestFraction = githubRestSnap.flatMap {
+            $0.status.confidence == .measured
+                ? $0.row1?.primaryFraction ?? $0.consumptionFraction
+                : nil
+        }
+        let isGitHubCritical = githubRestSnap?.status.urgency == .critical || (githubRestFraction ?? 0) >= 0.90
+        if let githubRestFraction, isGitHubCritical || githubRestFraction >= 0.70 {
+            // The window length is read, never assumed: "(hourly)" was a
+            // claim about GitHub's policy, printed whether or not we saw it.
+            let resetDesc = githubRestSnap?.row1?.resetText.map { " (\($0))" } ?? ""
             let usedPct = Int((githubRestFraction * 100).rounded())
             return QuotaAdvice(
                 headline: "GitHub REST Limit at \(usedPct)%",
-                message: "GitHub REST rate limit is \(isGitHubCritical ? "nearly exhausted" : "elevated") (\(resetDesc)). Developer limits unsuppressed. Throttle automated polling or switch to GraphQL v4.",
+                message: "GitHub REST rate limit is \(isGitHubCritical ? "nearly exhausted" : "elevated")\(resetDesc). Developer limits unsuppressed. Throttle automated polling or switch to GraphQL v4.",
                 suggestedAction: "Throttle GitHub CLI",
                 urgency: isGitHubCritical ? .critical : .warning,
                 iconName: "network.badge.shield.half.filled",
@@ -87,119 +227,38 @@ public struct QuotaAdvice: Sendable, Equatable {
             )
         }
 
-
-        // 3. SCENARIO: Claude weekly quota critical / Copilot exhausted / OpenCode exhausted, Gemini has ample capacity
-        let claudeWeekly = claudeSnap?.row2?.primaryFraction ?? 0.0
-        let copilotSnap = snapshots.first { $0.vendorId == .copilot }
-        let isCopilotExhausted = copilotSnap?.status.urgency == .critical || (copilotSnap?.row1?.primaryFraction ?? 0.0) >= 0.95
-        let isOpenCodeExhausted = opencodeSnap?.status.urgency == .critical || (opencodeSnap?.row3?.primaryFraction ?? 0.0) >= 0.95
-
-        if let geminiFraction,
-           (claudeWeekly >= 0.80 || isCopilotExhausted || isOpenCodeExhausted || (claudeFraction >= 0.70 && geminiFraction < 0.70)) && geminiFraction < 0.85 {
-            let geminiRemaining = Int(((1.0 - geminiFraction) * 100).rounded())
-
-            // Build dynamic list of constrained providers
-            var constraints: [String] = []
-
-            // Claude constraint
-            if let weeklyBar = claudeSnap?.row2, weeklyBar.primaryFraction >= 0.80 {
-                let pct = Int((weeklyBar.primaryFraction * 100).rounded())
-                let reset = cleanResetString(weeklyBar.resetText)
-                let resetStr = reset.map { " until \($0)" } ?? ""
-                constraints.append("Claude weekly at \(pct)%\(resetStr)")
-            } else if let fiveHBar = claudeSnap?.row1, fiveHBar.primaryFraction >= 0.70 {
-                let pct = Int((fiveHBar.primaryFraction * 100).rounded())
-                let reset = cleanResetString(fiveHBar.resetText)
-                let resetStr = reset.map { " (resets in \($0))" } ?? ""
-                constraints.append("Claude 5H at \(pct)%\(resetStr)")
-            }
-
-            // OpenCode constraint
-            if let moBar = opencodeSnap?.row3, moBar.primaryFraction >= 0.85 {
-                let isExh = moBar.primaryFraction >= 0.95 || opencodeSnap?.status.urgency == .critical
-                let reset = cleanResetString(moBar.resetText)
-                let resetStr = reset.map { " resets on \($0)" } ?? ""
-                constraints.append(isExh ? "OpenCode Go\(resetStr.isEmpty ? " exhausted" : "\(resetStr)")" : "OpenCode Go monthly at \(Int((moBar.primaryFraction * 100).rounded()))%\(resetStr)")
-            } else if let burstBar = opencodeSnap?.row1, burstBar.primaryFraction >= 0.75 {
-                let reset = cleanResetString(burstBar.resetText)
-                let resetStr = reset.map { " (resets in \($0))" } ?? ""
-                constraints.append("OpenCode Go burst at \(Int((burstBar.primaryFraction * 100).rounded()))%\(resetStr)")
-            }
-
-            // Copilot constraint
-            if let copilotBar = copilotSnap?.row1, copilotBar.primaryFraction >= 0.80 {
-                let isExh = copilotBar.primaryFraction >= 0.95 || copilotSnap?.status.urgency == .critical
-                let reset = cleanResetString(copilotBar.resetText)
-                let resetStr = reset.map { " for \($0)" } ?? ""
-                constraints.append(isExh ? "Copilot exhausted\(resetStr)" : "Copilot at \(Int((copilotBar.primaryFraction * 100).rounded()))%\(resetStr)")
-            }
-
-            let constraintText: String
-            if constraints.isEmpty {
-                constraintText = "Route requests here to preserve allowances on other providers."
-            } else if constraints.count == 1 {
-                constraintText = "\(constraints[0])."
-            } else if constraints.count == 2 {
-                constraintText = "\(constraints[0]) & \(constraints[1])."
-            } else {
-                let allButLast = constraints.dropLast().joined(separator: ", ")
-                constraintText = "\(allButLast) & \(constraints.last!)."
-            }
-
-            let message = "Gemini has \(geminiRemaining)% remaining. \(constraintText)"
-
-            return QuotaAdvice(
-                headline: "Use Gemini",
-                message: message,
-                suggestedAction: "Use Gemini",
-                urgency: .critical,
-                iconName: "sparkles",
-                iconColorHex: "#9C52FD",
-                vendorId: .gemini
-            )
-        }
-
-        // 4. SCENARIO: OpenCode running low.
-        //
-        // The warning is about OpenCode, so it must not be gated on Gemini
-        // being readable — that turned "OpenCode at 97%, Gemini unconfigured"
-        // into "All Quotas Healthy". Gemini only decides which alternative we
-        // are willing to name.
-        if opencodeFraction >= 0.75 {
-            let usedPct = Int((opencodeFraction * 100).rounded())
-            let geminiHasHeadroom = geminiFraction.map { $0 < 0.70 } ?? false
-            let alternatives = geminiHasHeadroom ? "Gemini or Copilot" : "Copilot"
-            return QuotaAdvice(
-                headline: "OpenCode Quota Low (\(usedPct)%)",
-                message: "OpenCode Go burst quota is at \(usedPct)%. Switch to \(alternatives) for code assistance.",
-                suggestedAction: geminiHasHeadroom ? "Switch to Gemini" : "Switch to Copilot",
-                urgency: .warning,
-                iconName: "arrow.triangle.swap",
-                iconColorHex: "#ffb874",
-                vendorId: geminiHasHeadroom ? .gemini : .copilot
-            )
-        }
-
-        // 5. SCENARIO: Imminent reset with unused capacity (e.g. Gemini / Claude about to reset)
-        if let gemini = geminiSnap, let geminiFraction, geminiFraction < 0.70, let rawReset = gemini.row1?.resetText, !rawReset.isEmpty {
-            let headroomPct = Int(((1.0 - geminiFraction) * 100).rounded())
+        // 3. SCENARIO: an allowance is about to reset unused. Spend it first.
+        if let best = headroom.first,
+           let rawReset = best.bar?.resetText, !rawReset.isEmpty {
+            let headroomPct = Int(((1.0 - best.used) * 100).rounded())
             let cleanReset = cleanResetString(rawReset) ?? rawReset
             let formattedReset = cleanReset.hasPrefix("in ") ? cleanReset : "in \(cleanReset)"
             return QuotaAdvice(
-                headline: "Gemini Resets Soon (\(formattedReset))",
-                message: "Gemini has \(headroomPct)% unused allowance resetting \(formattedReset). Switch to Gemini now to consume this window's allowance first.",
-                suggestedAction: "Use Gemini",
+                headline: "\(best.name) Resets Soon (\(formattedReset))",
+                message: "\(best.name) has \(headroomPct)% unused allowance resetting \(formattedReset). Switch to \(best.name) now to consume this window's allowance first.",
+                suggestedAction: "Use \(best.name)",
                 urgency: .none,
                 iconName: "flame.fill",
                 iconColorHex: "#adc6ff",
-                vendorId: .gemini
+                vendorId: best.vendorId
             )
         }
 
-        // 6. SCENARIO: All healthy & balanced
+        // 4. SCENARIO: all healthy & balanced.
+        //
+        // Names only the providers actually measured, and says plainly when
+        // some could not be read. Claiming headroom on an unreadable provider
+        // is the same fabrication as inventing its percentage.
+        let measuredNames = list(candidates.map(\.name))
+        let unreadable = snapshots
+            .filter { $0.category == .aiSubscriptions && $0.status.confidence == .unavailable }
+            .map(\.shortVendorName)
+        let caveat = unreadable.isEmpty ? "" : " \(list(unreadable)) could not be read."
         return QuotaAdvice(
             headline: "All Quotas Healthy & Balanced",
-            message: "Claude, Gemini, and OpenCode have ample headroom. Optimal time for long coding and refactoring sessions.",
+            message: measuredNames.isEmpty
+                ? "No subscription reported a usage window.\(caveat)"
+                : "\(measuredNames) \(candidates.count == 1 ? "has" : "have") ample headroom. Optimal time for long coding and refactoring sessions.\(caveat)",
             suggestedAction: "Optimal Headroom",
             urgency: .none,
             iconName: "sparkles",
@@ -220,4 +279,3 @@ public struct QuotaAdvice: Sendable, Equatable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-

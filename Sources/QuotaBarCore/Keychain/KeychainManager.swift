@@ -116,8 +116,58 @@ public enum CredentialStore {
     /// Settings exposes this as an explicit opt-in.
     public static let cliDiscoveryDefaultsKey = "QuotaBarEnableCLIDiscovery"
 
+    /// Where FrugalBar's preferences live.
+    ///
+    /// `UserDefaults.standard` in an *unbundled* executable keys off the
+    /// process name, not `CFBundleIdentifier` — `Info.plist` applies only
+    /// inside a real `.app`. The released binary installs as `frugalbar` while
+    /// the SwiftPM product builds as `QuotaBar`, so the two kept separate
+    /// preference files: opting into credential discovery under one name left
+    /// the other reporting every provider as "Not configured", with no visible
+    /// cause. Pinning the suite makes both names — and a bundled `.app`, whose
+    /// standard domain already *is* this string — share one store.
+    /// `nonisolated(unsafe)` because `UserDefaults` is not `Sendable` while
+    /// being documented as thread-safe: it is a shared store by design, and
+    /// this reference is assigned once and never reassigned.
+    nonisolated(unsafe) public static let preferences: UserDefaults = {
+        #if DEBUG
+        // Tests must not read or write the real user's preference file.
+        if TestHost.isActive, let suite = UserDefaults(suiteName: "\(sharedSuiteName).tests") {
+            return suite
+        }
+        #endif
+        return UserDefaults(suiteName: sharedSuiteName) ?? .standard
+    }()
+
+    static let sharedSuiteName = "com.quotabar.app"
+
+    /// Process names this app has shipped under, newest first. Only read once,
+    /// to carry a pre-existing choice into `preferences`.
+    static let legacyPreferenceDomains = ["frugalbar", "QuotaBar"]
+
+    /// Carries a pre-existing discovery choice into the shared store.
+    ///
+    /// Idempotent: once `preferences` holds a value it is never overwritten, so
+    /// this cannot undo a later change made in Settings.
+    public static func migrateLegacyPreferences() {
+        guard preferences.object(forKey: cliDiscoveryDefaultsKey) == nil else { return }
+        let legacy = legacyPreferenceDomains.compactMap {
+            UserDefaults.standard.persistentDomain(forName: $0)?[cliDiscoveryDefaultsKey] as? Bool
+        }
+        guard let value = migratedDiscoverySetting(fromLegacy: legacy) else { return }
+        preferences.set(value, forKey: cliDiscoveryDefaultsKey)
+    }
+
+    /// Resolves conflicting legacy domains. Prefers the one that had discovery
+    /// on — that is the binary the user actually had working — but adopts
+    /// `false` when every domain said no, so a deliberate opt-out is never
+    /// silently reversed by the move to a shared store.
+    static func migratedDiscoverySetting(fromLegacy values: [Bool]) -> Bool? {
+        values.isEmpty ? nil : values.contains(true)
+    }
+
     public static var isCLIDiscoveryEnabled: Bool {
-        UserDefaults.standard.bool(forKey: cliDiscoveryDefaultsKey)
+        preferences.bool(forKey: cliDiscoveryDefaultsKey)
     }
 
     /// Returns the API key for a vendor: Keychain first, then — only when the
@@ -244,13 +294,15 @@ public enum CredentialStore {
                 ?? claudeOAuthToken(from: try? Data(contentsOf: fileURL))
 
         case .copilot:
-            // 1. Check ~/.local/share/opencode/auth.json
+            // 1. Check ~/.local/share/opencode/auth.json.
+            //
+            // `refresh` is the durable GitHub OAuth token from the device flow;
+            // `access` is the short-lived Copilot API token minted from it, and
+            // api.github.com does not accept it. Reading `access` here is what
+            // made Copilot report "Credential rejected" indefinitely.
             let authUrl = URL(fileURLWithPath: NSHomeDirectory())
                 .appendingPathComponent(".local/share/opencode/auth.json")
-            if let data = try? Data(contentsOf: authUrl),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let cop = json["github-copilot"] as? [String: Any],
-               let token = cop["access"] as? String, !token.isEmpty {
+            if let token = copilotOAuthToken(from: try? Data(contentsOf: authUrl)) {
                 return token
             }
             // 2. Check ~/.config/github-copilot/hosts.json
@@ -318,6 +370,70 @@ extension CredentialStore {
            Date(timeIntervalSince1970: expiresAt / 1000) <= Date() {
             return nil
         }
+        return token
+    }
+
+    /// Extracts the durable GitHub OAuth token from OpenCode's `auth.json`.
+    ///
+    /// The `github-copilot` entry holds two tokens and they are not
+    /// interchangeable: `refresh` is the GitHub OAuth token from the device
+    /// flow, and `access` is the short-lived Copilot API token minted from it.
+    /// `api.github.com` accepts only the former. Reading `access` is what made
+    /// the Copilot row report "Credential rejected" indefinitely.
+    static func copilotOAuthToken(from data: Data?) -> String? {
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let copilot = json["github-copilot"] as? [String: Any],
+              let token = copilot["refresh"] as? String, !token.isEmpty
+        else { return nil }
+        return token
+    }
+
+    /// A still-valid Antigravity access token cached by the `antigravity-usage`
+    /// CLI, or nil.
+    ///
+    /// The Cloud Code API takes a Google OAuth bearer token, and until now the
+    /// only way to get one was the Connect Google account button — so a machine
+    /// with a perfectly good Antigravity session sitting on disk still reported
+    /// "Not configured".
+    ///
+    /// An expired token is reported as absent rather than refreshed: the grant
+    /// belongs to `antigravity-usage`'s OAuth client, and redeeming another
+    /// client's refresh token is not ours to do. The user's own session, minted
+    /// by the Settings sign-in, is the one this app renews. Same convention as
+    /// the expired-Claude-token path above.
+    static func antigravityAccessTokenAsync(now: Date = Date()) async -> String? {
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                continuation.resume(returning: antigravityAccessToken(now: now))
+            }
+        }
+    }
+
+    static func antigravityAccessToken(now: Date = Date()) -> String? {
+        let root = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/antigravity-usage")
+        guard let configData = try? Data(contentsOf: root.appendingPathComponent("config.json")),
+              let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+              let account = config["activeAccount"] as? String, !account.isEmpty
+        else { return nil }
+        let tokenData = try? Data(contentsOf: root
+            .appendingPathComponent("accounts/\(account)/tokens.json"))
+        return antigravityAccessToken(fromTokens: tokenData, now: now)
+    }
+
+    /// Parsing half of the above, separated so it can be exercised without
+    /// planting files in the tester's real home directory.
+    static func antigravityAccessToken(fromTokens data: Data?, now: Date) -> String? {
+        guard let data,
+              let tokens = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = tokens["accessToken"] as? String, !token.isEmpty
+        else { return nil }
+        // expiresAt is milliseconds since the epoch.
+        guard let expiresAt = tokens["expiresAt"] as? Double,
+              Date(timeIntervalSince1970: expiresAt / 1000) > now
+        else { return nil }
         return token
     }
 

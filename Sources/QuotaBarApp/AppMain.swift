@@ -21,9 +21,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // produces a bare executable, so set the accessory policy explicitly too.
         NSApp.setActivationPolicy(.accessory)
 
+        // Adopt a choice made under an older, process-name-keyed preference
+        // domain before deciding whether this is a first launch — otherwise
+        // renaming the binary reads as a fresh install.
+        CredentialStore.migrateLegacyPreferences()
+
         // Enable CLI discovery by default on first launch if not configured.
-        if UserDefaults.standard.object(forKey: CredentialStore.cliDiscoveryDefaultsKey) == nil {
-            UserDefaults.standard.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        if CredentialStore.preferences.object(forKey: CredentialStore.cliDiscoveryDefaultsKey) == nil {
+            CredentialStore.preferences.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
         }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

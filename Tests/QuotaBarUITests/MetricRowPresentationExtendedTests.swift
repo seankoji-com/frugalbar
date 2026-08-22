@@ -128,7 +128,9 @@ struct MetricRowPresentationAllCases {
         #expect(p.accessibilityLabel.contains("running low"))
     }
 
-    @Test("currency without limit shows spent amount only")
+    /// A bare dollar figure does not say whether it is money left or money
+    /// spent, and the two lead to opposite decisions. The label is the fact.
+    @Test("currency without limit names the spend rather than showing a bare figure")
     func currencyWithoutLimit() {
         let p = MetricRowPresentation(
             snapshot: snapshot(
@@ -138,7 +140,7 @@ struct MetricRowPresentationAllCases {
             ),
             now: now
         )
-        #expect(p.valueLabel == Self.fmt(12.34, code: "USD"))
+        #expect(p.valueLabel == "\(Self.fmt(12.34, code: "USD")) spent")
         #expect(p.fraction == nil)
         #expect(p.isMeasured)
     }

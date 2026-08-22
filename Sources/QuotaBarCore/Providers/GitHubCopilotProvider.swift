@@ -2,10 +2,16 @@ import Foundation
 
 /// GitHub Copilot provider.
 ///
-/// Follows CodexBar's Copilot telemetry implementation:
-/// 1. Queries `https://api.github.com/copilot_internal/v2/token` to fetch live quota limits,
-///    monthly allowance, token consumption, and reset deadlines.
-/// 2. Queries `https://api.github.com/user` to verify login profile.
+/// Reads the Copilot entitlement the editors read: `copilot_internal/user`
+/// returns the plan, the premium-interaction and chat quota snapshots, and the
+/// monthly reset date.
+///
+/// It is authenticated with the **GitHub OAuth token**, presented as
+/// `Authorization: token …`. The previous implementation sent the short-lived
+/// Copilot API token that OpenCode caches alongside it and called
+/// `copilot_internal/v2/token` — the endpoint that *mints* that token. Both
+/// halves of that were wrong, and the pair rendered as a permanent
+/// "Credential rejected".
 public final class GitHubCopilotProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .copilot
@@ -18,19 +24,51 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
         self.token = token
     }
 
-    struct InternalTokenResponse: Decodable, Sendable {
-        let token: String?
-        let expires_at: Int?
-        let sku: String?
-        let chat_enabled: Bool?
-        let monthly_quota: Int?
-        let current_usage: Int?
+    /// One metered Copilot allowance. GitHub publishes headroom, not usage.
+    struct QuotaSnapshotResponse: Decodable, Sendable {
+        let entitlement: Double?
+        let remaining: Double?
+        let percent_remaining: Double?
+        let unlimited: Bool?
+
+        /// A seat with no metered allowance reports zeroes on every field. That
+        /// is "this plan publishes no quota", not "0% used" — drawing it as an
+        /// empty bar would claim headroom nobody measured.
+        var isPlaceholder: Bool {
+            (entitlement ?? 0) == 0 && (remaining ?? 0) == 0
+        }
+
+        /// 0…1 consumed, or nil when GitHub published no denominator.
+        var usedFraction: Double? {
+            if unlimited == true || isPlaceholder { return nil }
+            if let percent = percent_remaining, (0...100).contains(percent) {
+                return 1 - percent / 100
+            }
+            guard let entitlement, entitlement > 0, let remaining, remaining >= 0 else { return nil }
+            return min(max(1 - remaining / entitlement, 0), 1)
+        }
+    }
+
+    struct UserResponse: Decodable, Sendable {
+        struct Snapshots: Decodable, Sendable {
+            let premium_interactions: QuotaSnapshotResponse?
+            let chat: QuotaSnapshotResponse?
+        }
+        let quota_snapshots: Snapshots?
+        let copilot_plan: String?
         let quota_reset_date: String?
     }
 
-    struct GHUser: Decodable, Sendable {
-        let login: String
-    }
+    /// Header set the Copilot editors send. `copilot_internal/user` rejects a
+    /// request that does not identify itself as an editor, so these are
+    /// load-bearing rather than decorative.
+    private static let editorHeaders = [
+        "Accept": "application/json",
+        "Editor-Version": "vscode/1.96.2",
+        "Editor-Plugin-Version": "copilot-chat/0.26.7",
+        "User-Agent": "GitHubCopilotChat/0.26.7",
+        "X-Github-Api-Version": "2025-04-01",
+    ]
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         guard let resolved = await credential(injected: token, for: .copilot) else {
@@ -38,77 +76,82 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
         }
 
         let (data, http) = try await QuotaHTTP.get(
-            url: "https://api.github.com/user",
-            headers: ["Accept": "application/vnd.github+json"],
-            auth: .bearer(resolved)
+            url: "https://api.github.com/copilot_internal/user",
+            headers: Self.editorHeaders,
+            auth: .header(name: "Authorization", value: "token \(resolved)")
         )
-
-        if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
-            return unavailable(reason)
-        }
-
-        guard let user = try? JSONDecoder().decode(GHUser.self, from: data) else {
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
+        guard let user = try? JSONDecoder().decode(UserResponse.self, from: data) else {
             return unavailable(.badResponse)
         }
 
-        let (copilotData, copilotHTTP) = try await QuotaHTTP.get(
-            url: "https://api.github.com/copilot_internal/v2/token",
-            headers: [
-                "Accept": "application/json",
-                "Editor-Version": "vscode/1.95.0",
-                "Editor-Plugin-Version": "copilot/1.250.0",
-                "User-Agent": "GithubCopilot/1.250.0"
-            ],
-            auth: .bearer(resolved)
-        )
-        if let reason = QuotaHTTP.failureReason(for: copilotHTTP.statusCode) { return unavailable(reason) }
-        guard let copilotToken = try? JSONDecoder().decode(InternalTokenResponse.self, from: copilotData),
-              let totalQuota = copilotToken.monthly_quota, totalQuota > 0,
-              let currentUsage = copilotToken.current_usage, currentUsage >= 0,
-              let resetDate = copilotToken.quota_reset_date.flatMap(Self.parseCopilotReset)
-        else { return unavailable(.badResponse) }
+        let resetDate = user.quota_reset_date.flatMap(Self.parseCopilotReset)
+        let premium = user.quota_snapshots?.premium_interactions?.usedFraction
+        let chat = user.quota_snapshots?.chat?.usedFraction
+        // Business seats and unlimited plans are metered by GitHub's billing,
+        // not by a percentage window. Say so instead of drawing a bar.
+        guard premium != nil || chat != nil else {
+            return unavailable(.unsupported("This Copilot plan publishes no quota"))
+        }
 
-        let fraction = totalQuota > 0 ? min(max(Double(currentUsage) / Double(totalQuota), 0.0), 1.0) : 1.0
-        let isExhausted = fraction >= 1.0
-        let status: ProviderStatus = isExhausted ? .critical : (fraction >= 0.80 ? .warning : .healthy)
-        let resetString = "Resets \(RelativeDateTimeFormatter().localizedString(for: resetDate, relativeTo: Date()))"
+        let worst = [premium, chat].compactMap { $0 }.max() ?? 0
+        let urgency: Urgency = worst >= 0.95 ? .critical : worst >= 0.80 ? .warning : .none
+        // nil when GitHub published no plan: the row subtitle then shows
+        // nothing rather than asserting a tier nobody measured.
+        let plan = user.copilot_plan.map { $0.capitalized }
 
-        let row1 = DualBarMetrics(
-            primaryFraction: fraction,
-            expectedPaceFraction: 0.60,
-            label: "MO",
-            statusColor: isExhausted ? "#ffb4ab" : "#53e16f",
-            usedText: "\(currentUsage.formatted()) / \(totalQuota.formatted()) AI credits (\(Int((fraction * 100).rounded()))%)",
-            resetText: resetString
-        )
+        // Copilot's allowance runs to a monthly reset, so the pace marker is
+        // the share of that calendar month elapsed — 28 to 31 days, taken from
+        // the reset date rather than assumed to be 30.
+        let pace = resetDate
+            .flatMap(DualBarMetrics.monthWindowLength(endingAt:))
+            .flatMap { DualBarMetrics.proRataPace(resetsAt: resetDate, windowLength: $0) }
+
+        func row(_ fraction: Double?, _ label: String) -> DualBarMetrics? {
+            guard let fraction else { return nil }
+            return DualBarMetrics(
+                primaryFraction: fraction, expectedPaceFraction: pace, label: label,
+                statusColor: worst >= 0.95 ? "#ffb4ab" : "#6e7681",
+                usedText: "\(label == "PREM" ? "Premium" : "Chat"): \(Int((fraction * 100).rounded()))% used",
+                resetText: resetDate.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))" }
+            )
+        }
 
         return QuotaSnapshot(
             id: vendorId.rawValue,
             vendorId: vendorId,
             displayName: displayName,
             category: category,
-            metric: .subscription(tierName: "Active", renewalDate: nil),
-            status: status,
+            metric: .subscription(tierName: plan ?? displayName, renewalDate: resetDate),
+            status: .measured(urgency),
             resetsAt: resetDate,
             lastUpdated: Date(),
-            auxiliaryInfo: "Signed in as \(user.login) • \(currentUsage.formatted()) / \(totalQuota.formatted()) credits used (\(isExhausted ? "Usage paused" : "Active"))",
-            row1: row1,
-            row2: nil,
-            badgeText: isExhausted ? "Exhausted" : "\(totalQuota - currentUsage) left",
-            planName: "GitHub Copilot",
+            auxiliaryInfo: "Live Copilot entitlement",
+            row1: row(premium, "PREM"),
+            row2: row(chat, "CHAT"),
+            badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",
+            planName: plan,
             keyMasked: nil,
-            cliSource: "gh auth token / hosts.json"
+            cliSource: "GitHub OAuth token"
         )
     }
 
-    private static func parseCopilotReset(_ isoDate: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        return formatter.date(from: isoDate)
+    /// `quota_reset_date` arrives as a bare `yyyy-MM-dd` as often as a full
+    /// timestamp, and `ISO8601DateFormatter` rejects the short form.
+    static func parseCopilotReset(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: trimmed) { return date }
+        if let date = ISO8601DateFormatter().date(from: trimmed) { return date }
+
+        let dayOnly = DateFormatter()
+        dayOnly.calendar = Calendar(identifier: .gregorian)
+        dayOnly.locale = Locale(identifier: "en_US_POSIX")
+        dayOnly.timeZone = TimeZone(secondsFromGMT: 0)
+        dayOnly.dateFormat = "yyyy-MM-dd"
+        return dayOnly.date(from: trimmed)
     }
 }
-
-
-
-
-
-

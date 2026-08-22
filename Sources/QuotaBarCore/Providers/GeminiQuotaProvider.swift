@@ -31,7 +31,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         var resolvedToken = accessToken
         if resolvedToken == nil || resolvedToken?.isEmpty == true {
+            // Our own session first — it is the only one we can renew.
             resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
+        }
+        if resolvedToken == nil || resolvedToken?.isEmpty == true {
+            resolvedToken = await CredentialStore.antigravityAccessTokenAsync()
         }
         guard let token = resolvedToken, !token.isEmpty else {
             return unavailable(.notConfigured)
@@ -79,16 +83,23 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // Google's naming.
         let ranked = readings.sorted { $0.1 > $1.1 }
         let primary = ranked[0]
-        let rows = ranked.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
+        // Antigravity meters a shared pool, so most models report the identical
+        // fraction and reset. Three bars of the same number read as three
+        // separate allowances; collapse them to one row per distinct pool.
+        var seen: Set<String> = []
+        let pools = ranked.filter { seen.insert("\(Int(($0.1 * 1000).rounded()))@\($0.2.timeIntervalSince1970)").inserted }
+        let rows = pools.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
+        // nil when Google published no plan type, rather than asserting one.
+        let plan = assist.planInfo?.planType
         let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
         let percent = Int((primary.1 * 100).rounded())
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
-            category: category, metric: .subscription(tierName: "Antigravity", renewalDate: nil),
+            category: category, metric: .subscription(tierName: plan ?? displayName, renewalDate: nil),
             status: .measured(urgency), resetsAt: primary.2, lastUpdated: Date(),
             auxiliaryInfo: "Live Antigravity subscription quota", row1: rows[safe: 0],
             row2: rows[safe: 1], row3: rows[safe: 2], badgeText: "\(100 - percent)% left",
-            planName: assist.planInfo?.planType ?? "Antigravity", cliSource: "Google OAuth"
+            planName: plan, cliSource: "Google OAuth"
         )
     }
 
@@ -113,10 +124,37 @@ public struct GeminiOAuthSession: Codable, Sendable {
     public let expiry: Date
 
     static let keychainLabel = "gemini.oauth.session"
+    static let clientIDKeychainLabel = "gemini.oauth.client_id"
+    static let clientSecretKeychainLabel = "gemini.oauth.client_secret"
+    static let clientSecretEnvVar = "FRUGALBAR_GEMINI_CLIENT_SECRET"
 
     /// Shared by the login flow and the refresh path so a token can only ever
     /// be renewed by the client that minted it.
-    static let clientID = "598649530021-n2bb3flau0ff6mt7v316kimt57rolkan.apps.googleusercontent.com"
+    ///
+    /// Overridable from Settings so a new Google client can be pointed at
+    /// without a rebuild — the default is FrugalBar's own.
+    static let defaultClientID = "598649530021-n2bb3flau0ff6mt7v316kimt57rolkan.apps.googleusercontent.com"
+
+    static var clientID: String {
+        guard let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel),
+              !stored.isEmpty
+        else { return defaultClientID }
+        return stored
+    }
+
+    /// Google requires `client_secret` on the token exchange for this client
+    /// type; omitting it fails every sign-in with "client_secret is missing"
+    /// before the user ever sees a token. It is deliberately *not* compiled in:
+    /// this repository is public, so the secret comes from the Keychain (via
+    /// Settings) or the environment, and is absent from the source tree.
+    static var clientSecret: String? {
+        if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel),
+           !stored.isEmpty {
+            return stored
+        }
+        let fromEnvironment = ProcessInfo.processInfo.environment[clientSecretEnvVar]
+        return (fromEnvironment?.isEmpty ?? true) ? nil : fromEnvironment
+    }
 
     /// Renew this far ahead of expiry so a request never leaves with a token
     /// that dies mid-flight.
@@ -162,8 +200,14 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// it already holds; dropping it would strand the user at the next expiry.
     static func requestToken(fields: [String: String],
                              existingRefreshToken: String?) async throws -> GeminiOAuthSession {
+        // Fail here, with a reason the user can act on, rather than letting
+        // Google answer "client_secret is missing" and surfacing that as an
+        // unexplained "sign-in did not complete".
+        guard let secret = clientSecret else { throw ProviderError.notConfigured }
+
         var form = URLComponents()
-        form.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
+        form.queryItems = fields.merging(["client_secret": secret]) { current, _ in current }
+            .map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let encoded = form.percentEncodedQuery?.data(using: .utf8) else {
             throw ProviderError.badResponse
         }

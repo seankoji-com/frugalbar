@@ -13,6 +13,49 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     private static let completionTimeout: TimeInterval = 300
 
     private var clientID: String { GeminiOAuthSession.clientID }
+
+    /// Stores the Google OAuth client this app signs in as.
+    ///
+    /// Kept in the Keychain rather than the source tree: the repository is
+    /// public, and a committed `client_secret` is a published one.
+    ///
+    /// The two fields treat "blank" differently, because the UI treats them
+    /// differently. The client ID field is shown pre-filled, so clearing it is
+    /// a deliberate revert to the built-in client. The secret is never read
+    /// back for display, so its field is *always* blank on open — clearing the
+    /// stored secret on save would wipe it every time Settings was reopened.
+    /// Blank there means "keep what is stored"; `clearClientSecret()` removes it.
+    public static func saveClientConfiguration(clientID: String, clientSecret: String) throws {
+        let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !secret.isEmpty {
+            try KeychainManager.shared.set(key: secret, label: GeminiOAuthSession.clientSecretKeychainLabel)
+        }
+        try store(clientID, label: GeminiOAuthSession.clientIDKeychainLabel)
+    }
+
+    public static func clearClientSecret() throws {
+        try KeychainManager.shared.delete(label: GeminiOAuthSession.clientSecretKeychainLabel)
+    }
+
+    /// The stored client ID, or nil when the built-in one is in use. The
+    /// secret is deliberately never read back out for display.
+    public static func storedClientID() -> String? {
+        guard let stored = try? KeychainManager.shared.get(label: GeminiOAuthSession.clientIDKeychainLabel),
+              !stored.isEmpty
+        else { return nil }
+        return stored
+    }
+
+    public static func hasClientSecret() -> Bool { GeminiOAuthSession.clientSecret != nil }
+
+    private static func store(_ value: String, label: String) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try KeychainManager.shared.delete(label: label)
+        } else {
+            try KeychainManager.shared.set(key: trimmed, label: label)
+        }
+    }
     private let lock = NSLock()
     private var listener: NWListener?
     private var continuation: CheckedContinuation<Void, Error>?
