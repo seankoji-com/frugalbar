@@ -148,6 +148,41 @@ struct ProviderHTTPTests {
         #expect(snap.planName == "Plus")
     }
 
+    /// Both windows are real limits, and each is named from the length OpenAI
+    /// reports. Showing only the first, under a label that named neither, drew
+    /// the weekly quota as "PLAN" and hid the 5-hour window entirely.
+    @Test("OpenAI shows both windows and labels each from its own length")
+    func openAIBothWindows() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"plan_type":"plus","rate_limit":{
+              "primary_window":{"used_percent":30,"reset_at":1787891551,"limit_window_seconds":18000},
+              "secondary_window":{"used_percent":92,"reset_at":1788391551,"limit_window_seconds":604800}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 0.30)
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row2?.primaryFraction == 0.92)
+        // Urgency and badge both follow the fuller window, so the menu bar and
+        // the row cannot disagree about which limit is binding.
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "8% left")
+    }
+
+    @Test("an unlabelled OpenAI window falls back rather than guessing a length")
+    func openAIWindowLabels() {
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 18000) == "5H")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 604_800) == "WK")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 2_592_000) == "MO")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: 3600) == "1H")
+        #expect(OpenAIQuotaProvider.label(forWindowSeconds: nil) == "PLAN")
+    }
+
     @Test("OpenAI missing usage data is unavailable rather than a zero-percent reading")
     func openAIMissingUsage() async throws {
         let provider = OpenAIQuotaProvider(accessToken: "session-token")
@@ -403,17 +438,73 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("Gemini parses live Antigravity model quota")
+    /// Payload captured verbatim from a live authenticated request. The old
+    /// source (`fetchAvailableModels`) exposed one `remainingFraction` per
+    /// model, so the row showed a single bar and silently omitted the weekly
+    /// limit — which was the binding constraint.
+    @Test("Gemini renders both metered windows, shortest first")
     func geminiParsesQuota() async throws {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"},"planInfo":{"planType":"ANTIGRAVITY"}}"#)
+                return canned(body: #"{"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#)
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.94,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro",
+               "buckets":[
+                 {"bucketId":"gemini-weekly","window":"weekly","resetTime":"2099-01-04T00:00:00Z","remainingFraction":0.28312185},
+                 {"bucketId":"gemini-5h","window":"5h","resetTime":"2099-01-01T00:00:00Z","remainingFraction":0.845952}]},
+              {"displayName":"Claude and GPT models",
+               "buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.31}]}]}
+            """#)
         }) { try await provider.fetchSnapshot() }
+
+        // Weekly is 71.7% used, so the provider warns — the pressure that was
+        // invisible while only the five-hour window was read.
+        #expect(snap.status == .measured(.warning))
+        // Shortest window first, as every other provider renders.
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.label == "WK")
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.154048) < 0.000_01)
+        #expect(abs((snap.row2?.primaryFraction ?? 0) - 0.71687815) < 0.000_01)
+        // The badge follows the fuller window, which is the binding one.
+        #expect(snap.badgeText == "28% left")
+        #expect(snap.planName == "Google AI Pro")
+    }
+
+    /// The response also carries a "Claude and GPT models" group — a separate
+    /// Antigravity allowance. Averaging it into a row labelled Gemini would
+    /// report a number for a pool the row does not name.
+    @Test("the third-party model group is not counted as Gemini")
+    func geminiIgnoresThirdPartyGroup() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.01}]},
+              {"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.90}]}]}
+            """#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.bars.count == 1)
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.10) < 0.000_01)
         #expect(snap.status == .healthy)
-        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.06) < 0.000_001)
+    }
+
+    /// Window lengths come from the vendor's own name for the bucket, so a
+    /// pace marker is never placed against a length we assumed.
+    @Test("pace markers use the window length the API names")
+    func geminiWindowLengths() {
+        #expect(GeminiQuotaProvider.windowLength(for: "5h") == QuotaWindow.fiveHours)
+        #expect(GeminiQuotaProvider.windowLength(for: "weekly") == QuotaWindow.week)
+        #expect(GeminiQuotaProvider.windowLength(for: "fortnightly") == nil)
+        #expect(GeminiQuotaProvider.label(for: "5h") == "5H")
+        #expect(GeminiQuotaProvider.label(for: "weekly") == "WK")
+        #expect(GeminiQuotaProvider.label(for: nil) == "AG")
     }
 
     /// The security test previously stubbed a 401 so only the first request
@@ -424,9 +515,12 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
         _ = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+                return canned(body: "{}")
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+            return canned(body: #"""
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5}]}]}
+            """#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(URLProtocolStub.capturedRequests.count == 2)
@@ -436,23 +530,6 @@ struct ProviderHTTPTests {
         }
     }
 
-    /// The menu-bar colour must follow the model closest to its limit, not
-    /// whichever one happens to sort first by name.
-    @Test("Gemini headlines the fullest model, not the alphabetically first")
-    func geminiRanksByUsage() async throws {
-        let provider = GeminiQuotaProvider(accessToken: "token")
-        let snap = try await withStubbedHTTP({ request in
-            if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
-            }
-            return canned(body: #"{"models":{"gemini-3-alpha":{"displayName":"Alpha","quotaInfo":{"remainingFraction":0.90,"resetTime":"2026-08-22T03:30:11Z"}},"gemini-3-zeta":{"displayName":"Zeta","quotaInfo":{"remainingFraction":0.02,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
-        }) { try await provider.fetchSnapshot() }
-
-        #expect(snap.status == .measured(.critical))
-        #expect(snap.row1?.usedText?.contains("Zeta") == true)
-        #expect(snap.badgeText == "2% left")
-    }
-
     /// A well-formed response that simply carries no quota is "nothing to
     /// read", not a malformed payload.
     @Test("Gemini reports no model quota as unsupported, not a bad response")
@@ -460,9 +537,9 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+                return canned(body: "{}")
             }
-            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Flash"}}}"#)
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h"}]}]}"#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(snap.status.confidence == .unavailable)
@@ -502,22 +579,90 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("OpenCode with no local telemetry stays unavailable")
+    /// Body captured verbatim from a live authenticated request, so the
+    /// parsing is pinned to the shape OpenCode actually sends rather than one
+    /// reconstructed from another client's source.
+    @Test("OpenCode reads the Go usage API with the key in a header")
     func openCodeWithKey() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "super-secret-key")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"ok","percent":0,"resetsAt":"2026-08-22T14:39:10.189Z"},
+                      "weekly":{"status":"ok","percent":40,"resetsAt":"2026-08-24T00:00:00.189Z"},
+                      "monthly":{"status":"rate-limited","percent":100,"resetsAt":"2026-08-23T08:36:39.189Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .critical)
+        #expect(snap.row1?.primaryFraction == 0.0)
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.primaryFraction == 0.40)
+        #expect(snap.row3?.primaryFraction == 1.0)
+        #expect(snap.badgeText == "Exhausted")
+        // A blocked window says so, rather than leaving 100% to be inferred.
+        #expect(snap.row3?.usedText?.contains("blocked") == true)
+        // Fractional seconds in `resetsAt` must parse, or every reset is lost.
+        #expect(snap.row2?.resetText != nil)
+
+        let req = try #require(URLProtocolStub.capturedRequests.first)
+        #expect(req.url?.absoluteString == "https://opencode.ai/zen/go/v1/usage")
+        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer super-secret-key")
+        #expect(req.url?.absoluteString.contains("super-secret-key") == false)
+    }
+
+    /// A window OpenCode reports as blocking is critical even when its
+    /// percentage alone would only warn.
+    @Test("a rate-limited window is critical whatever its percentage rounds to")
+    func openCodeBlockedWindow() async throws {
         let provider = OpenCodeGoProvider(apiKey: "k")
-        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"rate-limited","percent":12,"resetsAt":"2026-08-22T14:39:10.189Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .critical)
+        #expect(snap.row1?.primaryFraction == 0.12)
+    }
+
+    /// Every OpenCode window has a known length, so all three carry a marker.
+    @Test("each window gets a pace marker from its own length")
+    func openCodePaceOnlyWhereKnown() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "k")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 200, body: #"""
+            {"usage":{"rolling":{"status":"ok","percent":10,"resetsAt":"2099-01-01T00:00:00.000Z"},
+                      "weekly":{"status":"ok","percent":20,"resetsAt":"2099-01-01T00:00:00.000Z"},
+                      "monthly":{"status":"ok","percent":30,"resetsAt":"2099-01-01T00:00:00.000Z"}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.row1?.expectedPaceFraction != nil)
+        #expect(snap.row2?.expectedPaceFraction != nil)
+        #expect(snap.row3?.expectedPaceFraction != nil)
+    }
+
+    /// A structurally valid body with no window is "OpenCode published nothing",
+    /// which must never render as a bar at 0%.
+    @Test("OpenCode with no usage window stays unavailable")
+    func openCodeNoWindow() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "k")
+        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"usage":{}}"#) }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status.confidence == .unavailable)
         #expect(snap.consumptionFraction == nil)
-        #expect(URLProtocolStub.requestCount == 0)
+        #expect(snap.row1 == nil)
     }
 
 
     @Test("Copilot with missing quota data stays unavailable")
     func copilotValidToken() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
-        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"login":"octocat"}"#) }) {
+        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"copilot_plan":"business"}"#) }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status.confidence == .unavailable)

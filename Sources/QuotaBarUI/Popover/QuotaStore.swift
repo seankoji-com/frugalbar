@@ -58,19 +58,6 @@ public final class QuotaStore {
         onSummaryChange?(self.summary)
     }
 
-    /// Live quota simulation update
-    public func updateSnapshotUsage(id: String, fraction: Double) {
-        guard let idx = snapshots.firstIndex(where: { $0.id == id }) else { return }
-        var snap = snapshots[idx]
-        if var r1 = snap.row1 {
-            r1.primaryFraction = fraction
-            snap.row1 = r1
-        }
-        snapshots[idx] = snap
-        self.summary = SystemHealthSummary.compute(from: snapshots)
-        self.advice = QuotaAdvice.evaluate(from: snapshots)
-        onSummaryChange?(self.summary)
-    }
 }
 
 

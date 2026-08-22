@@ -68,6 +68,17 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             return unavailable(.badResponse)
         }
 
+        // Spend per window, straight from `/auth/key`. These are this key's
+        // figures; the credit balance below is account-wide, so the two are
+        // different scopes and are labelled as such rather than combined.
+        // A window the API omits stays nil and renders as an absence.
+        let spendWindows = [
+            SpendWindow(label: "1D", amount: decoded.data.usage_daily.map { Decimal($0) },
+                        currencyCode: "USD"),
+            SpendWindow(label: "WK", amount: decoded.data.usage_weekly.map { Decimal($0) },
+                        currencyCode: "USD"),
+        ]
+
         // Credits are authoritative when the supplied key can read them. If
         // this endpoint rejects a normal key, fall back to that key's cap.
         //
@@ -96,7 +107,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 // empty account is exactly what this app exists to warn about.
                 // Thresholds are on the absolute balance, in dollars.
                 let urgency: Urgency = balance < 1 ? .critical : balance < 5 ? .warning : .none
-                return QuotaSnapshot(
+                var snapshot = QuotaSnapshot(
                     id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                     category: category,
                     metric: .currency(balance: Decimal(balance), limit: nil,
@@ -105,9 +116,11 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                     auxiliaryInfo: "Account credit balance",
                     row1: nil, row2: nil,
                     badgeText: "\(String(format: "$%.2f", balance)) credit",
-                    planName: "OpenRouter", cliSource: "OPENROUTER_API_KEY / auth.json",
+                    planName: nil, cliSource: "OPENROUTER_API_KEY / auth.json",
                     currencyBasis: .accountCredit
                 )
+                snapshot.spendWindows = spendWindows
+                return snapshot
             }
         }
         let tierNote = decoded.data.is_free_tier == true ? "Free tier" : nil
@@ -119,7 +132,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             ?? String(format: "$%.2f lifetime", spentUsd)
 
         guard let capUsd = decoded.data.limit, capUsd > 0 else {
-            return QuotaSnapshot(
+            var snapshot = QuotaSnapshot(
                 id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                 category: category,
                 metric: .currency(balance: Decimal(spentUsd), limit: nil,
@@ -130,10 +143,12 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 row1: nil,
                 row2: nil,
                 badgeText: spendBadge,
-                planName: "OpenRouter",
+                planName: nil,
                 cliSource: "OPENROUTER_API_KEY / auth.json",
                 currencyBasis: .lifetimeSpend
             )
+            snapshot.spendWindows = spendWindows
+            return snapshot
         }
 
         let remainingUsd = decoded.data.limit_remaining ?? max(capUsd - spentUsd, 0)
@@ -145,7 +160,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
         let remainingFormatted = String(format: "$%.2f", remainingUsd)
 
-        return QuotaSnapshot(
+        var snapshot = QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
             metric: .currency(balance: Decimal(remainingUsd), limit: Decimal(capUsd),
@@ -156,10 +171,12 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             row1: nil,
             row2: nil,
             badgeText: "\(remainingFormatted) key cap left",
-            planName: "OpenRouter",
+            planName: nil,
             cliSource: "OPENROUTER_API_KEY / auth.json",
             currencyBasis: .keySpendCap
         )
+        snapshot.spendWindows = spendWindows
+        return snapshot
     }
 
 

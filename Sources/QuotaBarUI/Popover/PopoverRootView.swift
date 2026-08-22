@@ -62,9 +62,6 @@ public struct PopoverRootView: View {
                         withAnimation(.easeOut(duration: 0.2)) {
                             selectedSnapshot = nil
                         }
-                    },
-                    onUpdateUsage: { newUsage in
-                        store.updateSnapshotUsage(id: snap.id, fraction: newUsage)
                     }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
@@ -95,11 +92,14 @@ public struct PopoverRootView: View {
                     guard !items.isEmpty else { return false }
                     if category == .developerLimits {
                         return items.contains { snap in
-                            snap.status.urgency == .warning ||
-                            snap.status.urgency == .critical ||
-                            (snap.consumptionFraction ?? 0.0) >= 0.70 ||
-                            (snap.row1?.primaryFraction ?? 0.0) >= 0.70 ||
-                            (snap.row2?.primaryFraction ?? 0.0) >= 0.70
+                            if snap.status.urgency >= .warning { return true }
+                            // A limit we could not read is not an elevated one.
+                            // Coercing its missing fraction to 0 happened to be
+                            // right here, but it is the same `?? 0.0` that read
+                            // as "plenty left" elsewhere — so it is spelled out.
+                            let measured = snap.bars.map(\.primaryFraction)
+                                + [snap.consumptionFraction].compactMap { $0 }
+                            return measured.contains { $0 >= 0.70 }
                         }
                     }
                     return true

@@ -179,5 +179,184 @@ struct QuotaAdviceTests {
         #expect(advice.urgency == .none)
         #expect(advice.headline == "All Quotas Healthy & Balanced")
         #expect(advice.suggestedAction == "Optimal Headroom")
+        #expect(advice.message.contains("Claude & Gemini have ample headroom"))
+    }
+
+    // MARK: - Unreadable providers are never counted as headroom
+
+    private func subscription(
+        _ vendor: VendorIdentifier,
+        used: Double,
+        label: String = "5H",
+        urgency: Urgency = .none,
+        reset: String? = nil
+    ) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+            category: .aiSubscriptions, metric: .subscription(tierName: "T", renewalDate: nil),
+            status: .measured(urgency), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: used, label: label, resetText: reset)
+        )
+    }
+
+    private func unreadable(_ vendor: VendorIdentifier, _ reason: UnavailableReason) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+            category: .aiSubscriptions, metric: .subscription(tierName: reason.headline, renewalDate: nil),
+            status: .unavailable(reason), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: reason.remedy
+        )
+    }
+
+    /// The reported bug: Claude and OpenAI nearly spent, OpenCode exhausted,
+    /// Gemini wide open — and the summary read "All Quotas Healthy & Balanced,
+    /// Claude, Gemini and OpenCode have ample headroom".
+    @Test("a constrained fleet with one open provider routes to that provider")
+    func constrainedFleetRoutesToTheOpenProvider() {
+        let advice = QuotaAdvice.evaluate(from: [
+            subscription(.claude, used: 0.88, label: "WK", reset: "2 days"),
+            subscription(.openai, used: 0.92, label: "WK"),
+            subscription(.opencode, used: 1.0, label: "MO", urgency: .critical),
+            subscription(.gemini, used: 0.06, label: "AG"),
+        ])
+        #expect(advice.headline == "Use Gemini")
+        #expect(advice.vendorId == .gemini)
+        #expect(advice.urgency == .critical)
+        #expect(advice.message.contains("Gemini has 94% remaining"))
+        #expect(advice.message.contains("OpenAI WK at 92%"))
+        #expect(advice.message.contains("Claude WK at 88% (resets in 2 days)"))
+        #expect(advice.message.contains("OpenCode MO exhausted"))
+    }
+
+    /// An unreadable provider is not an empty one. The old engine defaulted a
+    /// missing fraction to 0.0, which read as "plenty left".
+    @Test("unreadable providers are named as unread, never as headroom")
+    func unreadableProvidersAreNotHeadroom() {
+        let advice = QuotaAdvice.evaluate(from: [
+            subscription(.claude, used: 0.30),
+            unreadable(.gemini, .notConfigured),
+            unreadable(.opencode, .unsupported("No usage API")),
+        ])
+        #expect(advice.headline == "All Quotas Healthy & Balanced")
+        #expect(advice.message.contains("Claude has ample headroom"))
+        #expect(advice.message.contains("Gemini & OpenCode could not be read"))
+        #expect(!advice.message.contains("Gemini has"))
+    }
+
+    /// A constrained provider with nothing to route to must not nominate an
+    /// unreadable provider as the alternative.
+    @Test("no readable alternative falls back to OpenRouter, not to an unread provider")
+    func noReadableAlternativeFallsBack() {
+        let advice = QuotaAdvice.evaluate(from: [
+            subscription(.claude, used: 0.97, urgency: .critical, reset: "3 hours"),
+            unreadable(.gemini, .credentialRejected),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+        #expect(advice.vendorId == .openrouter)
+        #expect(advice.message.contains("until Claude resets in 3 hours"))
+    }
+
+    // MARK: - Paid-for allowance is spent before metered credit
+
+    private func constrainedWindow(
+        _ vendor: VendorIdentifier,
+        used: Double,
+        label: String,
+        pace: Double?,
+        reset: String? = nil
+    ) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+            category: .aiSubscriptions, metric: .subscription(tierName: "T", renewalDate: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: used, expectedPaceFraction: pace,
+                                 label: label, resetText: reset)
+        )
+    }
+
+    /// The reported behaviour: with everything constrained but a weekly window
+    /// resetting tomorrow, the advice sent the user to paid OpenRouter credit
+    /// instead of the allowance they had already bought and were about to lose.
+    @Test("an allowance about to reset unspent is preferred over paid credit")
+    func expiringAllowanceBeatsOpenRouter() {
+        let advice = QuotaAdvice.evaluate(from: [
+            // 90% used, six days into a seven-day window: 10% is about to expire.
+            constrainedWindow(.claude, used: 0.90, label: "WK", pace: 6.0 / 7.0, reset: "11 hours"),
+            constrainedWindow(.openai, used: 0.92, label: "WK", pace: 0.30),
+            constrainedWindow(.copilot, used: 1.0, label: "PREM", pace: 0.50),
+        ])
+        #expect(advice.headline == "Spend Remaining Claude")
+        #expect(advice.vendorId == .claude)
+        #expect(advice.suggestedAction == "Use Claude")
+        #expect(advice.message.contains("Claude WK has 10% left"))
+        #expect(advice.message.contains("resets in 11 hours"))
+        #expect(!advice.message.contains("Route urgent tasks"))
+        // The other constraints are still reported, not swallowed.
+        #expect(advice.message.contains("OpenAI WK at 92%"))
+        #expect(advice.message.contains("Copilot PREM exhausted"))
+    }
+
+    /// The reported case: Claude's weekly window 93% elapsed with 3% left,
+    /// alongside genuinely spent Copilot and OpenCode. Three percent of a paid
+    /// weekly budget still beats paying for OpenRouter credit.
+    @Test("a nearly-spent window with a sliver left still beats paid credit")
+    func sliverOfAllowanceStillBeatsOpenRouter() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 0.97, label: "WK", pace: 0.93, reset: "11 hours"),
+            constrainedWindow(.openai, used: 1.0, label: "WK", pace: 0.18),
+            constrainedWindow(.copilot, used: 1.0, label: "MO", pace: 0.50),
+            constrainedWindow(.opencode, used: 1.0, label: "MO", pace: 0.97),
+        ])
+        #expect(advice.headline == "Spend Remaining Claude")
+        #expect(advice.vendorId == .claude)
+        #expect(advice.message.contains("Claude WK has 3% left"))
+        #expect(advice.message.contains("resets in 11 hours"))
+    }
+
+    /// Truly spent means spent: no "use the last 0%" advice.
+    @Test("a window at 100% is never offered as something to spend")
+    func fullySpentIsNotOffered() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 1.0, label: "WK", pace: 0.93, reset: "11 hours"),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+    }
+
+    /// Early in a window there is nothing about to be lost, so the free-
+    /// allowance nudge must not fire — the honest advice is still to route out.
+    @Test("allowance in a window that just opened is not treated as expiring")
+    func earlyWindowIsNotExpiring() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 0.88, label: "WK", pace: 0.10, reset: "6 days"),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+    }
+
+    /// Without a measured pace we do not know whether the window is ending, and
+    /// must not guess that it is.
+    @Test("an unpaced window never claims an allowance is about to expire")
+    func unpacedWindowIsNotExpiring() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 0.88, label: "WK", pace: nil, reset: "soon"),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+    }
+
+    /// A genuinely spent allowance has nothing left to burn.
+    @Test("a fully spent window falls through to OpenRouter")
+    func spentWindowFallsThrough() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 1.0, label: "WK", pace: 0.95, reset: "11 hours"),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+    }
+
+    @Test("nothing readable at all is reported as no readings, not as health")
+    func nothingReadable() {
+        let advice = QuotaAdvice.evaluate(from: [
+            unreadable(.claude, .credentialRejected),
+            unreadable(.gemini, .notConfigured),
+        ])
+        #expect(advice.headline == "No Quota Readings")
+        #expect(advice.urgency == .none)
     }
 }

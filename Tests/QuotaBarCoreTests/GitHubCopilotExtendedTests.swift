@@ -86,51 +86,76 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.consumptionFraction == nil)
     }
 
-    @Test("empty JSON object (missing login field) returns badResponse")
-    func missingLoginField() async throws {
+    /// A seat with no metered allowance is not a malformed payload, and it is
+    /// certainly not an empty bar.
+    @Test("a response carrying no quota snapshot reports no metered quota")
+    func missingQuotaSnapshots() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: "{}", status: 200)
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status == ProviderStatus.unavailable(UnavailableReason.badResponse))
+        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.consumptionFraction == nil)
+        #expect(snap.row1 == nil)
     }
 
-    /// The measured Copilot path had no test at all: the rename of the old
-    /// happy-path case left `monthly_quota` / `current_usage` /
-    /// `quota_reset_date` parsing entirely uncovered.
     @Test("full Copilot quota response produces a measured gauge")
     func measuredCopilotQuota() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
-        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400 * 10))
-        let snap = try await withStubbedHTTP({ request in
-            if request.url?.path.contains("copilot_internal") == true {
-                return canned(body: #"{"monthly_quota":5000,"current_usage":4000,"quota_reset_date":"\#(reset)"}"#)
-            }
-            return canned(body: #"{"login":"octocat"}"#)
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"copilot_plan":"individual","quota_reset_date":"2099-01-01",
+             "quota_snapshots":{
+               "premium_interactions":{"entitlement":300,"remaining":60,"percent_remaining":20,"unlimited":false},
+               "chat":{"entitlement":1000,"remaining":900,"percent_remaining":90,"unlimited":false}}}
+            """#)
         }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status.confidence == .measured)
         #expect(snap.status == .warning)
         #expect(snap.row1?.primaryFraction == 0.8)
-        #expect(snap.badgeText == "1000 left")
-        #expect(snap.auxiliaryInfo?.contains("octocat") == true)
-        // The old code fell back to a hardcoded epoch when parsing failed.
+        // Both allowances share one monthly reset, so the label names the window.
+        #expect(snap.row1?.label == "MO")
+        #expect(snap.row2?.label == "MO")
+        #expect(snap.row1?.usedText?.hasPrefix("Premium:") == true)
+        #expect(snap.row2?.usedText?.hasPrefix("Chat:") == true)
+        #expect(abs((snap.row2?.primaryFraction ?? 0) - 0.1) < 0.0001)
+        #expect(snap.badgeText == "20% left")
+        #expect(snap.planName == "Individual")
+        // A bare yyyy-MM-dd reset date is the common shape and must still parse.
         #expect(snap.resetsAt != nil)
+    }
+
+    /// The request that made this provider fail: it must present the GitHub
+    /// OAuth token to the entitlement endpoint, not mint a Copilot token.
+    @Test("Copilot reads copilot_internal/user with the GitHub OAuth token")
+    func requestShape() async throws {
+        let provider = GitHubCopilotProvider(token: "gho_example")
+        nonisolated(unsafe) var seen: URLRequest?
+        _ = try await withStubbedHTTP({ request in
+            seen = request
+            return canned(body: #"{"quota_snapshots":{"chat":{"entitlement":100,"remaining":50}}}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        let request = try #require(seen)
+        #expect(request.url?.absoluteString == "https://api.github.com/copilot_internal/user")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "token gho_example")
+        #expect(request.value(forHTTPHeaderField: "Editor-Version") != nil)
     }
 
     /// An exhausted allowance must not read as merely busy.
     @Test("a fully consumed Copilot allowance is critical")
     func exhaustedCopilotQuota() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
-        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
-        let snap = try await withStubbedHTTP({ request in
-            if request.url?.path.contains("copilot_internal") == true {
-                return canned(body: #"{"monthly_quota":5000,"current_usage":5000,"quota_reset_date":"\#(reset)"}"#)
-            }
-            return canned(body: #"{"login":"octocat"}"#)
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"copilot_plan":"individual",
+             "quota_snapshots":{"premium_interactions":{"entitlement":300,"remaining":0,"percent_remaining":0}}}
+            """#)
         }) {
             try await provider.fetchSnapshot()
         }
@@ -138,11 +163,30 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.badgeText == "Exhausted")
     }
 
-    @Test("missing Copilot quota response stays unavailable")
+    /// An unlimited plan has no denominator. Reporting it as 0% used would
+    /// claim headroom that nobody measured.
+    @Test("an unlimited allowance draws no bar")
+    func unlimitedCopilotQuota() async throws {
+        let provider = GitHubCopilotProvider(token: "tok")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"copilot_plan":"business",
+             "quota_snapshots":{"premium_interactions":{"entitlement":0,"remaining":0,"percent_remaining":100,"unlimited":true}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.row1 == nil)
+    }
+
+    /// A zero-entitlement, zero-remaining snapshot is GitHub's shape for a seat
+    /// billed by token rather than by quota — a placeholder, not a reading.
+    @Test("a zero-entitlement placeholder stays unavailable")
     func validUserResponse() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in
-            canned(body: #"{"login":"octocat"}"#, status: 200)
+            canned(body: #"{"quota_snapshots":{"premium_interactions":{"entitlement":0,"remaining":0}}}"#, status: 200)
         }) {
             try await provider.fetchSnapshot()
         }

@@ -202,17 +202,55 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.resetText = resetText
     }
 
-    /// Difference between actual consumption and pro-rata expected target.
+    /// Difference between actual consumption and pro-rata expected target, or
+    /// nil when there is no target.
     /// Positive = burning faster than pro-rata pace (over budget).
     /// Negative = burning slower than pro-rata pace (healthy buffer).
-    public var burndownDelta: Double {
-        let target = expectedPaceFraction ?? (label == "5H" ? 0.40 : (label == "WK" ? 0.45 : 0.50))
-        return primaryFraction - target
+    ///
+    /// This used to fall back to a hardcoded 0.40/0.45/0.50 by label. No
+    /// provider ever supplied a real figure, so *every* pace marker was that
+    /// constant: a weekly bar six days into its window drew its marker at 45%
+    /// of the track, claiming the user was far ahead of pace when they were far
+    /// behind it. A fabricated denominator is the same defect as a fabricated
+    /// quota — it just looks like geometry instead of a number.
+    public var burndownDelta: Double? {
+        expectedPaceFraction.map { primaryFraction - $0 }
     }
 
     public var isAboveProrataPace: Bool {
-        burndownDelta > 0.04
+        (burndownDelta ?? 0) > 0.04
     }
+
+    /// How far through a rolling window we are: the pro-rata share of the
+    /// allowance that "should" be spent by now.
+    ///
+    /// Returns nil when either the reset time or the window length is unknown,
+    /// which the UI renders as no marker at all.
+    public static func proRataPace(
+        resetsAt: Date?,
+        windowLength: TimeInterval,
+        now: Date = Date()
+    ) -> Double? {
+        guard let resetsAt, windowLength > 0 else { return nil }
+        let remaining = resetsAt.timeIntervalSince(now)
+        guard remaining.isFinite else { return nil }
+        return min(max((windowLength - remaining) / windowLength, 0), 1)
+    }
+
+    /// Length of the calendar month ending at `reset`. Months are 28–31 days,
+    /// so a 30-day constant would drift the marker by up to a day.
+    public static func monthWindowLength(endingAt reset: Date) -> TimeInterval? {
+        guard let start = Calendar.current.date(byAdding: .month, value: -1, to: reset) else { return nil }
+        let length = reset.timeIntervalSince(start)
+        return length > 0 ? length : nil
+    }
+}
+
+/// Rolling-window lengths the vendors actually use, so a pace marker is never
+/// derived from a guess.
+public enum QuotaWindow {
+    public static let fiveHours: TimeInterval = 5 * 3600
+    public static let week: TimeInterval = 7 * 24 * 3600
 }
 
 
@@ -251,6 +289,24 @@ public enum CurrencyBasis: String, Sendable, Codable, Equatable {
     }
 }
 
+/// Money spent over a named window, as the vendor reports it.
+///
+/// Distinct from `DualBarMetrics` because there is no denominator: spend has
+/// no cap to draw a bar against, so this renders as an amount and never as a
+/// gauge. `amount` is nil when the vendor published no figure for the window,
+/// which the UI shows as an absence.
+public struct SpendWindow: Sendable, Equatable {
+    public let label: String
+    public let amount: Decimal?
+    public let currencyCode: String
+
+    public init(label: String, amount: Decimal?, currencyCode: String) {
+        self.label = label
+        self.amount = amount
+        self.currencyCode = currencyCode
+    }
+}
+
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let id: String
     public let vendorId: VendorIdentifier
@@ -267,6 +323,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var row3: DualBarMetrics?
     public var badgeText: String?
     public var planName: String?
+    /// Spend per window, for providers that meter money rather than quota.
+    public var spendWindows: [SpendWindow] = []
     public var latencyMs: Int?
     public var keyMasked: String?
     public var cliSource: String?

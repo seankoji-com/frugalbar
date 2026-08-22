@@ -139,3 +139,77 @@ struct VendorIdentifierTests {
         }
     }
 }
+
+@Suite("Pro-rata pace marker")
+struct ProRataPaceTests {
+
+    /// The bug this replaced: the marker was a constant chosen by label, so a
+    /// weekly bar six days into its window drew its target at 45% of the track
+    /// and reported the user as comfortably ahead of pace.
+    @Test("pace is the share of the window elapsed, not a constant")
+    func paceTracksTheWindow() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        // Six days into a seven-day window: one day left.
+        let reset = now.addingTimeInterval(24 * 3600)
+        let pace = try #require(DualBarMetrics.proRataPace(
+            resetsAt: reset, windowLength: QuotaWindow.week, now: now))
+        #expect(abs(pace - 6.0 / 7.0) < 0.0001)
+    }
+
+    @Test("a window just opened is at zero pace, one about to reset at full")
+    func paceEndpoints() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(DualBarMetrics.proRataPace(
+            resetsAt: now.addingTimeInterval(QuotaWindow.fiveHours),
+            windowLength: QuotaWindow.fiveHours, now: now) == 0)
+        #expect(DualBarMetrics.proRataPace(
+            resetsAt: now, windowLength: QuotaWindow.fiveHours, now: now) == 1)
+    }
+
+    /// Clamped rather than extrapolated: a reset time we fetched a while ago
+    /// must not produce a marker past the end of the track.
+    @Test("a stale or overshot reset time clamps instead of running off the bar")
+    func paceClamps() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(DualBarMetrics.proRataPace(
+            resetsAt: now.addingTimeInterval(-3600),
+            windowLength: QuotaWindow.fiveHours, now: now) == 1)
+        #expect(DualBarMetrics.proRataPace(
+            resetsAt: now.addingTimeInterval(QuotaWindow.week),
+            windowLength: QuotaWindow.fiveHours, now: now) == 0)
+    }
+
+    /// No reset time and no window length means no target. The UI draws no
+    /// marker rather than inventing one.
+    @Test("an unknown window yields no pace at all")
+    func paceIsAbsentWithoutInputs() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(DualBarMetrics.proRataPace(resetsAt: nil, windowLength: QuotaWindow.week, now: now) == nil)
+        #expect(DualBarMetrics.proRataPace(resetsAt: now, windowLength: 0, now: now) == nil)
+    }
+
+    @Test("burndown delta is absent when there is no pace to compare against")
+    func burndownRequiresAPace() {
+        let bare = DualBarMetrics(primaryFraction: 0.9, label: "WK")
+        #expect(bare.burndownDelta == nil)
+        #expect(bare.isAboveProrataPace == false)
+
+        let paced = DualBarMetrics(primaryFraction: 0.9, expectedPaceFraction: 0.5, label: "WK")
+        #expect(paced.burndownDelta == 0.4)
+        #expect(paced.isAboveProrataPace)
+    }
+
+    /// Months are 28–31 days, so a 30-day constant drifts the marker by up to
+    /// a day at the point it matters most — the end of the window.
+    @Test("a monthly window takes its length from the calendar, not a constant")
+    func monthLengthComesFromTheCalendar() throws {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 3
+        components.day = 1
+        let march1 = try #require(Calendar.current.date(from: components))
+        let length = try #require(DualBarMetrics.monthWindowLength(endingAt: march1))
+        // February 2026 has 28 days.
+        #expect(abs(length - 28 * 24 * 3600) < 3600)
+    }
+}

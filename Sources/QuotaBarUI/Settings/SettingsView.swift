@@ -41,7 +41,17 @@ public struct SettingsView: View {
     @State private var isVerifying = false
     @State private var isSigningInToGemini = false
     @State private var geminiSignInStatus: String?
-    @AppStorage(CredentialStore.cliDiscoveryDefaultsKey) private var cliDiscovery = false
+    @State private var geminiClientSecret = ""
+    @State private var geminiClientID = ""
+    @State private var loadedGeminiClientID = ""
+    /// A stored secret is never read back for display, so the field is always
+    /// blank. Without an explicit "stored" signal that reads as "it did not
+    /// save" — which is exactly how it was reported.
+    @State private var geminiSecretIsStored = false
+    // Bound to the shared suite, not `.standard`: the toggle must apply to the
+    // app whatever the executable happens to be named.
+    @AppStorage(CredentialStore.cliDiscoveryDefaultsKey, store: CredentialStore.preferences)
+    private var cliDiscovery = false
 
     public init() {}
 
@@ -67,7 +77,34 @@ public struct SettingsView: View {
                 Button("Connect Google account") { Task { await connectGemini() } }
                     .disabled(isSigningInToGemini)
                 if isSigningInToGemini { ProgressView().controlSize(.small) }
-                Text(geminiSignInStatus ?? "Uses Google OAuth to read Antigravity quota. Tokens stay in your Keychain.")
+                Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                TextField("OAuth client ID", text: $geminiClientID)
+                    .textFieldStyle(.roundedBorder)
+                SecureField(
+                    "OAuth client secret",
+                    text: $geminiClientSecret,
+                    prompt: Text(geminiSecretIsStored
+                                 ? "•••••••• stored — leave blank to keep"
+                                 : "OAuth client secret")
+                )
+                .textFieldStyle(.roundedBorder)
+                Label(
+                    geminiSecretIsStored ? "Client secret stored" : "No client secret set",
+                    systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
+                )
+                .font(.caption2)
+                .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
+                Text("""
+                     Required. The Cloud Code API is private to Google's own \
+                     OAuth clients, so a client you create yourself will be \
+                     refused — use one whose project Google has allowlisted, \
+                     such as the pair the antigravity-usage CLI publishes in \
+                     its OAUTH_CONFIG. Leave the secret blank to keep the \
+                     stored one.
+                     """)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -104,8 +141,14 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    /// The Gemini client fields count too. They did not, so typing a client ID
+    /// left "Save & verify" greyed out and the only way to persist it was the
+    /// Connect button — which is not where anyone looks for "save".
     private var hasChanges: Bool {
-        Self.slots.contains { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }
+        if Self.slots.contains(where: { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }) { return true }
+        if geminiClientID != loadedGeminiClientID { return true }
+        // Blank means "keep the stored secret", so only a typed one is a change.
+        return !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - General
@@ -139,14 +182,42 @@ public struct SettingsView: View {
         }
         loaded = current
         entered = current
+
+        geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
+        loadedGeminiClientID = geminiClientID
+        geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+
+    }
+
+    private var hasGeminiClientEdits: Bool {
+        geminiClientID != loadedGeminiClientID
+            || !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func connectGemini() async {
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
+
+        // Persist the client configuration before signing in: the flow reads
+        // it from the Keychain, so a secret typed but not yet saved would fail
+        // the exchange and look like a rejected sign-in.
+        do {
+            try GeminiOAuthLogin.saveClientConfiguration(
+                clientID: geminiClientID, clientSecret: geminiClientSecret)
+        } catch {
+            geminiSignInStatus = "Could not save the client configuration to the Keychain"
+            return
+        }
+
         do {
             try await GeminiOAuthLogin.shared.signIn()
             geminiSignInStatus = "Connected"
+        } catch let error as ProviderError where error.reason == .notConfigured {
+            geminiSignInStatus = "Add an OAuth client ID and secret above first"
+        } catch let error as GeminiOAuthError {
+            // Google names the misconfiguration; passing it through turns a
+            // silent failure into one the user can act on.
+            geminiSignInStatus = "Google refused the sign-in: \(error.summary)"
         } catch {
             geminiSignInStatus = "Google sign-in did not complete"
         }
@@ -160,6 +231,26 @@ public struct SettingsView: View {
     private func saveAndVerify() async {
         isVerifying = true
         defer { isVerifying = false }
+
+        // Persist the Gemini client alongside the vendor keys. Changing it
+        // orphans any stored session — a refresh token belongs to the client
+        // that issued it — so say so rather than letting the row quietly read
+        // "Not configured" afterwards.
+        let clientChanged = geminiClientID != loadedGeminiClientID
+        if hasGeminiClientEdits {
+            do {
+                try GeminiOAuthLogin.saveClientConfiguration(
+                    clientID: geminiClientID, clientSecret: geminiClientSecret)
+                loadedGeminiClientID = geminiClientID
+                geminiClientSecret = ""
+                geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+                geminiSignInStatus = clientChanged
+                    ? "Client saved. Connect Google account again to sign in with it."
+                    : "Client secret saved."
+            } catch {
+                geminiSignInStatus = "Could not save the client configuration to the Keychain"
+            }
+        }
 
         var githubPatChanged = false
 

@@ -20,8 +20,11 @@ public struct DualBarProgressView: View {
         max(0, min(1, metrics.primaryFraction))
     }
 
-    private var targetPacePct: Double {
-        max(0, min(1, metrics.expectedPaceFraction ?? (metrics.label == "5H" ? 0.40 : (metrics.label == "WK" ? 0.45 : 0.50))))
+    /// nil when the vendor gave us no way to know how far through the window we
+    /// are. The bar then shows consumption alone rather than measuring it
+    /// against an invented target.
+    private var targetPacePct: Double? {
+        metrics.expectedPaceFraction.map { max(0, min(1, $0)) }
     }
 
     private var isExhausted: Bool {
@@ -31,7 +34,7 @@ public struct DualBarProgressView: View {
     private var labelColor: Color {
         if isExhausted {
             return Theme.error
-        } else if consumedPct > targetPacePct {
+        } else if let pace = targetPacePct, consumedPct > pace {
             return Color(red: 0.96, green: 0.72, blue: 0.15) // Bright warning yellow
         } else {
             return Theme.healthy // Vibrant green
@@ -47,7 +50,8 @@ public struct DualBarProgressView: View {
             GeometryReader { geo in
                 let w = geo.size.width
                 let aX = consumedPct * w
-                let mX = targetPacePct * w
+                let mX = (targetPacePct ?? 0) * w
+                let hasPace = targetPacePct != nil
 
                 ZStack(alignment: .leading) {
                     // 1. Subtle background track across full width
@@ -55,7 +59,22 @@ public struct DualBarProgressView: View {
                         .fill(trackColor)
                         .frame(height: 5.5)
 
-                    if isExhausted {
+                    if !hasPace {
+                        // --- CASE 0: NO PACE TARGET ---
+                        // Consumption only. Nothing here is measured against a
+                        // number we did not receive.
+                        if isExhausted {
+                            Capsule()
+                                .fill(Theme.error)
+                                .frame(width: w, height: 5.5)
+                                .shadow(color: Theme.error.opacity(0.6), radius: 2)
+                        } else if aX > 0 {
+                            Capsule()
+                                .fill(accentColor)
+                                .frame(width: max(4, aX), height: 5.5)
+                                .animation(.easeOut(duration: 0.35), value: consumedPct)
+                        }
+                    } else if isExhausted {
                         // --- CASE 1: 100% EXHAUSTED ---
                         // Budget portion up to marker in vendor brand color
                         if mX > 0 {
@@ -116,7 +135,7 @@ public struct DualBarProgressView: View {
                     }
 
                     // 3. Target Pace Marker (vertical white tick at mX)
-                    if mX > 0 && mX < w {
+                    if hasPace, mX > 0, mX < w {
                         Rectangle()
                             .fill(Color.white)
                             .frame(width: 2.0, height: 9.0)
@@ -140,8 +159,12 @@ public struct DualBarProgressView: View {
                     .font(.system(size: 9.5, weight: .bold))
                     .monospaced()
                     .foregroundStyle(labelColor)
+                    // A four-character window name wrapped to "PRE M" at the
+                    // old 32pt. The bar is flexible, so the extra width comes
+                    // out of the track rather than the 324pt row budget.
+                    .lineLimit(1)
             }
-            .frame(width: 32, alignment: .trailing)
+            .frame(width: 42, alignment: .trailing)
         }
         .help(helpText)
         .accessibilityHidden(true)
@@ -150,10 +173,15 @@ public struct DualBarProgressView: View {
 
 
     private var helpText: String {
-        let deltaInt = Int(((consumedPct - targetPacePct) * 100).rounded())
-        let paceStatus = deltaInt > 0 ? "+\(deltaInt)% above pro-rata pace (overuse)" : "\(abs(deltaInt))% buffer behind pro-rata pace (healthy underuse)"
         let usedPctInt = Int((consumedPct * 100).rounded())
         let detail = metrics.usedText ?? "\(usedPctInt)% used"
+        guard let delta = metrics.burndownDelta else {
+            return "\(metrics.label): \(usedPctInt)% used • \(detail)"
+        }
+        let deltaInt = Int((delta * 100).rounded())
+        let paceStatus = deltaInt > 0
+            ? "+\(deltaInt)% above pro-rata pace (overuse)"
+            : "\(abs(deltaInt))% buffer behind pro-rata pace (healthy underuse)"
         return "\(metrics.label): \(usedPctInt)% used • \(paceStatus) • \(detail)"
     }
 }

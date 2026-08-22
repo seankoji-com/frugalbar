@@ -22,6 +22,15 @@ provider returns `.unavailable(_)` and the UI draws no bar and no percentage.
 A wrong number is worse than no number here: people use this to decide whether
 to start a long job.
 
+**The rule covers geometry and labels, not just numbers.** A pace marker
+placed at a constant, a plan tier defaulted to the vendor's name, a balance
+printed under a "spent" label — each asserts something nobody measured, and
+each shipped here. If a figure was not received, draw nothing and say nothing:
+`expectedPaceFraction`, `planName` and `spent` are all optional for that
+reason. There is deliberately no debug affordance that writes a synthetic
+fraction into a live snapshot; one existed, and it fed the advice engine and
+the menu bar icon.
+
 **Failure must never render as health.** Check `http.statusCode` before
 decoding, and treat a decode failure as `.badResponse`. A 404 that renders as a
 full green bar is the specific bug this codebase shipped once already.
@@ -48,10 +57,35 @@ headers, never query strings. Never put `error.localizedDescription` in a
 `QuotaSnapshot` — `URLError`'s description carries the request URL. Map errors
 to `UnavailableReason` instead.
 
+**Preferences live in an explicit suite, not `UserDefaults.standard`.** An
+unbundled executable keys `.standard` off its *process name* — `Info.plist`
+applies only inside a real `.app`. The release installs as `frugalbar` and the
+SwiftPM product builds as `QuotaBar`, so `.standard` gave them separate stores:
+opting into CLI discovery under one name left the other reporting every
+provider "Not configured", with nothing on screen to explain it. Read and write
+through `CredentialStore.preferences`, including `@AppStorage(_, store:)`.
+
+**Test-host detection cannot rely on XCTest.** Under `swift test` with
+swift-testing, `XCTestCase` is not loaded and no `XCTest*` / `SWIFT_TESTING_*`
+variable is set — only `ProcessInfo.processName` identifies the runner. Both
+safety nets that depend on it (no real network, no writes to the user's real
+preference file) failed open for as long as they were written that way. Use
+`TestHost.isActive`.
+
 **Tests must be hermetic.** Inject providers via `QuotaManager(providerFactory:)`;
 never use `QuotaManager.shared`. Stub HTTP with `QuotaHTTP.$session.withValue(_:)`.
 Assert your stub was actually hit — a previous mock was never wired up and
 every "provider test" silently passed without exercising any parsing.
+
+**Tests must never write to a production credential label.** A test that
+called `saveClientConfiguration` against the real `gemini.oauth.*` labels
+deleted a working Google client secret on its first run. Keychain tests use a
+randomised label; anything that needs the store/clear *decision* tests the pure
+function (`secretToStore`, `clientIDToStore`) instead of round-tripping through
+the labels the running app reads. For the same reason `GeminiQuotaProvider`
+skips ambient credential lookup under `TestHost.isActive` — otherwise whether
+"no key short-circuits" passes depends on whether the developer happens to be
+signed in.
 
 **Never assert on a duration derived from `Date()`.** Pass an explicit `now`.
 `Int(179.97 / 60)` is 2, which made one test fail ~25% of runs.
@@ -69,6 +103,17 @@ to 356pt and clipped on launch.
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
+
+## Regression tests must be shown to fail
+
+A test that passes proves nothing about a bug it was written for. Reintroduce
+the defect and confirm the test goes red, then revert. Doing this over today's
+fixes found three tests that could not detect their own regression: two were
+masked by a *second* guard elsewhere (each alone sufficed, so mutating one
+changed nothing), and one asserted `preferences !== .standard`, which stayed
+true under the test-host override no matter what the production path did.
+That one is now behavioural — it writes through `preferences` and checks the
+value lands in the named suite and not in `.standard`.
 
 ## Before claiming done
 

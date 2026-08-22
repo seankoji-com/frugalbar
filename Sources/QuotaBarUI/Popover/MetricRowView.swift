@@ -57,6 +57,18 @@ struct MetricRowView: View {
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         .lineLimit(1)
                 }
+                // A money provider has no plan, but it does have the one figure
+                // that matters at a glance: what is left. It takes the subtitle
+                // slot rather than competing for the row's right-hand side.
+                if case .currency(let balance, _, _, let code) = snapshot.metric,
+                   snapshot.status.confidence == .measured {
+                    Text(formatCurrency(balance, code: code))
+                        .font(.system(size: 12, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(snapshot.status.urgency == .none
+                                         ? Theme.healthy : Theme.error)
+                        .lineLimit(1)
+                }
             }
             .frame(width: 80, alignment: .leading)
 
@@ -73,50 +85,25 @@ struct MetricRowView: View {
                         )
                     }
                 }
-            } else if case .currency(let balance, let limit, let spent, let currencyCode) = snapshot.metric {
-                // Driven by the provider's declared basis, not by matching on
-                // prose: a copy edit to auxiliaryInfo must not relabel money.
-                let basis: CurrencyBasis = snapshot.currencyBasis ?? (limit == nil ? .lifetimeSpend : .keySpendCap)
-                let spendLabel = basis.spendLabel
-                let balanceLabel = basis.balanceLabel
-                HStack(spacing: 6) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(spendLabel)
-                                .font(.system(size: 9.5, weight: .medium))
-                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-
-                            let spentVal = spent ?? balance
-                            Text(formatCurrency(spentVal, code: currencyCode))
+            } else if !snapshot.spendWindows.isEmpty {
+                // Spend per window. Deliberately not a bar: spend has no cap to
+                // measure against, so drawing one would invent a denominator.
+                VStack(alignment: .trailing, spacing: 3.5) {
+                    ForEach(Array(snapshot.spendWindows.enumerated()), id: \.offset) { _, window in
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            Text(window.amount.map { formatCurrency($0, code: window.currencyCode) } ?? "—")
                                 .font(.system(size: 11, weight: .bold))
                                 .monospacedDigit()
                                 .foregroundStyle(Theme.onSurface)
-                        }
-
-                        HStack(spacing: 4) {
-                            Text(balanceLabel)
-                                .font(.system(size: 9.5, weight: .medium))
+                            Text(window.label)
+                                .font(.system(size: 9.5, weight: .bold))
+                                .monospaced()
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-
-                            Text(formatCurrency(balance, code: currencyCode))
-                                .font(.system(size: 10.5, weight: .bold))
-                                .monospacedDigit()
-                                .foregroundStyle(Theme.secondary)
+                                .lineLimit(1)
+                                .frame(width: 26, alignment: .trailing)
                         }
                     }
-
-
-                    Spacer()
-
-                    // Currency badge
-                    Text(currencyCode)
-                        .font(.system(size: 9, weight: .bold))
-                        .monospaced()
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2.5)
-                        .background(Theme.surfaceContainerHighest.opacity(0.65))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
             } else {
                 // Subscription & count fallback layout (no progress bar unless a genuine denominator exists)

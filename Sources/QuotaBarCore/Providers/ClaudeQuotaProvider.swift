@@ -47,8 +47,10 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: "Claude", renewalDate: nil),
             status: .measured(urgency), resetsAt: fiveHour.reset, lastUpdated: Date(),
-            auxiliaryInfo: "Live Claude subscription quota", row1: row(fiveHour, label: "5H"),
-            row2: row(weekly, label: "WK"), badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
+            auxiliaryInfo: "Live Claude subscription quota",
+            row1: row(fiveHour, label: "5H", window: QuotaWindow.fiveHours),
+            row2: row(weekly, label: "WK", window: QuotaWindow.week),
+            badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: "Claude", cliSource: "Claude OAuth rate-limit headers"
         )
     }
@@ -71,8 +73,15 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         return Reading(used: used, reset: Date(timeIntervalSince1970: epoch))
     }
 
-    private func row(_ reading: Reading, label: String) -> DualBarMetrics {
-        DualBarMetrics(primaryFraction: reading.used, label: label, statusColor: "#d97757",
+    /// `window` is the length Anthropic meters this reading over. It turns the
+    /// reset time into the pro-rata pace marker — the share of the allowance
+    /// that should be spent by now. Without it the bar drew a fixed marker that
+    /// described no window at all.
+    private func row(_ reading: Reading, label: String, window: TimeInterval) -> DualBarMetrics {
+        DualBarMetrics(primaryFraction: reading.used,
+                       expectedPaceFraction: DualBarMetrics.proRataPace(
+                           resetsAt: reading.reset, windowLength: window),
+                       label: label, statusColor: "#d97757",
                        usedText: "\(Int((reading.used * 100).rounded()))% used",
                        resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: reading.reset, relativeTo: Date()))")
     }
