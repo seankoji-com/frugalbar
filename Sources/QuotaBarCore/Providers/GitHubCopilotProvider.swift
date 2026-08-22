@@ -96,7 +96,6 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             row2: nil,
             badgeText: isExhausted ? "Exhausted" : "\(totalQuota - currentUsage) left",
             planName: "GitHub Copilot",
-            latencyMs: 95,
             keyMasked: nil,
             cliSource: "gh auth token / hosts.json"
         )
@@ -105,11 +104,6 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
     private static func parseCopilotReset(_ isoDate: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         return formatter.date(from: isoDate)
-    }
-
-    private static func formatCopilotReset(_ isoDate: String) -> String {
-        guard let date = parseCopilotReset(isoDate) else { return "Reset time unavailable" }
-        return "Resets \(RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date()))"
     }
 }
 

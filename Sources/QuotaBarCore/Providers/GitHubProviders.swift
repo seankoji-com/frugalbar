@@ -137,7 +137,6 @@ private func rateLimitSnapshot(
         row2: r2,
         badgeText: "\(rate.remaining) left",
         planName: "GitHub API",
-        latencyMs: 74,
         cliSource: "gh auth token"
     )
 }

@@ -18,8 +18,8 @@ public struct SettingsView: View {
 
     private static let slots: [KeySlot] = [
         .init(id: .claude, label: "Claude session",
-              placeholder: "Claude Max / Pro / session",
-              note: "Discovered from ~/.claude.json when CLI discovery is on."),
+              placeholder: "Claude OAuth access token",
+              note: "Discovered from the Claude Code login when CLI discovery is on."),
         .init(id: .openai, label: "ChatGPT session",
               placeholder: "Codex ChatGPT access token",
               note: "Discovered from ~/.codex/auth.json when CLI discovery is on."),
@@ -220,6 +220,8 @@ public struct SettingsView: View {
         case .openai:      provider = OpenAIQuotaProvider(accessToken: key)
         case .githubRest:  provider = GitHubRestProvider(token: key)
         case .openrouter:  provider = OpenRouterProvider(apiKey: key)
+        // Gemini has no key slot — it is connected through the OAuth button
+        // above — but the switch must stay exhaustive.
         case .gemini:      provider = GeminiQuotaProvider(accessToken: key)
         case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
         case .copilot:     provider = GitHubCopilotProvider(token: key)
@@ -235,7 +237,7 @@ public struct SettingsView: View {
         case .offline, .timedOut: return "Could not reach the vendor"
         case .badResponse:        return "Unexpected response"
         case .rateLimited:        return "Vendor is throttling — try again shortly"
-        case .unsupported:        return "Key accepted"
+        case .unsupported:        return "Saved — no usage to read"
         case nil:                 return "Key accepted"
         }
     }

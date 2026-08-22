@@ -59,7 +59,7 @@ public struct QuotaAdvice: Sendable, Equatable {
 
         // 1. SCENARIO: All or most primary AI subscriptions are critical (Red)
         if isClaudeCritical && isGeminiCritical {
-            let claudeReset = claudeSnap?.row1?.resetText ?? "3 hours"
+            let claudeReset = claudeSnap?.row1?.resetText ?? "its next reset"
             let openrouterBalance = openrouterSnap?.badgeText ?? "check your OpenRouter balance"
             return QuotaAdvice(
                 headline: "Primary Quotas Exhausted",
@@ -159,17 +159,24 @@ public struct QuotaAdvice: Sendable, Equatable {
             )
         }
 
-        // 4. SCENARIO: OpenCode running low
-        if let geminiFraction, opencodeFraction >= 0.75 && geminiFraction < 0.70 {
+        // 4. SCENARIO: OpenCode running low.
+        //
+        // The warning is about OpenCode, so it must not be gated on Gemini
+        // being readable — that turned "OpenCode at 97%, Gemini unconfigured"
+        // into "All Quotas Healthy". Gemini only decides which alternative we
+        // are willing to name.
+        if opencodeFraction >= 0.75 {
             let usedPct = Int((opencodeFraction * 100).rounded())
+            let geminiHasHeadroom = geminiFraction.map { $0 < 0.70 } ?? false
+            let alternatives = geminiHasHeadroom ? "Gemini or Copilot" : "Copilot"
             return QuotaAdvice(
                 headline: "OpenCode Quota Low (\(usedPct)%)",
-                message: "OpenCode Go burst quota is at \(usedPct)%. Switch to Gemini or Copilot for code assistance.",
-                suggestedAction: "Switch to Gemini",
+                message: "OpenCode Go burst quota is at \(usedPct)%. Switch to \(alternatives) for code assistance.",
+                suggestedAction: geminiHasHeadroom ? "Switch to Gemini" : "Switch to Copilot",
                 urgency: .warning,
                 iconName: "arrow.triangle.swap",
                 iconColorHex: "#ffb874",
-                vendorId: .gemini
+                vendorId: geminiHasHeadroom ? .gemini : .copilot
             )
         }
 

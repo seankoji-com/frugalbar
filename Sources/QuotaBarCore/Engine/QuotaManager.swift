@@ -126,11 +126,17 @@ public actor QuotaManager {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
                     // does not bound a provider that issues several requests.
+                    let startedAt = DispatchTime.now().uptimeNanoseconds
                     let outcome = await withDeadline(seconds: budget) {
                         try await provider.fetchSnapshot()
                     }
                     switch outcome {
-                    case .success(let snapshot):
+                    case .success(var snapshot):
+                        // Measured here rather than guessed in each provider:
+                        // one real number for every vendor, including the ones
+                        // that issue several requests per refresh.
+                        let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+                        snapshot.latencyMs = Int(elapsed / 1_000_000)
                         return (provider.vendorId, snapshot)
                     case .failure(let reason):
                         return (provider.vendorId, Self.unavailableSnapshot(for: provider, reason: reason))

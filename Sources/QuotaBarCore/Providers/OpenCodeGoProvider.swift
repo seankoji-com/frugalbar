@@ -63,7 +63,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             row1: row(fiveHourUsage, "5H", "five_hour_reset"),
             row2: row(weeklyUsage, "WK", "weekly_reset"),
             row3: row(monthlyUsage, "MO", "monthly_reset"),
-            badgeText: monthlyUsage.map { "\(Int((1 - $0) * 100))% left" },
+            badgeText: monthlyUsage.map { "\(Int(((1 - $0) * 100).rounded()))% left" },
             planName: "OpenCode Go",
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"

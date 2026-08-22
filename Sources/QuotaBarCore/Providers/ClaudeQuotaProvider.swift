@@ -14,8 +14,18 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         guard let token = await credential(injected: apiKey, for: .claude) else {
             return unavailable(.notConfigured)
         }
+        // Anthropic publishes the unified quota only as response headers, so
+        // the smallest possible real request is the only way to read it. That
+        // costs one token of the very quota being reported — acceptable at the
+        // default refresh interval, and the reason this provider must not be
+        // polled aggressively.
+        //
+        // A Claude Code OAuth token is scoped to Claude Code: the endpoint
+        // rejects it unless the request identifies itself as such, so the
+        // system prompt below is load-bearing, not decoration.
         let body = try JSONSerialization.data(withJSONObject: [
-            "model": "claude-haiku-4-5-20251001", "max_tokens": 1,
+            "model": Self.probeModel, "max_tokens": 1,
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
             "messages": [["role": "user", "content": "hi"]],
         ])
         let (_, response) = try await QuotaHTTP.post(
@@ -28,25 +38,36 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
               let weekly = reading(response, prefix: "anthropic-ratelimit-unified-7d")
         else { return unavailable(.badResponse) }
 
-        let urgency: Urgency = max(fiveHour.used, weekly.used) > 0.90 ? .critical
-            : max(fiveHour.used, weekly.used) > 0.70 ? .warning : .none
+        // The binding constraint is whichever window is fuller. Badge and
+        // urgency must come from the same number, or the menu bar goes red
+        // while the row still reads "95% left".
+        let worst = max(fiveHour.used, weekly.used)
+        let urgency: Urgency = worst > 0.90 ? .critical : worst > 0.70 ? .warning : .none
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: "Claude", renewalDate: nil),
             status: .measured(urgency), resetsAt: fiveHour.reset, lastUpdated: Date(),
             auxiliaryInfo: "Live Claude subscription quota", row1: row(fiveHour, label: "5H"),
-            row2: row(weekly, label: "WK"), badgeText: "\(Int(((1 - weekly.used) * 100).rounded()))% left",
+            row2: row(weekly, label: "WK"), badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: "Claude", cliSource: "Claude OAuth rate-limit headers"
         )
     }
 
+    /// The cheapest model that still returns the unified quota headers.
+    /// Pinned rather than floating so a deprecation surfaces as an unavailable
+    /// provider we can fix, not as a silently wrong reading.
+    private static let probeModel = "claude-haiku-4-5-20251001"
+
     private struct Reading { let used: Double; let reset: Date }
 
     private func reading(_ response: HTTPURLResponse, prefix: String) -> Reading? {
-        guard let value = response.value(forHTTPHeaderField: "\(prefix)-utilization"),
-              let used = Double(value), (0...1).contains(used),
+        guard let raw = response.value(forHTTPHeaderField: "\(prefix)-utilization").flatMap(Double.init),
               let epoch = response.value(forHTTPHeaderField: "\(prefix)-reset").flatMap(Double.init), epoch > 0
         else { return nil }
+        // The header has been seen both as a 0…1 fraction and as a percentage.
+        // Accept either rather than discarding a real reading as malformed.
+        let used = raw > 1 ? raw / 100 : raw
+        guard (0...1).contains(used) else { return nil }
         return Reading(used: used, reset: Date(timeIntervalSince1970: epoch))
     }
 

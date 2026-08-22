@@ -97,6 +97,47 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.status == ProviderStatus.unavailable(UnavailableReason.badResponse))
     }
 
+    /// The measured Copilot path had no test at all: the rename of the old
+    /// happy-path case left `monthly_quota` / `current_usage` /
+    /// `quota_reset_date` parsing entirely uncovered.
+    @Test("full Copilot quota response produces a measured gauge")
+    func measuredCopilotQuota() async throws {
+        let provider = GitHubCopilotProvider(token: "tok")
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400 * 10))
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path.contains("copilot_internal") == true {
+                return canned(body: #"{"monthly_quota":5000,"current_usage":4000,"quota_reset_date":"\#(reset)"}"#)
+            }
+            return canned(body: #"{"login":"octocat"}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.status == .warning)
+        #expect(snap.row1?.primaryFraction == 0.8)
+        #expect(snap.badgeText == "1000 left")
+        #expect(snap.auxiliaryInfo?.contains("octocat") == true)
+        // The old code fell back to a hardcoded epoch when parsing failed.
+        #expect(snap.resetsAt != nil)
+    }
+
+    /// An exhausted allowance must not read as merely busy.
+    @Test("a fully consumed Copilot allowance is critical")
+    func exhaustedCopilotQuota() async throws {
+        let provider = GitHubCopilotProvider(token: "tok")
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path.contains("copilot_internal") == true {
+                return canned(body: #"{"monthly_quota":5000,"current_usage":5000,"quota_reset_date":"\#(reset)"}"#)
+            }
+            return canned(body: #"{"login":"octocat"}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .critical)
+        #expect(snap.badgeText == "Exhausted")
+    }
+
     @Test("missing Copilot quota response stays unavailable")
     func validUserResponse() async throws {
         let provider = GitHubCopilotProvider(token: "tok")

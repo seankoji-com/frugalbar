@@ -70,11 +70,16 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
         // Credits are authoritative when the supplied key can read them. If
         // this endpoint rejects a normal key, fall back to that key's cap.
-        let (creditsData, creditsHTTP) = try await QuotaHTTP.get(
+        //
+        // Best-effort on purpose: we already hold a good reading from
+        // /auth/key, and losing it because an *enrichment* call timed out
+        // would turn a working gauge into an error.
+        let creditsResult = try? await QuotaHTTP.get(
             url: "https://openrouter.ai/api/v1/credits",
             auth: .bearer(key)
         )
-        if (200...299).contains(creditsHTTP.statusCode) {
+        if let (creditsData, creditsHTTP) = creditsResult,
+           (200...299).contains(creditsHTTP.statusCode) {
             struct CreditsResponse: Decodable {
                 struct Payload: Decodable {
                     let total_credits: Double?
@@ -87,23 +92,31 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                let used = credits.data.total_usage,
                purchased >= 0, used >= 0 {
                 let balance = max(purchased - used, 0)
+                // Credit has no denominator to draw a gauge from, but a nearly
+                // empty account is exactly what this app exists to warn about.
+                // Thresholds are on the absolute balance, in dollars.
+                let urgency: Urgency = balance < 1 ? .critical : balance < 5 ? .warning : .none
                 return QuotaSnapshot(
                     id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                     category: category,
                     metric: .currency(balance: Decimal(balance), limit: nil,
                                       spent: Decimal(used), currencyCode: "USD"),
-                    status: .healthy, resetsAt: nil, lastUpdated: Date(),
+                    status: .measured(urgency), resetsAt: nil, lastUpdated: Date(),
                     auxiliaryInfo: "Account credit balance",
                     row1: nil, row2: nil,
                     badgeText: "\(String(format: "$%.2f", balance)) credit",
-                    planName: "OpenRouter", cliSource: "OPENROUTER_API_KEY / auth.json"
+                    planName: "OpenRouter", cliSource: "OPENROUTER_API_KEY / auth.json",
+                    currencyBasis: .accountCredit
                 )
             }
         }
         let tierNote = decoded.data.is_free_tier == true ? "Free tier" : nil
 
+        // `usage` never resets, so presenting it as a weekly figure would be a
+        // fabricated number by this project's own definition.
         let weeklySpentUsd = decoded.data.usage_weekly ?? spentUsd
-        let weeklyFormatted = String(format: "$%.2f", weeklySpentUsd)
+        let spendBadge = decoded.data.usage_weekly.map { String(format: "$%.2f this week", $0) }
+            ?? String(format: "$%.2f lifetime", spentUsd)
 
         guard let capUsd = decoded.data.limit, capUsd > 0 else {
             return QuotaSnapshot(
@@ -116,10 +129,10 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 auxiliaryInfo: tierNote ?? "Key lifetime spend: \(String(format: "$%.2f", spentUsd))",
                 row1: nil,
                 row2: nil,
-                badgeText: "\(weeklyFormatted) this week",
+                badgeText: spendBadge,
                 planName: "OpenRouter",
-                latencyMs: 165,
-                cliSource: "OPENROUTER_API_KEY / auth.json"
+                cliSource: "OPENROUTER_API_KEY / auth.json",
+                currencyBasis: .lifetimeSpend
             )
         }
 
@@ -144,8 +157,8 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             row2: nil,
             badgeText: "\(remainingFormatted) key cap left",
             planName: "OpenRouter",
-            latencyMs: 165,
-            cliSource: "OPENROUTER_API_KEY / auth.json"
+            cliSource: "OPENROUTER_API_KEY / auth.json",
+            currencyBasis: .keySpendCap
         )
     }
 

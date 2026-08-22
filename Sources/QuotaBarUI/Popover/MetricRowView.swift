@@ -44,7 +44,7 @@ struct MetricRowView: View {
             // Vendor avatar badge
             VendorAvatarView(vendorId: snapshot.vendorId, status: snapshot.status)
 
-            // Two lines: Subscription & Current Plan (e.g. Claude / Max x20, Gemini / AI Pro)
+            // Two lines: vendor, then the plan the provider actually reported.
             VStack(alignment: .leading, spacing: 1.5) {
                 Text(snapshot.shortVendorName)
                     .font(.system(size: 12, weight: .bold))
@@ -74,9 +74,11 @@ struct MetricRowView: View {
                     }
                 }
             } else if case .currency(let balance, let limit, let spent, let currencyCode) = snapshot.metric {
-                let isAccountCredit = snapshot.auxiliaryInfo == "Account credit balance"
-                let spendLabel = isAccountCredit ? "Lifetime used:" : (limit == nil ? "Lifetime spend:" : "Key spend:")
-                let balanceLabel = isAccountCredit ? "Account credit:" : (limit == nil ? "Recorded spend:" : "Key cap left:")
+                // Driven by the provider's declared basis, not by matching on
+                // prose: a copy edit to auxiliaryInfo must not relabel money.
+                let basis: CurrencyBasis = snapshot.currencyBasis ?? (limit == nil ? .lifetimeSpend : .keySpendCap)
+                let spendLabel = basis.spendLabel
+                let balanceLabel = basis.balanceLabel
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {

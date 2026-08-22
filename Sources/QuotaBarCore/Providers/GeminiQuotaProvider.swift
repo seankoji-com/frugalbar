@@ -29,7 +29,10 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        let resolvedToken = accessToken ?? GeminiOAuthSession.load()?.accessToken
+        var resolvedToken = accessToken
+        if resolvedToken == nil || resolvedToken?.isEmpty == true {
+            resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
+        }
         guard let token = resolvedToken, !token.isEmpty else {
             return unavailable(.notConfigured)
         }
@@ -55,16 +58,28 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
               let models = response.models
         else { return unavailable(.badResponse) }
 
+        // 2.5 shares a pooled allowance with the older Gemini API rather than
+        // the Antigravity subscription, so its fraction is not comparable with
+        // the rest and would distort the headline reading.
         let readings = models.compactMap { id, model -> (String, Double, Date)? in
             guard id.lowercased().contains("gemini"), !id.contains("2.5"),
                   let remaining = model.quotaInfo?.remainingFraction, (0...1).contains(remaining),
                   let resetText = model.quotaInfo?.resetTime, let reset = Self.parseDate(resetText)
             else { return nil }
             return (model.displayName ?? model.label ?? id, 1 - remaining, reset)
-        }.sorted { $0.0 < $1.0 }
-        guard let primary = readings.first else { return unavailable(.badResponse) }
+        }
+        // A structurally fine response that simply carries no per-model quota
+        // is "this vendor published nothing", not a malformed payload.
+        guard !readings.isEmpty else {
+            return unavailable(.unsupported("Antigravity reported no model quota"))
+        }
 
-        let rows = readings.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
+        // The binding constraint is the fullest model, not whichever one sorts
+        // first alphabetically — that made the menu-bar colour an accident of
+        // Google's naming.
+        let ranked = readings.sorted { $0.1 > $1.1 }
+        let primary = ranked[0]
+        let rows = ranked.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
         let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
         let percent = Int((primary.1 * 100).rounded())
         return QuotaSnapshot(
@@ -96,13 +111,85 @@ public struct GeminiOAuthSession: Codable, Sendable {
     public let accessToken: String
     public let refreshToken: String
     public let expiry: Date
+
     static let keychainLabel = "gemini.oauth.session"
+
+    /// Shared by the login flow and the refresh path so a token can only ever
+    /// be renewed by the client that minted it.
+    static let clientID = "598649530021-n2bb3flau0ff6mt7v316kimt57rolkan.apps.googleusercontent.com"
+
+    /// Renew this far ahead of expiry so a request never leaves with a token
+    /// that dies mid-flight.
+    private static let renewalMargin: TimeInterval = 120
 
     static func load() -> GeminiOAuthSession? {
         guard let text = try? KeychainManager.shared.get(label: keychainLabel),
               let data = text.data(using: .utf8)
         else { return nil }
         return try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
+    }
+
+    static func save(_ session: GeminiOAuthSession) throws {
+        let encoded = try JSONEncoder().encode(session)
+        try KeychainManager.shared.set(key: String(decoding: encoded, as: UTF8.self),
+                                       label: keychainLabel)
+    }
+
+    /// The stored session, renewed first if its access token is spent.
+    ///
+    /// Google's access tokens last an hour. Without this the app read a live
+    /// quota once and then reported "credential rejected" until the user
+    /// noticed and signed in by hand.
+    static func loadRefreshed() async -> GeminiOAuthSession? {
+        guard let session = load() else { return nil }
+        if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
+        guard !session.refreshToken.isEmpty else { return nil }
+        guard let renewed = try? await requestToken(
+            fields: [
+                "client_id": clientID,
+                "refresh_token": session.refreshToken,
+                "grant_type": "refresh_token",
+            ],
+            existingRefreshToken: session.refreshToken
+        ) else { return nil }
+        try? save(renewed)
+        return renewed
+    }
+
+    /// Posts a form-encoded grant to Google's token endpoint.
+    ///
+    /// A refresh response omits `refresh_token`, so the caller passes the one
+    /// it already holds; dropping it would strand the user at the next expiry.
+    static func requestToken(fields: [String: String],
+                             existingRefreshToken: String?) async throws -> GeminiOAuthSession {
+        var form = URLComponents()
+        form.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
+        guard let encoded = form.percentEncodedQuery?.data(using: .utf8) else {
+            throw ProviderError.badResponse
+        }
+
+        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = encoded
+
+        let (data, response) = try await QuotaHTTP.session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let token = try? JSONDecoder().decode(TokenResponse.self, from: data),
+              !token.access_token.isEmpty
+        else { throw ProviderError.badResponse }
+
+        return GeminiOAuthSession(
+            accessToken: token.access_token,
+            refreshToken: token.refresh_token ?? existingRefreshToken ?? "",
+            expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600))
+        )
+    }
+
+    private struct TokenResponse: Decodable {
+        let access_token: String
+        let refresh_token: String?
+        let expires_in: Int?
     }
 }
 
