@@ -106,6 +106,12 @@ class Frugalbar < Formula
     bin.install "frugalbar"
   end
 
+  service do
+    run [opt_bin/"frugalbar"]
+    keep_alive true
+    process_type :interactive
+  end
+
   test do
     system "#{bin}/frugalbar", "--help" rescue true
   end
