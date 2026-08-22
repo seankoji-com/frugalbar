@@ -44,7 +44,7 @@ struct MetricRowView: View {
             // Vendor avatar badge
             VendorAvatarView(vendorId: snapshot.vendorId, status: snapshot.status)
 
-            // Two lines: Subscription & Current Plan (e.g. Claude / Max x20, Gemini / AI Pro)
+            // Two lines: vendor, then the plan the provider actually reported.
             VStack(alignment: .leading, spacing: 1.5) {
                 Text(snapshot.shortVendorName)
                     .font(.system(size: 12, weight: .bold))
@@ -73,12 +73,16 @@ struct MetricRowView: View {
                         )
                     }
                 }
-            } else if case .currency(let balance, _, let spent, let currencyCode) = snapshot.metric {
-                // Financial raw dollar metrics block (7 Day Spend + Credit Remaining in AUD)
+            } else if case .currency(let balance, let limit, let spent, let currencyCode) = snapshot.metric {
+                // Driven by the provider's declared basis, not by matching on
+                // prose: a copy edit to auxiliaryInfo must not relabel money.
+                let basis: CurrencyBasis = snapshot.currencyBasis ?? (limit == nil ? .lifetimeSpend : .keySpendCap)
+                let spendLabel = basis.spendLabel
+                let balanceLabel = basis.balanceLabel
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
-                            Text("7 Day Spend:")
+                            Text(spendLabel)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
 
@@ -90,7 +94,7 @@ struct MetricRowView: View {
                         }
 
                         HStack(spacing: 4) {
-                            Text("Credit Remaining:")
+                            Text(balanceLabel)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
 
@@ -167,7 +171,6 @@ struct MetricRowView: View {
         }
     }
 }
-
 
 
 

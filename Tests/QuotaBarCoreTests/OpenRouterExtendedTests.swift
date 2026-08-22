@@ -103,7 +103,7 @@ struct OpenRouterExtendedTests {
         #expect(snap.auxiliaryInfo == "Free tier")
     }
 
-    @Test("capped non-free key reports 'Key spend cap'")
+    @Test("capped non-free key labels its key cap rather than account credit")
     func cappedKeyAuxiliaryInfo() async throws {
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
@@ -111,7 +111,7 @@ struct OpenRouterExtendedTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.auxiliaryInfo == "Key spend cap")
+        #expect(snap.auxiliaryInfo == "Key spend cap, not account credit")
     }
 
     // MARK: - Edge cases
@@ -280,7 +280,7 @@ struct OpenRouterExtendedTests {
 
     // MARK: - Currency metric shape
 
-    @Test("capped key returns currency metric with balance, limit and spent converted to AUD")
+    @Test("capped key returns the API's USD key-cap figures without conversion")
     func cappedKeyCurrencyMetric() async throws {
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
@@ -292,13 +292,13 @@ struct OpenRouterExtendedTests {
             Issue.record("expected .currency, got \(snap.metric)")
             return
         }
-        #expect(limit == Decimal(10 * OpenRouterProvider.usdToAudRate))
-        #expect(balance == Decimal(6.5 * OpenRouterProvider.usdToAudRate))  // limit_remaining
-        #expect(spent == Decimal(3.5 * OpenRouterProvider.usdToAudRate))
-        #expect(code == "AUD")
+        #expect(limit == Decimal(10))
+        #expect(balance == Decimal(6.5))  // limit_remaining
+        #expect(spent == Decimal(3.5))
+        #expect(code == "USD")
     }
 
-    @Test("uncapped key returns currency metric in AUD with nil limit and spent as usage")
+    @Test("uncapped key returns the API's USD lifetime spend with no cap")
     func uncappedKeyCurrencyMetric() async throws {
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
@@ -311,9 +311,8 @@ struct OpenRouterExtendedTests {
             return
         }
         #expect(limit == nil)
-        #expect(spent == Decimal(12.34 * OpenRouterProvider.usdToAudRate))
-        #expect(balance == Decimal(12.34 * OpenRouterProvider.usdToAudRate))
-        #expect(code == "AUD")
+        #expect(spent == Decimal(12.34))
+        #expect(balance == Decimal(12.34))
+        #expect(code == "USD")
     }
 }
-

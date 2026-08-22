@@ -123,10 +123,40 @@ struct ProviderHTTPTests {
         _ = try await withStubbedHTTP({ _ in canned(body: #"{"data":{"usage":1,"limit":10}}"#) }) {
             try await provider.fetchSnapshot()
         }
-        #expect(URLProtocolStub.requestCount == 1)
+        #expect(URLProtocolStub.requestCount == 2)
     }
 
     // MARK: OpenRouter
+
+    // MARK: OpenAI / ChatGPT
+
+    @Test("OpenAI reads the ChatGPT rolling window and sends the selected account header")
+    func openAIUsageWindow() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token", accountID: "account-123")
+        let snap = try await withStubbedHTTP({ request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
+            #expect(request.value(forHTTPHeaderField: "chatgpt-account-id") == "account-123")
+            return canned(body: #"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":85,"reset_at":1787891551}}}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 1)
+        #expect(snap.status == .measured(.warning))
+        #expect(snap.row1?.primaryFraction == 0.85)
+        #expect(snap.badgeText == "15% left")
+        #expect(snap.planName == "Plus")
+    }
+
+    @Test("OpenAI missing usage data is unavailable rather than a zero-percent reading")
+    func openAIMissingUsage() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token")
+        let snap = try await withStubbedHTTP({ _ in canned(body: #"{"plan_type":"plus"}"#) }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(snap.consumptionFraction == nil)
+    }
 
     @Test("uncapped key (limit: null) yields nil consumptionFraction and no fabricated cap")
     func openRouterUncappedKey() async throws {
@@ -144,6 +174,69 @@ struct ProviderHTTPTests {
             return
         }
         #expect(limit == nil) // never a fabricated $20 (or any other) cap
+    }
+
+    @Test("a key that can read credits reports the documented account credit balance")
+    func openRouterAccountCredits() async throws {
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/api/v1/credits" {
+                return canned(body: #"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
+            }
+            return canned(body: #"{"data":{"usage":2}}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        guard case .currency(let balance, let limit, let spent, let code) = snap.metric else {
+            Issue.record("expected account credit metric")
+            return
+        }
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(balance == Decimal(74.75))
+        #expect(limit == nil)
+        #expect(spent == Decimal(25.75))
+        #expect(code == "USD")
+        #expect(snap.badgeText == "$74.75 credit")
+    }
+
+    /// /credits is enrichment on top of a reading we already hold. A failure
+    /// there must not throw away a perfectly good key-cap gauge.
+    @Test("a failing credits call still yields the key-cap reading")
+    func openRouterCreditsFailureKeepsKeyCap() async throws {
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/api/v1/credits" {
+                return canned(status: 500, body: "{}")
+            }
+            return canned(body: #"{"data":{"usage":3.5,"limit":10,"limit_remaining":6.5}}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        guard case .currency(let balance, let limit, _, _) = snap.metric else {
+            Issue.record("expected the key-cap currency metric, got \(snap.metric)")
+            return
+        }
+        #expect(balance == Decimal(6.5))
+        #expect(limit == Decimal(10))
+        #expect(snap.currencyBasis == .keySpendCap)
+        #expect(snap.status.confidence == .measured)
+    }
+
+    /// An account with nothing left in it must not render green.
+    @Test("an exhausted account credit balance is critical, not healthy")
+    func openRouterEmptyCreditIsCritical() async throws {
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/api/v1/credits" {
+                return canned(body: #"{"data":{"total_credits":50,"total_usage":50}}"#)
+            }
+            return canned(body: #"{"data":{"usage":50}}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.currencyBasis == .accountCredit)
+        #expect(snap.badgeText == "$0.00 credit")
     }
 
     @Test("capped key at 95% consumed is critical")
@@ -300,18 +393,9 @@ struct ProviderHTTPTests {
         #expect(snap.consumptionFraction == nil)
     }
 
-    @Test("Claude with key reports critical subscription")
-    func claudeWithKey() async throws {
-        let provider = ClaudeQuotaProvider(apiKey: "Claude Max")
-        let snap = try await provider.fetchSnapshot()
-        #expect(snap.status == .critical)
-        #expect(snap.consumptionFraction == nil)
-        #expect(snap.metric == .subscription(tierName: "Claude Max", renewalDate: nil))
-    }
-
     @Test("Gemini with no key short-circuits without issuing a request")
     func geminiNoKeyNoRequest() async throws {
-        let provider = GeminiQuotaProvider(apiKey: "")
+        let provider = GeminiQuotaProvider(accessToken: "")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
@@ -319,39 +403,92 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("Gemini with a valid key reports healthy AI Studio subscription with no fabricated fraction")
-    func geminiValidKeyIsHealthy() async throws {
-        let provider = GeminiQuotaProvider(apiKey: "k")
-        let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
-            try await provider.fetchSnapshot()
-        }
+    @Test("Gemini parses live Antigravity model quota")
+    func geminiParsesQuota() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"},"planInfo":{"planType":"ANTIGRAVITY"}}"#)
+            }
+            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.94,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+        }) { try await provider.fetchSnapshot() }
         #expect(snap.status == .healthy)
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.06) < 0.000_001)
+    }
+
+    /// The security test previously stubbed a 401 so only the first request
+    /// was ever issued — the second call's URL was never inspected. Both must
+    /// be token-free.
+    @Test("Gemini keeps the token out of every request URL, not just the first")
+    func geminiTokenNeverInAnyURL() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
+        _ = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+            }
+            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(URLProtocolStub.capturedRequests.count == 2)
+        for request in URLProtocolStub.capturedRequests {
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer super-secret-key")
+            #expect(request.url?.absoluteString.contains("super-secret-key") == false)
+        }
+    }
+
+    /// The menu-bar colour must follow the model closest to its limit, not
+    /// whichever one happens to sort first by name.
+    @Test("Gemini headlines the fullest model, not the alphabetically first")
+    func geminiRanksByUsage() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+            }
+            return canned(body: #"{"models":{"gemini-3-alpha":{"displayName":"Alpha","quotaInfo":{"remainingFraction":0.90,"resetTime":"2026-08-22T03:30:11Z"}},"gemini-3-zeta":{"displayName":"Zeta","quotaInfo":{"remainingFraction":0.02,"resetTime":"2026-08-22T03:30:11Z"}}}}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.row1?.usedText?.contains("Zeta") == true)
+        #expect(snap.badgeText == "2% left")
+    }
+
+    /// A well-formed response that simply carries no quota is "nothing to
+    /// read", not a malformed payload.
+    @Test("Gemini reports no model quota as unsupported, not a bad response")
+    func geminiNoQuotaIsUnsupported() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: #"{"cloudaicompanionProject":{"id":"project-1"}}"#)
+            }
+            return canned(body: #"{"models":{"gemini-3-flash":{"displayName":"Flash"}}}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status.confidence == .unavailable)
+        #expect(snap.status != .unavailable(.badResponse))
         #expect(snap.consumptionFraction == nil)
-        #expect(snap.metric == .subscription(tierName: "AI Studio", renewalDate: nil))
     }
 
     @Test("Gemini 401 maps to credential rejected")
     func gemini401() async throws {
-        let provider = GeminiQuotaProvider(apiKey: "k")
+        let provider = GeminiQuotaProvider(accessToken: "k")
         let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
-    /// Security regression test: the API key must travel in the
-    /// `x-goog-api-key` header, never in the request URL — a URL leaks into
-    /// proxy logs, error descriptions, and crash reports; a header does not.
-    @Test("Gemini sends the key in the header, never in the URL")
-    func geminiKeyNeverInURL() async throws {
-        let provider = GeminiQuotaProvider(apiKey: "super-secret-key")
-        _ = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
+    @Test("Gemini sends the OAuth token in a header, never in the URL")
+    func geminiTokenNeverInURL() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
+        _ = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
         let requests = URLProtocolStub.capturedRequests
         #expect(requests.count == 1)
         let req = try #require(requests.first)
-        #expect(req.value(forHTTPHeaderField: "x-goog-api-key") == "super-secret-key")
+        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer super-secret-key")
         #expect(req.url?.absoluteString.contains("super-secret-key") == false)
     }
 
@@ -365,28 +502,26 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
-    @Test("OpenCode with a key reports critical subscription when monthly is exhausted")
+    @Test("OpenCode with no local telemetry stays unavailable")
     func openCodeWithKey() async throws {
         let provider = OpenCodeGoProvider(apiKey: "k")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "{}") }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status == .critical)
+        #expect(snap.status.confidence == .unavailable)
         #expect(snap.consumptionFraction == nil)
-        #expect(snap.metric == .subscription(tierName: "Go", renewalDate: nil))
         #expect(URLProtocolStub.requestCount == 0)
     }
 
 
-    @Test("Copilot with a valid token reports critical exhausted subscription")
+    @Test("Copilot with missing quota data stays unavailable")
     func copilotValidToken() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: #"{"login":"octocat"}"#) }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status == .critical)
+        #expect(snap.status.confidence == .unavailable)
         #expect(snap.consumptionFraction == nil)
-        #expect(snap.metric == .subscription(tierName: "Active", renewalDate: nil))
     }
 
 
@@ -401,58 +536,70 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
-    // MARK: Extended Claude & OpenCode Tests
-
-    @Test("Claude parses live organization and usage payload")
-    func claudeLiveTelemetryParsing() async throws {
-        let orgJSON = """
-        [{"uuid": "org-12345", "name": "Anthropic Org"}]
-        """
-        let usageJSON = """
-        {
-            "five_hour": { "utilization": 0.42, "resets_at": "2026-08-19T20:00:00Z" },
-            "seven_day": { "utilization": 0.88, "resets_at": "2026-08-23T09:00:00Z" }
+    /// The OAuth beta rejects /v1/messages unless the request identifies
+    /// itself as Claude Code. Losing that system block silently turns every
+    /// valid token into "Rejected — check the key".
+    @Test("Claude identifies itself as Claude Code so the OAuth token is accepted")
+    func claudeSendsClaudeCodeSystemPrompt() async throws {
+        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.10", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.20", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
+        _ = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
-        """
-
-        let snap = try await withStubbedHTTP({ req in
-            let url = req.url?.absoluteString ?? ""
-            if url.contains("/organizations/") && url.contains("/usage") {
-                return canned(status: 200, body: usageJSON)
-            } else if url.contains("/organizations") {
-                return canned(status: 200, body: orgJSON)
+        let request = try #require(URLProtocolStub.capturedRequests.first)
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
+        let body = request.httpBody ?? request.httpBodyStream.map { stream in
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
             }
-            return canned(status: 404, body: "{}")
-        }) {
-            let provider = ClaudeQuotaProvider(apiKey: "sk-ant-sid01-test-session-cookie")
-            return try await provider.fetchSnapshot()
+            return data
+        } ?? Data()
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["system"] as? String == "You are Claude Code, Anthropic's official CLI for Claude.")
+    }
+
+    /// The header has been observed as a fraction and as a percentage. Reading
+    /// a percentage as a fraction would report 42% usage as 4200% and get
+    /// discarded, so the provider must normalise rather than reject.
+    @Test("Claude accepts a percentage-scaled utilization header")
+    func claudeAcceptsPercentScale() async throws {
+        let headers = ["anthropic-ratelimit-unified-5h-utilization": "42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row1?.primaryFraction == 0.42)
+        #expect(snap.row2?.primaryFraction == 0.88)
+    }
+
+    /// Badge and menu-bar urgency must be driven by the same window, or the
+    /// icon goes red while the row still claims plenty of headroom.
+    @Test("Claude badge reflects the fuller window, not just the weekly one")
+    func claudeBadgeTracksWorstWindow() async throws {
+        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.05", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "1% left")
+    }
+
+    @Test("Claude parses real usage headers")
+    func claudeLiveTelemetryParsing() async throws {
+        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
 
         #expect(snap.vendorId == .claude)
         #expect(snap.row1?.primaryFraction == 0.42)
         #expect(snap.row2?.primaryFraction == 0.88)
-        #expect(snap.status == .critical)
+        #expect(snap.status == .warning)
     }
 
-    @Test("Claude detects Pro and Team tiers accurately")
-    func claudeTierDetection() async throws {
-        let proProvider = ClaudeQuotaProvider(apiKey: "sk-ant-api03-pro-key")
-        let proSnap = try await proProvider.fetchSnapshot()
-        #expect(proSnap.planName?.contains("Claude Pro") == true)
-
-        let teamProvider = ClaudeQuotaProvider(apiKey: "sk-ant-api03-team-key")
-        let teamSnap = try await teamProvider.fetchSnapshot()
-        #expect(teamSnap.planName?.contains("Claude Team") == true)
-    }
-
-    @Test("OpenCode with key returns dual-bar metrics")
-    func openCodeMetrics() async throws {
-        let provider = OpenCodeGoProvider(apiKey: "oc_live_test_key_123")
-        let snap = try await provider.fetchSnapshot()
-        #expect(snap.vendorId == .opencode)
-        #expect(snap.row1?.label == "5H")
-        #expect(snap.row2?.label == "WK")
-        #expect(snap.row3?.label == "MO")
-    }
 }
-

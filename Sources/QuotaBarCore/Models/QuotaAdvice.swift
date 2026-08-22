@@ -49,18 +49,18 @@ public struct QuotaAdvice: Sendable, Equatable {
 
 
         let claudeFraction = claudeSnap?.row1?.primaryFraction ?? claudeSnap?.consumptionFraction ?? 0.0
-        let geminiFraction = geminiSnap?.row1?.primaryFraction ?? geminiSnap?.consumptionFraction ?? 0.0
+        let geminiFraction = geminiSnap?.row1?.primaryFraction ?? geminiSnap?.consumptionFraction
         let opencodeFraction = opencodeSnap?.row1?.primaryFraction ?? opencodeSnap?.consumptionFraction ?? 0.0
         let githubRestFraction = githubRestSnap?.row1?.primaryFraction ?? githubRestSnap?.consumptionFraction ?? 0.0
 
         let isClaudeCritical = claudeSnap?.status.urgency == .critical || claudeFraction >= 0.85
-        let isGeminiCritical = geminiSnap?.status.urgency == .critical || geminiFraction >= 0.85
+        let isGeminiCritical = geminiSnap?.status.urgency == .critical || (geminiFraction ?? 0) >= 0.85
         let isGitHubCritical = githubRestSnap?.status.urgency == .critical || githubRestFraction >= 0.90
 
         // 1. SCENARIO: All or most primary AI subscriptions are critical (Red)
         if isClaudeCritical && isGeminiCritical {
-            let claudeReset = claudeSnap?.row1?.resetText ?? "3 hours"
-            let openrouterBalance = openrouterSnap?.badgeText ?? "A$22.01 left"
+            let claudeReset = claudeSnap?.row1?.resetText ?? "its next reset"
+            let openrouterBalance = openrouterSnap?.badgeText ?? "check your OpenRouter balance"
             return QuotaAdvice(
                 headline: "Primary Quotas Exhausted",
                 message: "Claude and Gemini are near capacity. Route urgent tasks to OpenRouter models (\(openrouterBalance)) until Claude resets in \(claudeReset).",
@@ -94,7 +94,8 @@ public struct QuotaAdvice: Sendable, Equatable {
         let isCopilotExhausted = copilotSnap?.status.urgency == .critical || (copilotSnap?.row1?.primaryFraction ?? 0.0) >= 0.95
         let isOpenCodeExhausted = opencodeSnap?.status.urgency == .critical || (opencodeSnap?.row3?.primaryFraction ?? 0.0) >= 0.95
 
-        if (claudeWeekly >= 0.80 || isCopilotExhausted || isOpenCodeExhausted || (claudeFraction >= 0.70 && geminiFraction < 0.70)) && geminiFraction < 0.85 {
+        if let geminiFraction,
+           (claudeWeekly >= 0.80 || isCopilotExhausted || isOpenCodeExhausted || (claudeFraction >= 0.70 && geminiFraction < 0.70)) && geminiFraction < 0.85 {
             let geminiRemaining = Int(((1.0 - geminiFraction) * 100).rounded())
 
             // Build dynamic list of constrained providers
@@ -158,22 +159,29 @@ public struct QuotaAdvice: Sendable, Equatable {
             )
         }
 
-        // 4. SCENARIO: OpenCode running low
-        if opencodeFraction >= 0.75 && geminiFraction < 0.70 {
+        // 4. SCENARIO: OpenCode running low.
+        //
+        // The warning is about OpenCode, so it must not be gated on Gemini
+        // being readable — that turned "OpenCode at 97%, Gemini unconfigured"
+        // into "All Quotas Healthy". Gemini only decides which alternative we
+        // are willing to name.
+        if opencodeFraction >= 0.75 {
             let usedPct = Int((opencodeFraction * 100).rounded())
+            let geminiHasHeadroom = geminiFraction.map { $0 < 0.70 } ?? false
+            let alternatives = geminiHasHeadroom ? "Gemini or Copilot" : "Copilot"
             return QuotaAdvice(
                 headline: "OpenCode Quota Low (\(usedPct)%)",
-                message: "OpenCode Go burst quota is at \(usedPct)%. Switch to Gemini or Copilot for code assistance.",
-                suggestedAction: "Switch to Gemini",
+                message: "OpenCode Go burst quota is at \(usedPct)%. Switch to \(alternatives) for code assistance.",
+                suggestedAction: geminiHasHeadroom ? "Switch to Gemini" : "Switch to Copilot",
                 urgency: .warning,
                 iconName: "arrow.triangle.swap",
                 iconColorHex: "#ffb874",
-                vendorId: .gemini
+                vendorId: geminiHasHeadroom ? .gemini : .copilot
             )
         }
 
         // 5. SCENARIO: Imminent reset with unused capacity (e.g. Gemini / Claude about to reset)
-        if let gemini = geminiSnap, geminiFraction < 0.70, let rawReset = gemini.row1?.resetText, !rawReset.isEmpty {
+        if let gemini = geminiSnap, let geminiFraction, geminiFraction < 0.70, let rawReset = gemini.row1?.resetText, !rawReset.isEmpty {
             let headroomPct = Int(((1.0 - geminiFraction) * 100).rounded())
             let cleanReset = cleanResetString(rawReset) ?? rawReset
             let formattedReset = cleanReset.hasPrefix("in ") ? cleanReset : "in \(cleanReset)"
@@ -212,5 +220,4 @@ public struct QuotaAdvice: Sendable, Equatable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-
 
