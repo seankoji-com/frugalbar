@@ -1,0 +1,23 @@
+class Frugalbar < Formula
+  desc "Track AI usage & dev limits in the macOS menu bar"
+  homepage "https://github.com/seankoji-com/frugalbar"
+  version "__VERSION__"
+  url "__URL__"
+  sha256 "__SHA256__"
+
+  depends_on :macos
+
+  def install
+    bin.install "frugalbar"
+  end
+
+  service do
+    run [opt_bin/"frugalbar"]
+    keep_alive true
+    process_type :interactive
+  end
+
+  test do
+    system "#{bin}/frugalbar", "--help" rescue true
+  end
+end
