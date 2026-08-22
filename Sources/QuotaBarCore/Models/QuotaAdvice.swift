@@ -62,8 +62,13 @@ public struct QuotaAdvice: Sendable, Equatable {
             return pace >= Self.windowNearlyOver
         }
 
-        /// Below this much consumed there is a slice worth routing work to.
-        static let worthSpending = 0.95
+        /// Anything the vendor has not actually spent is worth using before
+        /// paying for credit. This was 0.95, which excluded the exact case the
+        /// rule exists for: a weekly window 93% elapsed with 3% left reads as
+        /// "nothing to spend" at that cutoff and fell through to OpenRouter,
+        /// even though those last few percent are already paid for and about
+        /// to be lost.
+        static let worthSpending = 0.995
         static let windowNearlyOver = 0.75
     }
 

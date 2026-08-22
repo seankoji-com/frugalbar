@@ -295,6 +295,32 @@ struct QuotaAdviceTests {
         #expect(advice.message.contains("Copilot PREM exhausted"))
     }
 
+    /// The reported case: Claude's weekly window 93% elapsed with 3% left,
+    /// alongside genuinely spent Copilot and OpenCode. Three percent of a paid
+    /// weekly budget still beats paying for OpenRouter credit.
+    @Test("a nearly-spent window with a sliver left still beats paid credit")
+    func sliverOfAllowanceStillBeatsOpenRouter() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 0.97, label: "WK", pace: 0.93, reset: "11 hours"),
+            constrainedWindow(.openai, used: 1.0, label: "WK", pace: 0.18),
+            constrainedWindow(.copilot, used: 1.0, label: "MO", pace: 0.50),
+            constrainedWindow(.opencode, used: 1.0, label: "MO", pace: 0.97),
+        ])
+        #expect(advice.headline == "Spend Remaining Claude")
+        #expect(advice.vendorId == .claude)
+        #expect(advice.message.contains("Claude WK has 3% left"))
+        #expect(advice.message.contains("resets in 11 hours"))
+    }
+
+    /// Truly spent means spent: no "use the last 0%" advice.
+    @Test("a window at 100% is never offered as something to spend")
+    func fullySpentIsNotOffered() {
+        let advice = QuotaAdvice.evaluate(from: [
+            constrainedWindow(.claude, used: 1.0, label: "WK", pace: 0.93, reset: "11 hours"),
+        ])
+        #expect(advice.suggestedAction == "Use OpenRouter Models")
+    }
+
     /// Early in a window there is nothing about to be lost, so the free-
     /// allowance nudge must not fire — the honest advice is still to route out.
     @Test("allowance in a window that just opened is not treated as expiring")
