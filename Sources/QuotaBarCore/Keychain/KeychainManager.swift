@@ -397,11 +397,12 @@ extension CredentialStore {
     /// with a perfectly good Antigravity session sitting on disk still reported
     /// "Not configured".
     ///
-    /// An expired token is reported as absent rather than refreshed: the grant
-    /// belongs to `antigravity-usage`'s OAuth client, and redeeming another
-    /// client's refresh token is not ours to do. The user's own session, minted
-    /// by the Settings sign-in, is the one this app renews. Same convention as
-    /// the expired-Claude-token path above.
+    /// An expired token is reported as absent rather than refreshed. FrugalBar
+    /// now presents the same OAuth client as `antigravity-usage`, so it *could*
+    /// redeem that refresh token — but silently renewing a session another tool
+    /// owns invites two writers racing over one credential file. Signing in via
+    /// Settings mints a session this app owns and renews. Same convention as the
+    /// expired-Claude-token path above: expired reads as absent.
     static func antigravityAccessTokenAsync(now: Date = Date()) async -> String? {
         guard isCLIDiscoveryEnabled else { return nil }
         return await withCheckedContinuation { continuation in

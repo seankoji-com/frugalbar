@@ -74,7 +74,10 @@ struct GeminiOAuthClientTests {
             == "123-custom.apps.googleusercontent.com")
     }
 
-    /// A public repository must not carry the secret it tells users to paste.
+    /// No OAuth client secret belongs in this repository — not FrugalBar's,
+    /// and not the first-party one the Cloud Code API requires. GitHub's push
+    /// protection rejects both, and the honest place for them is the operator's
+    /// Keychain. This guard fails the build before a push ever gets that far.
     @Test("no client secret is compiled into the source tree")
     func noSecretInSource() throws {
         let sources = URL(fileURLWithPath: #filePath)
@@ -88,7 +91,43 @@ struct GeminiOAuthClientTests {
         #expect(!files.isEmpty)
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
-            #expect(!text.contains("GOCSPX-"), "client secret literal in \(file.lastPathComponent)")
+            #expect(text.ranges(of: try Regex("GOCSPX-[A-Za-z0-9_-]+")).isEmpty,
+                    "client secret literal in \(file.lastPathComponent)")
+            #expect(text.ranges(of: try Regex("[0-9]{9,14}-[a-z0-9]{20,}\\.apps\\.googleusercontent\\.com")).isEmpty,
+                    "OAuth client ID literal in \(file.lastPathComponent)")
+        }
+    }
+
+    /// A refresh token belongs to the client that issued it. Carrying a session
+    /// across a client change left users on "Credential rejected" with a stored
+    /// session that could never work.
+    @Test("a session minted by another OAuth client is not reused")
+    func foreignSessionIsDiscarded() throws {
+        let mine = GeminiOAuthSession(accessToken: "a", refreshToken: "r",
+                                      expiry: Date(timeIntervalSince1970: 4_000_000_000),
+                                      clientID: GeminiOAuthSession.clientID ?? "unset")
+        let theirs = GeminiOAuthSession(accessToken: "a", refreshToken: "r",
+                                        expiry: Date(timeIntervalSince1970: 4_000_000_000),
+                                        clientID: "999-someone-else.apps.googleusercontent.com")
+        #expect(mine.clientID == (GeminiOAuthSession.clientID ?? "unset"))
+        #expect(theirs.clientID != GeminiOAuthSession.clientID)
+
+        // Sessions written before the field existed decode, and count as foreign.
+        let legacy = try JSONDecoder().decode(
+            GeminiOAuthSession.self,
+            from: Data(#"{"accessToken":"a","refreshToken":"r","expiry":0}"#.utf8))
+        #expect(legacy.clientID == nil)
+    }
+
+    /// Signing in with no client configured must fail with a reason the user
+    /// can act on, not with Google's "client_secret is missing".
+    @Test("a token request without a configured client is not-configured")
+    func unconfiguredClientIsNotConfigured() async {
+        guard !GeminiOAuthSession.isClientConfigured else { return }   // configured locally
+        await #expect(throws: ProviderError.notConfigured) {
+            try await GeminiOAuthSession.requestToken(
+                fields: ["grant_type": "refresh_token", "refresh_token": "r"],
+                existingRefreshToken: "r")
         }
     }
 }

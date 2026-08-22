@@ -127,31 +127,50 @@ public struct GeminiOAuthSession: Codable, Sendable {
     public let accessToken: String
     public let refreshToken: String
     public let expiry: Date
+    /// Which OAuth client minted this session. A refresh token belongs to the
+    /// client that issued it, so a session carried over from a previous client
+    /// is dead weight — without this, switching clients left users staring at
+    /// "Credential rejected" with a stored session that could never work.
+    /// Optional so sessions written before this field decode rather than throw;
+    /// nil is treated as "not this client".
+    public let clientID: String?
 
     static let keychainLabel = "gemini.oauth.session"
     static let clientIDKeychainLabel = "gemini.oauth.client_id"
     static let clientSecretKeychainLabel = "gemini.oauth.client_secret"
     static let clientSecretEnvVar = "FRUGALBAR_GEMINI_CLIENT_SECRET"
 
-    /// Shared by the login flow and the refresh path so a token can only ever
-    /// be renewed by the client that minted it.
+    /// The OAuth client FrugalBar signs in as. Supplied by the operator, not
+    /// shipped.
     ///
-    /// Overridable from Settings so a new Google client can be pointed at
-    /// without a rebuild — the default is FrugalBar's own.
-    static let defaultClientID = "598649530021-n2bb3flau0ff6mt7v316kimt57rolkan.apps.googleusercontent.com"
+    /// `cloudcode-pa.googleapis.com` is a private API allowlisted to Google's
+    /// own first-party projects. A client you create cannot call it: enabling
+    /// the service is refused even to a project Owner, and it is not listed
+    /// among a project's *available* services at all. So reading Antigravity
+    /// quota requires presenting a first-party client — in practice the one the
+    /// `antigravity-usage` CLI publishes in its `OAUTH_CONFIG`.
+    ///
+    /// Those values are deliberately absent from this repository. They are
+    /// another product's credentials, GitHub's push protection rejects them,
+    /// and committing them would bake one vendor's identity into the source.
+    /// Set them once in Settings → Keys → Gemini, or via
+    /// `FRUGALBAR_GEMINI_CLIENT_ID` / `FRUGALBAR_GEMINI_CLIENT_SECRET`.
+    static let clientIDEnvVar = "FRUGALBAR_GEMINI_CLIENT_ID"
 
-    static var clientID: String {
-        guard let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel),
-              !stored.isEmpty
-        else { return defaultClientID }
-        return stored
+
+    static var clientID: String? {
+        if let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel),
+           !stored.isEmpty {
+            return stored
+        }
+        let fromEnvironment = ProcessInfo.processInfo.environment[clientIDEnvVar]
+        return (fromEnvironment?.isEmpty ?? true) ? nil : fromEnvironment
     }
 
     /// Google requires `client_secret` on the token exchange for this client
-    /// type; omitting it fails every sign-in with "client_secret is missing"
-    /// before the user ever sees a token. It is deliberately *not* compiled in:
-    /// this repository is public, so the secret comes from the Keychain (via
-    /// Settings) or the environment, and is absent from the source tree.
+    /// type; omitting it failed every sign-in with "client_secret is missing"
+    /// before the user ever saw a token.
+    ///
     static var clientSecret: String? {
         if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel),
            !stored.isEmpty {
@@ -161,15 +180,22 @@ public struct GeminiOAuthSession: Codable, Sendable {
         return (fromEnvironment?.isEmpty ?? true) ? nil : fromEnvironment
     }
 
+    /// Both halves are needed to sign in or refresh.
+    static var isClientConfigured: Bool { clientID != nil && clientSecret != nil }
+
     /// Renew this far ahead of expiry so a request never leaves with a token
     /// that dies mid-flight.
     private static let renewalMargin: TimeInterval = 120
 
     static func load() -> GeminiOAuthSession? {
         guard let text = try? KeychainManager.shared.get(label: keychainLabel),
-              let data = text.data(using: .utf8)
+              let data = text.data(using: .utf8),
+              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
         else { return nil }
-        return try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
+        // Sessions from another client are discarded rather than sent to be
+        // rejected: the honest state is "sign in again", not "bad credential".
+        guard session.clientID == clientID else { return nil }
+        return session
     }
 
     static func save(_ session: GeminiOAuthSession) throws {
@@ -189,7 +215,6 @@ public struct GeminiOAuthSession: Codable, Sendable {
         guard !session.refreshToken.isEmpty else { return nil }
         guard let renewed = try? await requestToken(
             fields: [
-                "client_id": clientID,
                 "refresh_token": session.refreshToken,
                 "grant_type": "refresh_token",
             ],
@@ -205,13 +230,14 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// it already holds; dropping it would strand the user at the next expiry.
     static func requestToken(fields: [String: String],
                              existingRefreshToken: String?) async throws -> GeminiOAuthSession {
-        // Fail here, with a reason the user can act on, rather than letting
-        // Google answer "client_secret is missing" and surfacing that as an
+        // Fail with a reason the user can act on, rather than letting Google
+        // answer "client_secret is missing" and surfacing that as an
         // unexplained "sign-in did not complete".
-        guard let secret = clientSecret else { throw ProviderError.notConfigured }
+        guard let secret = clientSecret, let id = clientID else { throw ProviderError.notConfigured }
 
         var form = URLComponents()
-        form.queryItems = fields.merging(["client_secret": secret]) { current, _ in current }
+        form.queryItems = fields
+            .merging(["client_secret": secret, "client_id": id]) { current, _ in current }
             .map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let encoded = form.percentEncodedQuery?.data(using: .utf8) else {
             throw ProviderError.badResponse
@@ -231,7 +257,8 @@ public struct GeminiOAuthSession: Codable, Sendable {
         return GeminiOAuthSession(
             accessToken: token.access_token,
             refreshToken: token.refresh_token ?? existingRefreshToken ?? "",
-            expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600))
+            expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600)),
+            clientID: clientID
         )
     }
 

@@ -12,7 +12,7 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     /// port back. Without this a closed browser tab wedges sign-in forever.
     private static let completionTimeout: TimeInterval = 300
 
-    private var clientID: String { GeminiOAuthSession.clientID }
+    private var clientID: String? { GeminiOAuthSession.clientID }
 
     /// Stores the Google OAuth client this app signs in as.
     ///
@@ -60,7 +60,11 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         return stored
     }
 
-    public static func hasClientSecret() -> Bool { GeminiOAuthSession.clientSecret != nil }
+    /// Whether a *user-supplied* secret overrides the vendored default.
+    public static func hasClientSecretOverride() -> Bool {
+        (try? KeychainManager.shared.get(label: GeminiOAuthSession.clientSecretKeychainLabel))
+            .map { !$0.isEmpty } ?? false
+    }
 
     private static func store(_ value: String, label: String) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,6 +82,10 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     private var verifier = ""
 
     public func signIn() async throws {
+        // Refuse before opening a browser: without a client there is nothing to
+        // sign in *as*, and Google's own error for it is unactionable.
+        guard GeminiOAuthSession.isClientConfigured else { throw ProviderError.notConfigured }
+
         let alreadyRunning = lock.withLock { self.listener != nil }
         // Reporting success for a sign-in we never started would leave the user
         // staring at "Connected" with no token.
@@ -137,7 +145,7 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     private func openAuthorizationPage(port: NWEndpoint.Port) {
         var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         components.queryItems = [
-            .init(name: "client_id", value: clientID),
+            .init(name: "client_id", value: clientID ?? ""),
             .init(name: "redirect_uri", value: Self.redirectURI(port: port)),
             .init(name: "response_type", value: "code"),
             .init(name: "scope", value: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"),
@@ -159,7 +167,7 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         // Browsers speculatively request /favicon.ico and friends on the same
         // origin. Treating those as a failed callback would abort a sign-in
         // that is still in progress.
-        guard url?.path == "/oauth/callback" else {
+        guard url?.path == "/callback" else {
             Self.respond(on: connection, status: "404 Not Found", body: "")
             return
         }
@@ -197,7 +205,6 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
 
         let session = try await GeminiOAuthSession.requestToken(fields: [
             "code": code,
-            "client_id": clientID,
             "redirect_uri": Self.redirectURI(port: port),
             "grant_type": "authorization_code",
             "code_verifier": verifier,
@@ -227,8 +234,10 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Matches the redirect the vendored Antigravity client is known to be
+    /// used with — an ephemeral loopback port and a bare `/callback` path.
     private static func redirectURI(port: NWEndpoint.Port) -> String {
-        "http://127.0.0.1:\(port)/oauth/callback"
+        "http://127.0.0.1:\(port)/callback"
     }
 
     private static func randomURLSafeString() -> String {
