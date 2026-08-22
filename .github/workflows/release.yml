@@ -83,11 +83,13 @@ jobs:
       - name: Update Homebrew Tap Formula
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.semver.outputs.tag }}"
           VER="${TAG#v}"
           SHA=$(cat frugalbar-${TAG}-arm64.tar.gz.sha256 | awk '{print $1}')
           URL="https://github.com/seankoji-com/frugalbar/releases/download/${TAG}/frugalbar-${TAG}-arm64.tar.gz"
+          BRANCH="release-${TAG}"
 
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
@@ -101,8 +103,23 @@ jobs:
           cd /tmp/homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add Formula/frugalbar.rb
-          git commit -m "feat(formula): update frugalbar to ${TAG}" || echo "No changes to commit"
-          git push origin main
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "feat(formula): update frugalbar to ${TAG}"
+          git push origin "${BRANCH}"
+
+          # main is protected by an org-wide ruleset requiring PRs, so push to a
+          # branch and merge a PR instead of pushing directly (0 reviews required).
+          PR_URL=$(gh pr create --repo seankoji-com/homebrew-tap \
+            --base main --head "${BRANCH}" \
+            --title "feat(formula): update frugalbar to ${TAG}" \
+            --body "Automated formula update for ${TAG}.")
+          gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --delete-branch
 
 
