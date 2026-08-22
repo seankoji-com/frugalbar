@@ -1,26 +1,19 @@
 # FrugalBar — Swift build & test workflow
 #
 # Runs on GitHub-hosted macOS (macos-15 / Sequoia / Apple Silicon).
+#
+# No `paths:` filter on purpose. "Build & Test (macOS)" is a required status
+# check on main, and a filtered workflow simply never reports on PRs it skips,
+# leaving them permanently unmergeable rather than green. Required checks and
+# path filters do not mix.
 
 name: FrugalBar CI
 
 on:
   push:
     branches: [main]
-    paths:
-      - "Sources/**"
-      - "Tests/**"
-      - "Package.swift"
-      - ".github/workflows/quotabar-ci.yml"
-      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "Sources/**"
-      - "Tests/**"
-      - "Package.swift"
-      - ".github/workflows/quotabar-ci.yml"
-      - ".github/dependabot.yml"
   workflow_dispatch:
 
 concurrency:
