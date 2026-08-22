@@ -316,3 +316,75 @@ struct OpenRouterExtendedTests {
         #expect(code == "USD")
     }
 }
+
+@Suite("OpenRouter spend windows", .serialized)
+struct OpenRouterSpendWindowTests {
+
+    private func snapshot(body: String) async throws -> QuotaSnapshot {
+        let provider = OpenRouterProvider(apiKey: "key")
+        return try await QuotaHTTP.$session.withValue(SpendStub.session(body)) {
+            try await provider.fetchSnapshot()
+        }
+    }
+
+    /// Both figures are published by `/auth/key`; neither is derived. The row
+    /// shows them as amounts, never as a bar — spend has no cap to measure
+    /// against, so a gauge would invent a denominator.
+    @Test("daily and weekly spend come straight from the API")
+    func spendWindowsArePublished() async throws {
+        let snap = try await snapshot(body: #"""
+        {"data":{"usage":96.02,"usage_daily":0.835992537,"usage_weekly":13.000224144,
+                 "limit":null,"limit_remaining":null,"is_free_tier":false}}
+        """#)
+        #expect(snap.spendWindows.count == 2)
+        #expect(snap.spendWindows[0].label == "1D")
+        #expect(snap.spendWindows[1].label == "WK")
+        #expect(snap.spendWindows[0].amount == Decimal(0.835992537))
+        #expect(snap.spendWindows[1].amount == Decimal(13.000224144))
+        // No bars: there is no denominator for spend.
+        #expect(snap.bars.isEmpty)
+    }
+
+    /// A window the vendor omits is an absence, not a zero — "$0.00 today"
+    /// and "we were not told" are different claims.
+    @Test("an omitted window is absent rather than zero")
+    func omittedWindowIsNil() async throws {
+        let snap = try await snapshot(body: #"{"data":{"usage":96.02,"limit":null}}"#)
+        #expect(snap.spendWindows.count == 2)
+        #expect(snap.spendWindows.allSatisfy { $0.amount == nil })
+    }
+
+    /// The plan slot carries the credit balance for a money provider, so it
+    /// must not also claim a plan name.
+    @Test("no plan name is asserted for a spend provider")
+    func noPlanNameAsserted() async throws {
+        let snap = try await snapshot(body: #"{"data":{"usage":96.02,"limit":null}}"#)
+        #expect(snap.planName == nil)
+        #expect(snap.shortPlanName.isEmpty)
+    }
+}
+
+private enum SpendStub {
+    static func session(_ body: String) -> URLSession {
+        Proto.body = body
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [Proto.self]
+        return URLSession(configuration: config)
+    }
+    final class Proto: URLProtocol, @unchecked Sendable {
+        nonisolated(unsafe) static var body = ""
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            // Only /auth/key answers; the credits enrichment 404s, which is the
+            // shape a non-provisioning key sees.
+            let isAuth = request.url?.absoluteString.contains("auth/key") == true
+            let response = HTTPURLResponse(url: request.url!, statusCode: isAuth ? 200 : 404,
+                                           httpVersion: "HTTP/1.1", headerFields: [:])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(isAuth ? Self.body.utf8 : "{}".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+}

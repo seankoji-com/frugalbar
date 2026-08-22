@@ -289,6 +289,24 @@ public enum CurrencyBasis: String, Sendable, Codable, Equatable {
     }
 }
 
+/// Money spent over a named window, as the vendor reports it.
+///
+/// Distinct from `DualBarMetrics` because there is no denominator: spend has
+/// no cap to draw a bar against, so this renders as an amount and never as a
+/// gauge. `amount` is nil when the vendor published no figure for the window,
+/// which the UI shows as an absence.
+public struct SpendWindow: Sendable, Equatable {
+    public let label: String
+    public let amount: Decimal?
+    public let currencyCode: String
+
+    public init(label: String, amount: Decimal?, currencyCode: String) {
+        self.label = label
+        self.amount = amount
+        self.currencyCode = currencyCode
+    }
+}
+
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let id: String
     public let vendorId: VendorIdentifier
@@ -305,6 +323,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var row3: DualBarMetrics?
     public var badgeText: String?
     public var planName: String?
+    /// Spend per window, for providers that meter money rather than quota.
+    public var spendWindows: [SpendWindow] = []
     public var latencyMs: Int?
     public var keyMasked: String?
     public var cliSource: String?
