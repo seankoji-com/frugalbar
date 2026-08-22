@@ -17,6 +17,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let cloudaicompanionProject: ProjectReference?
         let planInfo: Plan?
         let currentTier: Tier?
+        let paidTier: Tier?
     }
 
     /// `cloudaicompanionProject` is a bare string on some accounts and an
@@ -116,10 +117,19 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var seen: Set<String> = []
         let pools = ranked.filter { seen.insert("\(Int(($0.1 * 1000).rounded()))@\($0.2.timeIntervalSince1970)").inserted }
         let rows = pools.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
-        // `planInfo` is absent from the live payload; the tier is what the API
-        // actually reports. nil when neither is published, rather than
-        // asserting a tier nobody measured.
-        let plan = assist.planInfo?.planType ?? assist.currentTier?.id
+        // Two different tiers live in this response and only one is the
+        // subscription. `currentTier` is the *Code Assist licence* — "free-tier"
+        // for anyone not on a GCP-managed licence, which is almost everyone
+        // with a personal Antigravity subscription. `paidTier` is the plan the
+        // account actually pays for ("Google AI Pro"), and showing the former
+        // told a paying subscriber they were on the free tier.
+        //
+        // Read as current rather than as an advert because the response pairs
+        // it with an upgrade prompt naming the tier *above* it. nil when the
+        // API publishes neither, rather than asserting a plan nobody measured.
+        let plan = assist.paidTier?.name
+            ?? assist.planInfo?.planType
+            ?? assist.currentTier?.name
         let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
         let percent = Int((primary.1 * 100).rounded())
         return QuotaSnapshot(

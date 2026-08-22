@@ -178,3 +178,77 @@ struct GeminiPayloadTests {
         #expect(!GeminiQuotaProvider.isMeteredModel("claude-opus-4-6-thinking"))
     }
 }
+
+// `.serialized` because the stub below holds its canned bodies in statics —
+// `URLProtocol` subclasses are instantiated by `URLSession`, so there is
+// nowhere else to put them. Without it these tests overwrite each other's
+// responses and all three read whichever body won the race.
+@Suite("Gemini plan labelling", .serialized)
+struct GeminiPlanTests {
+
+    private func plan(from body: String) async throws -> String? {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        let models = #"""
+        {"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash",
+         "quotaInfo":{"remainingFraction":0.85,"resetTime":"2099-01-01T00:00:00Z"}}}}
+        """#
+        return try await QuotaHTTP.$session.withValue(GeminiStub.session(assist: body, models: models)) {
+            try await provider.fetchSnapshot().planName
+        }
+    }
+
+    /// `currentTier` is the Code Assist licence and reads "free-tier" for
+    /// virtually every personal account. Showing it told a paying subscriber
+    /// they were on the free tier; the subscription is `paidTier`.
+    @Test("the paid subscription is preferred over the Code Assist licence tier")
+    func paidTierWins() async throws {
+        let body = #"""
+        {"cloudaicompanionProject":"proj-1",
+         "currentTier":{"id":"free-tier","name":"Antigravity"},
+         "paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}
+        """#
+        #expect(try await plan(from: body) == "Google AI Pro")
+    }
+
+    @Test("without a paid tier the reported tier name is used")
+    func fallsBackToCurrentTier() async throws {
+        let body = #"""
+        {"cloudaicompanionProject":"proj-1","currentTier":{"id":"free-tier","name":"Antigravity"}}
+        """#
+        #expect(try await plan(from: body) == "Antigravity")
+    }
+
+    @Test("no published tier asserts no plan at all")
+    func noTierAssertsNothing() async throws {
+        #expect(try await plan(from: #"{"cloudaicompanionProject":"proj-1"}"#) == nil)
+    }
+}
+
+/// Serves the two Cloud Code responses the Gemini provider makes in order.
+private enum GeminiStub {
+    static func session(assist: String, models: String) -> URLSession {
+        StubProtocol.assist = assist
+        StubProtocol.models = models
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    final class StubProtocol: URLProtocol, @unchecked Sendable {
+        nonisolated(unsafe) static var assist = ""
+        nonisolated(unsafe) static var models = ""
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let path = request.url?.absoluteString ?? ""
+            let body = path.contains("loadCodeAssist") ? Self.assist : Self.models
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                           httpVersion: "HTTP/1.1", headerFields: [:])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+}
