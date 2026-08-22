@@ -43,6 +43,7 @@ public struct SettingsView: View {
     @State private var geminiSignInStatus: String?
     @State private var geminiClientSecret = ""
     @State private var geminiClientID = ""
+    @State private var loadedGeminiClientID = ""
     // Bound to the shared suite, not `.standard`: the toggle must apply to the
     // app whatever the executable happens to be named.
     @AppStorage(CredentialStore.cliDiscoveryDefaultsKey, store: CredentialStore.preferences)
@@ -124,8 +125,14 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    /// The Gemini client fields count too. They did not, so typing a client ID
+    /// left "Save & verify" greyed out and the only way to persist it was the
+    /// Connect button — which is not where anyone looks for "save".
     private var hasChanges: Bool {
-        Self.slots.contains { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }
+        if Self.slots.contains(where: { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }) { return true }
+        if geminiClientID != loadedGeminiClientID { return true }
+        // Blank means "keep the stored secret", so only a typed one is a change.
+        return !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - General
@@ -161,11 +168,17 @@ public struct SettingsView: View {
         entered = current
 
         geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
+        loadedGeminiClientID = geminiClientID
         // The secret is never read back for display; the field shows only
         // whether one is already stored, so reopening Settings cannot leak it.
         if GeminiOAuthLogin.hasClientSecretOverride(), geminiSignInStatus == nil {
             geminiSignInStatus = "Using your own client secret. Leave the field blank to keep it."
         }
+    }
+
+    private var hasGeminiClientEdits: Bool {
+        geminiClientID != loadedGeminiClientID
+            || !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func connectGemini() async {
@@ -205,6 +218,25 @@ public struct SettingsView: View {
     private func saveAndVerify() async {
         isVerifying = true
         defer { isVerifying = false }
+
+        // Persist the Gemini client alongside the vendor keys. Changing it
+        // orphans any stored session — a refresh token belongs to the client
+        // that issued it — so say so rather than letting the row quietly read
+        // "Not configured" afterwards.
+        let clientChanged = geminiClientID != loadedGeminiClientID
+        if hasGeminiClientEdits {
+            do {
+                try GeminiOAuthLogin.saveClientConfiguration(
+                    clientID: geminiClientID, clientSecret: geminiClientSecret)
+                loadedGeminiClientID = geminiClientID
+                geminiClientSecret = ""
+                geminiSignInStatus = clientChanged
+                    ? "Client saved. Connect Google account again to sign in with it."
+                    : "Client secret saved."
+            } catch {
+                geminiSignInStatus = "Could not save the client configuration to the Keychain"
+            }
+        }
 
         var githubPatChanged = false
 
