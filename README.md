@@ -1,8 +1,9 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img src="docs/assets/frugalbar-screenshot.png" alt="FrugalBar macOS Menu Bar Popover Screenshot" width="480">
+  <img width="375" height="472" alt="image" src="https://github.com/user-attachments/assets/65ab82f5-3370-4e8a-b85e-83dfdad464c3" alt="FrugalBar macOS Menu Bar Popover Screenshot" />
 </p>
+
 
 A native macOS menu bar app that shows how much headroom you have left across AI subscriptions, API spend caps, and developer rate limits.
 
