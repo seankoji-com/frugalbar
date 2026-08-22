@@ -12,6 +12,7 @@ on:
       - "Tests/**"
       - "Package.swift"
       - ".github/workflows/quotabar-ci.yml"
+      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - "Tests/**"
       - "Package.swift"
       - ".github/workflows/quotabar-ci.yml"
+      - ".github/dependabot.yml"
   workflow_dispatch:
 
 concurrency:
@@ -58,4 +60,3 @@ jobs:
       # fail roughly one run in four.
       - name: Re-run tests (flake check)
         run: swift test -c debug --parallel
-
