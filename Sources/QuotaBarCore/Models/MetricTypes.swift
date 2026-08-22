@@ -4,6 +4,7 @@ import Foundation
 
 public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case claude
+    case openai
     case gemini
     case opencode
     case copilot
@@ -14,6 +15,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var displayName: String {
         switch self {
         case .claude:        "Claude"
+        case .openai:        "OpenAI"
         case .gemini:        "Gemini"
         case .opencode:      "OpenCode"
         case .copilot:       "GitHub Copilot"
@@ -26,6 +28,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var accentColorHex: String {
         switch self {
         case .claude:        "#d97757"
+        case .openai:        "#10a37f"
         case .gemini:        "#3b82f6"
         case .opencode:      "#d47b00"
         case .copilot:       "#6e7681"
@@ -38,6 +41,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var iconSymbol: String {
         switch self {
         case .claude:        "sparkles"
+        case .openai:        "circle.hexagongrid.fill"
         case .gemini:        "sparkle"
         case .opencode:      "chevron.left.forwardslash.chevron.right"
         case .copilot:       "curlybraces"
@@ -214,6 +218,39 @@ public struct DualBarMetrics: Sendable, Equatable {
 
 // MARK: - Quota snapshot (the core value type)
 
+/// What the `balance` of a `.currency` metric actually represents.
+///
+/// Account credit and a key's remaining spend cap are both "a dollar figure
+/// with no limit", so the shape alone cannot tell them apart — and the UI
+/// labels them very differently. Carrying it explicitly beats inferring it
+/// from a prose field that any copy edit would silently break.
+public enum CurrencyBasis: String, Sendable, Codable, Equatable {
+    /// Money actually sitting in the vendor account.
+    case accountCredit
+    /// Headroom left under a spend cap attached to this key.
+    case keySpendCap
+    /// Cumulative spend, with no cap to measure it against.
+    case lifetimeSpend
+
+    /// Caption for the "spent" figure in the popover's currency block.
+    public var spendLabel: String {
+        switch self {
+        case .accountCredit: "Lifetime used:"
+        case .keySpendCap:   "Key spend:"
+        case .lifetimeSpend: "Lifetime spend:"
+        }
+    }
+
+    /// Caption for the "balance" figure in the popover's currency block.
+    public var balanceLabel: String {
+        switch self {
+        case .accountCredit: "Account credit:"
+        case .keySpendCap:   "Key cap left:"
+        case .lifetimeSpend: "Recorded spend:"
+        }
+    }
+}
+
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let id: String
     public let vendorId: VendorIdentifier
@@ -233,6 +270,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var latencyMs: Int?
     public var keyMasked: String?
     public var cliSource: String?
+    public var currencyBasis: CurrencyBasis?
 
     public var bars: [DualBarMetrics] {
         [row1, row2, row3].compactMap { $0 }
@@ -254,7 +292,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         planName: String? = nil,
         latencyMs: Int? = nil,
         keyMasked: String? = nil,
-        cliSource: String? = nil
+        cliSource: String? = nil,
+        currencyBasis: CurrencyBasis? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -273,6 +312,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.latencyMs = latencyMs
         self.keyMasked = keyMasked
         self.cliSource = cliSource
+        self.currencyBasis = currencyBasis
     }
 
     public init(
@@ -292,7 +332,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         planName: String? = nil,
         latencyMs: Int? = nil,
         keyMasked: String? = nil,
-        cliSource: String? = nil
+        cliSource: String? = nil,
+        currencyBasis: CurrencyBasis? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -311,6 +352,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.latencyMs = latencyMs
         self.keyMasked = keyMasked
         self.cliSource = cliSource
+        self.currencyBasis = currencyBasis
     }
 
 
@@ -319,6 +361,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var shortVendorName: String {
         switch vendorId {
         case .claude:        return "Claude"
+        case .openai:        return "OpenAI"
         case .gemini:        return "Gemini"
         case .opencode:      return "OpenCode"
         case .copilot:       return "Copilot"
@@ -327,24 +370,16 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
     }
 
-    /// Short plan name for compact row subtitle (e.g. "Max x20", "AI Pro", "Business", "Go").
+    /// The plan subtitle for a compact row, or "" when we do not know it.
+    ///
+    /// Deliberately has no per-vendor fallback. The old table asserted a tier
+    /// nobody had measured — every Claude user was labelled "Max x20", Pro
+    /// subscribers included — which is the same fabrication this app promises
+    /// not to commit, just in smaller type. An unknown plan renders as nothing.
     public var shortPlanName: String {
         if vendorId == .openrouter { return "" }
-        if let plan = planName, !plan.isEmpty {
-            if plan.contains("20x") || plan.contains("Max") { return "Max x20" }
-            if plan.contains("Pro") || plan.contains("Premium") || plan.contains("Studio") { return "AI Pro" }
-            if plan.contains("Business") || plan.contains("Individual") { return "Business" }
-            if plan.contains("Go") { return "Go" }
-            if plan.contains("Key") || plan.contains("Prepaid") { return "Key API" }
-        }
-        switch vendorId {
-        case .claude:        return "Max x20"
-        case .gemini:        return "AI Pro"
-        case .copilot:       return "Business"
-        case .opencode:      return "Go"
-        case .openrouter:    return ""
-        case .githubRest, .githubGraphql: return "API Limits"
-        }
+        guard let plan = planName, !plan.isEmpty else { return "" }
+        return plan
     }
 
 
@@ -373,5 +408,4 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
     }
 }
-
 

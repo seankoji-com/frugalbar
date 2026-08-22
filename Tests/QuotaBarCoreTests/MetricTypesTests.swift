@@ -127,9 +127,9 @@ struct ProviderStatusTests {
 @Suite("VendorIdentifier")
 struct VendorIdentifierTests {
 
-    @Test("7 known vendors")
+    @Test("8 known vendors")
     func allCases() {
-        #expect(VendorIdentifier.allCases.count == 7)
+        #expect(VendorIdentifier.allCases.count == 8)
     }
 
     @Test("all display names are non-empty")

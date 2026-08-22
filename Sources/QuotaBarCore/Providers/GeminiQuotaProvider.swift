@@ -1,103 +1,198 @@
 import Foundation
 
-/// Gemini (Google AI Studio) provider.
-///
-/// Validates the API key against Google AI Studio API. When validated, reports
-/// active Google AI Studio access.
-///
-/// The key is sent in the `x-goog-api-key` header, which is what Google's own
-/// documentation uses. It is never placed in the query string, where it would
-/// leak into proxy logs, error descriptions and crash reports.
+/// Antigravity subscription quota via the Google Cloud Code API. The request
+/// format is derived from antigravity-usage (MIT); no executable is required.
 public final class GeminiQuotaProvider: QuotaProvider, Sendable {
-
     public let vendorId: VendorIdentifier = .gemini
     public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
 
-    private let apiKey: String?
+    private let accessToken: String?
 
-    public init(apiKey: String? = nil) {
-        self.apiKey = apiKey
+    public init(accessToken: String? = nil) { self.accessToken = accessToken }
+
+    private struct CodeAssist: Decodable {
+        struct Project: Decodable { let id: String? }
+        struct Plan: Decodable { let planType: String? }
+        let cloudaicompanionProject: Project?
+        let planInfo: Plan?
+    }
+
+    private struct ModelResponse: Decodable {
+        struct Model: Decodable {
+            struct Quota: Decodable { let remainingFraction: Double?; let resetTime: String? }
+            let displayName: String?
+            let label: String?
+            let quotaInfo: Quota?
+        }
+        let models: [String: Model]?
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard let key = await credential(injected: apiKey, for: .gemini) else {
+        var resolvedToken = accessToken
+        if resolvedToken == nil || resolvedToken?.isEmpty == true {
+            resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
+        }
+        guard let token = resolvedToken, !token.isEmpty else {
             return unavailable(.notConfigured)
         }
-
-        let (_, http) = try await QuotaHTTP.get(
-            url: "https://generativelanguage.googleapis.com/v1beta/models",
-            auth: .header(name: "x-goog-api-key", value: key)
+        let metadata = ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]
+        let encoder = JSONEncoder()
+        let assistBody = try encoder.encode(["metadata": metadata])
+        let (assistData, assistHTTP) = try await QuotaHTTP.post(
+            url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", body: assistBody,
+            headers: ["User-Agent": "antigravity"], auth: .bearer(token)
         )
+        if let reason = QuotaHTTP.failureReason(for: assistHTTP.statusCode) { return unavailable(reason) }
+        guard let assist = try? JSONDecoder().decode(CodeAssist.self, from: assistData),
+              let projectID = assist.cloudaicompanionProject?.id, !projectID.isEmpty
+        else { return unavailable(.badResponse) }
 
-        if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
-            return unavailable(reason)
+        let modelBody = try encoder.encode(["project": projectID])
+        let (modelsData, modelsHTTP) = try await QuotaHTTP.post(
+            url: "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", body: modelBody,
+            headers: ["User-Agent": "antigravity"], auth: .bearer(token)
+        )
+        if let reason = QuotaHTTP.failureReason(for: modelsHTTP.statusCode) { return unavailable(reason) }
+        guard let response = try? JSONDecoder().decode(ModelResponse.self, from: modelsData),
+              let models = response.models
+        else { return unavailable(.badResponse) }
+
+        // 2.5 shares a pooled allowance with the older Gemini API rather than
+        // the Antigravity subscription, so its fraction is not comparable with
+        // the rest and would distort the headline reading.
+        let readings = models.compactMap { id, model -> (String, Double, Date)? in
+            guard id.lowercased().contains("gemini"), !id.contains("2.5"),
+                  let remaining = model.quotaInfo?.remainingFraction, (0...1).contains(remaining),
+                  let resetText = model.quotaInfo?.resetTime, let reset = Self.parseDate(resetText)
+            else { return nil }
+            return (model.displayName ?? model.label ?? id, 1 - remaining, reset)
+        }
+        // A structurally fine response that simply carries no per-model quota
+        // is "this vendor published nothing", not a malformed payload.
+        guard !readings.isEmpty else {
+            return unavailable(.unsupported("Antigravity reported no model quota"))
         }
 
-        var fiveHourUsage: Double = 0.59
-        var weeklyUsage: Double = 0.0352
-        var fiveHourReset = "Resets in 3h 29m"
-        var weeklyReset = "Refreshes in 167h 25m"
-
-        // Inspect local Antigravity daemon/CLI state if present
-        let antPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini")
-            .appendingPathComponent("antigravity-cli")
-            .appendingPathComponent("session_telemetry.json")
-
-        if let data = try? Data(contentsOf: antPath),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let fh = obj["five_hour_used"] as? Double { fiveHourUsage = fh }
-            if let wk = obj["weekly_used"] as? Double { weeklyUsage = wk }
-            if let fhr = obj["five_hour_reset"] as? String { fiveHourReset = fhr }
-            if let wkr = obj["weekly_reset"] as? String { weeklyReset = wkr }
-        }
-
-        let weeklyPct = Int((weeklyUsage * 100).rounded())
-        let fiveHourPct = Int((fiveHourUsage * 100).rounded())
-
-        let row1 = DualBarMetrics(
-            primaryFraction: fiveHourUsage,
-            expectedPaceFraction: 0.30,
-            label: "5H",
-            statusColor: "#7c3aed",
-            usedText: "\(fiveHourPct)% used · \(100 - fiveHourPct)% capacity",
-            resetText: fiveHourReset
-        )
-        let row2 = DualBarMetrics(
-            primaryFraction: weeklyUsage,
-            expectedPaceFraction: 0.20,
-            label: "WK",
-            statusColor: "#7c3aed",
-            usedText: "\(weeklyPct)% used · \(100 - weeklyPct)% remaining",
-            resetText: weeklyReset
-        )
-
+        // The binding constraint is the fullest model, not whichever one sorts
+        // first alphabetically — that made the menu-bar colour an accident of
+        // Google's naming.
+        let ranked = readings.sorted { $0.1 > $1.1 }
+        let primary = ranked[0]
+        let rows = ranked.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
+        let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
+        let percent = Int((primary.1 * 100).rounded())
         return QuotaSnapshot(
-            id: vendorId.rawValue,
-            vendorId: vendorId,
-            displayName: displayName,
-            category: category,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .healthy,
-            resetsAt: nil,
-            lastUpdated: Date(),
-            auxiliaryInfo: "\(fiveHourPct)% 5H used (\(fiveHourReset)) • \(100 - weeklyPct)% weekly capacity",
-            row1: row1,
-            row2: row2,
-            badgeText: "\(100 - fiveHourPct)% left",
-            planName: "Google AI Studio",
-            latencyMs: 88,
-            keyMasked: "AIzaSy••••••••K9q1",
-            cliSource: "GEMINI_API_KEY / auth.json"
+            id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+            category: category, metric: .subscription(tierName: "Antigravity", renewalDate: nil),
+            status: .measured(urgency), resetsAt: primary.2, lastUpdated: Date(),
+            auxiliaryInfo: "Live Antigravity subscription quota", row1: rows[safe: 0],
+            row2: rows[safe: 1], row3: rows[safe: 2], badgeText: "\(100 - percent)% left",
+            planName: assist.planInfo?.planType ?? "Antigravity", cliSource: "Google OAuth"
         )
+    }
+
+    private static func row(name: String, used: Double, reset: Date) -> DualBarMetrics {
+        DualBarMetrics(primaryFraction: used, label: "AG", statusColor: "#3b82f6",
+                       usedText: "\(name): \(Int((used * 100).rounded()))% used",
+                       resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: reset, relativeTo: Date()))")
+    }
+
+    private static func parseDate(_ text: String) -> Date? {
+        let standard = ISO8601DateFormatter()
+        if let date = standard.date(from: text) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
     }
 }
 
+public struct GeminiOAuthSession: Codable, Sendable {
+    public let accessToken: String
+    public let refreshToken: String
+    public let expiry: Date
 
+    static let keychainLabel = "gemini.oauth.session"
 
+    /// Shared by the login flow and the refresh path so a token can only ever
+    /// be renewed by the client that minted it.
+    static let clientID = "598649530021-n2bb3flau0ff6mt7v316kimt57rolkan.apps.googleusercontent.com"
 
+    /// Renew this far ahead of expiry so a request never leaves with a token
+    /// that dies mid-flight.
+    private static let renewalMargin: TimeInterval = 120
 
+    static func load() -> GeminiOAuthSession? {
+        guard let text = try? KeychainManager.shared.get(label: keychainLabel),
+              let data = text.data(using: .utf8)
+        else { return nil }
+        return try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
+    }
 
+    static func save(_ session: GeminiOAuthSession) throws {
+        let encoded = try JSONEncoder().encode(session)
+        try KeychainManager.shared.set(key: String(decoding: encoded, as: UTF8.self),
+                                       label: keychainLabel)
+    }
 
+    /// The stored session, renewed first if its access token is spent.
+    ///
+    /// Google's access tokens last an hour. Without this the app read a live
+    /// quota once and then reported "credential rejected" until the user
+    /// noticed and signed in by hand.
+    static func loadRefreshed() async -> GeminiOAuthSession? {
+        guard let session = load() else { return nil }
+        if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
+        guard !session.refreshToken.isEmpty else { return nil }
+        guard let renewed = try? await requestToken(
+            fields: [
+                "client_id": clientID,
+                "refresh_token": session.refreshToken,
+                "grant_type": "refresh_token",
+            ],
+            existingRefreshToken: session.refreshToken
+        ) else { return nil }
+        try? save(renewed)
+        return renewed
+    }
 
+    /// Posts a form-encoded grant to Google's token endpoint.
+    ///
+    /// A refresh response omits `refresh_token`, so the caller passes the one
+    /// it already holds; dropping it would strand the user at the next expiry.
+    static func requestToken(fields: [String: String],
+                             existingRefreshToken: String?) async throws -> GeminiOAuthSession {
+        var form = URLComponents()
+        form.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
+        guard let encoded = form.percentEncodedQuery?.data(using: .utf8) else {
+            throw ProviderError.badResponse
+        }
+
+        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = encoded
+
+        let (data, response) = try await QuotaHTTP.session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let token = try? JSONDecoder().decode(TokenResponse.self, from: data),
+              !token.access_token.isEmpty
+        else { throw ProviderError.badResponse }
+
+        return GeminiOAuthSession(
+            accessToken: token.access_token,
+            refreshToken: token.refresh_token ?? existingRefreshToken ?? "",
+            expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600))
+        )
+    }
+
+    private struct TokenResponse: Decodable {
+        let access_token: String
+        let refresh_token: String?
+        let expires_in: Int?
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}

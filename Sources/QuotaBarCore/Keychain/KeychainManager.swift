@@ -210,38 +210,38 @@ public enum CredentialStore {
             return key
 
         case .gemini:
-            if let env = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !env.isEmpty {
-                return env
-            }
+            // Deliberately nothing. The Gemini provider reads Antigravity
+            // subscription quota from the Cloud Code API, which takes a Google
+            // OAuth bearer token — see the Connect Google account button in
+            // Settings. Handing it a GEMINI_API_KEY (an AI Studio key for a
+            // different product) would only ever produce a 401 that looks like
+            // the user typed their key wrong.
+            return nil
+
+        case .openai:
             let url = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".local/share/opencode/auth.json")
+                .appendingPathComponent(".codex/auth.json")
             guard let data = try? Data(contentsOf: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let g = json["google"] as? [String: Any],
-                  let key = g["key"] as? String
+                  let tokens = json["tokens"] as? [String: Any],
+                  let token = tokens["access_token"] as? String,
+                  !token.isEmpty
             else { return nil }
-            return key
+            return token
 
         case .claude:
-            // ~/.claude.json — holds OAuth session and subscription tier
-            let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")
-            guard let data = try? Data(contentsOf: url),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let oauth = json["oauthAccount"] as? [String: Any]
-            else { return nil }
-
-            if let orgType = oauth["organizationType"] as? String {
-                if orgType.contains("max") { return "Claude Max" }
-                if orgType.contains("pro") { return "Claude Pro" }
-                if orgType.contains("team") { return "Claude Team" }
-            }
-            if let seat = oauth["seatTier"] as? String, !seat.isEmpty {
-                return seat.capitalized
-            }
-            if let billing = oauth["billingType"] as? String, billing == "stripe_subscription" {
-                return "Claude Pro"
-            }
-            return "Active"
+            // Claude CLI OAuth access token. A subscription tier by itself is
+            // not a credential and must never render a made-up usage value.
+            //
+            // On macOS the CLI keeps this blob in the login Keychain, not on
+            // disk; ~/.claude/.credentials.json is the Linux (and older
+            // install) location. Reading another app's Keychain item prompts
+            // the user for consent the first time, which is the right gate for
+            // a credential they did not type into us.
+            let fileURL = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".claude/.credentials.json")
+            return claudeOAuthToken(from: claudeCodeKeychainBlob())
+                ?? claudeOAuthToken(from: try? Data(contentsOf: fileURL))
 
         case .copilot:
             // 1. Check ~/.local/share/opencode/auth.json
@@ -284,6 +284,56 @@ extension CredentialStore {
         await withCheckedContinuation { continuation in
             credentialQueue.async {
                 continuation.resume(returning: apiKey(for: vendor))
+            }
+        }
+    }
+
+    /// The credential blob the Claude Code CLI writes to the macOS login
+    /// Keychain. It lives under a different service name than our own items,
+    /// so `KeychainManager` — scoped to `com.quotabar.keys` — cannot serve it.
+    private static func claudeCodeKeychainBlob() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: "Claude Code-credentials",
+            kSecReturnData as String:  true,
+            kSecMatchLimit as String:  kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
+    }
+
+    /// Extracts a still-valid OAuth access token from a Claude Code credential
+    /// blob. An expired token is reported as absent: sending it would render a
+    /// "credential rejected" the user cannot act on, when the honest state is
+    /// "sign in to Claude again".
+    static func claudeOAuthToken(from data: Data?) -> String? {
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String, !token.isEmpty
+        else { return nil }
+        // expiresAt is milliseconds since the epoch.
+        if let expiresAt = oauth["expiresAt"] as? Double,
+           Date(timeIntervalSince1970: expiresAt / 1000) <= Date() {
+            return nil
+        }
+        return token
+    }
+
+    /// The ChatGPT usage endpoint needs the account selected by the Codex
+    /// login. This is read only when local credential discovery is enabled.
+    static func openAIAccountIDAsync() async -> String? {
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                let url = URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent(".codex/auth.json")
+                let accountID = (try? Data(contentsOf: url))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    .flatMap { $0["tokens"] as? [String: Any] }
+                    .flatMap { $0["account_id"] as? String }
+                continuation.resume(returning: accountID?.isEmpty == false ? accountID : nil)
             }
         }
     }

@@ -32,6 +32,13 @@ public enum VendorSVGLogo {
                     fill-rule="evenodd" />
             </svg>
             """
+        case .openai:
+            return """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+              <rect width="24" height="24" rx="4.5" fill="#10A37F"/>
+              <path d="M12 4.5a3.2 3.2 0 0 1 5.45 2.28 3.2 3.2 0 0 1 1.93 5.77 3.2 3.2 0 0 1-3.52 4.94A3.2 3.2 0 0 1 10.25 19a3.2 3.2 0 0 1-5.44-2.3 3.2 3.2 0 0 1-1.93-5.75 3.2 3.2 0 0 1 3.53-4.95A3.2 3.2 0 0 1 12 4.5Z" fill="none" stroke="white" stroke-width="1.5"/>
+            </svg>
+            """
         case .gemini:
             return """
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
@@ -131,5 +138,4 @@ public struct VendorAvatarView: View {
         .frame(width: 24, height: 24)
     }
 }
-
 

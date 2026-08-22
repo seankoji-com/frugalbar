@@ -240,12 +240,13 @@ struct QuotaManagerExtendedTests {
         #expect(sorted.count == VendorIdentifier.allCases.count)
         #expect(sorted[0].vendorId == .claude)
 
-        #expect(sorted[1].vendorId == .gemini)
-        #expect(sorted[2].vendorId == .copilot)
-        #expect(sorted[3].vendorId == .opencode)
-        #expect(sorted[4].vendorId == .openrouter)
-        #expect(sorted[5].vendorId == .githubRest)
-        #expect(sorted[6].vendorId == .githubGraphql)
+        #expect(sorted[1].vendorId == .openai)
+        #expect(sorted[2].vendorId == .gemini)
+        #expect(sorted[3].vendorId == .copilot)
+        #expect(sorted[4].vendorId == .opencode)
+        #expect(sorted[5].vendorId == .openrouter)
+        #expect(sorted[6].vendorId == .githubRest)
+        #expect(sorted[7].vendorId == .githubGraphql)
 
     }
 

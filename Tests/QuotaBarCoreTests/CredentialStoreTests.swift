@@ -5,6 +5,41 @@ import Foundation
 @Suite("CredentialStore", .serialized)
 struct CredentialStoreTests {
 
+    // MARK: Claude OAuth blob
+
+    /// The blob is identical whether it came from the macOS Keychain or the
+    /// Linux credentials file, so the parsing is tested once, directly.
+    @Test("a live Claude OAuth blob yields its access token")
+    func claudeBlobYieldsToken() {
+        let future = (Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000).rounded()
+        let blob = Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-live","expiresAt":\#(Int(future))}}"#.utf8)
+        #expect(CredentialStore.claudeOAuthToken(from: blob) == "sk-ant-oat01-live")
+    }
+
+    /// Sending a known-dead token produces "Rejected — check the key", which
+    /// points the user at the one thing that is not wrong.
+    @Test("an expired Claude OAuth blob reports no token rather than a dead one")
+    func claudeExpiredBlobIsNil() {
+        let past = (Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000).rounded()
+        let blob = Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stale","expiresAt":\#(Int(past))}}"#.utf8)
+        #expect(CredentialStore.claudeOAuthToken(from: blob) == nil)
+    }
+
+    @Test("a blob with no expiry is still usable")
+    func claudeBlobWithoutExpiry() {
+        let blob = Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-live"}}"#.utf8)
+        #expect(CredentialStore.claudeOAuthToken(from: blob) == "sk-ant-oat01-live")
+    }
+
+    @Test("malformed and empty Claude blobs yield no token")
+    func claudeBlobRejectsGarbage() {
+        #expect(CredentialStore.claudeOAuthToken(from: nil) == nil)
+        #expect(CredentialStore.claudeOAuthToken(from: Data("not json".utf8)) == nil)
+        #expect(CredentialStore.claudeOAuthToken(from: Data(#"{"claudeAiOauth":{"accessToken":""}}"#.utf8)) == nil)
+        // A subscription tier is not a credential.
+        #expect(CredentialStore.claudeOAuthToken(from: Data(#"{"oauthAccount":{"organizationType":"max"}}"#.utf8)) == nil)
+    }
+
     // MARK: - Keychain path
 
     @Test("apiKey with no keychain entry and CLI discovery off returns nil")

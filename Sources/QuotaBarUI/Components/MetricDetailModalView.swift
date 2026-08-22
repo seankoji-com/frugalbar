@@ -151,10 +151,13 @@ public struct MetricDetailModalView: View {
 
             // Technical diagnostics
             VStack(spacing: 4) {
-                diagRow(label: "Latency & Ping", value: "\(snapshot.latencyMs ?? 85)ms (HTTP 200 OK)", valueColor: Theme.secondary)
-                diagRow(label: "Auth / CLI Source", value: snapshot.cliSource ?? "Local Keychain")
-                diagRow(label: "Key Fingerprint", value: snapshot.keyMasked ?? "••••••••••••")
-                diagRow(label: "Plan Tier", value: snapshot.planName ?? snapshot.badgeText ?? "Standard", valueColor: Theme.primary)
+                // Every value here is either measured or absent. A plausible
+                // placeholder in a diagnostics panel is worse than a dash: it
+                // is read as fact.
+                diagRow(label: "Latency & Ping", value: snapshot.latencyMs.map { "\($0)ms" } ?? "—", valueColor: Theme.secondary)
+                diagRow(label: "Auth / CLI Source", value: snapshot.cliSource ?? "—")
+                diagRow(label: "Key Fingerprint", value: snapshot.keyMasked ?? "—")
+                diagRow(label: "Plan Tier", value: snapshot.planName ?? snapshot.badgeText ?? "—", valueColor: Theme.primary)
             }
             .padding(8)
             .background(Theme.surfaceContainerLowest.opacity(0.6))
