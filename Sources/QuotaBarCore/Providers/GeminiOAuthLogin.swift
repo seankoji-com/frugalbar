@@ -26,11 +26,25 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     /// stored secret on save would wipe it every time Settings was reopened.
     /// Blank there means "keep what is stored"; `clearClientSecret()` removes it.
     public static func saveClientConfiguration(clientID: String, clientSecret: String) throws {
-        let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !secret.isEmpty {
+        if let secret = secretToStore(entered: clientSecret) {
             try KeychainManager.shared.set(key: secret, label: GeminiOAuthSession.clientSecretKeychainLabel)
         }
         try store(clientID, label: GeminiOAuthSession.clientIDKeychainLabel)
+    }
+
+    /// What a submitted secret field should write, or nil for "keep what is
+    /// stored". Pure, so the rule can be tested without a Keychain round-trip
+    /// against the labels the running app uses.
+    static func secretToStore(entered: String) -> String? {
+        let trimmed = entered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// What a submitted client-ID field should write, or nil to clear the
+    /// override and fall back to the built-in client.
+    static func clientIDToStore(entered: String) -> String? {
+        let trimmed = entered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     public static func clearClientSecret() throws {

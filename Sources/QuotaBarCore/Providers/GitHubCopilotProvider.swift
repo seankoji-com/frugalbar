@@ -107,12 +107,15 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             .flatMap(DualBarMetrics.monthWindowLength(endingAt:))
             .flatMap { DualBarMetrics.proRataPace(resetsAt: resetDate, windowLength: $0) }
 
-        func row(_ fraction: Double?, _ label: String) -> DualBarMetrics? {
+        // Both allowances run to the same monthly reset, so the label names
+        // the window — as it does for every other provider — and the row text
+        // carries which allowance it is.
+        func row(_ fraction: Double?, _ kind: String) -> DualBarMetrics? {
             guard let fraction else { return nil }
             return DualBarMetrics(
-                primaryFraction: fraction, expectedPaceFraction: pace, label: label,
+                primaryFraction: fraction, expectedPaceFraction: pace, label: "MO",
                 statusColor: worst >= 0.95 ? "#ffb4ab" : "#6e7681",
-                usedText: "\(label == "PREM" ? "Premium" : "Chat"): \(Int((fraction * 100).rounded()))% used",
+                usedText: "\(kind): \(Int((fraction * 100).rounded()))% used",
                 resetText: resetDate.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))" }
             )
         }
@@ -127,8 +130,8 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             resetsAt: resetDate,
             lastUpdated: Date(),
             auxiliaryInfo: "Live Copilot entitlement",
-            row1: row(premium, "PREM"),
-            row2: row(chat, "CHAT"),
+            row1: row(premium, "Premium"),
+            row2: row(chat, "Chat"),
             badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: plan,
             keyMasked: nil,

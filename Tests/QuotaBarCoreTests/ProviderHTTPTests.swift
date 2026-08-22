@@ -554,7 +554,7 @@ struct ProviderHTTPTests {
         }
         #expect(snap.status == .critical)
         #expect(snap.row1?.primaryFraction == 0.0)
-        #expect(snap.row1?.label == "ROLL")
+        #expect(snap.row1?.label == "5H")
         #expect(snap.row2?.primaryFraction == 0.40)
         #expect(snap.row3?.primaryFraction == 1.0)
         #expect(snap.badgeText == "Exhausted")
@@ -585,9 +585,8 @@ struct ProviderHTTPTests {
         #expect(snap.row1?.primaryFraction == 0.12)
     }
 
-    /// "rolling" names no window length, so its bar carries no pace marker —
-    /// where "weekly" and "monthly" name their own.
-    @Test("only windows that name their length get a pace marker")
+    /// Every OpenCode window has a known length, so all three carry a marker.
+    @Test("each window gets a pace marker from its own length")
     func openCodePaceOnlyWhereKnown() async throws {
         let provider = OpenCodeGoProvider(apiKey: "k")
         let snap = try await withStubbedHTTP({ _ in
@@ -599,7 +598,7 @@ struct ProviderHTTPTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.row1?.expectedPaceFraction == nil)
+        #expect(snap.row1?.expectedPaceFraction != nil)
         #expect(snap.row2?.expectedPaceFraction != nil)
         #expect(snap.row3?.expectedPaceFraction != nil)
     }

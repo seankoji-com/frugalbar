@@ -117,6 +117,11 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.status.confidence == .measured)
         #expect(snap.status == .warning)
         #expect(snap.row1?.primaryFraction == 0.8)
+        // Both allowances share one monthly reset, so the label names the window.
+        #expect(snap.row1?.label == "MO")
+        #expect(snap.row2?.label == "MO")
+        #expect(snap.row1?.usedText?.hasPrefix("Premium:") == true)
+        #expect(snap.row2?.usedText?.hasPrefix("Chat:") == true)
         #expect(abs((snap.row2?.primaryFraction ?? 0) - 0.1) < 0.0001)
         #expect(snap.badgeText == "20% left")
         #expect(snap.planName == "Individual")

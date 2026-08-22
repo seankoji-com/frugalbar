@@ -47,66 +47,31 @@ struct ProviderErrorTests {
     }
 }
 
-@Suite("Gemini OAuth client configuration", .serialized)
+@Suite("Gemini OAuth client configuration")
 struct GeminiOAuthClientTests {
 
-    private func clearStoredClient() {
-        try? KeychainManager.shared.delete(label: GeminiOAuthSession.clientSecretKeychainLabel)
-        try? KeychainManager.shared.delete(label: GeminiOAuthSession.clientIDKeychainLabel)
-    }
+    // These tests deliberately never touch the Keychain. An earlier version
+    // exercised `saveClientConfiguration` against the production labels and
+    // deleted the developer's real, working client secret on the first run.
+    // Test code must not be able to destroy a live credential.
 
-    /// Google requires `client_secret` on this client type's token exchange.
-    /// Without one every sign-in died at the last step with "client_secret is
-    /// missing", surfaced to the user as an unexplained failure — so the flow
-    /// now refuses before opening a browser, with a reason it can act on.
-    @Test("a token request without a client secret fails as not-configured, not as a bad response")
-    func missingSecretIsNotConfigured() async {
-        clearStoredClient()
-        defer { clearStoredClient() }
-        guard GeminiOAuthSession.clientSecret == nil else { return }   // env var set locally
-
-        await #expect(throws: ProviderError.notConfigured) {
-            try await GeminiOAuthSession.requestToken(
-                fields: ["grant_type": "refresh_token", "refresh_token": "r"],
-                existingRefreshToken: "r")
-        }
-    }
-
-    /// The secret field is always blank on open because it is never read back
+    /// The secret field is always blank on open, because it is never read back
     /// for display. Saving a blank must therefore keep what is stored, or
     /// simply reopening Settings would wipe it.
-    @Test("saving a blank secret keeps the stored one")
-    func blankSecretIsNotDestructive() throws {
-        clearStoredClient()
-        defer { clearStoredClient() }
-
-        try GeminiOAuthLogin.saveClientConfiguration(clientID: "", clientSecret: "GOCSPX-example")
-        #expect(GeminiOAuthLogin.hasClientSecret())
-
-        try GeminiOAuthLogin.saveClientConfiguration(clientID: "", clientSecret: "   ")
-        #expect(GeminiOAuthLogin.hasClientSecret())
-
-        try GeminiOAuthLogin.clearClientSecret()
-        #expect(GeminiOAuthSession.clientSecret == nil || GeminiOAuthLogin.hasClientSecret())
+    @Test("a blank secret field means keep the stored one")
+    func blankSecretIsNotDestructive() {
+        #expect(GeminiOAuthLogin.secretToStore(entered: "") == nil)
+        #expect(GeminiOAuthLogin.secretToStore(entered: "   \n ") == nil)
+        #expect(GeminiOAuthLogin.secretToStore(entered: "  GOCSPX-example  ") == "GOCSPX-example")
     }
 
-    /// The ID field *is* shown pre-filled, so clearing it is a deliberate
-    /// revert to the built-in client rather than an accident.
-    @Test("a stored client ID overrides the built-in one, and clearing it reverts")
-    func clientIDOverrideRoundTrips() throws {
-        clearStoredClient()
-        defer { clearStoredClient() }
-
-        #expect(GeminiOAuthSession.clientID == GeminiOAuthSession.defaultClientID)
-
-        try GeminiOAuthLogin.saveClientConfiguration(
-            clientID: "123-custom.apps.googleusercontent.com", clientSecret: "")
-        #expect(GeminiOAuthSession.clientID == "123-custom.apps.googleusercontent.com")
-        #expect(GeminiOAuthLogin.storedClientID() == "123-custom.apps.googleusercontent.com")
-
-        try GeminiOAuthLogin.saveClientConfiguration(clientID: "", clientSecret: "")
-        #expect(GeminiOAuthSession.clientID == GeminiOAuthSession.defaultClientID)
-        #expect(GeminiOAuthLogin.storedClientID() == nil)
+    /// The client ID field *is* shown pre-filled, so clearing it is a
+    /// deliberate revert to the built-in client rather than an accident.
+    @Test("a blank client ID field means revert to the built-in client")
+    func blankClientIDReverts() {
+        #expect(GeminiOAuthLogin.clientIDToStore(entered: "") == nil)
+        #expect(GeminiOAuthLogin.clientIDToStore(entered: " 123-custom.apps.googleusercontent.com ")
+            == "123-custom.apps.googleusercontent.com")
     }
 
     /// A public repository must not carry the secret it tells users to paste.

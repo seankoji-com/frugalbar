@@ -90,11 +90,11 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             resetsAt: usage.rolling?.reset ?? usage.weekly?.reset ?? usage.monthly?.reset,
             lastUpdated: now,
             auxiliaryInfo: "Live OpenCode Go subscription quota",
-            // The pace marker needs a window *length*, and this endpoint sends
-            // only a reset time. "weekly" and "monthly" name their own length;
-            // "rolling" names none, so that bar carries no marker rather than
-            // one placed against a length we assumed.
-            row1: Self.row(usage.rolling, "ROLL", length: nil, now: now),
+            // The endpoint sends a reset time but no window length. "weekly"
+            // and "monthly" name their own; the rolling window is five hours —
+            // stated by the operator and corroborated by its reset time landing
+            // ~5h out on a fresh window.
+            row1: Self.row(usage.rolling, "5H", length: QuotaWindow.fiveHours, now: now),
             row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
             row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
             badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",

@@ -30,12 +30,17 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         var resolvedToken = accessToken
-        if resolvedToken == nil || resolvedToken?.isEmpty == true {
-            // Our own session first — it is the only one we can renew.
-            resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
-        }
-        if resolvedToken == nil || resolvedToken?.isEmpty == true {
-            resolvedToken = await CredentialStore.antigravityAccessTokenAsync()
+        // Ambient credential lookup is skipped under a test host. Otherwise
+        // whether "no key short-circuits" passes depends on whether the
+        // developer running the suite happens to be signed in to Google.
+        if !TestHost.isActive {
+            if resolvedToken == nil || resolvedToken?.isEmpty == true {
+                // Our own session first — it is the only one we can renew.
+                resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
+            }
+            if resolvedToken == nil || resolvedToken?.isEmpty == true {
+                resolvedToken = await CredentialStore.antigravityAccessTokenAsync()
+            }
         }
         guard let token = resolvedToken, !token.isEmpty else {
             return unavailable(.notConfigured)
