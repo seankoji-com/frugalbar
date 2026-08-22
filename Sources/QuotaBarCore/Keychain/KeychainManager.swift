@@ -222,26 +222,27 @@ public enum CredentialStore {
             else { return nil }
             return key
 
-        case .claude:
-            // ~/.claude.json — holds OAuth session and subscription tier
-            let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")
+        case .openai:
+            let url = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".codex/auth.json")
             guard let data = try? Data(contentsOf: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let oauth = json["oauthAccount"] as? [String: Any]
+                  let tokens = json["tokens"] as? [String: Any],
+                  let token = tokens["access_token"] as? String,
+                  !token.isEmpty
             else { return nil }
+            return token
 
-            if let orgType = oauth["organizationType"] as? String {
-                if orgType.contains("max") { return "Claude Max" }
-                if orgType.contains("pro") { return "Claude Pro" }
-                if orgType.contains("team") { return "Claude Team" }
-            }
-            if let seat = oauth["seatTier"] as? String, !seat.isEmpty {
-                return seat.capitalized
-            }
-            if let billing = oauth["billingType"] as? String, billing == "stripe_subscription" {
-                return "Claude Pro"
-            }
-            return "Active"
+        case .claude:
+            // Claude CLI OAuth access token. A subscription tier by itself is
+            // not a credential and must never render a made-up usage value.
+            let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/.credentials.json")
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let oauth = json["claudeAiOauth"] as? [String: Any],
+                  let token = oauth["accessToken"] as? String, !token.isEmpty
+            else { return nil }
+            return token
 
         case .copilot:
             // 1. Check ~/.local/share/opencode/auth.json
@@ -284,6 +285,23 @@ extension CredentialStore {
         await withCheckedContinuation { continuation in
             credentialQueue.async {
                 continuation.resume(returning: apiKey(for: vendor))
+            }
+        }
+    }
+
+    /// The ChatGPT usage endpoint needs the account selected by the Codex
+    /// login. This is read only when local credential discovery is enabled.
+    static func openAIAccountIDAsync() async -> String? {
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                let url = URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent(".codex/auth.json")
+                let accountID = (try? Data(contentsOf: url))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    .flatMap { $0["tokens"] as? [String: Any] }
+                    .flatMap { $0["account_id"] as? String }
+                continuation.resume(returning: accountID?.isEmpty == false ? accountID : nil)
             }
         }
     }

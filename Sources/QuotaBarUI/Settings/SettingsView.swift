@@ -20,15 +20,15 @@ public struct SettingsView: View {
         .init(id: .claude, label: "Claude session",
               placeholder: "Claude Max / Pro / session",
               note: "Discovered from ~/.claude.json when CLI discovery is on."),
+        .init(id: .openai, label: "ChatGPT session",
+              placeholder: "Codex ChatGPT access token",
+              note: "Discovered from ~/.codex/auth.json when CLI discovery is on."),
         .init(id: .githubRest, label: "GitHub PAT",
               placeholder: "ghp_… or gho_…",
               note: "Used for REST, GraphQL and Copilot."),
         .init(id: .openrouter, label: "OpenRouter key",
               placeholder: "sk-or-v1-…",
               note: "Gauge shown only when the key has a spend cap."),
-        .init(id: .gemini, label: "Gemini key",
-              placeholder: "AIzaSy…",
-              note: "Validates against Google AI Studio."),
         .init(id: .opencode, label: "OpenCode token",
               placeholder: "oc_live_…",
               note: "Enables OpenCode Go monitoring."),
@@ -39,6 +39,8 @@ public struct SettingsView: View {
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
     @State private var isVerifying = false
+    @State private var isSigningInToGemini = false
+    @State private var geminiSignInStatus: String?
     @AppStorage(CredentialStore.cliDiscoveryDefaultsKey) private var cliDiscovery = false
 
     public init() {}
@@ -61,6 +63,14 @@ public struct SettingsView: View {
 
     private var keysTab: some View {
         Form {
+            Section("Gemini") {
+                Button("Connect Google account") { Task { await connectGemini() } }
+                    .disabled(isSigningInToGemini)
+                if isSigningInToGemini { ProgressView().controlSize(.small) }
+                Text(geminiSignInStatus ?? "Uses Google OAuth to read Antigravity quota. Tokens stay in your Keychain.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
             ForEach(Self.slots) { slot in
                 Section {
                     SecureField(
@@ -131,6 +141,17 @@ public struct SettingsView: View {
         entered = current
     }
 
+    private func connectGemini() async {
+        isSigningInToGemini = true
+        defer { isSigningInToGemini = false }
+        do {
+            try await GeminiOAuthLogin.shared.signIn()
+            geminiSignInStatus = "Connected"
+        } catch {
+            geminiSignInStatus = "Google sign-in did not complete"
+        }
+    }
+
     /// Writes only what changed and deletes what was cleared. Where the vendor
     /// has an endpoint to check against, the key is then exercised for real, so
     /// a truncated paste fails here — where the user can fix it — rather than
@@ -196,9 +217,10 @@ public struct SettingsView: View {
         let provider: any QuotaProvider
         switch vendor {
         case .claude:      provider = ClaudeQuotaProvider(apiKey: key)
+        case .openai:      provider = OpenAIQuotaProvider(accessToken: key)
         case .githubRest:  provider = GitHubRestProvider(token: key)
         case .openrouter:  provider = OpenRouterProvider(apiKey: key)
-        case .gemini:      provider = GeminiQuotaProvider(apiKey: key)
+        case .gemini:      provider = GeminiQuotaProvider(accessToken: key)
         case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
         case .copilot:     provider = GitHubCopilotProvider(token: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)

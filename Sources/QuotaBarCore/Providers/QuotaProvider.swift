@@ -98,6 +98,37 @@ public enum QuotaHTTP {
         return (data, http)
     }
 
+    /// Performs a JSON POST and returns its body plus status code. Credentials
+    /// stay in request headers, never in a URL or an error string.
+    public static func post(
+        url: String,
+        body: Data,
+        headers: [String: String] = [:],
+        auth: Auth = .none
+    ) async throws -> (Data, HTTPURLResponse) {
+        guard let u = URL(string: url) else { throw ProviderError.badResponse }
+        var req = URLRequest(url: u)
+        req.httpMethod = "POST"
+        req.httpBody = body
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        switch auth {
+        case .none:
+            break
+        case .bearer(let token):
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case .header(let name, let value):
+            req.setValue(value, forHTTPHeaderField: name)
+        }
+        for (key, value) in headers {
+            req.setValue(value, forHTTPHeaderField: key)
+        }
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw ProviderError.badResponse }
+        return (data, http)
+    }
+
     /// Maps an HTTP status to a failure reason, or nil when the response is OK.
     public static func failureReason(for status: Int) -> UnavailableReason? {
         switch status {

@@ -73,12 +73,14 @@ struct MetricRowView: View {
                         )
                     }
                 }
-            } else if case .currency(let balance, _, let spent, let currencyCode) = snapshot.metric {
-                // Financial raw dollar metrics block (7 Day Spend + Credit Remaining in AUD)
+            } else if case .currency(let balance, let limit, let spent, let currencyCode) = snapshot.metric {
+                let isAccountCredit = snapshot.auxiliaryInfo == "Account credit balance"
+                let spendLabel = isAccountCredit ? "Lifetime used:" : (limit == nil ? "Lifetime spend:" : "Key spend:")
+                let balanceLabel = isAccountCredit ? "Account credit:" : (limit == nil ? "Recorded spend:" : "Key cap left:")
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
-                            Text("7 Day Spend:")
+                            Text(spendLabel)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
 
@@ -90,7 +92,7 @@ struct MetricRowView: View {
                         }
 
                         HStack(spacing: 4) {
-                            Text("Credit Remaining:")
+                            Text(balanceLabel)
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
 
@@ -167,7 +169,6 @@ struct MetricRowView: View {
         }
     }
 }
-
 
 
 

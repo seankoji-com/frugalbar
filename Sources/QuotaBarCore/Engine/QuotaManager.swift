@@ -33,6 +33,7 @@ public actor QuotaManager {
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
         [
             ClaudeQuotaProvider(),
+            OpenAIQuotaProvider(),
             GeminiQuotaProvider(),
             GitHubCopilotProvider(),
             OpenCodeGoProvider(),
@@ -52,7 +53,7 @@ public actor QuotaManager {
     /// Returns all snapshots sorted by the canonical provider order.
     public func sortedSnapshots() -> [QuotaSnapshot] {
         let order: [VendorIdentifier] = [
-            .claude, .gemini, .copilot, .opencode,
+            .claude, .openai, .gemini, .copilot, .opencode,
             .openrouter,
             .githubRest, .githubGraphql,
         ]

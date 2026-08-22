@@ -4,6 +4,7 @@ import Foundation
 
 public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case claude
+    case openai
     case gemini
     case opencode
     case copilot
@@ -14,6 +15,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var displayName: String {
         switch self {
         case .claude:        "Claude"
+        case .openai:        "OpenAI"
         case .gemini:        "Gemini"
         case .opencode:      "OpenCode"
         case .copilot:       "GitHub Copilot"
@@ -26,6 +28,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var accentColorHex: String {
         switch self {
         case .claude:        "#d97757"
+        case .openai:        "#10a37f"
         case .gemini:        "#3b82f6"
         case .opencode:      "#d47b00"
         case .copilot:       "#6e7681"
@@ -38,6 +41,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     public var iconSymbol: String {
         switch self {
         case .claude:        "sparkles"
+        case .openai:        "circle.hexagongrid.fill"
         case .gemini:        "sparkle"
         case .opencode:      "chevron.left.forwardslash.chevron.right"
         case .copilot:       "curlybraces"
@@ -319,6 +323,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var shortVendorName: String {
         switch vendorId {
         case .claude:        return "Claude"
+        case .openai:        return "OpenAI"
         case .gemini:        return "Gemini"
         case .opencode:      return "OpenCode"
         case .copilot:       return "Copilot"
@@ -339,7 +344,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
         switch vendorId {
         case .claude:        return "Max x20"
-        case .gemini:        return "AI Pro"
+        case .openai:        return "ChatGPT"
+        case .gemini:        return "AI Studio"
         case .copilot:       return "Business"
         case .opencode:      return "Go"
         case .openrouter:    return ""
@@ -373,5 +379,4 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
     }
 }
-
 

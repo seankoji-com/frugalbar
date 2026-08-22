@@ -97,7 +97,7 @@ struct GitHubCopilotExtendedTests {
         #expect(snap.status == ProviderStatus.unavailable(UnavailableReason.badResponse))
     }
 
-    @Test("valid user response returns healthy subscription")
+    @Test("missing Copilot quota response stays unavailable")
     func validUserResponse() async throws {
         let provider = GitHubCopilotProvider(token: "tok")
         let snap = try await withStubbedHTTP({ _ in
@@ -105,13 +105,8 @@ struct GitHubCopilotExtendedTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(snap.status == .critical)
+        #expect(snap.status.confidence == .unavailable)
         #expect(snap.consumptionFraction == nil)
-        #expect(snap.metric == .subscription(tierName: "Active", renewalDate: nil))
-        #expect(snap.auxiliaryInfo?.contains("octocat") == true)
-
-
-
     }
 
 

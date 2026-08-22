@@ -51,12 +51,7 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             return unavailable(.badResponse)
         }
 
-        var totalQuota = 5000
-        var currentUsage = 5000
-        var resetString = "Resets in 13d (Aug 31)"
-
-        // Query Copilot internal quota telemetry endpoint (CodexBar technique)
-        if let (copilotData, copilotHttp) = try? await QuotaHTTP.get(
+        let (copilotData, copilotHTTP) = try await QuotaHTTP.get(
             url: "https://api.github.com/copilot_internal/v2/token",
             headers: [
                 "Accept": "application/json",
@@ -65,22 +60,18 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
                 "User-Agent": "GithubCopilot/1.250.0"
             ],
             auth: .bearer(resolved)
-        ), copilotHttp.statusCode == 200,
-           let copilotToken = try? JSONDecoder().decode(InternalTokenResponse.self, from: copilotData) {
-            if let mq = copilotToken.monthly_quota, mq > 0 {
-                totalQuota = mq
-            }
-            if let cu = copilotToken.current_usage {
-                currentUsage = cu
-            }
-            if let rd = copilotToken.quota_reset_date {
-                resetString = Self.formatCopilotReset(rd)
-            }
-        }
+        )
+        if let reason = QuotaHTTP.failureReason(for: copilotHTTP.statusCode) { return unavailable(reason) }
+        guard let copilotToken = try? JSONDecoder().decode(InternalTokenResponse.self, from: copilotData),
+              let totalQuota = copilotToken.monthly_quota, totalQuota > 0,
+              let currentUsage = copilotToken.current_usage, currentUsage >= 0,
+              let resetDate = copilotToken.quota_reset_date.flatMap(Self.parseCopilotReset)
+        else { return unavailable(.badResponse) }
 
         let fraction = totalQuota > 0 ? min(max(Double(currentUsage) / Double(totalQuota), 0.0), 1.0) : 1.0
         let isExhausted = fraction >= 1.0
         let status: ProviderStatus = isExhausted ? .critical : (fraction >= 0.80 ? .warning : .healthy)
+        let resetString = "Resets \(RelativeDateTimeFormatter().localizedString(for: resetDate, relativeTo: Date()))"
 
         let row1 = DualBarMetrics(
             primaryFraction: fraction,
@@ -98,7 +89,7 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             category: category,
             metric: .subscription(tierName: "Active", renewalDate: nil),
             status: status,
-            resetsAt: Date(timeIntervalSince1970: 1788134400),
+            resetsAt: resetDate,
             lastUpdated: Date(),
             auxiliaryInfo: "Signed in as \(user.login) • \(currentUsage.formatted()) / \(totalQuota.formatted()) credits used (\(isExhausted ? "Usage paused" : "Active"))",
             row1: row1,
@@ -106,24 +97,21 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             badgeText: isExhausted ? "Exhausted" : "\(totalQuota - currentUsage) left",
             planName: "GitHub Copilot",
             latencyMs: 95,
-            keyMasked: "gho_••••••••Xz49",
+            keyMasked: nil,
             cliSource: "gh auth token / hosts.json"
         )
     }
 
-    private static func formatCopilotReset(_ isoDate: String) -> String {
+    private static func parseCopilotReset(_ isoDate: String) -> Date? {
         let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: isoDate) {
-            let df = DateFormatter()
-            df.dateFormat = "MMM d"
-            let days = max(0, Int(date.timeIntervalSince(Date()) / 86400))
-            return "Resets in \(days)d (\(df.string(from: date)))"
-        }
-        return "Resets in 13d (Aug 31)"
+        return formatter.date(from: isoDate)
+    }
+
+    private static func formatCopilotReset(_ isoDate: String) -> String {
+        guard let date = parseCopilotReset(isoDate) else { return "Reset time unavailable" }
+        return "Resets \(RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date()))"
     }
 }
-
-
 
 
 

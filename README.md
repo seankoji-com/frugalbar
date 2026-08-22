@@ -61,8 +61,8 @@ swift run
 3. Add your provider credentials:
    - **GitHub**: One PAT covers REST, GraphQL rate limits, and Copilot subscription status.
    - **OpenRouter**: Use a spend-capped API key to display live balance, budget, and spend telemetry.
-   - **Google Gemini**: Add your Gemini / Google AI Studio API key.
-   - **Anthropic Claude / OpenCode**: Configure your credentials for subscription tracking.
+   - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
+   - **Anthropic Claude / OpenCode**: Configure credentials only when the provider publishes a live reading.
 
 Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
 
@@ -76,11 +76,12 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 |---|---|---|
 | **GitHub REST** | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge: requests/hour remaining with reset countdown |
 | **GitHub GraphQL** | `GET https://api.github.com/rate_limit` → `resources.graphql` | Live gauge: points/hour remaining with reset countdown |
-| **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key` | Live gauge **if key has a spend cap**; otherwise shows cumulative spend |
+| **OpenRouter** | `GET https://openrouter.ai/api/v1/credits`, then `GET https://openrouter.ai/api/v1/key` | Live account credit balance in USD when permitted; otherwise the key's USD spend cap |
+| **OpenAI / ChatGPT** | Codex ChatGPT session | Live rolling subscription window when local credential discovery is enabled |
 | **GitHub Copilot** | `GET https://api.github.com/user` | Subscription & account active status verified |
-| **Google Gemini** | `GET .../v1beta/models` | Key validity & subscription status verified |
-| **OpenCode** | Local auth store | Credential presence verified |
-| **Anthropic Claude** | Key validation | Credential presence verified |
+| **Google Gemini** | Google Cloud Code API | Live Antigravity subscription quota; no CLI dependency |
+| **OpenCode** | Local usage telemetry | Shown only when OpenCode has written measured usage |
+| **Anthropic Claude** | OAuth rate-limit headers | Live 5-hour and 7-day quota from Claude CLI OAuth |
 
 ---
 

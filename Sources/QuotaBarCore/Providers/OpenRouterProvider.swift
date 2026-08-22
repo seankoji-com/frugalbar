@@ -26,9 +26,6 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         self.apiKey = apiKey
     }
 
-    /// Midmarket exchange rate for USD -> AUD conversion.
-    public static let usdToAudRate: Double = 1.55
-
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         guard let key = await credential(injected: apiKey, for: .openrouter) else {
             return unavailable(.notConfigured)
@@ -58,6 +55,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 let limit: Double?
                 let limit_remaining: Double?
                 let is_free_tier: Bool?
+                let is_management_key: Bool?
                 let creator_user_id: String?
             }
             let data: Payload
@@ -69,52 +67,82 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         guard let spentUsd = decoded.data.usage else {
             return unavailable(.badResponse)
         }
+
+        // Credits are authoritative when the supplied key can read them. If
+        // this endpoint rejects a normal key, fall back to that key's cap.
+        let (creditsData, creditsHTTP) = try await QuotaHTTP.get(
+            url: "https://openrouter.ai/api/v1/credits",
+            auth: .bearer(key)
+        )
+        if (200...299).contains(creditsHTTP.statusCode) {
+            struct CreditsResponse: Decodable {
+                struct Payload: Decodable {
+                    let total_credits: Double?
+                    let total_usage: Double?
+                }
+                let data: Payload
+            }
+            if let credits = try? JSONDecoder().decode(CreditsResponse.self, from: creditsData),
+               let purchased = credits.data.total_credits,
+               let used = credits.data.total_usage,
+               purchased >= 0, used >= 0 {
+                let balance = max(purchased - used, 0)
+                return QuotaSnapshot(
+                    id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+                    category: category,
+                    metric: .currency(balance: Decimal(balance), limit: nil,
+                                      spent: Decimal(used), currencyCode: "USD"),
+                    status: .healthy, resetsAt: nil, lastUpdated: Date(),
+                    auxiliaryInfo: "Account credit balance",
+                    row1: nil, row2: nil,
+                    badgeText: "\(String(format: "$%.2f", balance)) credit",
+                    planName: "OpenRouter", cliSource: "OPENROUTER_API_KEY / auth.json"
+                )
+            }
+        }
         let tierNote = decoded.data.is_free_tier == true ? "Free tier" : nil
 
-        let spentAud = spentUsd * Self.usdToAudRate
-        let sevenDaySpentAud = (decoded.data.usage_weekly ?? spentUsd) * Self.usdToAudRate
-        let sevenDayFormatted = String(format: "A$%.2f", sevenDaySpentAud)
+        let weeklySpentUsd = decoded.data.usage_weekly ?? spentUsd
+        let weeklyFormatted = String(format: "$%.2f", weeklySpentUsd)
 
         guard let capUsd = decoded.data.limit, capUsd > 0 else {
             return QuotaSnapshot(
                 id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                 category: category,
-                metric: .currency(balance: Decimal(spentAud), limit: nil,
-                                  spent: Decimal(sevenDaySpentAud), currencyCode: "AUD"),
+                metric: .currency(balance: Decimal(spentUsd), limit: nil,
+                                  spent: Decimal(weeklySpentUsd), currencyCode: "USD"),
                 status: .measured(.none),
                 resetsAt: nil, lastUpdated: Date(),
-                auxiliaryInfo: tierNote ?? "7 Day spend: \(sevenDayFormatted) AUD",
+                auxiliaryInfo: tierNote ?? "Key lifetime spend: \(String(format: "$%.2f", spentUsd))",
                 row1: nil,
                 row2: nil,
-                badgeText: sevenDayFormatted,
+                badgeText: "\(weeklyFormatted) this week",
                 planName: "OpenRouter",
                 latencyMs: 165,
                 cliSource: "OPENROUTER_API_KEY / auth.json"
             )
         }
 
-        let capAud = capUsd * Self.usdToAudRate
         let remainingUsd = decoded.data.limit_remaining ?? max(capUsd - spentUsd, 0)
-        let remainingAud = remainingUsd * Self.usdToAudRate
 
-        let consumed = capAud > 0 ? min(max((capAud - remainingAud) / capAud, 0), 1) : 0
+        let consumed = min(max((capUsd - remainingUsd) / capUsd, 0), 1)
         let urgency: Urgency = consumed > 0.90 ? .critical
                              : consumed > 0.70 ? .warning
                              : .none
 
-        let remainingFormatted = String(format: "A$%.2f", remainingAud)
+        let remainingFormatted = String(format: "$%.2f", remainingUsd)
 
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
-            metric: .currency(balance: Decimal(remainingAud), limit: Decimal(capAud),
-                              spent: Decimal(sevenDaySpentAud), currencyCode: "AUD"),
+            metric: .currency(balance: Decimal(remainingUsd), limit: Decimal(capUsd),
+                              spent: Decimal(weeklySpentUsd), currencyCode: "USD"),
             status: .measured(urgency),
             resetsAt: nil, lastUpdated: Date(),
-            auxiliaryInfo: tierNote ?? "Key spend cap",
+            auxiliaryInfo: tierNote ?? "Key spend cap, not account credit",
             row1: nil,
             row2: nil,
-            badgeText: "\(remainingFormatted) left",
+            badgeText: "\(remainingFormatted) key cap left",
             planName: "OpenRouter",
             latencyMs: 165,
             cliSource: "OPENROUTER_API_KEY / auth.json"
