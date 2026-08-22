@@ -89,34 +89,14 @@ jobs:
           SHA=$(cat frugalbar-${TAG}-arm64.tar.gz.sha256 | awk '{print $1}')
           URL="https://github.com/seankoji-com/frugalbar/releases/download/${TAG}/frugalbar-${TAG}-arm64.tar.gz"
 
-          git clone https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git /tmp/homebrew-tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
 
-          cat << EOF > /tmp/homebrew-tap/Formula/frugalbar.rb
-class Frugalbar < Formula
-  desc "Track AI usage & dev limits in the macOS menu bar"
-  homepage "https://github.com/seankoji-com/frugalbar"
-  version "${VER}"
-  url "${URL}"
-  sha256 "${SHA}"
-
-  depends_on :macos
-
-  def install
-    bin.install "frugalbar"
-  end
-
-  service do
-    run [opt_bin/"frugalbar"]
-    keep_alive true
-    process_type :interactive
-  end
-
-  test do
-    system "#{bin}/frugalbar", "--help" rescue true
-  end
-end
-EOF
+          sed -e "s|__VERSION__|${VER}|" \
+              -e "s|__URL__|${URL}|" \
+              -e "s|__SHA256__|${SHA}|" \
+              "${GITHUB_WORKSPACE}/packaging/frugalbar.rb.tmpl" \
+              > /tmp/homebrew-tap/Formula/frugalbar.rb
 
           cd /tmp/homebrew-tap
           git config user.name "github-actions[bot]"
