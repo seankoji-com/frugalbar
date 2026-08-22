@@ -129,17 +129,18 @@ public enum CredentialStore {
     /// `nonisolated(unsafe)` because `UserDefaults` is not `Sendable` while
     /// being documented as thread-safe: it is a shared store by design, and
     /// this reference is assigned once and never reassigned.
-    nonisolated(unsafe) public static let preferences: UserDefaults = {
-        #if DEBUG
-        // Tests must not read or write the real user's preference file.
-        if TestHost.isActive, let suite = UserDefaults(suiteName: "\(sharedSuiteName).tests") {
-            return suite
-        }
-        #endif
-        return UserDefaults(suiteName: sharedSuiteName) ?? .standard
-    }()
+    nonisolated(unsafe) public static let preferences: UserDefaults =
+        UserDefaults(suiteName: preferencesSuiteName(isTestHost: TestHost.isActive)) ?? .standard
 
     static let sharedSuiteName = "com.quotabar.app"
+
+    /// The suite to read and write. One expression, so there is no second path
+    /// that could quietly fall back to `.standard` and reintroduce the
+    /// process-name split. Tests get their own suite: they must never touch the
+    /// real user's preference file.
+    static func preferencesSuiteName(isTestHost: Bool) -> String {
+        isTestHost ? "\(sharedSuiteName).tests" : sharedSuiteName
+    }
 
     /// Process names this app has shipped under, newest first. Only read once,
     /// to carry a pre-existing choice into `preferences`.

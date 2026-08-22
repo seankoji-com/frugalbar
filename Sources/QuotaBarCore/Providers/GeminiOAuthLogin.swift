@@ -147,19 +147,44 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     }
 
     private func openAuthorizationPage(port: NWEndpoint.Port) {
-        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
-        components.queryItems = [
-            .init(name: "client_id", value: clientID ?? ""),
-            .init(name: "redirect_uri", value: Self.redirectURI(port: port)),
+        guard let url = Self.authorizationURL(
+            clientID: clientID ?? "",
+            redirectURI: Self.redirectURI(port: port),
+            state: state
+        ) else { return }
+        DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+    }
+
+    static let scopes = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"
+
+    /// The consent URL, matching `antigravity-usage` parameter for parameter.
+    ///
+    /// Carries **no PKCE**. An earlier version added `code_challenge` and
+    /// `code_verifier` on top of a client-secret exchange, and every sign-in
+    /// died at the token step with nothing saved and nothing reported.
+    static func authorizationURL(clientID: String, redirectURI: String, state: String) -> URL? {
+        var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")
+        components?.queryItems = [
+            .init(name: "client_id", value: clientID),
+            .init(name: "redirect_uri", value: redirectURI),
             .init(name: "response_type", value: "code"),
-            .init(name: "scope", value: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"),
+            .init(name: "scope", value: scopes),
             .init(name: "access_type", value: "offline"),
             .init(name: "prompt", value: "consent"),
             .init(name: "state", value: state),
         ]
-        if let url = components.url {
-            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
-        }
+        return components?.url
+    }
+
+    /// Fields for the authorization-code exchange. `client_id` and
+    /// `client_secret` are merged in by `requestToken`, which owns the
+    /// configured client.
+    static func exchangeFields(code: String, redirectURI: String) -> [String: String] {
+        [
+            "code": code,
+            "redirect_uri": redirectURI,
+            "grant_type": "authorization_code",
+        ]
     }
 
     private func handleCallback(_ request: String, connection: NWConnection) {
@@ -205,11 +230,9 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     private func exchange(code: String) async throws {
         guard let port = lock.withLock({ self.listener?.port }) else { throw ProviderError.badResponse }
 
-        let session = try await GeminiOAuthSession.requestToken(fields: [
-            "code": code,
-            "redirect_uri": Self.redirectURI(port: port),
-            "grant_type": "authorization_code",
-        ], existingRefreshToken: nil)
+        let session = try await GeminiOAuthSession.requestToken(
+            fields: Self.exchangeFields(code: code, redirectURI: Self.redirectURI(port: port)),
+            existingRefreshToken: nil)
         try GeminiOAuthSession.save(session)
     }
 
@@ -235,9 +258,9 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Matches the redirect the vendored Antigravity client is known to be
-    /// used with — an ephemeral loopback port and a bare `/callback` path.
-    private static func redirectURI(port: NWEndpoint.Port) -> String {
+    /// Matches the redirect these clients are known to be used with — an
+    /// ephemeral loopback port and a bare `/callback` path.
+    static func redirectURI(port: NWEndpoint.Port) -> String {
         "http://127.0.0.1:\(port)/callback"
     }
 

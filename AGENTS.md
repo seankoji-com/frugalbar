@@ -104,6 +104,17 @@ Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
 
+## Regression tests must be shown to fail
+
+A test that passes proves nothing about a bug it was written for. Reintroduce
+the defect and confirm the test goes red, then revert. Doing this over today's
+fixes found three tests that could not detect their own regression: two were
+masked by a *second* guard elsewhere (each alone sufficed, so mutating one
+changed nothing), and one asserted `preferences !== .standard`, which stayed
+true under the test-host override no matter what the production path did.
+That one is now behavioural — it writes through `preferences` and checks the
+value lands in the named suite and not in `.standard`.
+
 ## Before claiming done
 
 Run the build and the tests. Don't tick an acceptance box you haven't executed

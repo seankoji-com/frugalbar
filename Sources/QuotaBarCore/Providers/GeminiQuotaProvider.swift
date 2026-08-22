@@ -257,8 +257,19 @@ public struct GeminiOAuthSession: Codable, Sendable {
         else { return nil }
         // Sessions from another client are discarded rather than sent to be
         // rejected: the honest state is "sign in again", not "bad credential".
-        guard session.clientID == clientID else { return nil }
+        guard isUsable(session, forClientID: clientID) else { return nil }
         return session
+    }
+
+    /// Whether a stored session can be used by the currently configured
+    /// client. A refresh token belongs to the client that issued it, so a
+    /// session carried across a client change is dead weight — and left in
+    /// place it produced a permanent "Credential rejected" that no amount of
+    /// re-signing-in would clear. A session with no recorded client predates
+    /// the field and counts as foreign.
+    static func isUsable(_ session: GeminiOAuthSession, forClientID clientID: String?) -> Bool {
+        guard let clientID, let sessionClient = session.clientID else { return false }
+        return sessionClient == clientID
     }
 
     static func save(_ session: GeminiOAuthSession) throws {
