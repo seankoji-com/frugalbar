@@ -44,6 +44,10 @@ public struct SettingsView: View {
     @State private var geminiClientSecret = ""
     @State private var geminiClientID = ""
     @State private var loadedGeminiClientID = ""
+    /// A stored secret is never read back for display, so the field is always
+    /// blank. Without an explicit "stored" signal that reads as "it did not
+    /// save" — which is exactly how it was reported.
+    @State private var geminiSecretIsStored = false
     // Bound to the shared suite, not `.standard`: the toggle must apply to the
     // app whatever the executable happens to be named.
     @AppStorage(CredentialStore.cliDiscoveryDefaultsKey, store: CredentialStore.preferences)
@@ -79,8 +83,20 @@ public struct SettingsView: View {
 
                 TextField("OAuth client ID", text: $geminiClientID)
                     .textFieldStyle(.roundedBorder)
-                SecureField("OAuth client secret", text: $geminiClientSecret)
-                    .textFieldStyle(.roundedBorder)
+                SecureField(
+                    "OAuth client secret",
+                    text: $geminiClientSecret,
+                    prompt: Text(geminiSecretIsStored
+                                 ? "•••••••• stored — leave blank to keep"
+                                 : "OAuth client secret")
+                )
+                .textFieldStyle(.roundedBorder)
+                Label(
+                    geminiSecretIsStored ? "Client secret stored" : "No client secret set",
+                    systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
+                )
+                .font(.caption2)
+                .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
                 Text("""
                      Required. The Cloud Code API is private to Google's own \
                      OAuth clients, so a client you create yourself will be \
@@ -169,11 +185,8 @@ public struct SettingsView: View {
 
         geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
         loadedGeminiClientID = geminiClientID
-        // The secret is never read back for display; the field shows only
-        // whether one is already stored, so reopening Settings cannot leak it.
-        if GeminiOAuthLogin.hasClientSecretOverride(), geminiSignInStatus == nil {
-            geminiSignInStatus = "Using your own client secret. Leave the field blank to keep it."
-        }
+        geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+
     }
 
     private var hasGeminiClientEdits: Bool {
@@ -230,6 +243,7 @@ public struct SettingsView: View {
                     clientID: geminiClientID, clientSecret: geminiClientSecret)
                 loadedGeminiClientID = geminiClientID
                 geminiClientSecret = ""
+                geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
                 geminiSignInStatus = clientChanged
                     ? "Client saved. Connect Google account again to sign in with it."
                     : "Client secret saved."

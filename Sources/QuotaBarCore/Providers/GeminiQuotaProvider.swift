@@ -12,10 +12,31 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public init(accessToken: String? = nil) { self.accessToken = accessToken }
 
     private struct CodeAssist: Decodable {
-        struct Project: Decodable { let id: String? }
         struct Plan: Decodable { let planType: String? }
-        let cloudaicompanionProject: Project?
+        struct Tier: Decodable { let id: String?; let name: String? }
+        let cloudaicompanionProject: ProjectReference?
         let planInfo: Plan?
+        let currentTier: Tier?
+    }
+
+    /// `cloudaicompanionProject` is a bare string on some accounts and an
+    /// object on others. Decoding it as only one shape made the whole response
+    /// unparseable — the provider reported "Unexpected response" against a
+    /// perfectly good 200 that contained the project id in plain sight.
+    /// `antigravity-usage` carries an `extractProjectId` helper for the same
+    /// reason.
+    struct ProjectReference: Decodable {
+        let id: String?
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let text = try? container.decode(String.self) {
+                id = text.isEmpty ? nil : text
+                return
+            }
+            struct Object: Decodable { let id: String? }
+            id = (try? container.decode(Object.self))?.id
+        }
     }
 
     private struct ModelResponse: Decodable {
@@ -69,9 +90,10 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         // 2.5 shares a pooled allowance with the older Gemini API rather than
         // the Antigravity subscription, so its fraction is not comparable with
-        // the rest and would distort the headline reading.
+        // the rest and would distort the headline reading. The remaining
+        // exclusions mirror `antigravity-usage`'s own model filter.
         let readings = models.compactMap { id, model -> (String, Double, Date)? in
-            guard id.lowercased().contains("gemini"), !id.contains("2.5"),
+            guard Self.isMeteredModel(id),
                   let remaining = model.quotaInfo?.remainingFraction, (0...1).contains(remaining),
                   let resetText = model.quotaInfo?.resetTime, let reset = Self.parseDate(resetText)
             else { return nil }
@@ -94,8 +116,10 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var seen: Set<String> = []
         let pools = ranked.filter { seen.insert("\(Int(($0.1 * 1000).rounded()))@\($0.2.timeIntervalSince1970)").inserted }
         let rows = pools.prefix(3).map { Self.row(name: $0.0, used: $0.1, reset: $0.2) }
-        // nil when Google published no plan type, rather than asserting one.
-        let plan = assist.planInfo?.planType
+        // `planInfo` is absent from the live payload; the tier is what the API
+        // actually reports. nil when neither is published, rather than
+        // asserting a tier nobody measured.
+        let plan = assist.planInfo?.planType ?? assist.currentTier?.id
         let urgency: Urgency = primary.1 > 0.90 ? .critical : primary.1 > 0.70 ? .warning : .none
         let percent = Int((primary.1 * 100).rounded())
         return QuotaSnapshot(
@@ -106,6 +130,18 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             row2: rows[safe: 1], row3: rows[safe: 2], badgeText: "\(100 - percent)% left",
             planName: plan, cliSource: "Google OAuth"
         )
+    }
+
+    /// Which models represent a metered Antigravity pool. Mirrors
+    /// `antigravity-usage`'s `shouldShowModel`, so the row names the same
+    /// models their CLI does.
+    static func isMeteredModel(_ id: String) -> Bool {
+        let lower = id.lowercased()
+        guard lower.contains("gemini") else { return false }
+        if lower.contains("2.5") { return false }
+        if lower.hasPrefix("chat_") || lower.hasPrefix("tab_") || lower.hasPrefix("rev") { return false }
+        if lower.contains("image") || lower.contains("lite") || lower.contains("mquery") { return false }
+        return true
     }
 
     private static func row(name: String, used: Double, reset: Date) -> DualBarMetrics {

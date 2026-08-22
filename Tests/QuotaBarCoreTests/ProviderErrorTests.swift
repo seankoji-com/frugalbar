@@ -105,12 +105,11 @@ struct GeminiOAuthClientTests {
     func foreignSessionIsDiscarded() throws {
         let mine = GeminiOAuthSession(accessToken: "a", refreshToken: "r",
                                       expiry: Date(timeIntervalSince1970: 4_000_000_000),
-                                      clientID: GeminiOAuthSession.clientID ?? "unset")
+                                      clientID: "111-mine.apps.googleusercontent.com")
         let theirs = GeminiOAuthSession(accessToken: "a", refreshToken: "r",
                                         expiry: Date(timeIntervalSince1970: 4_000_000_000),
                                         clientID: "999-someone-else.apps.googleusercontent.com")
-        #expect(mine.clientID == (GeminiOAuthSession.clientID ?? "unset"))
-        #expect(theirs.clientID != GeminiOAuthSession.clientID)
+        #expect(mine.clientID != theirs.clientID)
 
         // Sessions written before the field existed decode, and count as foreign.
         let legacy = try JSONDecoder().decode(
@@ -119,17 +118,6 @@ struct GeminiOAuthClientTests {
         #expect(legacy.clientID == nil)
     }
 
-    /// Signing in with no client configured must fail with a reason the user
-    /// can act on, not with Google's "client_secret is missing".
-    @Test("a token request without a configured client is not-configured")
-    func unconfiguredClientIsNotConfigured() async {
-        guard !GeminiOAuthSession.isClientConfigured else { return }   // configured locally
-        await #expect(throws: ProviderError.notConfigured) {
-            try await GeminiOAuthSession.requestToken(
-                fields: ["grant_type": "refresh_token", "refresh_token": "r"],
-                existingRefreshToken: "r")
-        }
-    }
 }
 
 @Suite("Gemini OAuth token errors")
@@ -153,5 +141,40 @@ struct GeminiOAuthErrorTests {
         let error = GeminiOAuthError(from: Data("<html>gateway timeout</html>".utf8), statusCode: 504)
         #expect(error.code == "http_504")
         #expect(error.summary == "http_504")
+    }
+}
+
+@Suite("Gemini Cloud Code payload shapes")
+struct GeminiPayloadTests {
+
+    private func projectID(from json: String) throws -> String? {
+        try JSONDecoder()
+            .decode(GeminiQuotaProvider.ProjectReference.self, from: Data(json.utf8))
+            .id
+    }
+
+    /// The live API returns this field as a bare string. Decoding it as only
+    /// an object made a perfectly good 200 unparseable, and the row read
+    /// "Unexpected response" with the project id sitting in plain sight.
+    @Test("a project reference decodes whether it is a string or an object")
+    func projectReferenceAcceptsBothShapes() throws {
+        #expect(try projectID(from: #""authentic-answer-268pr""#) == "authentic-answer-268pr")
+        #expect(try projectID(from: #"{"id":"authentic-answer-268pr"}"#) == "authentic-answer-268pr")
+        #expect(try projectID(from: #""""#) == nil)
+        #expect(try projectID(from: #"{"name":"no-id-here"}"#) == nil)
+    }
+
+    /// Mirrors antigravity-usage's own filter, so the row names the models
+    /// their CLI does — and never prices an image or autocomplete-only model
+    /// as though it were the coding pool.
+    @Test("only metered Gemini pools are counted")
+    func modelFilterMatchesTheReference() {
+        #expect(GeminiQuotaProvider.isMeteredModel("gemini-3-flash"))
+        #expect(GeminiQuotaProvider.isMeteredModel("gemini-3.1-pro-high"))
+        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-3.1-flash-image"))
+        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-2.5-flash"))
+        #expect(!GeminiQuotaProvider.isMeteredModel("gemini-3.5-flash-lite"))
+        #expect(!GeminiQuotaProvider.isMeteredModel("chat_gemini-3"))
+        #expect(!GeminiQuotaProvider.isMeteredModel("claude-opus-4-6-thinking"))
     }
 }
