@@ -415,14 +415,14 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
 
 
 
-    /// Short display name for compact row header (e.g. "Claude", "Gemini", "Copilot").
+    /// Short display name for a compact row header.
     public var shortVendorName: String {
         switch vendorId {
         case .claude:        return "Claude"
         case .openai:        return "OpenAI"
         case .gemini:        return "Gemini"
         case .opencode:      return "OpenCode"
-        case .copilot:       return "Copilot"
+        case .copilot:       return "GitHub Copilot"
         case .openrouter:    return "OpenRouter"
         case .githubRest, .githubGraphql: return "GitHub"
         }

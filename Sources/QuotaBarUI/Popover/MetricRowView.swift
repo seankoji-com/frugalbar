@@ -1,15 +1,14 @@
 import SwiftUI
 import QuotaBarCore
 
-/// A single high-density row showing one provider's status, dual-bar burndown chart,
-/// and interactive detail trigger.
+/// A single provider row: vendor mark, name and plan, and the burndown bars for
+/// every window that vendor publishes.
 struct MetricRowView: View {
 
     let snapshot: QuotaSnapshot
-    var isAltRow: Bool = false
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
 
-    @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 64
+    @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var isHovered = false
 
@@ -27,56 +26,68 @@ struct MetricRowView: View {
         }
     }
 
-    private var rowBackground: Color {
-        if isHovered {
-            return Color.white.opacity(0.08)
-        } else if isAltRow {
-            return Theme.surfaceContainerLow.opacity(0.40)
-        } else {
-            return Color.clear
+    /// The second line of the name column. An exhausted provider spends it on
+    /// the vendor's own reset text — the plan name is the least useful thing to
+    /// print about a quota you cannot currently use. Falls back to the plan
+    /// when the vendor published no reset rather than inventing one.
+    private var subtitle: String {
+        if p.isExhausted, let reset = p.exhaustedResetText, !reset.isEmpty {
+            return reset
         }
+        return snapshot.shortPlanName
     }
 
-
+    private var subtitleColor: Color {
+        p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            // Vendor avatar badge
-            VendorAvatarView(vendorId: snapshot.vendorId, status: snapshot.status)
+        HStack(spacing: 9) {
+            VendorAvatarView(
+                vendorId: snapshot.vendorId,
+                status: snapshot.status,
+                isExhausted: p.isExhausted,
+                size: 30
+            )
 
             // Two lines: vendor, then the plan the provider actually reported.
-            VStack(alignment: .leading, spacing: 1.5) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(snapshot.shortVendorName)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(Theme.Typography.title)
+                    .tracking(Theme.Tracking.title)
                     .foregroundStyle(Theme.onSurface)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
 
-                if !snapshot.shortPlanName.isEmpty {
-                    Text(snapshot.shortPlanName)
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(subtitleColor)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.9)
                 }
                 // A money provider has no plan, but it does have the one figure
                 // that matters at a glance: what is left. It takes the subtitle
                 // slot rather than competing for the row's right-hand side.
                 if case .currency(let balance, _, _, let code) = snapshot.metric,
                    snapshot.status.confidence == .measured {
+                    // Set as a figure, not as a second title. Two 17pt bolds
+                    // stacked made this the heaviest row in the popover for no
+                    // reason other than that it happens to hold money.
                     Text(formatCurrency(balance, code: code))
-                        .font(.system(size: 12, weight: .bold))
-                        .monospacedDigit()
+                        .font(Theme.Typography.numeric)
+                        .tracking(Theme.Tracking.numeric)
                         .foregroundStyle(snapshot.status.urgency == .none
                                          ? Theme.healthy : Theme.error)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
-            .frame(width: 80, alignment: .leading)
-
-
+            .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
             if !snapshot.bars.isEmpty {
                 // Multi-bar (5H / WK / MO) burndown charts
-                VStack(spacing: 3.5) {
+                VStack(spacing: 5) {
                     ForEach(Array(snapshot.bars.enumerated()), id: \.offset) { _, barMetrics in
                         DualBarProgressView(
                             metrics: barMetrics,
@@ -88,20 +99,24 @@ struct MetricRowView: View {
             } else if !snapshot.spendWindows.isEmpty {
                 // Spend per window. Deliberately not a bar: spend has no cap to
                 // measure against, so drawing one would invent a denominator.
-                VStack(alignment: .trailing, spacing: 3.5) {
+                VStack(alignment: .trailing, spacing: 5) {
                     ForEach(Array(snapshot.spendWindows.enumerated()), id: \.offset) { _, window in
+                        // Same spacing and token column as a bar row, so the
+                        // money card's right edge lines up with the quota
+                        // cards' instead of sitting 16pt short of it.
                         HStack(spacing: 8) {
                             Spacer(minLength: 0)
                             Text(window.amount.map { formatCurrency($0, code: window.currencyCode) } ?? "—")
-                                .font(.system(size: 11, weight: .bold))
-                                .monospacedDigit()
+                                .font(Theme.Typography.numeric)
+                                .tracking(Theme.Tracking.numeric)
                                 .foregroundStyle(Theme.onSurface)
                             Text(window.label)
-                                .font(.system(size: 9.5, weight: .bold))
-                                .monospaced()
+                                .font(Theme.Typography.token)
+                                .tracking(Theme.Tracking.token)
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                                 .lineLimit(1)
-                                .frame(width: 26, alignment: .trailing)
+                                .minimumScaleFactor(0.75)
+                                .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
                         }
                     }
                 }
@@ -114,34 +129,29 @@ struct MetricRowView: View {
                         .frame(width: barWidth)
                 }
 
-
                 Text(p.valueLabel)
-                    .font(.system(size: 10.5, weight: p.isMeasured ? .semibold : .regular))
-                    .monospacedDigit()
+                    .font(Theme.Typography.chip)
                     .foregroundStyle(p.isMeasured ? (p.fraction != nil ? urgencyColor : Theme.secondary) : Theme.outline)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2.5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(Theme.surfaceContainerHighest.opacity(0.50))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                     .lineLimit(1)
                     .layoutPriority(1)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4.5)
-        .frame(minHeight: 32)
+        .padding(.vertical, 9)
+        .frame(minHeight: Theme.rowMinHeight)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(rowBackground)
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                .padding(.horizontal, -6)
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture {
             onSelect?(snapshot)
         }
-
-
-
         .help(p.accessibilityLabel)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(p.accessibilityLabel)
@@ -158,6 +168,3 @@ struct MetricRowView: View {
         }
     }
 }
-
-
-

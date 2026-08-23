@@ -17,12 +17,30 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let isMeasured: Bool
     public let urgency: Urgency
     public let accessibilityLabel: String
+    /// A window the vendor reports as fully spent. Deliberately narrower than
+    /// `.critical` urgency, which also covers "nearly gone" — the struck-through
+    /// logo is reserved for nothing-left-at-all.
+    public let isExhausted: Bool
+    /// What the vendor published about when the exhausted window reopens, e.g.
+    /// "Resets on 1st of month". nil when it published nothing, in which case
+    /// the row keeps showing the plan name rather than inventing a date.
+    public let exhaustedResetText: String?
+
+    /// A bar is only exhausted at the top of its range. `>= 1` would miss the
+    /// floating-point residue of a percentage that arrived as 100.
+    static let exhaustionThreshold = 0.999
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
+
+        // An unreadable provider has no bars, so this reads false there — a
+        // quota we could not fetch is not a quota we know is spent.
+        let spentBar = snapshot.bars.first { $0.primaryFraction >= Self.exhaustionThreshold }
+        self.isExhausted = spentBar != nil
+        self.exhaustedResetText = spentBar?.resetText
 
         if let reason = snapshot.status.unavailableReason {
             self.valueLabel = reason.headline
@@ -36,6 +54,14 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.resetLabel = ResetCountdownBadge.format(snapshot.resetsAt, now: now)
 
         var parts = [snapshot.displayName, Self.spoken(for: snapshot.metric)]
+        if isExhausted {
+            // Said outright rather than left to "critically low", which a
+            // screen reader user cannot distinguish from 5% remaining.
+            parts.append("exhausted")
+            if let exhaustedResetText {
+                parts.append(exhaustedResetText)
+            }
+        }
         switch snapshot.status.urgency {
         case .none:     break
         case .warning:  parts.append("running low")

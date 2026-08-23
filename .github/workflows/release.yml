@@ -62,6 +62,14 @@ jobs:
 
       - name: Build Release (ARM64)
         run: |
+          # The release ships a bare executable, so Bundle.main carries no
+          # version for the About window to read. Stamp the tag into the source
+          # before building — same __VERSION__ templating the formula uses.
+          VER="${{ steps.semver.outputs.tag }}"
+          VER="${VER#v}"
+          sed -i '' "s|\"__VERSION__\"|\"${VER}\"|" Sources/QuotaBarCore/Models/AppInfo.swift
+          grep -q "\"${VER}\"" Sources/QuotaBarCore/Models/AppInfo.swift \
+            || { echo "::error::version stamp did not apply"; exit 1; }
           swift build -c release --arch arm64 -Xswiftc -warnings-as-errors
           mkdir -p bin
           cp .build/arm64-apple-macosx/release/QuotaBar bin/frugalbar

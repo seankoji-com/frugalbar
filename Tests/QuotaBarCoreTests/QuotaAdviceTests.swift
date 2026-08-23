@@ -119,7 +119,9 @@ struct QuotaAdviceTests {
         #expect(advice.urgency == .critical)
         #expect(advice.headline == "Use Gemini")
         #expect(advice.message.contains("Gemini has 70% remaining"))
-        #expect(advice.message.contains("Claude 5H at 80% (resets in 42m)"))
+        // The recommendation only. What is *not* worth using is visible in the
+        // rows themselves and does not need restating in the summary.
+        #expect(!advice.message.contains("Claude"))
         #expect(advice.suggestedAction == "Use Gemini")
     }
 
@@ -221,10 +223,11 @@ struct QuotaAdviceTests {
         #expect(advice.headline == "Use Gemini")
         #expect(advice.vendorId == .gemini)
         #expect(advice.urgency == .critical)
+        // Routing is what this case guards; the constrained providers are named
+        // by the rows, not enumerated back at the user here.
         #expect(advice.message.contains("Gemini has 94% remaining"))
-        #expect(advice.message.contains("OpenAI WK at 92%"))
-        #expect(advice.message.contains("Claude WK at 88% (resets in 2 days)"))
-        #expect(advice.message.contains("OpenCode MO exhausted"))
+        #expect(!advice.message.contains("OpenAI"))
+        #expect(!advice.message.contains("OpenCode"))
     }
 
     /// An unreadable provider is not an empty one. The old engine defaulted a
@@ -290,9 +293,8 @@ struct QuotaAdviceTests {
         #expect(advice.message.contains("Claude WK has 10% left"))
         #expect(advice.message.contains("resets in 11 hours"))
         #expect(!advice.message.contains("Route urgent tasks"))
-        // The other constraints are still reported, not swallowed.
-        #expect(advice.message.contains("OpenAI WK at 92%"))
-        #expect(advice.message.contains("Copilot PREM exhausted"))
+        #expect(!advice.message.contains("OpenAI"))
+        #expect(!advice.message.contains("Copilot"))
     }
 
     /// The reported case: Claude's weekly window 93% elapsed with 3% left,

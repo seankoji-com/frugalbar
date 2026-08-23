@@ -33,10 +33,16 @@ public enum VendorSVGLogo {
             </svg>
             """
         case .openai:
+            // Official mark. The source ships `fill="currentColor"` and `1em`
+            // dimensions, neither of which means anything to NSImage — there is
+            // no CSS context offscreen — so the fill is explicit and the badge
+            // padding comes from an oversized viewBox rather than a `<g
+            // transform>`, which macOS SVG support handles unevenly.
             return """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-              <rect width="24" height="24" rx="4.5" fill="#10A37F"/>
-              <path d="M12 4.5a3.2 3.2 0 0 1 5.45 2.28 3.2 3.2 0 0 1 1.93 5.77 3.2 3.2 0 0 1-3.52 4.94A3.2 3.2 0 0 1 10.25 19a3.2 3.2 0 0 1-5.44-2.3 3.2 3.2 0 0 1-1.93-5.75 3.2 3.2 0 0 1 3.53-4.95A3.2 3.2 0 0 1 12 4.5Z" fill="none" stroke="white" stroke-width="1.5"/>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 32 32" width="24" height="24">
+              <rect x="-4" y="-4" width="32" height="32" rx="6" fill="#10A37F"/>
+              <path fill="#FFFFFF" fill-rule="evenodd"
+                    d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />
             </svg>
             """
         case .gemini:
@@ -90,52 +96,84 @@ public enum VendorSVGLogo {
 }
 
 
-/// 20x20 vendor avatar badge rendering official brand SVG and status dot.
+/// Vendor avatar badge rendering the official brand SVG plus a status dot,
+/// or a red ✗ in place of the logo once a window is fully spent.
 public struct VendorAvatarView: View {
 
     let vendorId: VendorIdentifier
     let status: ProviderStatus
+    /// Strikes the brand mark through with a ✗ and fades it back. The vendor
+    /// still has to be identifiable at a glance — the row is read by its logo
+    /// before its name — so the mark stays and the ✗ sits over it.
+    let isExhausted: Bool
+    let size: CGFloat
 
-    public init(vendorId: VendorIdentifier, status: ProviderStatus) {
+    public init(
+        vendorId: VendorIdentifier,
+        status: ProviderStatus,
+        isExhausted: Bool = false,
+        size: CGFloat = 32
+    ) {
         self.vendorId = vendorId
         self.status = status
+        self.isExhausted = isExhausted
+        self.size = size
     }
 
     private var isCritical: Bool { status.urgency == .critical }
     private var isWarning: Bool { status.urgency == .warning }
 
+    @ViewBuilder
+    private var mark: some View {
+        if let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
+            Image(nsImage: nsImg)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.23))
+        } else {
+            RoundedRectangle(cornerRadius: size * 0.23)
+                .fill(Color(hexString: vendorId.accentColorHex) ?? Theme.primary)
+                .frame(width: size, height: size)
+        }
+    }
+
     public var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
-                Image(nsImage: nsImg)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 24, height: 24)
-                    .clipShape(RoundedRectangle(cornerRadius: 5.5))
-            } else {
-                RoundedRectangle(cornerRadius: 5.5)
-                    .fill(Color(hexString: vendorId.accentColorHex) ?? Theme.primary)
-                    .frame(width: 24, height: 24)
-            }
+            ZStack {
+                // Faded rather than hidden: enough to keep the vendor
+                // recognisable, dim enough that the ✗ is what registers first.
+                mark.opacity(isExhausted ? 0.40 : 1)
 
-            if isCritical {
-                Circle()
-                    .fill(Theme.error)
-                    .frame(width: 7, height: 7)
-                    .overlay(Circle().stroke(Theme.surface, lineWidth: 1))
-                    .shadow(color: Theme.error.opacity(0.8), radius: 2)
-                    .offset(x: 2.5, y: -2.5)
-            } else if isWarning {
-                Circle()
-                    .fill(Theme.tertiary)
-                    .frame(width: 7, height: 7)
-                    .overlay(Circle().stroke(Theme.surface, lineWidth: 1))
-                    .shadow(color: Theme.tertiary.opacity(0.6), radius: 1.5)
-                    .offset(x: 2.5, y: -2.5)
+                if isExhausted {
+                    Image(systemName: "xmark")
+                        .font(.system(size: size * 0.78, weight: .heavy))
+                        .foregroundStyle(Theme.error)
+                }
+            }
+            .frame(width: size, height: size)
+
+            // The ✗ already says everything the dot would, louder.
+            if !isExhausted {
+                if isCritical {
+                    Circle()
+                        .fill(Theme.error)
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(Theme.card, lineWidth: 1.25))
+                        .shadow(color: Theme.error.opacity(0.8), radius: 2)
+                        .offset(x: 3, y: -3)
+                } else if isWarning {
+                    Circle()
+                        .fill(Theme.tertiary)
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(Theme.card, lineWidth: 1.25))
+                        .shadow(color: Theme.tertiary.opacity(0.6), radius: 1.5)
+                        .offset(x: 3, y: -3)
+                }
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: size, height: size)
     }
 }
 

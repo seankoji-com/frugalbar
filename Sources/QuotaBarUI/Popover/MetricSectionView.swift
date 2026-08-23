@@ -1,7 +1,8 @@
 import SwiftUI
 import QuotaBarCore
 
-/// A categorized section showing a header + metric rows with visual separators.
+/// A categorized section: one card holding the vendor rows for that category,
+/// hairline-separated.
 struct MetricSectionView: View {
 
     let category: MetricCategory
@@ -9,32 +10,22 @@ struct MetricSectionView: View {
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
 
     var body: some View {
-        // Vendor rows with subtle alternating card styling & separators
         VStack(spacing: 0) {
             ForEach(Array(snapshots.enumerated()), id: \.element.id) { index, snap in
-                MetricRowView(
-                    snapshot: snap,
-                    isAltRow: index % 2 != 0,
-                    onSelect: onSelect
-                )
+                MetricRowView(snapshot: snap, onSelect: onSelect)
 
                 if index < snapshots.count - 1 {
                     Rectangle()
-                        .fill(Theme.outlineVariant.opacity(0.20))
+                        .fill(Theme.outlineVariant.opacity(0.22))
                         .frame(height: 0.5)
-                        .padding(.horizontal, 6)
                 }
             }
         }
-        .background(Theme.surfaceContainerLowest.opacity(0.50))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Theme.outlineVariant.opacity(0.25), lineWidth: 0.5)
-        )
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, 4)
+        // Solid, not translucent: the old 50% fill sat on a near-identical
+        // ground and the card never read as a separate surface.
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
     }
 }
-
-
-
-

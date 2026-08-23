@@ -18,18 +18,17 @@ struct FooterActionsView: View {
             // FrugalBar Branding + Live status dot
             HStack(spacing: 6) {
                 Text("FrugalBar")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(Theme.Typography.footer)
                     .foregroundStyle(Theme.onSurface)
 
                 Circle()
                     .fill(healthColor)
-                    .frame(width: 5.5, height: 5.5)
-                    .shadow(color: healthColor.opacity(0.6), radius: 1.5)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: healthColor.opacity(0.6), radius: 2)
 
                 if let oldest = summary.oldestReading {
                     Text(elapsed(oldest))
-                        .font(.system(size: 9.5, weight: .medium))
-                        .monospacedDigit()
+                        .font(Theme.Typography.footerMeta)
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
                         .help("Oldest reading in view")
                 }
@@ -40,7 +39,7 @@ struct FooterActionsView: View {
             // Manual Refresh Button
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isRefreshHovered ? Theme.onSurface : Theme.onSurfaceVariant.opacity(0.85))
                     .rotationEffect(.degrees(isRefreshing ? 360 : 0))
                     .animation(
@@ -49,7 +48,7 @@ struct FooterActionsView: View {
                             : .default,
                         value: isRefreshing
                     )
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -74,8 +73,9 @@ struct FooterActionsView: View {
                 .keyboardShortcut("r", modifiers: .command)
 
                 Button {
-                    // Standard macOS About panel
-                    NSApp.orderFrontStandardAboutPanel(nil)
+                    // Not the standard panel: it reads Bundle.main, which is
+                    // empty for the bare executable a release ships.
+                    AboutWindow.show()
                 } label: {
                     Label("About FrugalBar", systemImage: "info.circle")
                 }
@@ -90,9 +90,9 @@ struct FooterActionsView: View {
                 .keyboardShortcut("q", modifiers: .command)
             } label: {
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 14.5, weight: .medium))
                     .foregroundStyle(isGearHovered ? Theme.onSurface : Theme.onSurfaceVariant.opacity(0.85))
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
 
@@ -101,12 +101,12 @@ struct FooterActionsView: View {
             .fixedSize()
             .onHover { isGearHovered = $0 }
         }
-        .padding(.horizontal, Theme.edgeMargin)
-        .frame(height: 32)
-        .background(Theme.surfaceContainerLowest.opacity(0.90))
+        .padding(.horizontal, Theme.edgeMargin + 4)
+        .frame(height: 44)
+        .background(Theme.card)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Theme.outlineVariant.opacity(0.35))
+                .fill(Theme.outlineVariant.opacity(0.30))
                 .frame(height: 0.5)
         }
     }
