@@ -374,6 +374,114 @@ extension CredentialStore {
         return token
     }
 
+    /// Where a provider's credential is actually coming from right now.
+    ///
+    /// Settings needs this to answer the only question its key fields raise:
+    /// do I have to fill this in? Two of the five are normally satisfied by CLI
+    /// discovery, and a form that shows five identical empty boxes cannot say
+    /// so. Carries no secret — only its provenance.
+    public enum CredentialSource: Sendable, Equatable {
+        /// Typed into this app and stored in our own Keychain item.
+        case keychain
+        /// Read from a CLI tool's own credential store. The string names it.
+        case discovered(String)
+        case absent
+    }
+
+    /// Human name for the place `discoverFromCLI` reads each vendor from.
+    public static func discoverySourceName(for vendor: VendorIdentifier) -> String {
+        switch vendor {
+        case .claude:        "Claude Code login"
+        case .openai:        "~/.codex/auth.json"
+        case .gemini:        "Google OAuth session"
+        case .opencode:      "OpenCode auth.json"
+        case .copilot:       "OpenCode auth.json"
+        case .openrouter:    "OpenCode auth.json"
+        case .githubRest:    "gh auth token"
+        case .githubGraphql: "gh auth token"
+        }
+    }
+
+    /// Resolves provenance off the main thread — `discoverFromCLI` can shell
+    /// out to `gh`, which has no business running during a view update.
+    public static func credentialSourceAsync(for vendor: VendorIdentifier) async -> CredentialSource {
+        await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                if let stored = try? KeychainManager.shared.get(label: vendor.rawValue),
+                   !stored.isEmpty {
+                    continuation.resume(returning: .keychain)
+                    return
+                }
+                guard isCLIDiscoveryEnabled,
+                      let found = discoverFromCLI(vendor: vendor), !found.isEmpty
+                else {
+                    continuation.resume(returning: .absent)
+                    return
+                }
+                continuation.resume(returning: .discovered(discoverySourceName(for: vendor)))
+            }
+        }
+    }
+
+    /// The subscription tier the Claude Code credential blob reports, e.g.
+    /// "Max (5x)" or "Pro".
+    ///
+    /// Anthropic's rate-limit headers carry usage but not the plan, so this is
+    /// the only place the tier is actually published. Returns nil rather than a
+    /// guess: an earlier revision hardcoded a per-vendor tier table and labelled
+    /// every Claude user "Max x20", Pro subscribers included.
+    static func claudePlanName(from data: Data?) -> String? {
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any]
+        else { return nil }
+
+        // rateLimitTier first: it is the more specific of the two. A
+        // subscriptionType of "max" does not say whether that is the 5x plan or
+        // the 20x one, and those are materially different allowances.
+        if let tier = oauth["rateLimitTier"] as? String,
+           let name = claudePlanName(fromRateLimitTier: tier) {
+            return name
+        }
+        if let type = oauth["subscriptionType"] as? String, !type.isEmpty {
+            return type.capitalized
+        }
+        return nil
+    }
+
+    /// Tiers Anthropic names in `rateLimitTier`. Anything unrecognised falls
+    /// through to `subscriptionType` rather than being reformatted on a guess.
+    static let claudeTierNames: Set<String> = ["free", "pro", "max", "team", "enterprise"]
+
+    /// "default_claude_max_5x" -> "Max (5x)"; "default_claude_pro" -> "Pro".
+    ///
+    /// Parsed by locating a known tier word rather than by stripping a fixed
+    /// "default_claude_" prefix, so a renamed prefix degrades to nil instead of
+    /// producing nonsense.
+    static func claudePlanName(fromRateLimitTier tier: String) -> String? {
+        let parts = tier.lowercased().split(separator: "_").map(String.init)
+        guard let index = parts.firstIndex(where: { claudeTierNames.contains($0) }) else { return nil }
+        let base = parts[index].capitalized
+        let multiplier = parts[(index + 1)...].first {
+            $0.count >= 2 && $0.hasSuffix("x") && $0.dropLast().allSatisfy(\.isNumber)
+        }
+        guard let multiplier else { return base }
+        return "\(base) (\(multiplier))"
+    }
+
+    /// Reads the tier off disk or the Keychain, on the credential queue.
+    public static func claudePlanNameAsync() async -> String? {
+        await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                let fileURL = URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent(".claude/.credentials.json")
+                let name = claudePlanName(from: claudeCodeKeychainBlob())
+                    ?? claudePlanName(from: try? Data(contentsOf: fileURL))
+                continuation.resume(returning: name)
+            }
+        }
+    }
+
     /// Extracts the durable GitHub OAuth token from OpenCode's `auth.json`.
     ///
     /// The `github-copilot` entry holds two tokens and they are not

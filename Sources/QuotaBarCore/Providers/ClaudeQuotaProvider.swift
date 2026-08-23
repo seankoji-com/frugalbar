@@ -41,17 +41,21 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // The binding constraint is whichever window is fuller. Badge and
         // urgency must come from the same number, or the menu bar goes red
         // while the row still reads "95% left".
+        // The plan is published in the credential blob, not in these headers.
+        // Absent, the row shows no subtitle at all — "Claude" under "Claude"
+        // was a placeholder that said nothing.
+        let plan = await CredentialStore.claudePlanNameAsync()
         let worst = max(fiveHour.used, weekly.used)
         let urgency: Urgency = worst > 0.90 ? .critical : worst > 0.70 ? .warning : .none
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
-            category: category, metric: .subscription(tierName: "Claude", renewalDate: nil),
+            category: category, metric: .subscription(tierName: plan ?? "Claude", renewalDate: nil),
             status: .measured(urgency), resetsAt: fiveHour.reset, lastUpdated: Date(),
             auxiliaryInfo: "Live Claude subscription quota",
             row1: row(fiveHour, label: "5H", window: QuotaWindow.fiveHours),
             row2: row(weekly, label: "WK", window: QuotaWindow.week),
             badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
-            planName: "Claude", cliSource: "Claude OAuth rate-limit headers"
+            planName: plan, cliSource: "Claude OAuth rate-limit headers"
         )
     }
 
