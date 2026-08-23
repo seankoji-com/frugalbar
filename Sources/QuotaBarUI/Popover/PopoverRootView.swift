@@ -17,9 +17,12 @@ public struct PopoverRootView: View {
 
     /// Wide enough for the row budget in `MetricRowView` (324pt of content).
     public static let popoverWidth: CGFloat = Theme.popoverWidth
-    public static let popoverHeight: CGFloat = 480
+    public static let popoverHeight: CGFloat = 640
     /// Only engaged when content genuinely cannot fit, e.g. accessibility sizes.
-    public static let maxContentHeight: CGFloat = 580
+    /// Raised from 580 with the comfortable row height: a full set of providers
+    /// plus the suggestion card lands near 670pt, which still clears the usable
+    /// height below the menu bar on a 13" display.
+    public static let maxContentHeight: CGFloat = 760
 
     public init(
         store: QuotaStore = QuotaStore(),
@@ -76,8 +79,25 @@ public struct PopoverRootView: View {
         }
     }
 
+    /// Launches the recommended agent, when the advice names a vendor that has
+    /// one. Advice about GitHub API limits names no tool to open, so the card
+    /// renders without a button rather than with a dead one.
+    private var adviceAction: (() -> Void)? {
+        guard let vendorId = store.advice.vendorId,
+              CLILauncher.command(for: vendorId) != nil
+        else { return nil }
+        return { Task { @MainActor in CLILauncher.launch(for: vendorId) } }
+    }
+
     private var sections: some View {
         VStack(spacing: Theme.sectionGap) {
+            // The recommendation leads. It is the one thing in the popover that
+            // answers the question the user opened it to ask; underneath five
+            // provider cards it was the last thing they reached.
+            if !store.snapshots.isEmpty {
+                AdviceSectionView(advice: store.advice, onActionTap: adviceAction)
+            }
+
             ForEach(MetricCategory.allCases, id: \.self) { category in
                 let items = store.snapshots.filter {
                     if category == .developerLimits {
@@ -120,20 +140,18 @@ public struct PopoverRootView: View {
 
 
 
-            if !store.snapshots.isEmpty {
-                AdviceSectionView(advice: store.advice)
-            } else {
+            if store.snapshots.isEmpty {
                 Text("Loading…")
-                    .font(.system(size: 11, weight: .regular))
+                    .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.outline)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    .padding(.vertical, 32)
             }
         }
         .padding(.horizontal, Theme.edgeMargin)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
-        .background(Theme.surface.opacity(0.3))
+        .padding(.top, Theme.edgeMargin)
+        .padding(.bottom, Theme.edgeMargin)
+        .background(Theme.surface)
     }
 }
 

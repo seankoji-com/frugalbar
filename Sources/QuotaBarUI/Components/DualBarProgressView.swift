@@ -10,7 +10,16 @@ public struct DualBarProgressView: View {
     let accentColor: Color
     let urgency: Urgency
 
-    public init(metrics: DualBarMetrics, accentColor: Color, urgency: Urgency) {
+    /// Track and fill thickness.
+    static let barHeight: CGFloat = 8
+    /// Pace marker height, and therefore the bar's layout height.
+    static let tickHeight: CGFloat = 14
+
+    public init(
+        metrics: DualBarMetrics,
+        accentColor: Color,
+        urgency: Urgency
+    ) {
         self.metrics = metrics
         self.accentColor = accentColor
         self.urgency = urgency
@@ -33,7 +42,7 @@ public struct DualBarProgressView: View {
 
     private var labelColor: Color {
         if isExhausted {
-            return Theme.error
+            return Theme.errorBold
         } else if let pace = targetPacePct, consumedPct > pace {
             return Color(red: 0.96, green: 0.72, blue: 0.15) // Bright warning yellow
         } else {
@@ -57,52 +66,42 @@ public struct DualBarProgressView: View {
                     // 1. Subtle background track across full width
                     Capsule()
                         .fill(trackColor)
-                        .frame(height: 5.5)
+                        .frame(height: Self.barHeight)
 
-                    if !hasPace {
+                    if isExhausted {
+                        // --- CASE 1: NOTHING LEFT ---
+                        // Red end to end. Splitting this at the pace marker
+                        // painted most of the bar in the vendor's brand colour
+                        // and reddened only the tail, so a spent quota read as
+                        // a mostly-healthy one with a red tip.
+                        Capsule()
+                            .fill(Theme.errorBold)
+                            .frame(width: w, height: Self.barHeight)
+                            .shadow(color: Theme.errorBold.opacity(0.6), radius: 2)
+                    } else if !hasPace {
                         // --- CASE 0: NO PACE TARGET ---
                         // Consumption only. Nothing here is measured against a
                         // number we did not receive.
-                        if isExhausted {
-                            Capsule()
-                                .fill(Theme.error)
-                                .frame(width: w, height: 5.5)
-                                .shadow(color: Theme.error.opacity(0.6), radius: 2)
-                        } else if aX > 0 {
+                        if aX > 0 {
                             Capsule()
                                 .fill(accentColor)
-                                .frame(width: max(4, aX), height: 5.5)
+                                .frame(width: max(4, aX), height: Self.barHeight)
                                 .animation(.easeOut(duration: 0.35), value: consumedPct)
                         }
-                    } else if isExhausted {
-                        // --- CASE 1: 100% EXHAUSTED ---
-                        // Budget portion up to marker in vendor brand color
-                        if mX > 0 {
-                            Capsule()
-                                .fill(accentColor)
-                                .frame(width: max(4, mX), height: 5.5)
-                        }
-
-                        // Overage segment in bright glowing RED to the end
-                        Capsule()
-                            .fill(Theme.error)
-                            .frame(width: max(4, w - mX), height: 5.5)
-                            .offset(x: mX)
-                            .shadow(color: Theme.error.opacity(0.6), radius: 2)
                     } else if aX > mX {
                         // --- CASE 2: OVERUSE (Marker is INSIDE the bar: aX > mX) ---
                         // Actual usage bar within budget (0 -> mX) in vendor brand color
                         if mX > 0 {
                             Capsule()
                                 .fill(accentColor)
-                                .frame(width: max(4, mX), height: 5.5)
+                                .frame(width: max(4, mX), height: Self.barHeight)
                         }
 
                         // Overuse delta segment between marker and actual usage (mX -> aX) in RED
                         if aX > mX {
                             Capsule()
                                 .fill(Theme.error)
-                                .frame(width: max(4, aX - mX), height: 5.5)
+                                .frame(width: max(4, aX - mX), height: Self.barHeight)
                                 .offset(x: mX)
                                 .animation(.easeOut(duration: 0.35), value: consumedPct)
                         }
@@ -112,7 +111,7 @@ public struct DualBarProgressView: View {
                         if mX > aX {
                             Capsule()
                                 .fill(Theme.healthy)
-                                .frame(width: max(4, mX - aX), height: 5.5)
+                                .frame(width: max(4, mX - aX), height: Self.barHeight)
                                 .offset(x: aX)
                                 .animation(.easeOut(duration: 0.35), value: consumedPct)
                         }
@@ -121,7 +120,7 @@ public struct DualBarProgressView: View {
                         if aX > 0 {
                             Capsule()
                                 .fill(accentColor)
-                                .frame(width: max(4, aX), height: 5.5)
+                                .frame(width: max(4, aX), height: Self.barHeight)
                                 .animation(.easeOut(duration: 0.35), value: consumedPct)
                         }
                     } else {
@@ -129,42 +128,35 @@ public struct DualBarProgressView: View {
                         if aX > 0 {
                             Capsule()
                                 .fill(accentColor)
-                                .frame(width: max(4, aX), height: 5.5)
+                                .frame(width: max(4, aX), height: Self.barHeight)
                                 .animation(.easeOut(duration: 0.35), value: consumedPct)
                         }
                     }
 
                     // 3. Target Pace Marker (vertical white tick at mX)
                     if hasPace, mX > 0, mX < w {
-                        Rectangle()
+                        Capsule()
                             .fill(Color.white)
-                            .frame(width: 2.0, height: 9.0)
-                            .offset(x: min(w - 2.0, max(0, mX - 1.0)))
-                            .shadow(color: Color.black.opacity(0.5), radius: 1.5, x: 0, y: 0)
+                            .frame(width: 2.5, height: Self.tickHeight)
+                            .offset(x: min(w - 2.5, max(0, mX - 1.25)))
+                            .shadow(color: Color.black.opacity(0.65), radius: 2, x: 0, y: 0)
                     }
                 }
                 .frame(height: geo.size.height, alignment: .center)
             }
-            .frame(height: 5.5)
+            // Taller than the track so the 14pt pace tick has room to stand
+            // proud of it instead of overflowing an 8pt layout box.
+            .frame(height: Self.tickHeight)
 
-            // High-contrast window interval label (5H, WK, MO) with dynamic color & warning icon on 100%
-            HStack(spacing: 3) {
-                if isExhausted {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Theme.error)
-                }
-
-                Text(metrics.label)
-                    .font(.system(size: 9.5, weight: .bold))
-                    .monospaced()
-                    .foregroundStyle(labelColor)
-                    // A four-character window name wrapped to "PRE M" at the
-                    // old 32pt. The bar is flexible, so the extra width comes
-                    // out of the track rather than the 324pt row budget.
-                    .lineLimit(1)
-            }
-            .frame(width: 42, alignment: .trailing)
+            // The window token, always. Colour carries the state: green at or
+            // under pace, amber ahead of it, red once it is spent.
+            Text(metrics.label)
+                .font(Theme.Typography.token)
+                .tracking(Theme.Tracking.token)
+                .foregroundStyle(labelColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
         }
         .help(helpText)
         .accessibilityHidden(true)

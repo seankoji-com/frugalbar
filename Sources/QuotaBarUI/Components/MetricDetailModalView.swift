@@ -40,15 +40,15 @@ public struct MetricDetailModalView: View {
                 content
                 footer
             }
-            .frame(width: 320)
-            .background(Theme.surfaceContainer)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .frame(width: 348)
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Theme.outlineVariant.opacity(0.5), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                    .stroke(Theme.outlineVariant.opacity(0.4), lineWidth: 0.5)
             )
-            .shadow(color: Color.black.opacity(0.5), radius: 16, x: 0, y: 8)
-            .padding(10)
+            .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
+            .padding(Theme.edgeMargin)
         }
     }
 
@@ -56,44 +56,50 @@ public struct MetricDetailModalView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            VendorAvatarView(vendorId: snapshot.vendorId, status: snapshot.status)
+            VendorAvatarView(
+                vendorId: snapshot.vendorId,
+                status: snapshot.status,
+                isExhausted: MetricRowPresentation(snapshot: snapshot).isExhausted
+            )
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
                     Text(snapshot.displayName)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(Theme.Typography.title)
+                        .tracking(Theme.Tracking.title)
                         .foregroundStyle(Theme.onSurface)
 
                     if let badge = snapshot.badgeText {
                         Text(badge)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(Theme.Typography.token)
+                            .tracking(Theme.Tracking.token)
                             .foregroundStyle(Theme.primary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
                             .background(Theme.primary.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
                     }
                 }
 
                 Text(snapshot.category.rawValue)
-                    .font(.system(size: 9, weight: .regular))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
             }
 
             Spacer()
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(Theme.onSurfaceVariant)
-                    .padding(5)
-                    .background(Color.white.opacity(0.08))
+                    .padding(7)
+                    .background(Color.white.opacity(0.10))
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, 12)
         .background(Theme.surfaceContainerHigh)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.outlineVariant.opacity(0.5)).frame(height: 0.5)
@@ -103,32 +109,33 @@ public struct MetricDetailModalView: View {
     // MARK: - Content
 
     private var content: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             // Status alert banner
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: statusBannerIcon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(statusBannerColor)
                     .padding(.top, 1)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(statusBannerHeadline)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(Theme.Typography.cardBody.weight(.semibold))
                         .foregroundStyle(statusBannerColor)
 
                     if let note = snapshot.auxiliaryInfo {
                         Text(note)
-                            .font(.system(size: 9, weight: .regular))
+                            .font(Theme.Typography.subtitle)
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
-            .padding(8)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(statusBannerColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 10)
                     .stroke(statusBannerColor.opacity(0.3), lineWidth: 0.5)
             )
 
@@ -150,7 +157,7 @@ public struct MetricDetailModalView: View {
             }
 
             // Technical diagnostics
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 // Every value here is either measured or absent. A plausible
                 // placeholder in a diagnostics panel is worse than a dash: it
                 // is read as fact.
@@ -159,45 +166,46 @@ public struct MetricDetailModalView: View {
                 diagRow(label: "Key Fingerprint", value: snapshot.keyMasked ?? "—")
                 diagRow(label: "Plan Tier", value: snapshot.planName ?? snapshot.badgeText ?? "—", valueColor: Theme.primary)
             }
-            .padding(8)
+            .padding(10)
             .background(Theme.surfaceContainerLowest.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 10)
                     .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
             )
 
         }
-        .padding(12)
+        .padding(Theme.cardPadding)
     }
 
     private func metricCard(title: String, icon: String, primaryValue: String, secondaryValue: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 8))
+                    .font(.system(size: 10))
                 Text(title)
-                    .font(.system(size: 8.5, weight: .medium))
+                    .font(Theme.Typography.subtitle)
             }
-            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
 
             Text(primaryValue)
-                .font(.system(size: 11, weight: .bold))
-                .monospacedDigit()
+                .font(Theme.Typography.numeric)
+                .tracking(Theme.Tracking.numeric)
                 .foregroundStyle(Theme.onSurface)
                 .padding(.top, 1)
 
             Text(secondaryValue)
-                .font(.system(size: 8, weight: .regular))
+                .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.primary.opacity(0.85))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .padding(6)
+        .padding(9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surfaceContainerLowest.opacity(0.8))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
     }
@@ -205,12 +213,11 @@ public struct MetricDetailModalView: View {
     private func diagRow(label: String, value: String, valueColor: Color = Theme.onSurface) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 8.5, weight: .regular))
+                .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
             Spacer()
             Text(value)
-                .font(.system(size: 8.5, weight: .medium))
-                .monospaced()
+                .font(Theme.Typography.subtitle.monospaced())
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
         }
@@ -221,11 +228,11 @@ public struct MetricDetailModalView: View {
     private var footer: some View {
         HStack {
             Button(action: copyJson) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 9))
+                        .font(.system(size: 12))
                     Text(copied ? "Copied" : "Copy JSON")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(Theme.Typography.footer)
                 }
                 .foregroundStyle(copied ? Theme.secondary : Theme.onSurfaceVariant)
             }
@@ -234,16 +241,16 @@ public struct MetricDetailModalView: View {
             Spacer()
 
             Button("Done", action: onClose)
-                .font(.system(size: 9, weight: .semibold))
+                .font(Theme.Typography.footer)
                 .foregroundStyle(Theme.onSurface)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
                 .background(Color.white.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(Capsule())
                 .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, 10)
         .background(Theme.surfaceContainerLowest)
         .overlay(alignment: .top) {
             Rectangle().fill(Theme.outlineVariant.opacity(0.5)).frame(height: 0.5)
