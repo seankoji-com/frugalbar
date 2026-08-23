@@ -1,13 +1,14 @@
 import SwiftUI
 import QuotaBarCore
 
-/// Actionable advice and model routing recommendation section.
+/// The routing recommendation, presented as the popover's hero card: what to
+/// use next, why, and a single button that goes and does it.
 public struct AdviceSectionView: View {
 
     let advice: QuotaAdvice
     var onActionTap: (() -> Void)? = nil
 
-    @State private var isActionHovered = false
+    @State private var isHovered = false
 
     public init(advice: QuotaAdvice, onActionTap: (() -> Void)? = nil) {
         self.advice = advice
@@ -19,84 +20,68 @@ public struct AdviceSectionView: View {
     }
 
     public var body: some View {
-        // Advice card
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
 
-            // Vendor Brand Logo or glowing status icon
-            if let vendorId = advice.vendorId, let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
-                Image(nsImage: nsImg)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 24, height: 24)
-                    .clipShape(RoundedRectangle(cornerRadius: 5.5))
-                    .padding(.top, 1)
-            } else {
-                ZStack {
-                    Circle()
-                        .fill(accentColor.opacity(0.18))
-                        .frame(width: 24, height: 24)
+                // Vendor brand logo, or a glowing status icon when the advice
+                // is not about one particular vendor.
+                if let vendorId = advice.vendorId, let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
+                    Image(nsImage: nsImg)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 7.5))
+                } else {
+                    ZStack {
+                        Circle()
+                            .fill(accentColor.opacity(0.18))
+                            .frame(width: 32, height: 32)
 
-                    Image(systemName: advice.iconName)
-                        .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(accentColor)
+                        Image(systemName: advice.iconName)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(accentColor)
+                    }
                 }
-                .padding(.top, 1)
-            }
 
-            VStack(alignment: .leading, spacing: 3.5) {
-
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
                     Text(advice.headline)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(Theme.Typography.cardTitle)
+                        .tracking(Theme.Tracking.cardTitle)
                         .foregroundStyle(Theme.onSurface)
 
-                    Spacer()
-
-                    if let action = advice.suggestedAction {
-                        Button {
-                            onActionTap?()
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text(action)
-                                    .font(.system(size: 9.5, weight: .semibold))
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 8, weight: .bold))
-                            }
-                            .foregroundStyle(isActionHovered ? Theme.onSurface : accentColor)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4.5)
-                                    .fill(isActionHovered ? accentColor.opacity(0.30) : accentColor.opacity(0.14))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4.5)
-                                    .stroke(accentColor.opacity(isActionHovered ? 0.75 : 0.40), lineWidth: 0.75)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .onHover { isActionHovered = $0 }
+                    // The card is the control now that the button is gone, so
+                    // it needs some mark that it can be clicked. A chevron next
+                    // to the title is the smallest thing that reads as one.
+                    if isActionable {
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Theme.onSurface.opacity(isHovered ? 0.95 : 0.45))
                     }
                 }
 
                 Text(advice.message)
-                    .font(.system(size: 10.5, weight: .regular))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.90))
+                    .font(Theme.Typography.cardBody)
+                    .lineSpacing(2)
+                    .foregroundStyle(Theme.onSurface.opacity(0.92))
                     .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
             }
+
+            Spacer(minLength: 0)
         }
-        .padding(10)
+        .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surfaceContainerLowest.opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 6.5))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6.5)
-                .stroke(Theme.outlineVariant.opacity(0.30), lineWidth: 0.5)
-        )
-
+        .background(isActionable && isHovered ? Theme.surfaceContainerHigh : Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture { onActionTap?() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isActionable ? .isButton : [])
+        .accessibilityLabel(advice.suggestedAction.map { "\(advice.headline). \(advice.message) \($0)" }
+                            ?? "\(advice.headline). \(advice.message)")
     }
+
+    private var isActionable: Bool { onActionTap != nil }
 }
-
-
-

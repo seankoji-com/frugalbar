@@ -91,17 +91,6 @@ public struct QuotaAdvice: Sendable, Equatable {
         }
     }
 
-    /// "Claude 5H at 80% (resets in 42m)" — or "… exhausted" once it is spent.
-    private static func constraintText(_ candidate: Candidate) -> String {
-        let percent = Int((candidate.used * 100).rounded())
-        let label = candidate.bar.map { " \($0.label)" } ?? ""
-        let reset = cleanResetString(candidate.bar?.resetText).map { " (resets in \($0))" } ?? ""
-        if candidate.used >= 0.995 {
-            return "\(candidate.name)\(label) exhausted\(reset)"
-        }
-        return "\(candidate.name)\(label) at \(percent)%\(reset)"
-    }
-
     private static func list(_ items: [String]) -> String {
         switch items.count {
         case 0:  return ""
@@ -150,13 +139,14 @@ public struct QuotaAdvice: Sendable, Equatable {
         // 1. SCENARIO: something is nearly spent. Route around it — or, if
         //    nothing has headroom left, off the subscriptions entirely.
         if !constrained.isEmpty {
-            let constraints = list(constrained.map(constraintText))
-
             if let best = headroom.first {
                 let remaining = Int(((1.0 - best.used) * 100).rounded())
+                // Just the recommendation. Enumerating what is spent turned a
+                // one-line answer into a five-line paragraph the user has to
+                // read past to find out what to do.
                 return QuotaAdvice(
                     headline: "Use \(best.name)",
-                    message: "\(best.name) has \(remaining)% remaining. \(constraints).",
+                    message: "\(best.name) has \(remaining)% remaining.",
                     suggestedAction: "Use \(best.name)",
                     urgency: .critical,
                     iconName: "arrow.triangle.swap",
@@ -175,11 +165,9 @@ public struct QuotaAdvice: Sendable, Equatable {
                 let label = expiring.bar.map { " \($0.label)" } ?? ""
                 let reset = cleanResetString(expiring.bar?.resetText)
                     .map { " and the window resets in \($0)" } ?? ""
-                let others = constrained.filter { $0.vendorId != expiring.vendorId }
-                let rest = others.isEmpty ? "" : " \(list(others.map(constraintText)))."
                 return QuotaAdvice(
                     headline: "Spend Remaining \(expiring.name)",
-                    message: "\(expiring.name)\(label) has \(remaining)% left\(reset) — use it before it resets, rather than spending OpenRouter credit.\(rest)",
+                    message: "\(expiring.name)\(label) has \(remaining)% left\(reset) — use it before it resets, rather than spending OpenRouter credit.",
                     suggestedAction: "Use \(expiring.name)",
                     urgency: .warning,
                     iconName: "hourglass.bottomhalf.filled",
