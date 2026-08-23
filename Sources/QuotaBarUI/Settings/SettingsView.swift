@@ -17,19 +17,19 @@ public struct SettingsView: View {
     }
 
     private static let slots: [KeySlot] = [
-        .init(id: .claude, label: "Claude session",
+        .init(id: .claude, label: "Claude",
               placeholder: "Claude OAuth access token",
               note: "Discovered from the Claude Code login when CLI discovery is on."),
-        .init(id: .openai, label: "ChatGPT session",
+        .init(id: .openai, label: "ChatGPT",
               placeholder: "Codex ChatGPT access token",
               note: "Discovered from ~/.codex/auth.json when CLI discovery is on."),
-        .init(id: .githubRest, label: "GitHub PAT",
+        .init(id: .githubRest, label: "GitHub",
               placeholder: "ghp_… or gho_…",
               note: "Used for REST, GraphQL and Copilot."),
-        .init(id: .openrouter, label: "OpenRouter key",
+        .init(id: .openrouter, label: "OpenRouter",
               placeholder: "sk-or-v1-…",
               note: "Gauge shown only when the key has a spend cap."),
-        .init(id: .opencode, label: "OpenCode token",
+        .init(id: .opencode, label: "OpenCode",
               placeholder: "oc_live_…",
               note: "Enables OpenCode Go monitoring."),
     ]
@@ -39,6 +39,9 @@ public struct SettingsView: View {
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
     @State private var isVerifying = false
+    @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
+    @State private var expanded: Set<VendorIdentifier> = []
+    @State private var showGeminiClient = false
     @State private var isSigningInToGemini = false
     @State private var geminiSignInStatus: String?
     @State private var geminiClientSecret = ""
@@ -64,81 +67,189 @@ public struct SettingsView: View {
                 .tabItem { Label(Tab.general.rawValue, systemImage: "gearshape") }
                 .tag(Tab.general)
         }
-        .frame(width: 460, height: 340)
+        // Grown with the rest of the app's density pass: at 460x340 the keys
+        // tab scrolled as soon as the notes under each field wrapped.
+        .frame(width: 540, height: 520)
         .padding()
         .onAppear(perform: loadKeys)
+        .task { await refreshSources() }
+        // Turning discovery off can strip a row back to "Not configured";
+        // saving a key can flip one to "Stored in Keychain". Both have to be
+        // reflected, or the status line becomes a lie the moment it matters.
+        .onChange(of: cliDiscovery) { Task { await refreshSources() } }
     }
 
     // MARK: - Keys
 
     private var keysTab: some View {
+        VStack(spacing: 0) {
+            keysForm
+            Divider()
+            saveBar
+        }
+    }
+
+    private var keysForm: some View {
         Form {
-            Section("Gemini") {
-                Button("Connect Google account") { Task { await connectGemini() } }
-                    .disabled(isSigningInToGemini)
-                if isSigningInToGemini { ProgressView().controlSize(.small) }
+            Section {
+                ForEach(Self.slots) { slot in
+                    slotRow(slot)
+                }
+            } header: {
+                Text("Providers")
+            } footer: {
+                Text("""
+                     These fill themselves in from your CLI logins. Expand a \
+                     row only to override one, or when it says "Not configured".
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Google (Gemini)") {
+                HStack {
+                    Button("Connect Google account") { Task { await connectGemini() } }
+                        .disabled(isSigningInToGemini)
+                    if isSigningInToGemini { ProgressView().controlSize(.small) }
+                }
                 Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
 
-                TextField("OAuth client ID", text: $geminiClientID)
-                    .textFieldStyle(.roundedBorder)
-                SecureField(
-                    "OAuth client secret",
-                    text: $geminiClientSecret,
-                    prompt: Text(geminiSecretIsStored
-                                 ? "•••••••• stored — leave blank to keep"
-                                 : "OAuth client secret")
-                )
-                .textFieldStyle(.roundedBorder)
-                Label(
-                    geminiSecretIsStored ? "Client secret stored" : "No client secret set",
-                    systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
-                )
-                .font(.caption2)
-                .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
-                Text("""
-                     Required. The Cloud Code API is private to Google's own \
-                     OAuth clients, so a client you create yourself will be \
-                     refused — use one whose project Google has allowlisted, \
-                     such as the pair the antigravity-usage CLI publishes in \
-                     its OAUTH_CONFIG. Leave the secret blank to keep the \
-                     stored one.
-                     """)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            ForEach(Self.slots) { slot in
-                Section {
+                // Folded away by default. This is the OAuth *client* identity,
+                // not a credential of the user's — it is the one thing here
+                // that genuinely has to be typed, and also the thing almost
+                // nobody needs to touch twice.
+                DisclosureGroup(isExpanded: $showGeminiClient) {
+                    TextField("OAuth client ID", text: $geminiClientID)
+                        .textFieldStyle(.roundedBorder)
                     SecureField(
-                        slot.label,
-                        text: Binding(
-                            get: { entered[slot.id] ?? "" },
-                            set: { entered[slot.id] = $0 }
-                        ),
-                        prompt: Text(slot.placeholder)
+                        "OAuth client secret",
+                        text: $geminiClientSecret,
+                        prompt: Text(geminiSecretIsStored
+                                     ? "•••••••• stored — leave blank to keep"
+                                     : "OAuth client secret")
                     )
-                    if let note = slot.note {
-                        Text(note)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let status = perKeyStatus[slot.id] {
-                        Text(status)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                    .textFieldStyle(.roundedBorder)
+                    Text("""
+                         The Cloud Code API is private to Google's own OAuth \
+                         clients, so one you create yourself will be refused — \
+                         use a pair whose project Google has allowlisted, such \
+                         as the one the antigravity-usage CLI publishes in its \
+                         OAUTH_CONFIG.
+                         """)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("OAuth client")
+                        Spacer()
+                        Label(
+                            geminiSecretIsStored ? "Configured" : "Needs a client",
+                            systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
+                        )
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                        .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
                     }
                 }
             }
 
-            HStack {
-                Button("Save & verify") { Task { await saveAndVerify() } }
-                    .disabled(isVerifying || !hasChanges)
-                if isVerifying { ProgressView().controlSize(.small) }
-            }
-            .padding(.top, 8)
         }
         .formStyle(.grouped)
+    }
+
+    /// Pinned below the form rather than appended to it. As the last row of a
+    /// scrolling `Form` this was off-screen at the default window height, so
+    /// the one commit action in the window looked like it did not exist.
+    private var saveBar: some View {
+        HStack(spacing: 8) {
+            if isVerifying { ProgressView().controlSize(.small) }
+            Spacer()
+            Button("Save & verify") { Task { await saveAndVerify() } }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isVerifying || !hasChanges)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+    }
+
+    /// One provider: what it is, where its credential is coming from, and — only
+    /// when you ask for it — a field to override that.
+    @ViewBuilder
+    private func slotRow(_ slot: KeySlot) -> some View {
+        let source = sources[slot.id] ?? .absent
+        DisclosureGroup(
+            isExpanded: Binding(
+                get: { expanded.contains(slot.id) },
+                set: { isOpen in
+                    if isOpen { expanded.insert(slot.id) } else { expanded.remove(slot.id) }
+                }
+            )
+        ) {
+            SecureField(
+                slot.label,
+                text: Binding(
+                    get: { entered[slot.id] ?? "" },
+                    set: { entered[slot.id] = $0 }
+                ),
+                prompt: Text(slot.placeholder)
+            )
+            .textFieldStyle(.roundedBorder)
+
+            if let note = slot.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            if let status = perKeyStatus[slot.id] {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: Self.icon(for: source))
+                    .foregroundStyle(Self.tint(for: source))
+                Text(slot.label)
+                Spacer()
+                Text(Self.describe(source))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    static func describe(_ source: CredentialStore.CredentialSource) -> String {
+        switch source {
+        case .keychain:            "Stored in Keychain"
+        case .discovered(let where_): "From \(where_)"
+        case .absent:              "Not configured"
+        }
+    }
+
+    private static func icon(for source: CredentialStore.CredentialSource) -> String {
+        switch source {
+        case .keychain:   "key.fill"
+        case .discovered: "sparkles"
+        case .absent:     "circle.dashed"
+        }
+    }
+
+    private static func tint(for source: CredentialStore.CredentialSource) -> Color {
+        switch source {
+        case .keychain:   .green
+        case .discovered: .blue
+        case .absent:     .secondary
+        }
+    }
+
+    private func refreshSources() async {
+        var found: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
+        for slot in Self.slots {
+            found[slot.id] = await CredentialStore.credentialSourceAsync(for: slot.id)
+        }
+        sources = found
     }
 
     /// The Gemini client fields count too. They did not, so typing a client ID
@@ -164,7 +275,7 @@ public struct SettingsView: View {
                      credentials you have not explicitly given the app.
                      """)
 
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Credential discovery")
@@ -285,6 +396,8 @@ public struct SettingsView: View {
                 perKeyStatus[.githubRest] = "Saved, but could not sync to \(failures.joined(separator: ", "))"
             }
         }
+
+        await refreshSources()
     }
 
     /// Returns the display names of any linked vendors that could not be synced.
