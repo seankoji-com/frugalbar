@@ -1,7 +1,7 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img width="375" height="472" alt="image" src="https://github.com/user-attachments/assets/65ab82f5-3370-4e8a-b85e-83dfdad464c3" alt="FrugalBar macOS Menu Bar Popover Screenshot" />
+  <img width="416" height="568" alt="image" src="https://github.com/user-attachments/assets/a6fed1ea-f879-4a98-828d-791f889221f8" />
 </p>
 
 
