@@ -41,7 +41,59 @@ struct MetricRowView: View {
         p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
 
+    /// OpenRouter's own catalog badges (free-tier + cheap large-context
+    /// model). Reached through the row's own leading column rather than
+    /// either of the three layout branches below (bars / spend windows /
+    /// no-reading chip fallback) so the badges render identically whichever
+    /// of those a given snapshot lands in — including the chip-fallback
+    /// branch a no-key OpenRouter reading always takes.
+    private var hasOpenRouterBadges: Bool {
+        snapshot.vendorId == .openrouter &&
+        (snapshot.freeTierModelBadge != nil || snapshot.cheapestLargeContextModelBadge != nil)
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            row
+            if hasOpenRouterBadges {
+                openRouterBadgesRow
+            }
+        }
+        .padding(.vertical, 9)
+        .frame(minHeight: Theme.rowMinHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                .padding(.horizontal, -6)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            onSelect?(snapshot)
+        }
+        .help(p.accessibilityLabel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(p.accessibilityLabel)
+    }
+
+    /// Both new badges in one compact line — not two stacked lines, which
+    /// would tower this row over its neighbours given OpenRouter's name
+    /// column already carries up to two lines of its own today.
+    private var openRouterBadgesRow: some View {
+        HStack(spacing: 6) {
+            if let free = snapshot.freeTierModelBadge {
+                BadgePillView(text: free)
+                    .accessibilityLabel("Free tier model: \(free)")
+            }
+            if let cheap = snapshot.cheapestLargeContextModelBadge {
+                BadgePillView(text: cheap, tint: Theme.secondary)
+                    .accessibilityLabel("Cheapest model with 1 million or more context: \(cheap)")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 9) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
@@ -140,21 +192,6 @@ struct MetricRowView: View {
                     .layoutPriority(1)
             }
         }
-        .padding(.vertical, 9)
-        .frame(minHeight: Theme.rowMinHeight)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
-                .padding(.horizontal, -6)
-        )
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .onTapGesture {
-            onSelect?(snapshot)
-        }
-        .help(p.accessibilityLabel)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(p.accessibilityLabel)
     }
 
     private func formatCurrency(_ value: Decimal, code: String) -> String {

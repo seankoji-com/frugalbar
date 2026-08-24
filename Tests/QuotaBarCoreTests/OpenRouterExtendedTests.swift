@@ -266,16 +266,20 @@ struct OpenRouterExtendedTests {
 
     // MARK: - Empty key
 
-    @Test("empty key returns notConfigured without issuing a request")
+    @Test("empty key returns notConfigured without issuing an /auth/key request")
     func emptyKeyNoRequest() async throws {
         let provider = OpenRouterProvider(apiKey: "")
-        let snap = try await withStubbedHTTP({ _ in
-            canned(body: "unused")
+        // No key means the primary /auth/key call never fires — but the
+        // model-catalog call needs no key, so it still runs on every
+        // refresh (that's what lets its badges appear with no key configured).
+        let snap = try await withStubbedHTTP({ request in
+            #expect(request.url?.absoluteString.contains("auth/key") != true)
+            return canned(body: "unused")
         }) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status == .unavailable(.notConfigured))
-        #expect(LocalStub.requestCount == 0)
+        #expect(LocalStub.requestCount == 1)
     }
 
     // MARK: - Currency metric shape

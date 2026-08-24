@@ -123,7 +123,8 @@ struct ProviderHTTPTests {
         _ = try await withStubbedHTTP({ _ in canned(body: #"{"data":{"usage":1,"limit":10}}"#) }) {
             try await provider.fetchSnapshot()
         }
-        #expect(URLProtocolStub.requestCount == 2)
+        // /auth/key, /credits, and the key-less /models catalog call.
+        #expect(URLProtocolStub.requestCount == 3)
     }
 
     // MARK: OpenRouter
@@ -226,7 +227,8 @@ struct ProviderHTTPTests {
             Issue.record("expected account credit metric")
             return
         }
-        #expect(URLProtocolStub.requestCount == 2)
+        // /auth/key, /credits, and the key-less /models catalog call.
+        #expect(URLProtocolStub.requestCount == 3)
         #expect(balance == Decimal(74.75))
         #expect(limit == nil)
         #expect(spent == Decimal(25.75))
