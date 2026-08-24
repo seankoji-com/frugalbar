@@ -27,6 +27,18 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        // The catalog fetch needs no key and must run on every refresh, key
+        // or not, so it starts concurrently with the (possibly key-gated)
+        // primary snapshot rather than after it.
+        async let badgesTask = Self.fetchModelBadges()
+        var snapshot = try await fetchPrimarySnapshot()
+        let badges = await badgesTask
+        snapshot.freeTierModelBadge = badges.freeTier
+        snapshot.cheapestLargeContextModelBadge = badges.cheapestLargeContext
+        return snapshot
+    }
+
+    private func fetchPrimarySnapshot() async throws -> QuotaSnapshot {
         guard let key = await credential(injected: apiKey, for: .openrouter) else {
             return unavailable(.notConfigured)
         }
@@ -189,5 +201,143 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         guard let raw = http.value(forHTTPHeaderField: "Retry-After"),
               let seconds = TimeInterval(raw) else { return nil }
         return Date().addingTimeInterval(seconds)
+    }
+
+    // MARK: - Model catalog badges
+
+    /// One entry from `GET /api/v1/models`, OpenRouter's public model
+    /// catalog. `pricing`/`context_length` are optional because a model
+    /// missing either is excluded from both badge rankings below — never
+    /// treated as `0` or as qualifying.
+    private struct ModelCatalogEntry: Decodable, Sendable {
+        struct Pricing: Decodable, Sendable {
+            let prompt: String?
+            let completion: String?
+        }
+        let id: String
+        let name: String?
+        let context_length: Int?
+        let pricing: Pricing?
+    }
+
+    private struct ModelCatalogResponse: Decodable, Sendable {
+        let data: [ModelCatalogEntry]
+    }
+
+    /// The two badge strings, or nil each when the catalog call failed or no
+    /// model qualified. Never fabricated — every field comes straight off a
+    /// real catalog entry.
+    private struct ModelBadges: Sendable {
+        var freeTier: String?
+        var cheapestLargeContext: String?
+    }
+
+    private struct RankedModel {
+        let id: String
+        let name: String
+        let contextLength: Int
+        let promptPrice: Double
+        let completionPrice: Double
+    }
+
+    /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
+    /// public catalog, which needs no key. Bounded to a deadline well under
+    /// `CachePolicy.perProviderTimeout` (10s) so a slow-but-not-erroring
+    /// `/api/v1/models` response can never ride the outer per-provider
+    /// deadline down to a generic `.timedOut` — including on the no-key fast
+    /// path, where `fetchPrimarySnapshot()` already has its real answer
+    /// (`.notConfigured`) instantly and shouldn't be held hostage by this
+    /// enrichment call. `withDeadline` races the fetch against its own
+    /// timer; a miss here simply yields empty badges, exactly like the
+    /// `try?` failure path it wraps.
+    private static func fetchModelBadges() async -> ModelBadges {
+        let outcome = await withDeadline(seconds: 5) {
+            await fetchModelBadgesFromCatalog()
+        }
+        switch outcome {
+        case .success(let badges):
+            return badges
+        case .failure:
+            // The wrapped fetch never throws, so a `.failure` here is always
+            // the 5s deadline itself elapsing. Logged so a degraded/slow
+            // catalog is distinguishable in the unified log from the
+            // legitimate "fetched fine, nothing qualified" case below, which
+            // stays silent on purpose.
+            NSLog("frugalbar: OpenRouter model-catalog fetch timed out after 5s; badges omitted this poll")
+            return ModelBadges()
+        }
+    }
+
+    private static func fetchModelBadgesFromCatalog() async -> ModelBadges {
+        guard let result = try? await QuotaHTTP.get(url: "https://openrouter.ai/api/v1/models"),
+              (200...299).contains(result.1.statusCode),
+              let decoded = try? JSONDecoder().decode(ModelCatalogResponse.self, from: result.0)
+        else {
+            // Distinct from a genuine zero-match: this is a network/HTTP/
+            // decode failure, not "fetched fine, no model qualified."
+            NSLog("frugalbar: OpenRouter model-catalog fetch failed or returned an unparseable body; badges omitted this poll")
+            return ModelBadges()
+        }
+
+        // A model with a missing/unparseable context_length or pricing is
+        // dropped from consideration entirely — it never becomes a `0` or a
+        // false qualifier for either ranking.
+        let candidates: [RankedModel] = decoded.data.compactMap { entry in
+            guard let pricing = entry.pricing,
+                  let promptStr = pricing.prompt, let promptPrice = Double(promptStr),
+                  let completionStr = pricing.completion, let completionPrice = Double(completionStr),
+                  let contextLength = entry.context_length
+            else { return nil }
+            return RankedModel(
+                id: entry.id, name: entry.name ?? entry.id, contextLength: contextLength,
+                promptPrice: promptPrice, completionPrice: completionPrice
+            )
+        }
+
+        // Badge 1: $0 prompt AND $0 completion, largest context wins. Ties
+        // broken alphabetically by id for determinism.
+        let free = candidates
+            .filter { $0.promptPrice == 0.0 && $0.completionPrice == 0.0 }
+            .min { lhs, rhs in
+                lhs.contextLength != rhs.contextLength
+                    ? lhs.contextLength > rhs.contextLength
+                    : lhs.id < rhs.id
+            }
+
+        // Badge 2: strictly-paid (completion > 0) with context >= 1M,
+        // cheapest $/M completion tokens wins. Ties broken alphabetically.
+        let cheap = candidates
+            .filter { $0.completionPrice > 0.0 && $0.contextLength >= 1_000_000 }
+            .min { lhs, rhs in
+                lhs.completionPrice != rhs.completionPrice
+                    ? lhs.completionPrice < rhs.completionPrice
+                    : lhs.id < rhs.id
+            }
+
+        return ModelBadges(
+            freeTier: free.map { "Free · \($0.name) (\(abbreviateContext($0.contextLength)) ctx)" },
+            cheapestLargeContext: cheap.map {
+                "\(formatPricePerMillion($0.completionPrice)) · \($0.name) (\(abbreviateContext($0.contextLength)) ctx)"
+            }
+        )
+    }
+
+    /// Abbreviates a token count for a compact badge: `128000` → `"128K"`,
+    /// `1000000` → `"1M"`, `10000000` → `"10M"`.
+    private static func abbreviateContext(_ tokens: Int) -> String {
+        if tokens >= 1_000_000 {
+            let millions = Double(tokens) / 1_000_000
+            return millions == millions.rounded() ? "\(Int(millions))M" : String(format: "%.1fM", millions)
+        }
+        if tokens >= 1_000 {
+            let thousands = Double(tokens) / 1_000
+            return thousands == thousands.rounded() ? "\(Int(thousands))K" : String(format: "%.1fK", thousands)
+        }
+        return "\(tokens)"
+    }
+
+    /// OpenRouter publishes price per token in USD; badges read as $/M tokens.
+    private static func formatPricePerMillion(_ perToken: Double) -> String {
+        String(format: "$%.2f/M", perToken * 1_000_000)
     }
 }

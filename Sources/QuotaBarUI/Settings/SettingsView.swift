@@ -55,6 +55,10 @@ public struct SettingsView: View {
     // app whatever the executable happens to be named.
     @AppStorage(CredentialStore.cliDiscoveryDefaultsKey, store: CredentialStore.preferences)
     private var cliDiscovery = false
+    // Same shared suite as `cliDiscovery`, so this reads and writes the same
+    // preference file whatever the executable happens to be named.
+    @AppStorage(CredentialStore.notificationsEnabledDefaultsKey, store: CredentialStore.preferences)
+    private var notificationsEnabled = false
 
     public init() {}
 
@@ -279,6 +283,26 @@ public struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Credential discovery")
+            }
+
+            Section {
+                Toggle("Notify when a quota recovers", isOn: $notificationsEnabled)
+                Text("""
+                     When on, FrugalBar posts a local notification once a \
+                     provider goes from critical/exhausted back to having \
+                     headroom. Off by default.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text("""
+                     Delivered via a `display notification` AppleScript call, \
+                     so macOS attributes the banner to whatever process runs \
+                     it, not to "FrugalBar" specifically.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Quota-recovery notifications")
             }
         }
         .formStyle(.grouped)

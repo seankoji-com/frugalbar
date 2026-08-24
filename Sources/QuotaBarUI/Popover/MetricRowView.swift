@@ -41,7 +41,80 @@ struct MetricRowView: View {
         p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
 
+    /// OpenRouter's own catalog badges (free-tier + cheap large-context
+    /// model). Reached through the row's own leading column rather than
+    /// either of the three layout branches below (bars / spend windows /
+    /// no-reading chip fallback) so the badges render identically whichever
+    /// of those a given snapshot lands in — including the chip-fallback
+    /// branch a no-key OpenRouter reading always takes.
+    private var hasOpenRouterBadges: Bool {
+        snapshot.vendorId == .openrouter &&
+        (snapshot.freeTierModelBadge != nil || snapshot.cheapestLargeContextModelBadge != nil)
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            row
+            if hasOpenRouterBadges {
+                openRouterBadgesRow
+            }
+        }
+        .padding(.vertical, 9)
+        .frame(minHeight: Theme.rowMinHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                .padding(.horizontal, -6)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            onSelect?(snapshot)
+        }
+        .help(combinedAccessibilityLabel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(combinedAccessibilityLabel)
+    }
+
+    /// The row collapses into a single accessibility element via
+    /// `.accessibilityElement(children: .ignore)` above, which means any
+    /// `.accessibilityLabel` set on a child (the badge pills below) is never
+    /// reached by VoiceOver — only this one label is announced. The badges'
+    /// descriptions are folded in here rather than left on the pills, where
+    /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
+    /// styling alone is not an accessible status channel).
+    private var combinedAccessibilityLabel: String {
+        var parts = [p.accessibilityLabel]
+        if let free = snapshot.freeTierModelBadge {
+            parts.append("Free tier model: \(free)")
+        }
+        if let cheap = snapshot.cheapestLargeContextModelBadge {
+            parts.append("Cheapest model with 1 million or more context: \(cheap)")
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    /// Both new badges in one compact line — not two stacked lines, which
+    /// would tower this row over its neighbours given OpenRouter's name
+    /// column already carries up to two lines of its own today.
+    ///
+    /// The pills themselves carry no accessibility label: the parent row
+    /// ignores child accessibility elements entirely, so any label set here
+    /// would be silently discarded. `combinedAccessibilityLabel` above is
+    /// where the badge text actually reaches VoiceOver.
+    private var openRouterBadgesRow: some View {
+        HStack(spacing: 6) {
+            if let free = snapshot.freeTierModelBadge {
+                BadgePillView(text: free)
+            }
+            if let cheap = snapshot.cheapestLargeContextModelBadge {
+                BadgePillView(text: cheap, tint: Theme.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 9) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
@@ -140,21 +213,6 @@ struct MetricRowView: View {
                     .layoutPriority(1)
             }
         }
-        .padding(.vertical, 9)
-        .frame(minHeight: Theme.rowMinHeight)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
-                .padding(.horizontal, -6)
-        )
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .onTapGesture {
-            onSelect?(snapshot)
-        }
-        .help(p.accessibilityLabel)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(p.accessibilityLabel)
     }
 
     private func formatCurrency(_ value: Decimal, code: String) -> String {

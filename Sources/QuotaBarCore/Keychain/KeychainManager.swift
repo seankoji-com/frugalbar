@@ -116,6 +116,17 @@ public enum CredentialStore {
     /// Settings exposes this as an explicit opt-in.
     public static let cliDiscoveryDefaultsKey = "QuotaBarEnableCLIDiscovery"
 
+    /// Whether to deliver a local notification when a provider's quota
+    /// recovers from critical/exhausted back to having headroom.
+    ///
+    /// Off by default — an unbundled executable has no `Bundle` identity to
+    /// request notification authorization under, so delivery goes through an
+    /// `osascript`/`display notification` AppleScript call instead of
+    /// `UNUserNotificationCenter`, and a banner some users never asked for is
+    /// a poor default for that mechanism. Settings exposes this as an
+    /// explicit opt-in.
+    public static let notificationsEnabledDefaultsKey = "QuotaBarEnableNotifications"
+
     /// Where FrugalBar's preferences live.
     ///
     /// `UserDefaults.standard` in an *unbundled* executable keys off the
@@ -169,6 +180,10 @@ public enum CredentialStore {
 
     public static var isCLIDiscoveryEnabled: Bool {
         preferences.bool(forKey: cliDiscoveryDefaultsKey)
+    }
+
+    public static var isNotificationsEnabled: Bool {
+        preferences.bool(forKey: notificationsEnabledDefaultsKey)
     }
 
     /// Returns the API key for a vendor: Keychain first, then — only when the

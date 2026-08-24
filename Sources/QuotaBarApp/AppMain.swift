@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// neither has to rebuild the other to see new data.
     private let store = QuotaStore()
     private var schedulerToken: UUID?
+    private let notificationObserver = QuotaNotificationObserver()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
@@ -64,10 +65,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await store.load()
             await BackgroundScheduler.shared.start(interval: 120)
+            // One handler for both jobs: adding a second would make the
+            // recovery check race the refresh it depends on for no reason.
             schedulerToken = await BackgroundScheduler.shared.addHandler { [weak self] in
                 await self?.store.load()
+                await self?.checkForQuotaRecovery()
             }
         }
+    }
+
+    /// Diffs the latest snapshots against the previous poll and delivers a
+    /// notification for any critical→recovered transitions, when the user
+    /// has opted in.
+    ///
+    /// `observe` runs on every poll regardless of the toggle, so the
+    /// observer's "previous" state stays current even while notifications are
+    /// off — only delivery is gated below.
+    private func checkForQuotaRecovery() async {
+        let events = await notificationObserver.observe(current: store.snapshots)
+        guard CredentialStore.isNotificationsEnabled, !events.isEmpty else { return }
+        deliverRecoveryNotification(for: events)
+    }
+
+    /// Posts one `display notification` via `osascript` for the whole batch.
+    ///
+    /// A poll can surface more than one vendor recovering at once; one
+    /// `Process` per event would fire a burst of separate system banners for
+    /// what is, from the user's point of view, a single poll result, so
+    /// multiple events are consolidated into one notification.
+    ///
+    /// `UNUserNotificationCenter` is not an option: this app ships as a bare
+    /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
+    /// nil and `UNUserNotificationCenter.current()` crashes the process. This
+    /// mechanism needs no bundle identity and no authorization request.
+    private func deliverRecoveryNotification(for events: [QuotaRecoveryEvent]) {
+        let title: String
+        let body: String
+        if events.count == 1, let event = events.first {
+            title = "\(event.displayName) quota recovered"
+            body = "\(event.displayName) has headroom again."
+        } else {
+            title = "Quota recovered"
+            let names = events.map(\.displayName).joined(separator: ", ")
+            body = "\(names) have headroom again."
+        }
+        let script = "display notification \"\(Self.escapeForAppleScript(body))\" with title \"\(Self.escapeForAppleScript(title))\""
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        task.standardOutput = FileHandle.nullDevice
+        let errorPipe = Pipe()
+        task.standardError = errorPipe
+        task.standardInput = FileHandle.nullDevice
+        // Best-effort: neither a launch failure nor a runtime/compile failure
+        // of the AppleScript itself may crash or block the poll — but they
+        // must not vanish silently either. The app has no logging infra to
+        // plug into, so this uses the one channel that needs none: NSLog,
+        // which lands in the unified log (`log show --predicate 'process ==
+        // "frugalbar"'`) without requiring a bundle identity, matching the
+        // same unbundled-executable constraint that rules out
+        // UNUserNotificationCenter above. Non-zero exit status is captured
+        // via `terminationHandler` (off the caller's thread, so this never
+        // blocks the poll) and its stderr logged, mirroring the
+        // failure-logging pattern in OpenRouterProvider.fetchModelBadges().
+        task.terminationHandler = { process in
+            guard process.terminationStatus != 0 else { return }
+            let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderrText = String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("frugalbar: osascript exited with status \(process.terminationStatus) delivering quota-recovery notification: \(stderrText)")
+        }
+        do {
+            try task.run()
+        } catch {
+            NSLog("frugalbar: failed to launch osascript for quota-recovery notification: \(error)")
+        }
+    }
+
+    /// Escapes backslashes and double quotes so an interpolated vendor name
+    /// cannot break out of the AppleScript string literal it is placed in.
+    private static func escapeForAppleScript(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -329,6 +329,12 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var keyMasked: String?
     public var cliSource: String?
     public var currencyBasis: CurrencyBasis?
+    /// OpenRouter's own catalog badges — real, vendor-published data points,
+    /// never a fabricated ranking. `nil` when the catalog fetch failed or no
+    /// model qualified. Defaulted here (not as an init parameter) so neither
+    /// existing initializer, nor any other provider's call site, has to change.
+    public var freeTierModelBadge: String? = nil
+    public var cheapestLargeContextModelBadge: String? = nil
 
     public var bars: [DualBarMetrics] {
         [row1, row2, row3].compactMap { $0 }
