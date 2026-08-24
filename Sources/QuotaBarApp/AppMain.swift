@@ -115,15 +115,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = ["-e", script]
         task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
+        let errorPipe = Pipe()
+        task.standardError = errorPipe
         task.standardInput = FileHandle.nullDevice
-        // Best-effort: a launch failure here must never crash or block the
-        // poll — but it also must not vanish silently. The app has no
-        // logging infra to plug into, so this uses the one channel that
-        // needs none: NSLog, which lands in the unified log (`log show
-        // --predicate 'process == "frugalbar"'`) without requiring a
-        // bundle identity, matching the same unbundled-executable
-        // constraint that rules out UNUserNotificationCenter above.
+        // Best-effort: neither a launch failure nor a runtime/compile failure
+        // of the AppleScript itself may crash or block the poll — but they
+        // must not vanish silently either. The app has no logging infra to
+        // plug into, so this uses the one channel that needs none: NSLog,
+        // which lands in the unified log (`log show --predicate 'process ==
+        // "frugalbar"'`) without requiring a bundle identity, matching the
+        // same unbundled-executable constraint that rules out
+        // UNUserNotificationCenter above. Non-zero exit status is captured
+        // via `terminationHandler` (off the caller's thread, so this never
+        // blocks the poll) and its stderr logged, mirroring the
+        // failure-logging pattern in OpenRouterProvider.fetchModelBadges().
+        task.terminationHandler = { process in
+            guard process.terminationStatus != 0 else { return }
+            let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderrText = String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("frugalbar: osascript exited with status \(process.terminationStatus) delivering quota-recovery notification: \(stderrText)")
+        }
         do {
             try task.run()
         } catch {
