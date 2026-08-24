@@ -88,16 +88,27 @@ jobs:
           prerelease: false
           generate_release_notes: true
 
+      - name: Generate seankoji-com-ci App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.SEANKOJI_CI_APP_ID }}
+          private-key: ${{ secrets.SEANKOJI_CI_PRIVATE_KEY }}
+          owner: seankoji-com
+          repositories: homebrew-tap
+
+      # seankoji-com-ci is an "always" bypass_actor on both org rulesets (the
+      # required-PR rule and the CodeQL-required rule this Formula-only repo
+      # can never satisfy) -- pushing directly as that App needs no
+      # branch/PR/merge dance.
       - name: Update Homebrew Tap Formula
         env:
-          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           TAG="${{ steps.semver.outputs.tag }}"
           VER="${TAG#v}"
           SHA=$(cat frugalbar-${TAG}-arm64.tar.gz.sha256 | awk '{print $1}')
           URL="https://github.com/seankoji-com/frugalbar/releases/download/${TAG}/frugalbar-${TAG}-arm64.tar.gz"
-          BRANCH="release-${TAG}"
 
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
@@ -109,9 +120,8 @@ jobs:
               > /tmp/homebrew-tap/Formula/frugalbar.rb
 
           cd /tmp/homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${BRANCH}"
+          git config user.name "seankoji-com-ci[bot]"
+          git config user.email "288827119+seankoji-com-ci[bot]@users.noreply.github.com"
           git add Formula/frugalbar.rb
 
           if git diff --cached --quiet; then
@@ -120,22 +130,6 @@ jobs:
           fi
 
           git commit -m "feat(formula): update frugalbar to ${TAG}"
-          git push origin "${BRANCH}"
-
-          # main is protected by an org-wide ruleset requiring PRs, so push to a
-          # branch and merge a PR instead of pushing directly (0 reviews required).
-          PR_URL=$(gh pr create --repo seankoji-com/homebrew-tap \
-            --base main --head "${BRANCH}" \
-            --title "feat(formula): update frugalbar to ${TAG}" \
-            --body "Automated formula update for ${TAG}.")
-
-          # The GitHub release itself is already live by this point -- a stuck
-          # formula PR (e.g. an org ruleset requirement the tap repo can never
-          # satisfy, like a required CodeQL scan on a Formula-only repo) must
-          # not fail the whole release job. Leave the PR open for manual/admin
-          # merge instead of hard-failing on a merge this step doesn't control.
-          if ! gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --delete-branch; then
-            echo "::warning::Homebrew formula PR could not auto-merge: ${PR_URL} -- merge it manually (release ${TAG} is already published)."
-          fi
+          git push origin HEAD:main
 
 
