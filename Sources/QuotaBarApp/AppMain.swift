@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// neither has to rebuild the other to see new data.
     private let store = QuotaStore()
     private var schedulerToken: UUID?
+    private let notificationObserver = QuotaNotificationObserver()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
@@ -64,10 +65,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await store.load()
             await BackgroundScheduler.shared.start(interval: 120)
+            // One handler for both jobs: adding a second would make the
+            // recovery check race the refresh it depends on for no reason.
             schedulerToken = await BackgroundScheduler.shared.addHandler { [weak self] in
                 await self?.store.load()
+                await self?.checkForQuotaRecovery()
             }
         }
+    }
+
+    /// Diffs the latest snapshots against the previous poll and delivers one
+    /// notification per critical→recovered transition, when the user has
+    /// opted in.
+    ///
+    /// `observe` runs on every poll regardless of the toggle, so the
+    /// observer's "previous" state stays current even while notifications are
+    /// off — only delivery is gated below.
+    private func checkForQuotaRecovery() async {
+        let events = await notificationObserver.observe(current: store.snapshots)
+        guard CredentialStore.isNotificationsEnabled else { return }
+        for event in events {
+            deliverRecoveryNotification(for: event)
+        }
+    }
+
+    /// Posts one `display notification` via `osascript`.
+    ///
+    /// `UNUserNotificationCenter` is not an option: this app ships as a bare
+    /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
+    /// nil and `UNUserNotificationCenter.current()` crashes the process. This
+    /// mechanism needs no bundle identity and no authorization request.
+    private func deliverRecoveryNotification(for event: QuotaRecoveryEvent) {
+        let title = Self.escapeForAppleScript("\(event.displayName) quota recovered")
+        let body = Self.escapeForAppleScript("\(event.displayName) has headroom again.")
+        let script = "display notification \"\(body)\" with title \"\(title)\""
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        task.standardInput = FileHandle.nullDevice
+        // Best-effort: a launch failure here must never crash or block the poll.
+        try? task.run()
+    }
+
+    /// Escapes backslashes and double quotes so an interpolated vendor name
+    /// cannot break out of the AppleScript string literal it is placed in.
+    private static func escapeForAppleScript(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
