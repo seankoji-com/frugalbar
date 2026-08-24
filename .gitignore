@@ -7,3 +7,8 @@
 DerivedData/
 *.xcodeproj
 *.xcworkspace
+
+# Claude Code runtime state — never commit
+.claude/worktrees/
+.claude/jobs/
+.claude/settings.local.json
