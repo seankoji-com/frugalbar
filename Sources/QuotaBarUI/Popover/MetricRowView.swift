@@ -71,23 +71,44 @@ struct MetricRowView: View {
         .onTapGesture {
             onSelect?(snapshot)
         }
-        .help(p.accessibilityLabel)
+        .help(combinedAccessibilityLabel)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(p.accessibilityLabel)
+        .accessibilityLabel(combinedAccessibilityLabel)
+    }
+
+    /// The row collapses into a single accessibility element via
+    /// `.accessibilityElement(children: .ignore)` above, which means any
+    /// `.accessibilityLabel` set on a child (the badge pills below) is never
+    /// reached by VoiceOver — only this one label is announced. The badges'
+    /// descriptions are folded in here rather than left on the pills, where
+    /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
+    /// styling alone is not an accessible status channel).
+    private var combinedAccessibilityLabel: String {
+        var parts = [p.accessibilityLabel]
+        if let free = snapshot.freeTierModelBadge {
+            parts.append("Free tier model: \(free)")
+        }
+        if let cheap = snapshot.cheapestLargeContextModelBadge {
+            parts.append("Cheapest model with 1 million or more context: \(cheap)")
+        }
+        return parts.joined(separator: ". ")
     }
 
     /// Both new badges in one compact line — not two stacked lines, which
     /// would tower this row over its neighbours given OpenRouter's name
     /// column already carries up to two lines of its own today.
+    ///
+    /// The pills themselves carry no accessibility label: the parent row
+    /// ignores child accessibility elements entirely, so any label set here
+    /// would be silently discarded. `combinedAccessibilityLabel` above is
+    /// where the badge text actually reaches VoiceOver.
     private var openRouterBadgesRow: some View {
         HStack(spacing: 6) {
             if let free = snapshot.freeTierModelBadge {
                 BadgePillView(text: free)
-                    .accessibilityLabel("Free tier model: \(free)")
             }
             if let cheap = snapshot.cheapestLargeContextModelBadge {
                 BadgePillView(text: cheap, tint: Theme.secondary)
-                    .accessibilityLabel("Cheapest model with 1 million or more context: \(cheap)")
             }
             Spacer(minLength: 0)
         }
