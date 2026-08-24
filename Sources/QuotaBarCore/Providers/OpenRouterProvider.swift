@@ -241,15 +241,41 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
-    /// public catalog, which needs no key. Wrapped in `try?` so its failure —
-    /// timeout, malformed body, no qualifying model — never downgrades or
-    /// blocks the primary key-based snapshot; mirrors the existing
-    /// best-effort `/credits` enrichment call above.
+    /// public catalog, which needs no key. Bounded to a deadline well under
+    /// `CachePolicy.perProviderTimeout` (10s) so a slow-but-not-erroring
+    /// `/api/v1/models` response can never ride the outer per-provider
+    /// deadline down to a generic `.timedOut` — including on the no-key fast
+    /// path, where `fetchPrimarySnapshot()` already has its real answer
+    /// (`.notConfigured`) instantly and shouldn't be held hostage by this
+    /// enrichment call. `withDeadline` races the fetch against its own
+    /// timer; a miss here simply yields empty badges, exactly like the
+    /// `try?` failure path it wraps.
     private static func fetchModelBadges() async -> ModelBadges {
+        let outcome = await withDeadline(seconds: 5) {
+            await fetchModelBadgesFromCatalog()
+        }
+        switch outcome {
+        case .success(let badges):
+            return badges
+        case .failure:
+            // The wrapped fetch never throws, so a `.failure` here is always
+            // the 5s deadline itself elapsing. Logged so a degraded/slow
+            // catalog is distinguishable in the unified log from the
+            // legitimate "fetched fine, nothing qualified" case below, which
+            // stays silent on purpose.
+            NSLog("frugalbar: OpenRouter model-catalog fetch timed out after 5s; badges omitted this poll")
+            return ModelBadges()
+        }
+    }
+
+    private static func fetchModelBadgesFromCatalog() async -> ModelBadges {
         guard let result = try? await QuotaHTTP.get(url: "https://openrouter.ai/api/v1/models"),
               (200...299).contains(result.1.statusCode),
               let decoded = try? JSONDecoder().decode(ModelCatalogResponse.self, from: result.0)
         else {
+            // Distinct from a genuine zero-match: this is a network/HTTP/
+            // decode failure, not "fetched fine, no model qualified."
+            NSLog("frugalbar: OpenRouter model-catalog fetch failed or returned an unparseable body; badges omitted this poll")
             return ModelBadges()
         }
 

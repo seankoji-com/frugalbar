@@ -74,31 +74,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Diffs the latest snapshots against the previous poll and delivers one
-    /// notification per critical→recovered transition, when the user has
-    /// opted in.
+    /// Diffs the latest snapshots against the previous poll and delivers a
+    /// notification for any critical→recovered transitions, when the user
+    /// has opted in.
     ///
     /// `observe` runs on every poll regardless of the toggle, so the
     /// observer's "previous" state stays current even while notifications are
     /// off — only delivery is gated below.
     private func checkForQuotaRecovery() async {
         let events = await notificationObserver.observe(current: store.snapshots)
-        guard CredentialStore.isNotificationsEnabled else { return }
-        for event in events {
-            deliverRecoveryNotification(for: event)
-        }
+        guard CredentialStore.isNotificationsEnabled, !events.isEmpty else { return }
+        deliverRecoveryNotification(for: events)
     }
 
-    /// Posts one `display notification` via `osascript`.
+    /// Posts one `display notification` via `osascript` for the whole batch.
+    ///
+    /// A poll can surface more than one vendor recovering at once; one
+    /// `Process` per event would fire a burst of separate system banners for
+    /// what is, from the user's point of view, a single poll result, so
+    /// multiple events are consolidated into one notification.
     ///
     /// `UNUserNotificationCenter` is not an option: this app ships as a bare
     /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
     /// nil and `UNUserNotificationCenter.current()` crashes the process. This
     /// mechanism needs no bundle identity and no authorization request.
-    private func deliverRecoveryNotification(for event: QuotaRecoveryEvent) {
-        let title = Self.escapeForAppleScript("\(event.displayName) quota recovered")
-        let body = Self.escapeForAppleScript("\(event.displayName) has headroom again.")
-        let script = "display notification \"\(body)\" with title \"\(title)\""
+    private func deliverRecoveryNotification(for events: [QuotaRecoveryEvent]) {
+        let title: String
+        let body: String
+        if events.count == 1, let event = events.first {
+            title = "\(event.displayName) quota recovered"
+            body = "\(event.displayName) has headroom again."
+        } else {
+            title = "Quota recovered"
+            let names = events.map(\.displayName).joined(separator: ", ")
+            body = "\(names) have headroom again."
+        }
+        let script = "display notification \"\(Self.escapeForAppleScript(body))\" with title \"\(Self.escapeForAppleScript(title))\""
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -106,8 +117,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         task.standardInput = FileHandle.nullDevice
-        // Best-effort: a launch failure here must never crash or block the poll.
-        try? task.run()
+        // Best-effort: a launch failure here must never crash or block the
+        // poll — but it also must not vanish silently. The app has no
+        // logging infra to plug into, so this uses the one channel that
+        // needs none: NSLog, which lands in the unified log (`log show
+        // --predicate 'process == "frugalbar"'`) without requiring a
+        // bundle identity, matching the same unbundled-executable
+        // constraint that rules out UNUserNotificationCenter above.
+        do {
+            try task.run()
+        } catch {
+            NSLog("frugalbar: failed to launch osascript for quota-recovery notification: \(error)")
+        }
     }
 
     /// Escapes backslashes and double quotes so an interpolated vendor name
