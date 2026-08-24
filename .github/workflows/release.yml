@@ -128,6 +128,14 @@ jobs:
             --base main --head "${BRANCH}" \
             --title "feat(formula): update frugalbar to ${TAG}" \
             --body "Automated formula update for ${TAG}.")
-          gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --delete-branch
+
+          # The GitHub release itself is already live by this point -- a stuck
+          # formula PR (e.g. an org ruleset requirement the tap repo can never
+          # satisfy, like a required CodeQL scan on a Formula-only repo) must
+          # not fail the whole release job. Leave the PR open for manual/admin
+          # merge instead of hard-failing on a merge this step doesn't control.
+          if ! gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --delete-branch; then
+            echo "::warning::Homebrew formula PR could not auto-merge: ${PR_URL} -- merge it manually (release ${TAG} is already published)."
+          fi
 
 
