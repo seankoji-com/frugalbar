@@ -86,6 +86,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         /// Pro-rata share of the window elapsed, or nil when OpenAI published
         /// no window length to measure it against.
         let pace: Double?
+        let windowSeconds: Double?
     }
 
     private static func reading(_ window: Response.RateLimit.Window) -> Reading? {
@@ -97,7 +98,8 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             label: label(forWindowSeconds: window.limit_window_seconds),
             pace: window.limit_window_seconds.flatMap {
                 DualBarMetrics.proRataPace(resetsAt: reset, windowLength: $0)
-            }
+            },
+            windowSeconds: window.limit_window_seconds
         )
     }
 
@@ -121,7 +123,8 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             primaryFraction: reading.used, expectedPaceFraction: reading.pace,
             label: reading.label, statusColor: "#10a37f",
             usedText: "\(Int((reading.used * 100).rounded()))% used",
-            resetText: reading.reset.map(resetText)
+            resetText: reading.reset.map(resetText),
+            resetsAt: reading.reset, windowLength: reading.windowSeconds
         )
     }
 

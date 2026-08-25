@@ -183,6 +183,15 @@ public struct DualBarMetrics: Sendable, Equatable {
     public var statusColor: String?
     public var usedText: String?
     public var resetText: String?
+    /// When this window resets, and how long it runs — the same two figures
+    /// `proRataPace` was given to compute `expectedPaceFraction`. Carried here
+    /// too so the burn-rate projection below can convert a fraction of the
+    /// window back into a real date, instead of everyone reaching for a
+    /// hardcoded window length. `nil` whenever the vendor gave no real reset
+    /// or window length, in which case the projection is nil rather than
+    /// invented.
+    public var resetsAt: Date?
+    public var windowLength: TimeInterval?
 
     public init(
         primaryFraction: Double,
@@ -191,7 +200,9 @@ public struct DualBarMetrics: Sendable, Equatable {
         label: String,
         statusColor: String? = nil,
         usedText: String? = nil,
-        resetText: String? = nil
+        resetText: String? = nil,
+        resetsAt: Date? = nil,
+        windowLength: TimeInterval? = nil
     ) {
         self.primaryFraction = primaryFraction
         self.expectedPaceFraction = expectedPaceFraction
@@ -200,6 +211,8 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.statusColor = statusColor
         self.usedText = usedText
         self.resetText = resetText
+        self.resetsAt = resetsAt
+        self.windowLength = windowLength
     }
 
     /// Difference between actual consumption and pro-rata expected target, or
@@ -219,6 +232,32 @@ public struct DualBarMetrics: Sendable, Equatable {
 
     public var isAboveProrataPace: Bool {
         (burndownDelta ?? 0) > 0.04
+    }
+
+    /// How many times faster the quota is being consumed than the window is
+    /// elapsing: 1.0 tracks pace exactly, 2.0 burns twice as fast (and so
+    /// would run out halfway through the window). `nil` before there is a
+    /// pace to compare against — a window barely open, or a vendor that gave
+    /// no reset time at all.
+    public var burnRateMultiplier: Double? {
+        guard let expectedPaceFraction, expectedPaceFraction > 0.001 else { return nil }
+        return primaryFraction / expectedPaceFraction
+    }
+
+    /// When the quota would hit 100% if consumption kept going at the average
+    /// rate seen so far — extrapolated from `primaryFraction` over the
+    /// elapsed share of the window, not from anything guessed. `nil` unless
+    /// all three of a real reset date, a real window length, and a burn rate
+    /// above pace are present: below pace, the window resets before the
+    /// quota would ever run dry, so there is nothing to project.
+    public var projectedExhaustionDate: Date? {
+        guard let resetsAt, let windowLength, windowLength > 0,
+              let elapsedFraction = expectedPaceFraction, elapsedFraction > 0.001,
+              primaryFraction > elapsedFraction
+        else { return nil }
+        let windowStart = resetsAt.addingTimeInterval(-windowLength)
+        let secondsToExhaustion = elapsedFraction * windowLength / primaryFraction
+        return windowStart.addingTimeInterval(secondsToExhaustion)
     }
 
     /// How far through a rolling window we are: the pro-rata share of the

@@ -145,14 +145,16 @@ public struct MetricDetailModalView: View {
                     title: "5H Window Usage",
                     icon: "clock",
                     primaryValue: snapshot.row1?.usedText ?? "—",
-                    secondaryValue: snapshot.row1?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—"
+                    secondaryValue: snapshot.row1?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
+                    bar: snapshot.row1
                 )
 
                 metricCard(
                     title: "Weekly Velocity",
                     icon: "cpu",
                     primaryValue: snapshot.row2?.usedText ?? "—",
-                    secondaryValue: snapshot.row2?.resetText ?? "—"
+                    secondaryValue: snapshot.row2?.resetText ?? "—",
+                    bar: snapshot.row2
                 )
             }
 
@@ -178,7 +180,7 @@ public struct MetricDetailModalView: View {
         .padding(Theme.cardPadding)
     }
 
-    private func metricCard(title: String, icon: String, primaryValue: String, secondaryValue: String) -> some View {
+    private func metricCard(title: String, icon: String, primaryValue: String, secondaryValue: String, bar: DualBarMetrics?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
@@ -199,6 +201,23 @@ public struct MetricDetailModalView: View {
                 .foregroundStyle(Theme.primary.opacity(0.85))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+
+            if let burnText = burnRateText(bar) {
+                Text(burnText)
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(burnRateColor(bar))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.top, 2)
+            }
+
+            if let exhaustionText = exhaustionText(bar) {
+                Text(exhaustionText)
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.error)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .padding(9)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -208,6 +227,33 @@ public struct MetricDetailModalView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
+    }
+
+    /// "Burning 1.8x pace" or "0.6x pace" — how fast the window is being
+    /// spent relative to how fast it is elapsing. Nil whenever the bar has no
+    /// pace to compare against (a fresh window, or a vendor with no reset
+    /// time), rather than a rate computed against nothing.
+    private func burnRateText(_ bar: DualBarMetrics?) -> String? {
+        guard let bar, bar.primaryFraction < MetricRowPresentation.exhaustionThreshold,
+              let rate = bar.burnRateMultiplier
+        else { return nil }
+        return "Burning \(String(format: "%.1f", rate))× pace"
+    }
+
+    private func burnRateColor(_ bar: DualBarMetrics?) -> Color {
+        guard let rate = bar?.burnRateMultiplier else { return Theme.onSurfaceVariant.opacity(0.75) }
+        if rate > 1.04 { return Theme.tertiary }
+        if rate < 0.96 { return Theme.healthy }
+        return Theme.onSurfaceVariant.opacity(0.75)
+    }
+
+    /// Only rendered when the current burn rate would actually exhaust the
+    /// window before it resets — a real projection from a real reset date and
+    /// window length, never a guess dressed up as one.
+    private func exhaustionText(_ bar: DualBarMetrics?) -> String? {
+        guard let date = bar?.projectedExhaustionDate else { return nil }
+        let relative = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+        return "Exhausts \(relative)"
     }
 
     private func diagRow(label: String, value: String, valueColor: Color = Theme.onSurface) -> some View {
