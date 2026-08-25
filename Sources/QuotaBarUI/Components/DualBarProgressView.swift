@@ -63,75 +63,85 @@ public struct DualBarProgressView: View {
                 let hasPace = targetPacePct != nil
 
                 ZStack(alignment: .leading) {
-                    // 1. Subtle background track across full width
-                    Capsule()
-                        .fill(trackColor)
-                        .frame(height: Self.barHeight)
+                    // Track and every consumption/pace segment are flat
+                    // rectangles clipped together to a single outer Capsule,
+                    // so only the bar's two true ends round — an internal
+                    // seam between two independently-capsuled segments (e.g.
+                    // brand colour meeting the red overuse delta) used to
+                    // leave a lens-shaped notch where their rounded caps met.
+                    ZStack(alignment: .leading) {
+                        // 1. Subtle background track across full width
+                        Rectangle()
+                            .fill(trackColor)
+                            .frame(height: Self.barHeight)
 
-                    if isExhausted {
-                        // --- CASE 1: NOTHING LEFT ---
-                        // Red end to end. Splitting this at the pace marker
-                        // painted most of the bar in the vendor's brand colour
-                        // and reddened only the tail, so a spent quota read as
-                        // a mostly-healthy one with a red tip.
-                        Capsule()
-                            .fill(Theme.errorBold)
-                            .frame(width: w, height: Self.barHeight)
-                            .shadow(color: Theme.errorBold.opacity(0.6), radius: 2)
-                    } else if !hasPace {
-                        // --- CASE 0: NO PACE TARGET ---
-                        // Consumption only. Nothing here is measured against a
-                        // number we did not receive.
-                        if aX > 0 {
-                            Capsule()
-                                .fill(accentColor)
-                                .frame(width: max(4, aX), height: Self.barHeight)
-                                .animation(.easeOut(duration: 0.35), value: consumedPct)
-                        }
-                    } else if aX > mX {
-                        // --- CASE 2: OVERUSE (Marker is INSIDE the bar: aX > mX) ---
-                        // Actual usage bar within budget (0 -> mX) in vendor brand color
-                        if mX > 0 {
-                            Capsule()
-                                .fill(accentColor)
-                                .frame(width: max(4, mX), height: Self.barHeight)
-                        }
+                        if isExhausted {
+                            // --- CASE 1: NOTHING LEFT ---
+                            // Red end to end. Splitting this at the pace marker
+                            // painted most of the bar in the vendor's brand colour
+                            // and reddened only the tail, so a spent quota read as
+                            // a mostly-healthy one with a red tip.
+                            Rectangle()
+                                .fill(Theme.errorBold)
+                                .frame(width: w, height: Self.barHeight)
+                                .shadow(color: Theme.errorBold.opacity(0.6), radius: 2)
+                        } else if !hasPace {
+                            // --- CASE 0: NO PACE TARGET ---
+                            // Consumption only. Nothing here is measured against a
+                            // number we did not receive.
+                            if aX > 0 {
+                                Rectangle()
+                                    .fill(accentColor)
+                                    .frame(width: max(4, aX), height: Self.barHeight)
+                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            }
+                        } else if aX > mX {
+                            // --- CASE 2: OVERUSE (Marker is INSIDE the bar: aX > mX) ---
+                            // Actual usage bar within budget (0 -> mX) in vendor brand color
+                            if mX > 0 {
+                                Rectangle()
+                                    .fill(accentColor)
+                                    .frame(width: max(4, mX), height: Self.barHeight)
+                            }
 
-                        // Overuse delta segment between marker and actual usage (mX -> aX) in RED
-                        if aX > mX {
-                            Capsule()
-                                .fill(Theme.error)
-                                .frame(width: max(4, aX - mX), height: Self.barHeight)
-                                .offset(x: mX)
-                                .animation(.easeOut(duration: 0.35), value: consumedPct)
-                        }
-                    } else if aX < mX {
-                        // --- CASE 3: UNDERUSE (Marker is OUTSIDE the bar: aX < mX) ---
-                        // Underuse buffer segment between actual usage and marker (aX -> mX) in GREEN
-                        if mX > aX {
-                            Capsule()
-                                .fill(Theme.healthy)
-                                .frame(width: max(4, mX - aX), height: Self.barHeight)
-                                .offset(x: aX)
-                                .animation(.easeOut(duration: 0.35), value: consumedPct)
-                        }
+                            // Overuse delta segment between marker and actual usage (mX -> aX) in RED
+                            if aX > mX {
+                                Rectangle()
+                                    .fill(Theme.error)
+                                    .frame(width: max(4, aX - mX), height: Self.barHeight)
+                                    .offset(x: mX)
+                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            }
+                        } else if aX < mX {
+                            // --- CASE 3: UNDERUSE (Marker is OUTSIDE the bar: aX < mX) ---
+                            // Underuse buffer segment between actual usage and marker (aX -> mX) in GREEN
+                            if mX > aX {
+                                Rectangle()
+                                    .fill(Theme.healthy)
+                                    .frame(width: max(4, mX - aX), height: Self.barHeight)
+                                    .offset(x: aX)
+                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            }
 
-                        // Actual usage bar (0 -> aX) in vendor brand color
-                        if aX > 0 {
-                            Capsule()
-                                .fill(accentColor)
-                                .frame(width: max(4, aX), height: Self.barHeight)
-                                .animation(.easeOut(duration: 0.35), value: consumedPct)
-                        }
-                    } else {
-                        // --- CASE 4: AT PACE (aX == mX) ---
-                        if aX > 0 {
-                            Capsule()
-                                .fill(accentColor)
-                                .frame(width: max(4, aX), height: Self.barHeight)
-                                .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            // Actual usage bar (0 -> aX) in vendor brand color
+                            if aX > 0 {
+                                Rectangle()
+                                    .fill(accentColor)
+                                    .frame(width: max(4, aX), height: Self.barHeight)
+                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            }
+                        } else {
+                            // --- CASE 4: AT PACE (aX == mX) ---
+                            if aX > 0 {
+                                Rectangle()
+                                    .fill(accentColor)
+                                    .frame(width: max(4, aX), height: Self.barHeight)
+                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
+                            }
                         }
                     }
+                    .frame(width: w, height: Self.barHeight, alignment: .leading)
+                    .clipShape(Capsule())
 
                     // 3. Target Pace Marker (vertical white tick at mX)
                     if hasPace, mX > 0, mX < w {

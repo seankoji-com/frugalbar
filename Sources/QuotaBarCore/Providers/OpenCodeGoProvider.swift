@@ -122,7 +122,8 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             label: label,
             statusColor: window.isBlocked ? "#ffb4ab" : "#d47b00",
             usedText: "\(Int((fraction * 100).rounded()))% used\(window.isBlocked ? " • blocked" : "")",
-            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" }
+            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" },
+            resetsAt: reset, windowLength: windowLength
         )
     }
 

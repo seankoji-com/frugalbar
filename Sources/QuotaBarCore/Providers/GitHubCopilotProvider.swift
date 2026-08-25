@@ -103,9 +103,8 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
         // Copilot's allowance runs to a monthly reset, so the pace marker is
         // the share of that calendar month elapsed — 28 to 31 days, taken from
         // the reset date rather than assumed to be 30.
-        let pace = resetDate
-            .flatMap(DualBarMetrics.monthWindowLength(endingAt:))
-            .flatMap { DualBarMetrics.proRataPace(resetsAt: resetDate, windowLength: $0) }
+        let monthLength = resetDate.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
+        let pace = monthLength.flatMap { DualBarMetrics.proRataPace(resetsAt: resetDate, windowLength: $0) }
 
         // Both allowances run to the same monthly reset, so the label names
         // the window — as it does for every other provider — and the row text
@@ -116,7 +115,8 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
                 primaryFraction: fraction, expectedPaceFraction: pace, label: "MO",
                 statusColor: worst >= 0.95 ? "#ffb4ab" : "#6e7681",
                 usedText: "\(kind): \(Int((fraction * 100).rounded()))% used",
-                resetText: resetDate.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))" }
+                resetText: resetDate.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))" },
+                resetsAt: resetDate, windowLength: monthLength
             )
         }
 
