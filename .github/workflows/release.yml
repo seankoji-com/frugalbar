@@ -97,18 +97,22 @@ jobs:
           owner: seankoji-com
           repositories: homebrew-tap
 
-      # seankoji-com-ci is an "always" bypass_actor on both org rulesets (the
-      # required-PR rule and the CodeQL-required rule this Formula-only repo
-      # can never satisfy) -- pushing directly as that App needs no
-      # branch/PR/merge dance.
+      # seankoji-com-ci is an "always" bypass_actor on the CodeQL-required org
+      # ruleset, but the org-wide required-PR ruleset applies to every repo
+      # with no bypass actor, so a direct push to homebrew-tap's main is
+      # always rejected (GH013). Push to a release branch and open a PR with
+      # auto-merge instead -- the ruleset requires 0 approvals, so it merges
+      # itself as soon as it's mergeable.
       - name: Update Homebrew Tap Formula
         env:
           TAP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           TAG="${{ steps.semver.outputs.tag }}"
           VER="${TAG#v}"
           SHA=$(cat frugalbar-${TAG}-arm64.tar.gz.sha256 | awk '{print $1}')
           URL="https://github.com/seankoji-com/frugalbar/releases/download/${TAG}/frugalbar-${TAG}-arm64.tar.gz"
+          BRANCH="release-${TAG}"
 
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/seankoji-com/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
@@ -122,6 +126,7 @@ jobs:
           cd /tmp/homebrew-tap
           git config user.name "seankoji-com-ci[bot]"
           git config user.email "288827119+seankoji-com-ci[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add Formula/frugalbar.rb
 
           if git diff --cached --quiet; then
@@ -130,6 +135,12 @@ jobs:
           fi
 
           git commit -m "feat(formula): update frugalbar to ${TAG}"
-          git push origin HEAD:main
+          git push origin "${BRANCH}"
+
+          PR_URL=$(gh pr create --repo seankoji-com/homebrew-tap \
+            --base main --head "${BRANCH}" \
+            --title "feat(formula): update frugalbar to ${TAG}" \
+            --body "Automated formula update for ${TAG}.")
+          gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --auto
 
 
