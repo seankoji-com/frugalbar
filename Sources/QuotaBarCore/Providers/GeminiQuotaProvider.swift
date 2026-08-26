@@ -135,7 +135,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             label: label(for: bucket.window),
             statusColor: "#3b82f6",
             usedText: "\(Int((used * 100).rounded()))% used",
-            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" }
+            resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" },
+            resetsAt: reset, windowLength: length
         )
         return Reading(used: used, reset: reset, windowLength: length, bar: bar)
     }
