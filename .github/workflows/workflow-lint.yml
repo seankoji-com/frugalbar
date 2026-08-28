@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned to the same version used locally. The image bundles shellcheck
       # and pyflakes, so run:/python blocks get linted too.
