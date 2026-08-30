@@ -119,6 +119,7 @@ struct ProviderHTTPTests {
 
     @Test("the URLProtocol stub is actually invoked by requests")
     func stubActuallyIntercepts() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         _ = try await withStubbedHTTP({ _ in canned(body: #"{"data":{"usage":1,"limit":10}}"#) }) {
             try await provider.fetchSnapshot()
@@ -196,6 +197,7 @@ struct ProviderHTTPTests {
 
     @Test("uncapped key (limit: null) yields nil consumptionFraction and no fabricated cap")
     func openRouterUncappedKey() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: #"{"data":{"usage":3.5,"limit":null,"limit_remaining":null,"is_free_tier":false}}"#)
@@ -214,6 +216,7 @@ struct ProviderHTTPTests {
 
     @Test("a key that can read credits reports the documented account credit balance")
     func openRouterAccountCredits() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/api/v1/credits" {
@@ -240,6 +243,7 @@ struct ProviderHTTPTests {
     /// there must not throw away a perfectly good key-cap gauge.
     @Test("a failing credits call still yields the key-cap reading")
     func openRouterCreditsFailureKeepsKeyCap() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/api/v1/credits" {
@@ -262,6 +266,7 @@ struct ProviderHTTPTests {
     /// An account with nothing left in it must not render green.
     @Test("an exhausted account credit balance is critical, not healthy")
     func openRouterEmptyCreditIsCritical() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/api/v1/credits" {
@@ -278,6 +283,7 @@ struct ProviderHTTPTests {
 
     @Test("capped key at 95% consumed is critical")
     func openRouterNearExhaustion() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: #"{"data":{"usage":9.5,"limit":10,"limit_remaining":0.5}}"#)
@@ -290,6 +296,7 @@ struct ProviderHTTPTests {
 
     @Test("capped key at low usage is healthy")
     func openRouterLowUsage() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: #"{"data":{"usage":1,"limit":10}}"#)
@@ -301,6 +308,7 @@ struct ProviderHTTPTests {
 
     @Test("401 maps to credential rejected")
     func openRouterUnauthorized() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
             try await provider.fetchSnapshot()
@@ -310,6 +318,7 @@ struct ProviderHTTPTests {
 
     @Test("429 maps to rate limited")
     func openRouter429RateLimited() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in canned(status: 429, body: "{}") }) {
             try await provider.fetchSnapshot()
@@ -319,6 +328,7 @@ struct ProviderHTTPTests {
 
     @Test("500 maps to bad response")
     func openRouterServerError() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in canned(status: 500, body: "internal error") }) {
             try await provider.fetchSnapshot()
@@ -328,6 +338,7 @@ struct ProviderHTTPTests {
 
     @Test("garbage body with HTTP 200 is bad response, never measured")
     func openRouterMalformedBody() async throws {
+        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key-123")
         let snap = try await withStubbedHTTP({ _ in canned(status: 200, body: "not json { at all") }) {
             try await provider.fetchSnapshot()
