@@ -1,5 +1,50 @@
 import Foundation
 
+/// Memoises the fetched-and-ranked OpenRouter model catalog behind a TTL so
+/// repeated polls don't each re-fetch and re-rank the same public catalog.
+/// Deliberately process-lifetime state, not a second cache layer with disk
+/// persistence — a cold app launch always fetches fresh.
+actor ModelCatalogCache {
+
+    static let shared = ModelCatalogCache()
+
+    private var cached: (sessionKey: ObjectIdentifier, badges: OpenRouterProvider.ModelBadges, at: Date)?
+
+    /// Returns the memoised badges if they're younger than `ttl` and were
+    /// fetched through the same `URLSession` the caller is using now,
+    /// otherwise runs `fetch` and caches the result.
+    ///
+    /// Keyed on the session's identity rather than being a single unkeyed
+    /// slot: production always resolves `QuotaHTTP.session` to the same
+    /// long-lived instance, so this is a plain multi-hour cache there, but a
+    /// test that swaps in its own stub session via
+    /// `QuotaHTTP.$session.withValue(_:)` gets a fresh key and therefore a
+    /// guaranteed cache miss — it can never read back another test's stub
+    /// response. Deliberately does not coalesce concurrent misses onto one
+    /// in-flight call either, for the same reason: an actor hop preserves
+    /// the caller's own task-local session, and joining another caller's
+    /// in-flight future would hand back a result fetched under *that*
+    /// caller's session instead.
+    fileprivate func badges(
+        sessionKey: ObjectIdentifier,
+        ttl: TimeInterval,
+        fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges
+    ) async -> OpenRouterProvider.ModelBadges {
+        if let cached, cached.sessionKey == sessionKey,
+           Date().timeIntervalSince(cached.at) < ttl {
+            return cached.badges
+        }
+        let badges = await fetch()
+        cached = (sessionKey, badges, Date())
+        return badges
+    }
+
+    /// Test hook — drops memoised state between cases.
+    func reset() {
+        cached = nil
+    }
+}
+
 /// OpenRouter credit provider — `GET /api/v1/auth/key`.
 ///
 /// Contract notes, because a previous revision misread all three:
@@ -27,9 +72,8 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        // The catalog fetch needs no key and must run on every refresh, key
-        // or not, so it starts concurrently with the (possibly key-gated)
-        // primary snapshot rather than after it.
+        // The catalog fetch needs no key, so it starts concurrently with the
+        // (possibly key-gated) primary snapshot rather than after it.
         async let badgesTask = Self.fetchModelBadges()
         var snapshot = try await fetchPrimarySnapshot()
         let badges = await badgesTask
@@ -227,7 +271,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// The two badge strings, or nil each when the catalog call failed or no
     /// model qualified. Never fabricated — every field comes straight off a
     /// real catalog entry.
-    private struct ModelBadges: Sendable {
+    fileprivate struct ModelBadges: Sendable {
         var freeTier: String?
         var cheapestLargeContext: String?
     }
@@ -240,6 +284,13 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         let completionPrice: Double
     }
 
+    /// How long a fetched-and-ranked catalog stays valid before the next
+    /// call re-fetches. The public model list changes on the order of days,
+    /// not seconds, so a multi-hour TTL trades a little staleness for
+    /// sparing every poll of every OpenRouter provider instance a redundant
+    /// `/api/v1/models` round trip and re-rank.
+    static let catalogTTL: TimeInterval = 4 * 60 * 60
+
     /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
     /// public catalog, which needs no key. Bounded to a deadline well under
     /// `CachePolicy.perProviderTimeout` (10s) so a slow-but-not-erroring
@@ -251,8 +302,11 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// timer; a miss here simply yields empty badges, exactly like the
     /// `try?` failure path it wraps.
     private static func fetchModelBadges() async -> ModelBadges {
+        let sessionKey = ObjectIdentifier(QuotaHTTP.session)
         let outcome = await withDeadline(seconds: 5) {
-            await fetchModelBadgesFromCatalog()
+            await ModelCatalogCache.shared.badges(sessionKey: sessionKey, ttl: catalogTTL) {
+                await fetchModelBadgesFromCatalog()
+            }
         }
         switch outcome {
         case .success(let badges):

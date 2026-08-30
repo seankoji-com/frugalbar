@@ -93,6 +93,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("free badge picks the largest-context free model; cheap badge picks the cheapest qualifying paid model")
     func clearWinners() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             // Free models: two qualify, "big-free" has the larger context.
             modelEntry(id: "small-free", name: "Small Free", contextLength: 32_000,
@@ -135,6 +136,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("empty catalog leaves both badges nil, never a fabricated default")
     func emptyCatalog() async throws {
+        await ModelCatalogCache.shared.reset()
         CatalogStub.configure(modelsBody: catalogBody([]))
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
@@ -146,6 +148,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a model missing pricing entirely is excluded from both rankings")
     func missingPricingField() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "no-pricing", name: "No Pricing", contextLength: 2_000_000, omitPricing: true),
         ]
@@ -160,6 +163,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a model missing context_length is excluded from both rankings")
     func missingContextLength() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "no-context", name: "No Context", contextLength: nil,
                        promptPrice: "0", completionPrice: "0"),
@@ -177,6 +181,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("ties on context length break alphabetically by id for the free badge")
     func freeTieBreak() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "zebra-free", name: "Zebra Free", contextLength: 64_000,
                        promptPrice: "0", completionPrice: "0"),
@@ -193,6 +198,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("ties on $/M completion price break alphabetically by id for the cheap badge")
     func cheapTieBreak() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "zebra-cheap", name: "Zebra Cheap", contextLength: 1_000_000,
                        promptPrice: "0.0000001", completionPrice: "0.0000002"),
@@ -211,6 +217,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a failing /models call leaves badges nil without affecting the primary reading")
     func modelsCallFails() async throws {
+        await ModelCatalogCache.shared.reset()
         CatalogStub.configure(
             authBody: #"{"data":{"usage":3.5,"limit":10,"limit_remaining":6.5}}"#,
             modelsBody: "not json",
@@ -233,6 +240,7 @@ struct OpenRouterModelCatalogTests {
 
     @Test("badges are populated even with no OpenRouter key configured")
     func noKeyStillFetchesCatalog() async throws {
+        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "big-free", name: "Big Free", contextLength: 128_000,
                        promptPrice: "0", completionPrice: "0"),
