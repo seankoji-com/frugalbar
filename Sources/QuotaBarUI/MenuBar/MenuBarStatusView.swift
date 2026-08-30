@@ -37,8 +37,7 @@ public enum MenuBarPresentation {
     ) -> RecommendationDetails {
         var targetVendor = advice.vendorId
         if targetVendor == nil {
-            targetVendor = snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.urgency == .none })?.vendorId
-                ?? snapshots.first(where: { $0.category == .aiSubscriptions })?.vendorId
+            targetVendor = snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.confidence == .measured })?.vendorId
         }
 
         guard let vendorId = targetVendor,
@@ -77,8 +76,13 @@ public enum MenuBarPresentation {
             }
         }
 
-        let remainingInt = Int((lowestRemaining * 100).rounded())
-        let remainingPctStr = "\(remainingInt)%"
+        let remainingPctStr: String?
+        if foundBar {
+            let remainingInt = Int((lowestRemaining * 100).rounded())
+            remainingPctStr = "\(remainingInt)%"
+        } else {
+            remainingPctStr = nil
+        }
 
         let timeLeftStr = formatTimeLeft(matchingResetText)
 
