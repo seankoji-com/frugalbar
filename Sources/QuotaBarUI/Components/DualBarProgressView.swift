@@ -39,6 +39,10 @@ public struct DualBarProgressView: View {
         metrics.expectedPaceFraction.map { max(0, min(1, $0)) }
     }
 
+    /// Only ever evaluated once `hasNoReading` has already routed the nil
+    /// case away (see `body` and `labelColor`), so the `?? 0` here never
+    /// stands in as a fabricated "not exhausted" verdict for an unmeasured
+    /// window.
     private var isExhausted: Bool {
         (consumedPct ?? 0) >= 0.999
     }
@@ -50,13 +54,23 @@ public struct DualBarProgressView: View {
     ///
     /// Deliberately *not* also keyed on `urgency == .critical`. `urgency` is
     /// the whole snapshot's, applied to every one of its bars, and
-    /// `statusColor` is a brand colour for most providers (`#10a37f` for
-    /// OpenAI, `#d97757` for Claude, `#3b82f6` for Gemini). Letting critical
-    /// urgency pull it in painted a spent OpenAI bar green and repainted the
-    /// snapshot's still-healthy weekly/monthly bars along with it.
+    /// `blockedColor` is a brand colour for the vendors that use it. Letting
+    /// critical urgency pull it in painted a spent OpenAI bar green and
+    /// repainted the snapshot's still-healthy weekly/monthly bars along with
+    /// it.
     private var vendorStatusColor: Color? {
         guard metrics.isBlocked else { return nil }
-        return metrics.statusColor.flatMap(Color.init(hexString:))
+        return metrics.blockedColor.flatMap(Color.init(hexString:))
+    }
+
+    /// True whenever the vendor gave no percentage to measure this window
+    /// with, blocked or not. The umbrella guard that keeps every fraction
+    /// below (`aX`, `isExhausted`, the pace comparison in `labelColor`) from
+    /// ever substituting a coerced 0 for a reading that does not exist —
+    /// `DualBarMetrics(primaryFraction: nil, expectedPaceFraction: 0.5)` must
+    /// never render as "0% used" against a real pace marker.
+    private var hasNoReading: Bool {
+        metrics.primaryFraction == nil
     }
 
     /// True exactly in the case the vendor told us "blocked" but gave no
@@ -65,12 +79,22 @@ public struct DualBarProgressView: View {
     /// "this window is blocked" — but it must not fabricate a fraction to do
     /// it.
     private var isBlockedWithoutReading: Bool {
-        metrics.isBlocked && metrics.primaryFraction == nil
+        metrics.isBlocked && hasNoReading
     }
 
     private var labelColor: Color {
         if let vendorStatusColor {
             return vendorStatusColor
+        } else if isBlockedWithoutReading {
+            // Matches the hatched placeholder bar's own fallback below
+            // (`vendorStatusColor ?? Theme.errorBold`) — a blocked window
+            // with no vendor colour and no reading must not show a label in
+            // one colour beside a bar drawn in another.
+            return Theme.errorBold
+        } else if hasNoReading {
+            // No reading and not vendor-flagged blocked: neutral, not a
+            // fabricated "healthy" green.
+            return Theme.outline
         } else if isExhausted {
             return Theme.errorBold
         } else if let pace = targetPacePct, let consumedPct, consumedPct > pace {
@@ -122,6 +146,14 @@ public struct DualBarProgressView: View {
                                     style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
                                 )
                                 .frame(width: w, height: Self.barHeight)
+                        } else if hasNoReading {
+                            // --- CASE B': NO READING, NOT BLOCKED ---
+                            // The vendor gave no percentage but isn't
+                            // reporting the window blocked either — e.g. a
+                            // real pace target with no usage to compare it
+                            // against. The track alone is drawn above; adding
+                            // a fill here would mean inventing a 0% reading
+                            // this window never reported.
                         } else if isExhausted {
                             // --- CASE 1: NOTHING LEFT ---
                             // Red end to end. Splitting this at the pace marker

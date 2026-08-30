@@ -23,9 +23,12 @@ struct HeaderSummaryView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 5) {
-                Circle()
-                    .fill(Self.healthColor(for: summary))
-                    .frame(width: 6, height: 6)
+                // A shape, not colour alone, carries the status (WCAG 1.4.1):
+                // a checkmark, a triangle, or an octagon reads the same
+                // whether or not colour vision distinguishes green from red.
+                Image(systemName: Self.healthSymbol(for: summary))
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Self.healthColor(for: summary))
                     .shadow(color: Self.healthColor(for: summary).opacity(0.5), radius: 2, x: 0, y: 0)
 
                 Text(Self.healthText(for: summary))
@@ -76,7 +79,15 @@ struct HeaderSummaryView: View {
 
     // MARK: - Aggregate presentation
 
-    static func healthSymbol(for summary: SystemHealthSummary) -> String {
+    // `nonisolated`: pure functions of their arguments, but `View`'s `body`
+    // requirement is main-actor-isolated and the compiler can infer that
+    // isolation onto every member of a conforming type unless told
+    // otherwise. That inference is toolchain-sensitive — it did not fire
+    // locally, but did under CI's Xcode/Swift version, which is what turned
+    // "365 tests green" locally into a red `Build & Test (macOS)` job — and
+    // would make these uncallable from the synchronous, non-isolated `@Test`
+    // functions that exercise them directly.
+    nonisolated static func healthSymbol(for summary: SystemHealthSummary) -> String {
         guard summary.hasAnyReading else { return "minus.circle" }
         switch summary.worstUrgency {
         case .none:     return "checkmark.circle.fill"
@@ -85,7 +96,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    static func healthColor(for summary: SystemHealthSummary) -> Color {
+    nonisolated static func healthColor(for summary: SystemHealthSummary) -> Color {
         guard summary.hasAnyReading else { return Theme.outline }
         switch summary.worstUrgency {
         case .none:     return Theme.secondary
@@ -94,7 +105,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    static func healthText(for summary: SystemHealthSummary) -> String {
+    nonisolated static func healthText(for summary: SystemHealthSummary) -> String {
         var parts: [String] = []
         if summary.hasAnyReading {
             switch summary.worstUrgency {
@@ -114,7 +125,7 @@ struct HeaderSummaryView: View {
     /// `now` is a parameter, not a captured `Date()`, so a test can assert an
     /// exact boundary ("59s", not "60s") instead of racing the clock between
     /// building the input date and reading it back.
-    static func elapsed(since date: Date, now: Date = Date()) -> String {
+    nonisolated static func elapsed(since date: Date, now: Date = Date()) -> String {
         let interval = max(0, now.timeIntervalSince(date))
         if interval < 60 { return "\(Int(interval.rounded()))s" }
         if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }

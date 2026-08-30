@@ -29,6 +29,13 @@ public struct CachePolicy: Sendable {
         minPollInterval: 30
     )
 
+    /// `minPollInterval` defaults to 0 here (floor disabled), unlike
+    /// `.default`'s 30s: dozens of existing tests construct a `CachePolicy`
+    /// through this initialiser without an opinion on the poll floor, and
+    /// defaulting it on would have silently started throttling every one of
+    /// them. A test that means to exercise the floor passes it explicitly
+    /// (see `QuotaManagerTests.minPollIntervalThrottlesForceRefresh`); only
+    /// `.default` — what the running app actually uses — enables it.
     public init(
         cacheTTL: TimeInterval,
         backgroundRefreshInterval: TimeInterval,

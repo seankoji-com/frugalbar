@@ -77,7 +77,7 @@ public struct QuotaAdvice: Sendable, Equatable {
             guard snapshot.category == .aiSubscriptions,
                   snapshot.status.confidence == .measured
             else { return nil }
-            let worstBar = snapshot.bars.max { ($0.primaryFraction ?? -1) < ($1.primaryFraction ?? -1) }
+            let worstBar = snapshot.bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
             // No bar and no denominator means no reading to reason about. A
             // provider we cannot measure must not be presented as an option.
             guard let used = worstBar?.primaryFraction ?? snapshot.consumptionFraction else { return nil }

@@ -180,10 +180,24 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// window blocked/critical (see `isBlocked`) but gave no percentage to
     /// measure it with — never coerced to 0 or 1 to fill the gap.
     public var primaryFraction: Double?
+    /// `primaryFraction` floored to 0 for callers checking "has this bar
+    /// crossed some threshold" (exhaustion, criticality): a bar with no
+    /// reading is correctly "not there yet", never coerced to look spent.
+    /// Named once here instead of each call site repeating its own `?? 0`.
+    public var primaryFractionOrUnmeasured: Double { primaryFraction ?? 0 }
+    /// `primaryFraction` sunk below any real reading, for `max(by:)` ranking
+    /// among a snapshot's bars: a bar with no reading must never outrank one
+    /// that actually has a number just because `nil < 0` reads as true.
+    public var primaryFractionForWorstBarRanking: Double { primaryFraction ?? -1 }
     public var expectedPaceFraction: Double?     // Pro-rata expected fraction elapsed in window (0.0 to 1.0)
     public var secondaryFraction: Double?       // delta / surge burndown fraction
     public var label: String                    // e.g. "5H", "WK", "REST", "GraphQL"
-    public var statusColor: String?
+    /// The vendor's own colour for a *blocked* window (see `isBlocked`) —
+    /// e.g. OpenCodeGo's rate-limited red. Never read unless `isBlocked` is
+    /// also true, so it is meaningless — and should be left `nil` — for a
+    /// provider that never sets `isBlocked`; `DualBarProgressView` derives
+    /// every other window's colour from pace/exhaustion/urgency instead.
+    public var blockedColor: String?
     /// The vendor told us outright that this window cannot be used at all
     /// right now (e.g. rate-limited), independent of whatever percentage — or
     /// lack of one — it also reported.
@@ -205,7 +219,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         expectedPaceFraction: Double? = nil,
         secondaryFraction: Double? = nil,
         label: String,
-        statusColor: String? = nil,
+        blockedColor: String? = nil,
         isBlocked: Bool = false,
         usedText: String? = nil,
         resetText: String? = nil,
@@ -216,7 +230,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.expectedPaceFraction = expectedPaceFraction
         self.secondaryFraction = secondaryFraction
         self.label = label
-        self.statusColor = statusColor
+        self.blockedColor = blockedColor
         self.isBlocked = isBlocked
         self.usedText = usedText
         self.resetText = resetText

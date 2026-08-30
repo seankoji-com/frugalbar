@@ -86,6 +86,20 @@ private func catalogBody(_ entries: [String]) -> String {
     #"{"data":[\#(entries.joined(separator: ","))]}"#
 }
 
+/// Runs `operation` under a fresh `QuotaHTTP.session` and a fresh
+/// `ModelCatalogCache.current`, so no memoised badge from a previous test can
+/// leak into this one.
+private func withCatalogSession<T: Sendable>(
+    _ session: URLSession,
+    _ operation: @Sendable () async throws -> T
+) async throws -> T {
+    try await QuotaHTTP.$session.withValue(session) {
+        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
+            try await operation()
+        }
+    }
+}
+
 @Suite("OpenRouter model catalog badges", .serialized)
 struct OpenRouterModelCatalogTests {
 
@@ -93,7 +107,6 @@ struct OpenRouterModelCatalogTests {
 
     @Test("free badge picks the largest-context free model; cheap badge picks the cheapest qualifying paid model")
     func clearWinners() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             // Free models: two qualify, "big-free" has the larger context.
             modelEntry(id: "small-free", name: "Small Free", contextLength: 32_000,
@@ -115,7 +128,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
 
@@ -136,10 +149,9 @@ struct OpenRouterModelCatalogTests {
 
     @Test("empty catalog leaves both badges nil, never a fabricated default")
     func emptyCatalog() async throws {
-        await ModelCatalogCache.shared.reset()
         CatalogStub.configure(modelsBody: catalogBody([]))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -148,13 +160,12 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a model missing pricing entirely is excluded from both rankings")
     func missingPricingField() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "no-pricing", name: "No Pricing", contextLength: 2_000_000, omitPricing: true),
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -163,14 +174,13 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a model missing context_length is excluded from both rankings")
     func missingContextLength() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "no-context", name: "No Context", contextLength: nil,
                        promptPrice: "0", completionPrice: "0"),
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -181,7 +191,6 @@ struct OpenRouterModelCatalogTests {
 
     @Test("ties on context length break alphabetically by id for the free badge")
     func freeTieBreak() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "zebra-free", name: "Zebra Free", contextLength: 64_000,
                        promptPrice: "0", completionPrice: "0"),
@@ -190,7 +199,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge?.contains("Alpha Free") == true)
@@ -198,7 +207,6 @@ struct OpenRouterModelCatalogTests {
 
     @Test("ties on $/M completion price break alphabetically by id for the cheap badge")
     func cheapTieBreak() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "zebra-cheap", name: "Zebra Cheap", contextLength: 1_000_000,
                        promptPrice: "0.0000001", completionPrice: "0.0000002"),
@@ -207,7 +215,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.cheapestLargeContextModelBadge?.contains("Alpha Cheap") == true)
@@ -217,14 +225,13 @@ struct OpenRouterModelCatalogTests {
 
     @Test("a failing /models call leaves badges nil without affecting the primary reading")
     func modelsCallFails() async throws {
-        await ModelCatalogCache.shared.reset()
         CatalogStub.configure(
             authBody: #"{"data":{"usage":3.5,"limit":10,"limit_remaining":6.5}}"#,
             modelsBody: "not json",
             modelsStatus: 500
         )
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -240,14 +247,13 @@ struct OpenRouterModelCatalogTests {
 
     @Test("badges are populated even with no OpenRouter key configured")
     func noKeyStillFetchesCatalog() async throws {
-        await ModelCatalogCache.shared.reset()
         let entries = [
             modelEntry(id: "big-free", name: "Big Free", contextLength: 128_000,
                        promptPrice: "0", completionPrice: "0"),
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status == .unavailable(.notConfigured))

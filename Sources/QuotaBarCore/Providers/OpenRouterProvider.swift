@@ -6,25 +6,27 @@ import Foundation
 /// persistence — a cold app launch always fetches fresh.
 actor ModelCatalogCache {
 
-    static let shared = ModelCatalogCache()
+    /// Task-local, mirroring `QuotaHTTP.$session`: production never rebinds
+    /// it, so `Self.current` always resolves to this one process-lifetime
+    /// instance, but a test that enters its own scope via
+    /// `$current.withValue(ModelCatalogCache())` — alongside its own
+    /// `QuotaHTTP.$session.withValue(_:)` — gets a brand new, empty actor
+    /// instance instead of sharing global memoised state. That is a
+    /// structural guarantee against cross-test leakage, unlike keying on a
+    /// session's `ObjectIdentifier`: an unretained `URLSession`'s address can
+    /// be reused after `finishTasksAndInvalidate()`, which made that scheme
+    /// only a probabilistic guard against a stale hit.
+    @TaskLocal static var current = ModelCatalogCache()
 
-    private var cached: (sessionKey: ObjectIdentifier, badges: OpenRouterProvider.ModelBadges, at: Date)?
+    private var cached: (badges: OpenRouterProvider.ModelBadges, at: Date)?
 
-    /// Returns the memoised badges if they're younger than `ttl` and were
-    /// fetched through the same `URLSession` the caller is using now,
-    /// otherwise runs `fetch` and caches the result.
+    /// Returns the memoised badges if they're younger than `ttl`, otherwise
+    /// runs `fetch` and caches the result.
     ///
-    /// Keyed on the session's identity rather than being a single unkeyed
-    /// slot: production always resolves `QuotaHTTP.session` to the same
-    /// long-lived instance, so this is a plain multi-hour cache there, but a
-    /// test that swaps in its own stub session via
-    /// `QuotaHTTP.$session.withValue(_:)` gets a fresh key and therefore a
-    /// guaranteed cache miss — it can never read back another test's stub
-    /// response. Deliberately does not coalesce concurrent misses onto one
-    /// in-flight call either, for the same reason: an actor hop preserves
-    /// the caller's own task-local session, and joining another caller's
-    /// in-flight future would hand back a result fetched under *that*
-    /// caller's session instead.
+    /// Deliberately does not coalesce concurrent misses onto one in-flight
+    /// call: an actor hop preserves the caller's own task-local session, and
+    /// joining another caller's in-flight future would hand back a result
+    /// fetched under *that* caller's session instead.
     ///
     /// `fetch` returns nil for a network/HTTP/decode failure, and a failure is
     /// never memoised: caching it would pin empty badges for the whole TTL, so
@@ -32,24 +34,17 @@ actor ModelCatalogCache {
     /// the network came back. Only a catalog we actually read is cached — even
     /// when nothing in it qualified, which is a real answer.
     fileprivate func badges(
-        sessionKey: ObjectIdentifier,
         ttl: TimeInterval,
         fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges?
     ) async -> OpenRouterProvider.ModelBadges {
-        if let cached, cached.sessionKey == sessionKey,
-           Date().timeIntervalSince(cached.at) < ttl {
+        if let cached, Date().timeIntervalSince(cached.at) < ttl {
             return cached.badges
         }
         guard let badges = await fetch() else {
             return OpenRouterProvider.ModelBadges()
         }
-        cached = (sessionKey, badges, Date())
+        cached = (badges, Date())
         return badges
-    }
-
-    /// Test hook — drops memoised state between cases.
-    func reset() {
-        cached = nil
     }
 }
 
@@ -307,9 +302,8 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// timer; a miss here simply yields empty badges, exactly like the
     /// `try?` failure path it wraps.
     private static func fetchModelBadges() async -> ModelBadges {
-        let sessionKey = ObjectIdentifier(QuotaHTTP.session)
         let outcome = await withDeadline(seconds: 5) {
-            await ModelCatalogCache.shared.badges(sessionKey: sessionKey, ttl: catalogTTL) {
+            await ModelCatalogCache.current.badges(ttl: catalogTTL) {
                 await fetchModelBadgesFromCatalog()
             }
         }

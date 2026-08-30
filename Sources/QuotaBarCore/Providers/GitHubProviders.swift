@@ -100,7 +100,6 @@ private func rateLimitSnapshot(
         primaryFraction: consumed,
         secondaryFraction: 0.0,
         label: "REST",
-        statusColor: urgency == .critical ? "#ffb4ab" : (urgency == .warning ? "#ffb874" : "#53e16f"),
         usedText: "\(rate.remaining) / \(rate.limit) req/hr",
         resetText: minsRemaining > 0 ? "Resets in \(minsRemaining)m" : "Resets shortly"
     )
@@ -114,7 +113,6 @@ private func rateLimitSnapshot(
             primaryFraction: gqlConsumed,
             secondaryFraction: 0.0,
             label: "GraphQL",
-            statusColor: actualGql.remaining < 500 ? "#ffb4ab" : "#53e16f",
             usedText: "\(actualGql.remaining) / \(actualGql.limit) pts/hr",
             resetText: gqlMins > 0 ? "Resets in \(gqlMins)m" : "Hourly roll at :00"
         )

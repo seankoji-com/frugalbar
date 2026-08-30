@@ -107,7 +107,7 @@ public actor QuotaManager {
             return await existing.value
         }
 
-        let task = Task { await self.parallelFetch() }
+        let task = Task { await self.parallelFetch(force: force) }
         activeTask = task
         let result = await task.value
         // Only clear if this task is still the current one — a forceRefresh
@@ -116,12 +116,11 @@ public actor QuotaManager {
         return result
     }
 
-    private func parallelFetch() async -> [VendorIdentifier: QuotaSnapshot] {
+    private func parallelFetch(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
         let providers: [any QuotaProvider] = providerFactory()
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
         let startNow = Date()
-        var results: [VendorIdentifier: QuotaSnapshot] = [:]
 
         // Per-vendor poll floor: a vendor fetched more recently than
         // minPollInterval is served its cached snapshot instead of being
@@ -130,14 +129,31 @@ public actor QuotaManager {
         // so mashing the manual refresh button can't hammer a paid
         // provider's API faster than the floor allows.
         var providersToFetch: [any QuotaProvider] = []
+        var throttledOnForce: [VendorIdentifier] = []
         for provider in providers {
+            // The floor only ever holds back a vendor with a *real* prior
+            // reading. A cached `.unavailable` snapshot (never configured,
+            // credential rejected, offline, …) has nothing to protect from
+            // over-fetching, and holding it back here is what let a
+            // just-saved API key take up to `minPollInterval` seconds to
+            // take effect on the next forceRefresh().
             if let entry = cache[provider.vendorId],
+               entry.snapshot.status.confidence == .measured,
                startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval {
-                results[provider.vendorId] = entry.snapshot
+                if force { throttledOnForce.append(provider.vendorId) }
             } else {
                 providersToFetch.append(provider)
             }
         }
+        // A forced refresh that ends up issuing no network request at all
+        // looks, to the caller, exactly like a plain cache read — so this is
+        // logged rather than left silent, unlike the throttled-but-not-forced
+        // case, which is the poll floor working as designed.
+        if force, !throttledOnForce.isEmpty {
+            NSLog("frugalbar: forceRefresh() served \(throttledOnForce.count) vendor(s) from cache " +
+                  "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce.map(\.rawValue))")
+        }
+        var results: [VendorIdentifier: QuotaSnapshot] = [:]
 
         await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
             for provider in providersToFetch {

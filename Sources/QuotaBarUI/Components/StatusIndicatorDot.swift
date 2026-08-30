@@ -11,7 +11,14 @@ struct StatusIndicatorDot: View {
 
     let status: ProviderStatus
 
-    static func symbol(for status: ProviderStatus) -> String {
+    // `nonisolated`: pure functions of their arguments, but `View`'s `body`
+    // requirement is main-actor-isolated and the compiler can infer that
+    // isolation onto every member of a conforming type unless told
+    // otherwise. That inference is toolchain-sensitive — it did not fire
+    // locally, but did under CI's Xcode/Swift version — and would make these
+    // uncallable from the synchronous, non-isolated `@Test` functions that
+    // exercise them directly.
+    nonisolated static func symbol(for status: ProviderStatus) -> String {
         if status.confidence == .unavailable { return "minus.circle" }
         switch status.urgency {
         case .none:     return "checkmark.circle.fill"
@@ -20,7 +27,7 @@ struct StatusIndicatorDot: View {
         }
     }
 
-    static func tint(for status: ProviderStatus) -> Color {
+    nonisolated static func tint(for status: ProviderStatus) -> Color {
         if status.confidence == .unavailable { return Theme.outline }
         switch status.urgency {
         case .none:     return Theme.secondary

@@ -38,7 +38,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
 
         // An unreadable provider has no bars, so this reads false there — a
         // quota we could not fetch is not a quota we know is spent.
-        let spentBar = snapshot.bars.first { ($0.primaryFraction ?? 0) >= Self.exhaustionThreshold }
+        let spentBar = snapshot.bars.first { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
         self.isExhausted = spentBar != nil
         self.exhaustedResetText = spentBar?.resetText
 

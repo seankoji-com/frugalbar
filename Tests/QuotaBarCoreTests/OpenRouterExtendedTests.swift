@@ -67,7 +67,11 @@ private func withStubbedHTTP<T: Sendable>(
     LocalStub.reset()
     LocalStub.handler = handler
     return try await QuotaHTTP.$session.withValue(LocalStub.makeSession()) {
-        try await operation()
+        // A fresh cache instance per scope, exactly like the session above,
+        // so this test can never read back another test's memoised badges.
+        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
+            try await operation()
+        }
     }
 }
 
@@ -94,7 +98,6 @@ struct OpenRouterExtendedTests {
 
     @Test("free tier key reports auxiliaryInfo 'Free tier'")
     func freeTierAuxiliaryInfo() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(isFreeTier: true))
@@ -106,7 +109,6 @@ struct OpenRouterExtendedTests {
 
     @Test("capped non-free key labels its key cap rather than account credit")
     func cappedKeyAuxiliaryInfo() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody())
@@ -120,7 +122,6 @@ struct OpenRouterExtendedTests {
 
     @Test("usage of 0 with a cap is healthy and reports 0 consumed")
     func zeroUsageCapped() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 0, limit: 10, limitRemaining: 10))
@@ -133,7 +134,6 @@ struct OpenRouterExtendedTests {
 
     @Test("usage equal to cap reports critical")
     func usageEqualsCap() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 10, limit: 10, limitRemaining: 0))
@@ -146,7 +146,6 @@ struct OpenRouterExtendedTests {
 
     @Test("usage at exactly 70% is healthy, 71% is warning")
     func warningBoundary() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         // 70% — still healthy
         let snapHealthy = try await withStubbedHTTP({ _ in
@@ -168,7 +167,6 @@ struct OpenRouterExtendedTests {
 
     @Test("usage at exactly 90% is warning, 91% is critical")
     func criticalBoundary() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snapWarning = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 9, limit: 10, limitRemaining: 1))
@@ -189,7 +187,6 @@ struct OpenRouterExtendedTests {
 
     @Test("missing usage field returns badResponse")
     func missingUsageField() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: #"{"data":{"limit":10,"limit_remaining":5}}"# )
@@ -203,7 +200,6 @@ struct OpenRouterExtendedTests {
 
     @Test("missing data key returns badResponse")
     func missingDataKey() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: #"{"not_data":{}}"#)
@@ -217,7 +213,6 @@ struct OpenRouterExtendedTests {
 
     @Test("capped key without limit_remaining computes remaining from cap - usage")
     func cappedKeyNoLimitRemaining() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 3, limit: 10, limitRemaining: nil))
@@ -233,7 +228,6 @@ struct OpenRouterExtendedTests {
 
     @Test("429 with Retry-After header parses the retry date")
     func rateLimitedWithRetryAfter() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: "{}", status: 429, headers: ["Retry-After": "120"])
@@ -254,7 +248,6 @@ struct OpenRouterExtendedTests {
 
     @Test("429 without Retry-After header returns rateLimited with nil retryAfter")
     func rateLimitedNoRetryAfter() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: "{}", status: 429)
@@ -266,7 +259,6 @@ struct OpenRouterExtendedTests {
 
     @Test("429 with non-numeric Retry-After ignores the header")
     func rateLimitedInvalidRetryAfter() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: "{}", status: 429, headers: ["Retry-After": "not-a-number"])
@@ -280,11 +272,10 @@ struct OpenRouterExtendedTests {
 
     @Test("empty key returns notConfigured without issuing an /auth/key request")
     func emptyKeyNoRequest() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "")
         // No key means the primary /auth/key call never fires — but the
-        // model-catalog call needs no key, so it still runs on every
-        // refresh (that's what lets its badges appear with no key configured).
+        // model-catalog call needs no key, so it still runs on a cache miss
+        // (that's what lets its badges appear with no key configured).
         let snap = try await withStubbedHTTP({ request in
             #expect(request.url?.absoluteString.contains("auth/key") != true)
             return canned(body: "unused")
@@ -299,7 +290,6 @@ struct OpenRouterExtendedTests {
 
     @Test("capped key returns the API's USD key-cap figures without conversion")
     func cappedKeyCurrencyMetric() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 3.5, limit: 10, limitRemaining: 6.5))
@@ -318,7 +308,6 @@ struct OpenRouterExtendedTests {
 
     @Test("uncapped key returns the API's USD lifetime spend with no cap")
     func uncappedKeyCurrencyMetric() async throws {
-        await ModelCatalogCache.shared.reset()
         let provider = OpenRouterProvider(apiKey: "key")
         let snap = try await withStubbedHTTP({ _ in
             canned(body: openRouterBody(usage: 12.34, limit: nil, limitRemaining: nil))
@@ -351,7 +340,6 @@ struct OpenRouterSpendWindowTests {
     /// against, so a gauge would invent a denominator.
     @Test("daily and weekly spend come straight from the API")
     func spendWindowsArePublished() async throws {
-        await ModelCatalogCache.shared.reset()
         let snap = try await snapshot(body: #"""
         {"data":{"usage":96.02,"usage_daily":0.835992537,"usage_weekly":13.000224144,
                  "limit":null,"limit_remaining":null,"is_free_tier":false}}
@@ -369,7 +357,6 @@ struct OpenRouterSpendWindowTests {
     /// and "we were not told" are different claims.
     @Test("an omitted window is absent rather than zero")
     func omittedWindowIsNil() async throws {
-        await ModelCatalogCache.shared.reset()
         let snap = try await snapshot(body: #"{"data":{"usage":96.02,"limit":null}}"#)
         #expect(snap.spendWindows.count == 2)
         #expect(snap.spendWindows.allSatisfy { $0.amount == nil })
@@ -379,7 +366,6 @@ struct OpenRouterSpendWindowTests {
     /// must not also claim a plan name.
     @Test("no plan name is asserted for a spend provider")
     func noPlanNameAsserted() async throws {
-        await ModelCatalogCache.shared.reset()
         let snap = try await snapshot(body: #"{"data":{"usage":96.02,"limit":null}}"#)
         #expect(snap.planName == nil)
         #expect(snap.shortPlanName.isEmpty)

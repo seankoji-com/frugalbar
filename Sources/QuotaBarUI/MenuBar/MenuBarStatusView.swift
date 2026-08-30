@@ -37,7 +37,19 @@ public enum MenuBarPresentation {
     ) -> RecommendationDetails {
         var targetVendor = advice.vendorId
         if targetVendor == nil {
-            targetVendor = snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.confidence == .measured })?.vendorId
+            // Healthy-first: when advice names no specific vendor, prefer one
+            // with real headroom over one merely first in canonical order —
+            // recommending a 25%-remaining vendor over a 90%-remaining one
+            // just because it sorts earlier would be a bad recommendation.
+            // `status.urgency == .none` alone isn't enough to mean "healthy":
+            // an `.unavailable` status also reports urgency `.none`, so the
+            // `.measured` filter must apply to both clauses, or an unreadable
+            // provider could still win the first search and get presented as
+            // a reading nobody ever took.
+            targetVendor = snapshots.first(where: {
+                $0.category == .aiSubscriptions && $0.status.confidence == .measured && $0.status.urgency == .none
+            })?.vendorId
+                ?? snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.confidence == .measured })?.vendorId
         }
 
         guard let vendorId = targetVendor,

@@ -192,6 +192,55 @@ struct QuotaManagerTests {
         #expect(worst == .critical)
     }
 
+    @Test("minPollInterval throttles a vendor even on forceRefresh, serving its cached snapshot")
+    func minPollIntervalThrottlesForceRefresh() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .succeed(.none))]
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .measured(.none))
+        #expect(counter.value == 1)
+
+        // cacheTTL is 0, so refresh()/forceRefresh() would normally re-fetch —
+        // but the vendor was just fetched well inside the one-hour poll
+        // floor, so it must be served from cache rather than re-hit.
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .measured(.none))
+        #expect(counter.value == 1)
+    }
+
+    @Test("minPollInterval does not throttle a vendor whose only cached snapshot was never measured")
+    func minPollIntervalIgnoresUnmeasuredCache() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .throwError(.badResponse))]
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .unavailable(.badResponse))
+        #expect(counter.value == 1)
+
+        // The floor exists to stop hammering a vendor with a *real* reading
+        // to protect — a cached `.unavailable` snapshot has nothing like
+        // that to protect, so a just-fixed credential must be retried
+        // immediately rather than waiting out the one-hour floor.
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .unavailable(.badResponse))
+        #expect(counter.value == 2)
+    }
+
     @Test("transient provider error preserves existing measured cache entry")
     func transientErrorPreservesMeasuredCache() async {
         let counter = InvocationCounter()

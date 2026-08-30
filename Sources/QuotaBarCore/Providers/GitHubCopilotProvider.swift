@@ -113,7 +113,6 @@ public final class GitHubCopilotProvider: QuotaProvider, Sendable {
             guard let fraction else { return nil }
             return DualBarMetrics(
                 primaryFraction: fraction, expectedPaceFraction: pace, label: "MO",
-                statusColor: worst >= 0.95 ? "#ffb4ab" : "#6e7681",
                 usedText: "\(kind): \(Int((fraction * 100).rounded()))% used",
                 resetText: resetDate.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()))" },
                 resetsAt: resetDate, windowLength: monthLength

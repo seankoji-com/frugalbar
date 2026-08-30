@@ -234,7 +234,7 @@ public struct MetricDetailModalView: View {
     /// pace to compare against (a fresh window, or a vendor with no reset
     /// time), rather than a rate computed against nothing.
     private func burnRateText(_ bar: DualBarMetrics?) -> String? {
-        guard let bar, (bar.primaryFraction ?? 0) < MetricRowPresentation.exhaustionThreshold,
+        guard let bar, bar.primaryFractionOrUnmeasured < MetricRowPresentation.exhaustionThreshold,
               let rate = bar.burnRateMultiplier
         else { return nil }
         return "Burning \(String(format: "%.1f", rate))× pace"
@@ -322,35 +322,49 @@ public struct MetricDetailModalView: View {
         }
     }
 
-    // Confidence gates urgency here, same as StatusIndicatorDot: an
-    // unreadable provider must never render as "All Systems Healthy" just
-    // because its unread urgency defaults to .none.
+    /// Confidence gates urgency here, same as StatusIndicatorDot: an
+    /// unreadable provider must never render as "All Systems Healthy" just
+    /// because its unread urgency defaults to .none. Named once so
+    /// `statusBannerIcon`/`Color`/`Headline` can't drift into checking that
+    /// gate three different ways (two used to test `confidence ==
+    /// .unavailable`, one tested `unavailableReason != nil` — the same fact,
+    /// asserted through two different predicates).
+    private enum BannerState {
+        case unavailable(UnavailableReason)
+        case measured(Urgency)
+    }
+
+    private var bannerState: BannerState {
+        if let reason = snapshot.status.unavailableReason {
+            return .unavailable(reason)
+        }
+        return .measured(snapshot.status.urgency)
+    }
+
     private var statusBannerIcon: String {
-        if snapshot.status.confidence == .unavailable { return "minus.circle" }
-        switch snapshot.status.urgency {
-        case .none:     return "checkmark.circle.fill"
-        case .warning:  return "exclamationmark.circle.fill"
-        case .critical: return "exclamationmark.octagon.fill"
+        switch bannerState {
+        case .unavailable: return "minus.circle"
+        case .measured(.none):     return "checkmark.circle.fill"
+        case .measured(.warning):  return "exclamationmark.circle.fill"
+        case .measured(.critical): return "exclamationmark.octagon.fill"
         }
     }
 
     private var statusBannerColor: Color {
-        if snapshot.status.confidence == .unavailable { return Theme.outline }
-        switch snapshot.status.urgency {
-        case .none:     return Theme.secondary
-        case .warning:  return Theme.tertiary
-        case .critical: return Theme.error
+        switch bannerState {
+        case .unavailable: return Theme.outline
+        case .measured(.none):     return Theme.secondary
+        case .measured(.warning):  return Theme.tertiary
+        case .measured(.critical): return Theme.error
         }
     }
 
     private var statusBannerHeadline: String {
-        if let reason = snapshot.status.unavailableReason {
-            return reason.headline
-        }
-        switch snapshot.status.urgency {
-        case .none:     return "All Systems Healthy"
-        case .warning:  return "Quota Warning (Elevated Burn)"
-        case .critical: return "Critical Limits Approaching"
+        switch bannerState {
+        case .unavailable(let reason): return reason.headline
+        case .measured(.none):     return "All Systems Healthy"
+        case .measured(.warning):  return "Quota Warning (Elevated Burn)"
+        case .measured(.critical): return "Critical Limits Approaching"
         }
     }
 }

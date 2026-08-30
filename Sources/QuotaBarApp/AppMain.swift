@@ -4,113 +4,6 @@ import Foundation
 import QuotaBarCore
 import QuotaBarUI
 
-/// Handles `--help`, `--version`, and `--doctor` before any AppKit/SwiftUI
-/// machinery spins up, so a CLI invocation gets a fast, plain-text answer
-/// instead of a menu bar icon flashing into existence and a popover it never
-/// wanted.
-enum CLIArguments {
-
-    static let helpText = """
-        \(AppInfo.name) — track AI usage & dev limits in the macOS menu bar.
-
-        Usage: frugalbar [options]
-
-        Options:
-          --help       Show this help text and exit.
-          --version    Print the installed version and exit.
-          --doctor     Run startup diagnostics and exit.
-        """
-
-    /// Returns `true` when a recognised flag was found and handled (its
-    /// output already printed). The caller is responsible for calling
-    /// `exit(0)` immediately afterward — this type never exits on its own,
-    /// so it stays trivially testable.
-    @discardableResult
-    static func handleIfPresent(_ arguments: [String] = CommandLine.arguments) -> Bool {
-        let flags = Set(arguments.dropFirst())
-        if flags.contains("--help") {
-            print(helpText)
-            return true
-        }
-        if flags.contains("--version") {
-            print(AppInfo.version)
-            return true
-        }
-        if flags.contains("--doctor") {
-            runDoctor()
-            return true
-        }
-        return false
-    }
-
-    /// The macOS floor this build actually requires — the one place `--doctor`
-    /// states it, kept as a value so the printed label cannot drift away from
-    /// the version actually tested. Must track `Package.swift`'s `.macOS(.v15)`.
-    private static let requiredMacOSFloor = OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)
-
-    /// Startup diagnostic pass: the macOS floor this build actually requires
-    /// (`Package.swift`'s `.macOS(.v15)`), a Keychain read/write round-trip,
-    /// and presence of the Gemini OAuth client env vars. Prints one line per
-    /// check and exits 0 regardless of outcome — `--doctor` reports, it
-    /// doesn't gate.
-    private static func runDoctor() {
-        print("\(AppInfo.name) doctor")
-
-        let floor = requiredMacOSFloor
-        let floorText = "\(floor.majorVersion).\(floor.minorVersion)"
-        let osOK = ProcessInfo.processInfo.isOperatingSystemAtLeast(floor)
-        report("macOS \(osVersionString()) meets the \(floorText) floor", ok: osOK)
-
-        report("Keychain read/write round-trip", ok: keychainRoundTripSucceeds())
-
-        // Gemini OAuth is opt-in, and the env vars are only one of two ways to
-        // supply it (Settings → Keys → Gemini writes the same client to the
-        // Keychain). So an unset var reports as skipped, never as a failure: a
-        // doctor that prints [FAIL] on a correctly configured machine trains
-        // people to ignore it.
-        let env = ProcessInfo.processInfo.environment
-        for name in ["FRUGALBAR_GEMINI_CLIENT_ID", "FRUGALBAR_GEMINI_CLIENT_SECRET"] {
-            report(
-                "\(name) is set (optional — Gemini OAuth via env)",
-                ok: !(env[name] ?? "").isEmpty,
-                optional: true
-            )
-        }
-    }
-
-    private static func osVersionString() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
-
-    /// Uses a randomised, throwaway label so a diagnostic run never reads or
-    /// clobbers a real credential slot, and cleans up after itself either way.
-    private static func keychainRoundTripSucceeds() -> Bool {
-        let label = "com.quotabar.doctor.\(UUID().uuidString)"
-        let probe = "frugalbar-doctor-probe"
-        do {
-            try KeychainManager.shared.set(key: probe, label: label)
-            defer { try? KeychainManager.shared.delete(label: label) }
-            return try KeychainManager.shared.get(label: label) == probe
-        } catch {
-            return false
-        }
-    }
-
-    /// `optional: true` means "absent is a valid, healthy state" — it reports
-    /// `[--]` rather than `[FAIL]`, so the only FAIL lines are ones that
-    /// actually describe a broken install.
-    private static func report(_ label: String, ok: Bool, optional: Bool = false) {
-        let marker: String
-        if ok {
-            marker = "[ok]  "
-        } else {
-            marker = optional ? "[--]  " : "[FAIL]"
-        }
-        print("\(marker) \(label)")
-    }
-}
-
 /// Status item + popover lifecycle.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -368,12 +261,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct QuotaBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    /// Runs before any Scene is built or the app delegate fires, so a CLI
-    /// invocation exits here — before the app's window/menu-bar machinery
-    /// ever starts — rather than after a status item has already appeared.
+    /// Runs before any Scene is built, and before `applicationDidFinishLaunching`
+    /// fires on the `@NSApplicationDelegateAdaptor`-constructed app delegate —
+    /// so a CLI invocation exits here, before the app's window/menu-bar
+    /// machinery ever starts, rather than after a status item has already
+    /// appeared.
     init() {
-        if CLIArguments.handleIfPresent() {
-            exit(0)
+        if let exitCode = CLIArguments.handleIfPresent() {
+            exit(exitCode)
         }
     }
 

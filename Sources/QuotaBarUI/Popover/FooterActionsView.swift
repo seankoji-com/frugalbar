@@ -21,9 +21,13 @@ struct FooterActionsView: View {
                     .font(Theme.Typography.footer)
                     .foregroundStyle(Theme.onSurface)
 
-                Circle()
-                    .fill(HeaderSummaryView.healthColor(for: summary))
-                    .frame(width: 7, height: 7)
+                // A shape, not colour alone, carries the status (WCAG 1.4.1) —
+                // shares HeaderSummaryView's symbol mapping so the header and
+                // footer indicators can never disagree about what a given
+                // summary means.
+                Image(systemName: HeaderSummaryView.healthSymbol(for: summary))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(HeaderSummaryView.healthColor(for: summary))
                     .shadow(color: HeaderSummaryView.healthColor(for: summary).opacity(0.6), radius: 2)
 
                 if let oldest = summary.oldestReading {
