@@ -273,8 +273,12 @@ public struct SettingsView: View {
             Section {
                 Toggle("Read credentials from local CLI tools", isOn: $cliDiscovery)
                 Text("""
-                     When on, FrugalBar may run `gh auth token` and read \
-                     ~/.local/share/opencode/auth.json if the Keychain has no \
+                     When on, FrugalBar may run `gh auth token`; read \
+                     ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
+                     ~/.claude/.credentials.json, or \
+                     ~/.config/github-copilot/hosts.json; read the \
+                     OPENROUTER_API_KEY environment variable; or read the \
+                     Claude Code login Keychain item — if the Keychain has no \
                      entry for a provider. Off by default: this reads \
                      credentials you have not explicitly given the app.
                      """)
