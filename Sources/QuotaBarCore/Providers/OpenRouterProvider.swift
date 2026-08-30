@@ -25,16 +25,24 @@ actor ModelCatalogCache {
     /// the caller's own task-local session, and joining another caller's
     /// in-flight future would hand back a result fetched under *that*
     /// caller's session instead.
+    ///
+    /// `fetch` returns nil for a network/HTTP/decode failure, and a failure is
+    /// never memoised: caching it would pin empty badges for the whole TTL, so
+    /// one poll made while offline would blank the badges for four hours after
+    /// the network came back. Only a catalog we actually read is cached — even
+    /// when nothing in it qualified, which is a real answer.
     fileprivate func badges(
         sessionKey: ObjectIdentifier,
         ttl: TimeInterval,
-        fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges
+        fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges?
     ) async -> OpenRouterProvider.ModelBadges {
         if let cached, cached.sessionKey == sessionKey,
            Date().timeIntervalSince(cached.at) < ttl {
             return cached.badges
         }
-        let badges = await fetch()
+        guard let badges = await fetch() else {
+            return OpenRouterProvider.ModelBadges()
+        }
         cached = (sessionKey, badges, Date())
         return badges
     }
@@ -238,9 +246,6 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
 
 
-
-
-
     private static func retryAfter(from http: HTTPURLResponse) -> Date? {
         guard let raw = http.value(forHTTPHeaderField: "Retry-After"),
               let seconds = TimeInterval(raw) else { return nil }
@@ -322,7 +327,10 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         }
     }
 
-    private static func fetchModelBadgesFromCatalog() async -> ModelBadges {
+    /// nil on a network/HTTP/decode failure, which is what keeps the failure
+    /// out of `ModelCatalogCache` — a genuine zero-match returns real (empty)
+    /// badges and is cached, a failure is retried on the next poll.
+    private static func fetchModelBadgesFromCatalog() async -> ModelBadges? {
         guard let result = try? await QuotaHTTP.get(url: "https://openrouter.ai/api/v1/models"),
               (200...299).contains(result.1.statusCode),
               let decoded = try? JSONDecoder().decode(ModelCatalogResponse.self, from: result.0)
@@ -330,7 +338,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             // Distinct from a genuine zero-match: this is a network/HTTP/
             // decode failure, not "fetched fine, no model qualified."
             NSLog("frugalbar: OpenRouter model-catalog fetch failed or returned an unparseable body; badges omitted this poll")
-            return ModelBadges()
+            return nil
         }
 
         // A model with a missing/unparseable context_length or pricing is
