@@ -131,15 +131,29 @@ public actor QuotaManager {
         var providersToFetch: [any QuotaProvider] = []
         var throttledOnForce: [VendorIdentifier] = []
         for provider in providers {
-            // The floor only ever holds back a vendor with a *real* prior
-            // reading. A cached `.unavailable` snapshot (never configured,
-            // credential rejected, offline, …) has nothing to protect from
-            // over-fetching, and holding it back here is what let a
-            // just-saved API key take up to `minPollInterval` seconds to
-            // take effect on the next forceRefresh().
-            if let entry = cache[provider.vendorId],
-               entry.snapshot.status.confidence == .measured,
-               startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval {
+            let shouldThrottle: Bool
+            if let entry = cache[provider.vendorId] {
+                let withinFloor = startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval
+                switch entry.snapshot.status {
+                case .unavailable(.notConfigured), .unavailable(.credentialRejected):
+                    // These two are the only reasons a Settings change can
+                    // fix instantly — a just-saved or just-corrected API key
+                    // must take effect on the very next forceRefresh(), so
+                    // they never sit under the floor.
+                    shouldThrottle = false
+                case .measured, .unavailable:
+                    // Every other outcome — a real reading, or a vendor-side
+                    // signal like rateLimited/offline/timedOut/badResponse —
+                    // is exactly what the floor exists to protect: mashing
+                    // refresh must not re-hit a throttling or ailing vendor
+                    // every cycle just because its last result wasn't a
+                    // successful measurement.
+                    shouldThrottle = withinFloor
+                }
+            } else {
+                shouldThrottle = false
+            }
+            if shouldThrottle {
                 if force { throttledOnForce.append(provider.vendorId) }
             } else {
                 providersToFetch.append(provider)
@@ -186,13 +200,21 @@ public actor QuotaManager {
         for provider in providersToFetch {
             let id = provider.vendorId
             guard let snap = results[id] else { continue }
-            // Keep the old cache entry if a previously successful provider now fails transiently
-            // so we don't wipe out the measured reading. Only vendors we actually
-            // fetched get their fetchedAt bumped — throttled vendors keep their
-            // original timestamp so the poll floor doesn't reset itself.
-            if snap.status.confidence == .measured || cache[id] == nil {
-                cache[id] = CacheEntry(snapshot: snap, fetchedAt: now)
-            }
+            // Keep the old cache entry's snapshot if a previously successful
+            // provider now fails transiently, so we don't wipe out the
+            // measured reading the UI is showing. But always bump fetchedAt
+            // to `now` for a vendor we actually attempted — throttled
+            // vendors (never fetched this round) keep their original
+            // timestamp, since it's the attempt, not the outcome, that
+            // re-arms the floor. Doing this only on `.measured` used to
+            // leave `fetchedAt` frozen at the last success for the entire
+            // duration of an outage, so every subsequent forceRefresh
+            // re-hit the failing vendor once the floor's window (measured
+            // from that stale timestamp) had elapsed.
+            let displaySnapshot = (snap.status.confidence == .measured || cache[id] == nil)
+                ? snap
+                : cache[id]!.snapshot
+            cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
         return cache.mapValues(\.snapshot)

@@ -260,4 +260,29 @@ struct OpenRouterModelCatalogTests {
         #expect(snap.freeTierModelBadge?.contains("Big Free") == true)
         #expect(CatalogStub.modelsRequestCount == 1)
     }
+
+    @Test("a second fetch within the TTL reuses the memoised catalog instead of re-requesting it")
+    func secondFetchWithinTTLIsMemoised() async throws {
+        // Every other test in this file wraps a single fetch in its own
+        // fresh withCatalogSession scope, which proves the catalog is
+        // fetched at all but never proves the memoisation this TTL exists
+        // for — this is the one that actually reuses the same cache scope
+        // across two fetches and checks the network was hit only once.
+        let entries = [
+            modelEntry(id: "big-free", name: "Big Free", contextLength: 128_000,
+                       promptPrice: "0", completionPrice: "0"),
+        ]
+        CatalogStub.configure(modelsBody: catalogBody(entries))
+        let provider = OpenRouterProvider(apiKey: "key")
+        let session = CatalogStub.makeSession()
+        try await withCatalogSession(session) {
+            let first = try await provider.fetchSnapshot()
+            #expect(first.freeTierModelBadge?.contains("Big Free") == true)
+            #expect(CatalogStub.modelsRequestCount == 1)
+
+            let second = try await provider.fetchSnapshot()
+            #expect(second.freeTierModelBadge?.contains("Big Free") == true)
+            #expect(CatalogStub.modelsRequestCount == 1) // still 1 — served from the TTL cache
+        }
+    }
 }
