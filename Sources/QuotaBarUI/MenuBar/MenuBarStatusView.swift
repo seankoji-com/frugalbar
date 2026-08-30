@@ -60,7 +60,10 @@ public enum MenuBarPresentation {
         var foundBar = false
 
         for bar in snapshot.bars {
-            let used = bar.primaryFraction
+            // A bar with no fraction (blocked, no percentage reported) has
+            // nothing to measure "remaining" against — skip it rather than
+            // coercing the missing reading to 0% or 100% remaining.
+            guard let used = bar.primaryFraction else { continue }
             let remaining = max(0.0, min(1.0, 1.0 - used))
             if !foundBar || remaining < lowestRemaining {
                 lowestRemaining = remaining

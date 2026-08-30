@@ -111,9 +111,16 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         monthly: Bool = false,
         now: Date
     ) -> DualBarMetrics? {
-        guard let window, let fraction = window.fraction else { return nil }
+        // A window with neither a percentage nor a blocked flag has nothing
+        // to draw — that stays an omitted row. A blocked window still gets a
+        // row even with no percentage, so it renders as a placeholder rather
+        // than disappearing (see DualBarProgressView.isBlockedWithoutReading).
+        guard let window, window.fraction != nil || window.isBlocked else { return nil }
+        let fraction = window.fraction
         let reset = window.reset
         let windowLength = length ?? (monthly ? reset.flatMap(DualBarMetrics.monthWindowLength(endingAt:)) : nil)
+        let usedText: String = fraction.map { "\(Int(($0 * 100).rounded()))% used\(window.isBlocked ? " • blocked" : "")" }
+            ?? "Blocked • no reading reported"
         return DualBarMetrics(
             primaryFraction: fraction,
             expectedPaceFraction: windowLength.flatMap {
@@ -121,7 +128,8 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             },
             label: label,
             statusColor: window.isBlocked ? "#ffb4ab" : "#d47b00",
-            usedText: "\(Int((fraction * 100).rounded()))% used\(window.isBlocked ? " • blocked" : "")",
+            isBlocked: window.isBlocked,
+            usedText: usedText,
             resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" },
             resetsAt: reset, windowLength: windowLength
         )
