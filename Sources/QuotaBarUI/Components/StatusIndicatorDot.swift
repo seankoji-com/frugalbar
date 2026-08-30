@@ -11,7 +11,7 @@ struct StatusIndicatorDot: View {
 
     let status: ProviderStatus
 
-    private var symbol: String {
+    static func symbol(for status: ProviderStatus) -> String {
         if status.confidence == .unavailable { return "minus.circle" }
         switch status.urgency {
         case .none:     return "checkmark.circle.fill"
@@ -20,7 +20,7 @@ struct StatusIndicatorDot: View {
         }
     }
 
-    private var tint: Color {
+    static func tint(for status: ProviderStatus) -> Color {
         if status.confidence == .unavailable { return Theme.outline }
         switch status.urgency {
         case .none:     return Theme.secondary
@@ -30,9 +30,9 @@ struct StatusIndicatorDot: View {
     }
 
     var body: some View {
-        Image(systemName: symbol)
+        Image(systemName: Self.symbol(for: status))
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(tint)
+            .foregroundStyle(Self.tint(for: status))
             .frame(width: 14)
             .accessibilityHidden(true)   // the row supplies the spoken label
     }
