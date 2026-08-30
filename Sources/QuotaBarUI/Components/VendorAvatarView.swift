@@ -120,9 +120,6 @@ public struct VendorAvatarView: View {
         self.size = size
     }
 
-    private var isCritical: Bool { status.urgency == .critical }
-    private var isWarning: Bool { status.urgency == .warning }
-
     @ViewBuilder
     private var mark: some View {
         if let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
@@ -156,21 +153,8 @@ public struct VendorAvatarView: View {
 
             // The ✗ already says everything the dot would, louder.
             if !isExhausted {
-                if isCritical {
-                    Circle()
-                        .fill(Theme.error)
-                        .frame(width: 8, height: 8)
-                        .overlay(Circle().stroke(Theme.card, lineWidth: 1.25))
-                        .shadow(color: Theme.error.opacity(0.8), radius: 2)
-                        .offset(x: 3, y: -3)
-                } else if isWarning {
-                    Circle()
-                        .fill(Theme.tertiary)
-                        .frame(width: 8, height: 8)
-                        .overlay(Circle().stroke(Theme.card, lineWidth: 1.25))
-                        .shadow(color: Theme.tertiary.opacity(0.6), radius: 1.5)
-                        .offset(x: 3, y: -3)
-                }
+                StatusIndicatorDot(status: status)
+                    .offset(x: 3, y: -3)
             }
         }
         .frame(width: size, height: size)
