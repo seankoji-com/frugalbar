@@ -22,19 +22,24 @@ struct FooterActionsView: View {
                     .foregroundStyle(Theme.onSurface)
 
                 Circle()
-                    .fill(healthColor)
+                    .fill(HeaderSummaryView.healthColor(for: summary))
                     .frame(width: 7, height: 7)
-                    .shadow(color: healthColor.opacity(0.6), radius: 2)
+                    .shadow(color: HeaderSummaryView.healthColor(for: summary).opacity(0.6), radius: 2)
 
                 if let oldest = summary.oldestReading {
-                    Text(elapsed(oldest))
+                    Text(HeaderSummaryView.elapsed(since: oldest))
                         .font(Theme.Typography.footerMeta)
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
                         .help("Oldest reading in view")
                 }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("FrugalBar health status")
+            // The dot carries the health state in colour alone, so the label
+            // has to say it — a static "FrugalBar health status" combines the
+            // children and then throws the status away, leaving VoiceOver with
+            // a category name and no reading. Same wording as the header's own
+            // label so the two announce consistently.
+            .accessibilityLabel(footerAccessibilityLabel)
 
             Spacer()
 
@@ -113,22 +118,19 @@ struct FooterActionsView: View {
         }
     }
 
-    private var healthColor: Color {
-        guard summary.hasAnyReading else { return Theme.outline }
-        switch summary.worstUrgency {
-        case .none:     return Theme.secondary
-        case .warning:  return Theme.tertiary
-        case .critical: return Theme.error
+    /// Spoken form of the branding group: the health text the dot only shows
+    /// in colour, plus the age of the oldest reading when there is one.
+    ///
+    /// Derived from `HeaderSummaryView`'s statics rather than a second copy of
+    /// the mapping — the footer dot and the header dot must never be able to
+    /// disagree about what a given summary means.
+    private var footerAccessibilityLabel: String {
+        var label = "FrugalBar. \(HeaderSummaryView.healthText(for: summary))"
+        if let oldest = summary.oldestReading {
+            label += ". Oldest reading \(HeaderSummaryView.elapsed(since: oldest)) ago"
         }
-    }
-
-    private func elapsed(_ date: Date) -> String {
-        let interval = max(0, -date.timeIntervalSinceNow)
-        if interval < 60 { return "\(Int(interval.rounded()))s" }
-        if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
-        return "\(Int((interval / 3600).rounded()))h"
+        return label
     }
 }
-
 
 
