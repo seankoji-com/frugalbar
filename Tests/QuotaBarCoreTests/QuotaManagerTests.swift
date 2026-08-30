@@ -192,6 +192,128 @@ struct QuotaManagerTests {
         #expect(worst == .critical)
     }
 
+    @Test("minPollInterval throttles a vendor even on forceRefresh, serving its cached snapshot")
+    func minPollIntervalThrottlesForceRefresh() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .succeed(.none))]
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .measured(.none))
+        #expect(counter.value == 1)
+
+        // cacheTTL is 0, so refresh()/forceRefresh() would normally re-fetch —
+        // but the vendor was just fetched well inside the one-hour poll
+        // floor, so it must be served from cache rather than re-hit.
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .measured(.none))
+        #expect(counter.value == 1)
+    }
+
+    @Test("minPollInterval does not throttle notConfigured/credentialRejected — a just-fixed key must retry immediately")
+    func minPollIntervalIgnoresCredentialRecoverableFailures() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .throwError(.notConfigured))]
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .unavailable(.notConfigured))
+        #expect(counter.value == 1)
+
+        // notConfigured/credentialRejected are the two reasons a Settings
+        // change can fix instantly, so they never sit under the floor — a
+        // just-saved API key must be retried on the very next forceRefresh.
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .unavailable(.notConfigured))
+        #expect(counter.value == 2)
+    }
+
+    @Test("minPollInterval throttles a vendor-side failure (rateLimited) exactly like a measured reading")
+    func minPollIntervalThrottlesRateLimitedFailure() async {
+        let counter = InvocationCounter()
+        let noRetryAfter: Date? = nil
+        let expectedStatus = ProviderStatus.unavailable(.rateLimited(retryAfter: noRetryAfter))
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .throwError(ProviderError(.rateLimited(retryAfter: noRetryAfter))))]
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == expectedStatus)
+        #expect(counter.value == 1)
+
+        // rateLimited is the vendor's own signal to back off — mashing
+        // refresh must not re-hit it every cycle just because the last
+        // result wasn't a successful measurement. This is the exact
+        // "hammering a paid provider" scenario minPollInterval exists to
+        // stop, and the one case where the vendor itself asked to be left
+        // alone.
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == expectedStatus)
+        #expect(counter.value == 1)
+    }
+
+    @Test("minPollInterval re-arms during an outage instead of re-hitting a failing vendor every cycle")
+    func minPollIntervalReArmsDuringOutage() async {
+        // Two independent counters: `factoryCallCount` only decides which
+        // behavior providerFactory hands back next; `fetchCounter` is what
+        // StubProvider bumps inside fetchSnapshot() and is the one that
+        // actually proves whether the vendor was hit over the network.
+        let factoryCallCount = InvocationCounter()
+        let fetchCounter = InvocationCounter()
+        // A short floor so the test can genuinely let it expire once (via a
+        // real sleep) before the outage, then prove the failed attempt
+        // re-arms a fresh window rather than leaving fetchedAt frozen at
+        // the last success.
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 0.05
+            ),
+            providerFactory: {
+                let call = factoryCallCount.increment()
+                if call == 1 {
+                    return [StubProvider(vendorId: .claude, counter: fetchCounter, behavior: .succeed(.warning))]
+                } else {
+                    return [StubProvider(vendorId: .claude, counter: fetchCounter, behavior: .throwError(.badResponse))]
+                }
+            }
+        )
+        let first = await manager.forceRefresh()
+        #expect(first[.claude]?.status == .measured(.warning))
+        #expect(fetchCounter.value == 1)
+
+        // Let the floor expire before the vendor starts failing.
+        try? await Task.sleep(for: .seconds(0.1))
+
+        let second = await manager.forceRefresh()
+        #expect(second[.claude]?.status == .measured(.warning)) // stale reading preserved
+        #expect(fetchCounter.value == 2)
+
+        // Immediately re-refresh, well within a fresh floor window measured
+        // from the failed attempt above. Without re-arming fetchedAt on
+        // failure, this would incorrectly re-hit the vendor a third time.
+        let third = await manager.forceRefresh()
+        #expect(third[.claude]?.status == .measured(.warning))
+        #expect(fetchCounter.value == 2) // still 2 — the floor re-armed on the failed attempt above
+    }
+
     @Test("transient provider error preserves existing measured cache entry")
     func transientErrorPreservesMeasuredCache() async {
         let counter = InvocationCounter()

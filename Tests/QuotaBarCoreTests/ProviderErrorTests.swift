@@ -120,6 +120,92 @@ struct GeminiOAuthClientTests {
 
 }
 
+@Suite("Gemini OAuth callback parsing")
+struct GeminiOAuthCallbackOutcomeTests {
+
+    private static let expectedState = "xyz-expected-state"
+
+    private func request(target: String) -> String {
+        "GET \(target) HTTP/1.1\r\nHost: 127.0.0.1:54321\r\nConnection: close\r\n\r\n"
+    }
+
+    /// Browsers speculatively request /favicon.ico on the callback's origin.
+    /// It carries no matching code or state, so it must be classified as a
+    /// failed callback — never mistaken for a successful sign-in. (The
+    /// caller, `handleCallback`, is what keeps this from aborting an
+    /// in-progress sign-in: it checks the path before ever calling
+    /// `callbackOutcome` and answers a bare 404 without touching the
+    /// continuation.)
+    @Test("a /favicon.ico probe is never treated as a successful callback")
+    func faviconProbeIsRejected() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/favicon.ico"),
+            expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected failure, got \(outcome)")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    /// The CSRF protection: a callback whose `state` does not match the one
+    /// we generated for this sign-in must be rejected outright. This must
+    /// never be relaxed, even to make some other test easier to satisfy.
+    @Test("a state-param mismatch is rejected")
+    func stateMismatchIsRejected() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?code=abc123&state=someone-elses-state"),
+            expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected failure, got \(outcome)")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    /// Google reports consent failures via an `error` query parameter rather
+    /// than omitting `code` — that must still fail the callback even when
+    /// `state` matches.
+    @Test("an error param present fails the callback")
+    func errorParamIsRejected() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?error=access_denied&state=\(Self.expectedState)"),
+            expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected failure, got \(outcome)")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    /// No `code` means nothing to exchange, regardless of `state` matching.
+    @Test("a missing code param fails the callback")
+    func missingCodeIsRejected() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?state=\(Self.expectedState)"),
+            expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected failure, got \(outcome)")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    /// Matching state, no error, and a code present: the code is returned so
+    /// the exchange step can run.
+    @Test("a well-formed callback with matching state succeeds")
+    func happyPathSucceeds() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?code=abc123&state=\(Self.expectedState)"),
+            expectedState: Self.expectedState)
+        guard case .success(let code) = outcome else {
+            Issue.record("expected success, got \(outcome)")
+            return
+        }
+        #expect(code == "abc123")
+    }
+}
+
 @Suite("Gemini OAuth token errors")
 struct GeminiOAuthErrorTests {
 

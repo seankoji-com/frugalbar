@@ -107,7 +107,7 @@ public actor QuotaManager {
             return await existing.value
         }
 
-        let task = Task { await self.parallelFetch() }
+        let task = Task { await self.parallelFetch(force: force) }
         activeTask = task
         let result = await task.value
         // Only clear if this task is still the current one — a forceRefresh
@@ -116,13 +116,61 @@ public actor QuotaManager {
         return result
     }
 
-    private func parallelFetch() async -> [VendorIdentifier: QuotaSnapshot] {
+    private func parallelFetch(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
         let providers: [any QuotaProvider] = providerFactory()
         let budget = cachePolicy.perProviderTimeout
+        let minPollInterval = cachePolicy.minPollInterval
+        let startNow = Date()
+
+        // Per-vendor poll floor: a vendor fetched more recently than
+        // minPollInterval is served its cached snapshot instead of being
+        // re-hit. This applies even on the forceRefresh path (force only
+        // bypasses cacheTTL/lastCompleteFetch, not this per-vendor floor),
+        // so mashing the manual refresh button can't hammer a paid
+        // provider's API faster than the floor allows.
+        var providersToFetch: [any QuotaProvider] = []
+        var throttledOnForce: [VendorIdentifier] = []
+        for provider in providers {
+            let shouldThrottle: Bool
+            if let entry = cache[provider.vendorId] {
+                let withinFloor = startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval
+                switch entry.snapshot.status {
+                case .unavailable(.notConfigured), .unavailable(.credentialRejected):
+                    // These two are the only reasons a Settings change can
+                    // fix instantly — a just-saved or just-corrected API key
+                    // must take effect on the very next forceRefresh(), so
+                    // they never sit under the floor.
+                    shouldThrottle = false
+                case .measured, .unavailable:
+                    // Every other outcome — a real reading, or a vendor-side
+                    // signal like rateLimited/offline/timedOut/badResponse —
+                    // is exactly what the floor exists to protect: mashing
+                    // refresh must not re-hit a throttling or ailing vendor
+                    // every cycle just because its last result wasn't a
+                    // successful measurement.
+                    shouldThrottle = withinFloor
+                }
+            } else {
+                shouldThrottle = false
+            }
+            if shouldThrottle {
+                if force { throttledOnForce.append(provider.vendorId) }
+            } else {
+                providersToFetch.append(provider)
+            }
+        }
+        // A forced refresh that ends up issuing no network request at all
+        // looks, to the caller, exactly like a plain cache read — so this is
+        // logged rather than left silent, unlike the throttled-but-not-forced
+        // case, which is the poll floor working as designed.
+        if force, !throttledOnForce.isEmpty {
+            NSLog("frugalbar: forceRefresh() served \(throttledOnForce.count) vendor(s) from cache " +
+                  "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce.map(\.rawValue))")
+        }
         var results: [VendorIdentifier: QuotaSnapshot] = [:]
 
         await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
-            for provider in providers {
+            for provider in providersToFetch {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
                     // does not bound a provider that issues several requests.
@@ -149,12 +197,24 @@ public actor QuotaManager {
         }
 
         let now = Date()
-        for (id, snap) in results {
-            // Keep the old cache entry if a previously successful provider now fails transiently
-            // so we don't wipe out the measured reading.
-            if snap.status.confidence == .measured || cache[id] == nil {
-                cache[id] = CacheEntry(snapshot: snap, fetchedAt: now)
-            }
+        for provider in providersToFetch {
+            let id = provider.vendorId
+            guard let snap = results[id] else { continue }
+            // Keep the old cache entry's snapshot if a previously successful
+            // provider now fails transiently, so we don't wipe out the
+            // measured reading the UI is showing. But always bump fetchedAt
+            // to `now` for a vendor we actually attempted — throttled
+            // vendors (never fetched this round) keep their original
+            // timestamp, since it's the attempt, not the outcome, that
+            // re-arms the floor. Doing this only on `.measured` used to
+            // leave `fetchedAt` frozen at the last success for the entire
+            // duration of an outage, so every subsequent forceRefresh
+            // re-hit the failing vendor once the floor's window (measured
+            // from that stale timestamp) had elapsed.
+            let displaySnapshot = (snap.status.confidence == .measured || cache[id] == nil)
+                ? snap
+                : cache[id]!.snapshot
+            cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
         return cache.mapValues(\.snapshot)

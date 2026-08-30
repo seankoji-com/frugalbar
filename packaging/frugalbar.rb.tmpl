@@ -5,7 +5,8 @@ class Frugalbar < Formula
   url "__URL__"
   sha256 "__SHA256__"
 
-  depends_on :macos
+  depends_on arch: :arm64
+  depends_on macos: :sequoia
 
   def install
     bin.install "frugalbar"
@@ -18,6 +19,6 @@ class Frugalbar < Formula
   end
 
   test do
-    system "#{bin}/frugalbar", "--help" rescue true
+    system "#{bin}/frugalbar", "--help"
   end
 end

@@ -23,21 +23,24 @@ struct HeaderSummaryView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 5) {
-                Circle()
-                    .fill(healthColor)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: healthColor.opacity(0.5), radius: 2, x: 0, y: 0)
+                // A shape, not colour alone, carries the status (WCAG 1.4.1):
+                // a checkmark, a triangle, or an octagon reads the same
+                // whether or not colour vision distinguishes green from red.
+                Image(systemName: Self.healthSymbol(for: summary))
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Self.healthColor(for: summary))
+                    .shadow(color: Self.healthColor(for: summary).opacity(0.5), radius: 2, x: 0, y: 0)
 
-                Text(healthText)
+                Text(Self.healthText(for: summary))
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(healthColor)
+                    .foregroundStyle(Self.healthColor(for: summary))
                     .lineLimit(1)
             }
 
             Spacer(minLength: 4)
 
             if let oldest = summary.oldestReading {
-                Text(elapsed(oldest))
+                Text(Self.elapsed(since: oldest))
                     .font(.system(size: 9, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
@@ -70,13 +73,21 @@ struct HeaderSummaryView: View {
                 .frame(height: 0.5)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FrugalBar. \(healthText)")
+        .accessibilityLabel("FrugalBar. \(Self.healthText(for: summary))")
 
     }
 
     // MARK: - Aggregate presentation
 
-    private var healthSymbol: String {
+    // `nonisolated`: pure functions of their arguments, but `View`'s `body`
+    // requirement is main-actor-isolated and the compiler can infer that
+    // isolation onto every member of a conforming type unless told
+    // otherwise. That inference is toolchain-sensitive — it did not fire
+    // locally, but did under CI's Xcode/Swift version, which is what turned
+    // "365 tests green" locally into a red `Build & Test (macOS)` job — and
+    // would make these uncallable from the synchronous, non-isolated `@Test`
+    // functions that exercise them directly.
+    nonisolated static func healthSymbol(for summary: SystemHealthSummary) -> String {
         guard summary.hasAnyReading else { return "minus.circle" }
         switch summary.worstUrgency {
         case .none:     return "checkmark.circle.fill"
@@ -85,7 +96,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    private var healthColor: Color {
+    nonisolated static func healthColor(for summary: SystemHealthSummary) -> Color {
         guard summary.hasAnyReading else { return Theme.outline }
         switch summary.worstUrgency {
         case .none:     return Theme.secondary
@@ -94,7 +105,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    private var healthText: String {
+    nonisolated static func healthText(for summary: SystemHealthSummary) -> String {
         var parts: [String] = []
         if summary.hasAnyReading {
             switch summary.worstUrgency {
@@ -111,11 +122,13 @@ struct HeaderSummaryView: View {
         return parts.joined(separator: " · ")
     }
 
-    private func elapsed(_ date: Date) -> String {
-        let interval = max(0, -date.timeIntervalSinceNow)
+    /// `now` is a parameter, not a captured `Date()`, so a test can assert an
+    /// exact boundary ("59s", not "60s") instead of racing the clock between
+    /// building the input date and reading it back.
+    nonisolated static func elapsed(since date: Date, now: Date = Date()) -> String {
+        let interval = max(0, now.timeIntervalSince(date))
         if interval < 60 { return "\(Int(interval.rounded()))s" }
         if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
         return "\(Int((interval / 3600).rounded()))h"
     }
 }
-

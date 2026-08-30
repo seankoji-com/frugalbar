@@ -1,5 +1,53 @@
 import Foundation
 
+/// Memoises the fetched-and-ranked OpenRouter model catalog behind a TTL so
+/// repeated polls don't each re-fetch and re-rank the same public catalog.
+/// Deliberately process-lifetime state, not a second cache layer with disk
+/// persistence — a cold app launch always fetches fresh.
+actor ModelCatalogCache {
+
+    /// Task-local, mirroring `QuotaHTTP.$session`: production never rebinds
+    /// it, so `Self.current` always resolves to this one process-lifetime
+    /// instance, but a test that enters its own scope via
+    /// `$current.withValue(ModelCatalogCache())` — alongside its own
+    /// `QuotaHTTP.$session.withValue(_:)` — gets a brand new, empty actor
+    /// instance instead of sharing global memoised state. That is a
+    /// structural guarantee against cross-test leakage, unlike keying on a
+    /// session's `ObjectIdentifier`: an unretained `URLSession`'s address can
+    /// be reused after `finishTasksAndInvalidate()`, which made that scheme
+    /// only a probabilistic guard against a stale hit.
+    @TaskLocal static var current = ModelCatalogCache()
+
+    private var cached: (badges: OpenRouterProvider.ModelBadges, at: Date)?
+
+    /// Returns the memoised badges if they're younger than `ttl`, otherwise
+    /// runs `fetch` and caches the result.
+    ///
+    /// Deliberately does not coalesce concurrent misses onto one in-flight
+    /// call: an actor hop preserves the caller's own task-local session, and
+    /// joining another caller's in-flight future would hand back a result
+    /// fetched under *that* caller's session instead.
+    ///
+    /// `fetch` returns nil for a network/HTTP/decode failure, and a failure is
+    /// never memoised: caching it would pin empty badges for the whole TTL, so
+    /// one poll made while offline would blank the badges for four hours after
+    /// the network came back. Only a catalog we actually read is cached — even
+    /// when nothing in it qualified, which is a real answer.
+    fileprivate func badges(
+        ttl: TimeInterval,
+        fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges?
+    ) async -> OpenRouterProvider.ModelBadges {
+        if let cached, Date().timeIntervalSince(cached.at) < ttl {
+            return cached.badges
+        }
+        guard let badges = await fetch() else {
+            return OpenRouterProvider.ModelBadges()
+        }
+        cached = (badges, Date())
+        return badges
+    }
+}
+
 /// OpenRouter credit provider — `GET /api/v1/auth/key`.
 ///
 /// Contract notes, because a previous revision misread all three:
@@ -27,9 +75,8 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        // The catalog fetch needs no key and must run on every refresh, key
-        // or not, so it starts concurrently with the (possibly key-gated)
-        // primary snapshot rather than after it.
+        // The catalog fetch needs no key, so it starts concurrently with the
+        // (possibly key-gated) primary snapshot rather than after it.
         async let badgesTask = Self.fetchModelBadges()
         var snapshot = try await fetchPrimarySnapshot()
         let badges = await badgesTask
@@ -194,9 +241,6 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
 
 
-
-
-
     private static func retryAfter(from http: HTTPURLResponse) -> Date? {
         guard let raw = http.value(forHTTPHeaderField: "Retry-After"),
               let seconds = TimeInterval(raw) else { return nil }
@@ -227,7 +271,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// The two badge strings, or nil each when the catalog call failed or no
     /// model qualified. Never fabricated — every field comes straight off a
     /// real catalog entry.
-    private struct ModelBadges: Sendable {
+    fileprivate struct ModelBadges: Sendable {
         var freeTier: String?
         var cheapestLargeContext: String?
     }
@@ -239,6 +283,13 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         let promptPrice: Double
         let completionPrice: Double
     }
+
+    /// How long a fetched-and-ranked catalog stays valid before the next
+    /// call re-fetches. The public model list changes on the order of days,
+    /// not seconds, so a multi-hour TTL trades a little staleness for
+    /// sparing every poll of every OpenRouter provider instance a redundant
+    /// `/api/v1/models` round trip and re-rank.
+    static let catalogTTL: TimeInterval = 4 * 60 * 60
 
     /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
     /// public catalog, which needs no key. Bounded to a deadline well under
@@ -252,7 +303,9 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// `try?` failure path it wraps.
     private static func fetchModelBadges() async -> ModelBadges {
         let outcome = await withDeadline(seconds: 5) {
-            await fetchModelBadgesFromCatalog()
+            await ModelCatalogCache.current.badges(ttl: catalogTTL) {
+                await fetchModelBadgesFromCatalog()
+            }
         }
         switch outcome {
         case .success(let badges):
@@ -268,7 +321,10 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         }
     }
 
-    private static func fetchModelBadgesFromCatalog() async -> ModelBadges {
+    /// nil on a network/HTTP/decode failure, which is what keeps the failure
+    /// out of `ModelCatalogCache` — a genuine zero-match returns real (empty)
+    /// badges and is cached, a failure is retried on the next poll.
+    private static func fetchModelBadgesFromCatalog() async -> ModelBadges? {
         guard let result = try? await QuotaHTTP.get(url: "https://openrouter.ai/api/v1/models"),
               (200...299).contains(result.1.statusCode),
               let decoded = try? JSONDecoder().decode(ModelCatalogResponse.self, from: result.0)
@@ -276,7 +332,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             // Distinct from a genuine zero-match: this is a network/HTTP/
             // decode failure, not "fetched fine, no model qualified."
             NSLog("frugalbar: OpenRouter model-catalog fetch failed or returned an unparseable body; badges omitted this poll")
-            return ModelBadges()
+            return nil
         }
 
         // A model with a missing/unparseable context_length or pricing is

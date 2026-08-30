@@ -121,7 +121,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     private static func row(_ reading: Reading) -> DualBarMetrics {
         DualBarMetrics(
             primaryFraction: reading.used, expectedPaceFraction: reading.pace,
-            label: reading.label, statusColor: "#10a37f",
+            label: reading.label,
             usedText: "\(Int((reading.used * 100).rounded()))% used",
             resetText: reading.reset.map(resetText),
             resetsAt: reading.reset, windowLength: reading.windowSeconds

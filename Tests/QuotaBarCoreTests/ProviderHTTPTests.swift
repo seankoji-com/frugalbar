@@ -101,8 +101,14 @@ private func withStubbedHTTP<T: Sendable>(
 ) async throws -> T {
     URLProtocolStub.reset()
     URLProtocolStub.handler = handler
-    return try await QuotaHTTP.$session.withValue(URLProtocolStub.makeSession()) {
-        try await operation()
+    let session = URLProtocolStub.makeSession()
+    defer { session.finishTasksAndInvalidate() }
+    return try await QuotaHTTP.$session.withValue(session) {
+        // A fresh cache instance per scope, exactly like the session above,
+        // so this test can never read back another test's memoised badges.
+        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
+            try await operation()
+        }
     }
 }
 

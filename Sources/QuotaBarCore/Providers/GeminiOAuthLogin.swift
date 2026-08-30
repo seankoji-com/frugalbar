@@ -199,27 +199,56 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
             return
         }
 
+        let outcome = Self.callbackOutcome(request: request, expectedState: state)
+        let message: String
+        switch outcome {
+        case .success:
+            message = "<html><body><h2>FrugalBar</h2><p>You may close this window.</p></body></html>"
+        case .failure:
+            message = "<html><body><h2>FrugalBar</h2><p>Sign-in did not complete. You may close this window.</p></body></html>"
+        }
+        Self.respond(on: connection, status: "200 OK", body: message)
+
+        switch outcome {
+        case .success(let code):
+            Task {
+                do {
+                    try await exchange(code: code)
+                    finish(.success(()))
+                } catch {
+                    finish(.failure(error))
+                }
+            }
+        case .failure(let error):
+            finish(.failure(error))
+        }
+    }
+
+    /// The parse-and-validate half of the callback: given the raw HTTP
+    /// request line and the state we generated for this sign-in, extracts the
+    /// authorization code or classifies why the callback cannot be trusted.
+    ///
+    /// Pure and static so the CSRF check (`returnedState == expectedState`)
+    /// — along with a present `error` param and a missing `code` — can be
+    /// tested without standing up an `NWConnection`. Every failure path
+    /// collapses to the same generic `.badResponse`: none of these is
+    /// actionable by the user, and the caller never surfaces the raw
+    /// difference, only whether the callback succeeded.
+    static func callbackOutcome(request: String, expectedState: String) -> Result<String, ProviderError> {
+        let target = request.split(separator: "\n").first?.split(separator: " ").dropFirst().first
+        let url = target.flatMap { URL(string: "http://127.0.0.1\($0)") }
+
         let code = url?.queryItem(named: "code")
         let returnedState = url?.queryItem(named: "state")
         let error = url?.queryItem(named: "error")
-        let succeeded = error == nil && returnedState == state && code != nil
-        let message = succeeded
-            ? "<html><body><h2>FrugalBar</h2><p>You may close this window.</p></body></html>"
-            : "<html><body><h2>FrugalBar</h2><p>Sign-in did not complete. You may close this window.</p></body></html>"
-        Self.respond(on: connection, status: "200 OK", body: message)
 
-        guard succeeded, let code else {
-            finish(.failure(ProviderError.badResponse))
-            return
+        // The state check is the CSRF protection: a callback with a state
+        // that does not match the one we generated must be rejected, never
+        // relaxed to make some other check easier to satisfy.
+        guard error == nil, returnedState == expectedState, let code else {
+            return .failure(.badResponse)
         }
-        Task {
-            do {
-                try await exchange(code: code)
-                finish(.success(()))
-            } catch {
-                finish(.failure(error))
-            }
-        }
+        return .success(code)
     }
 
     private static func respond(on connection: NWConnection, status: String, body: String) {
