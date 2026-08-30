@@ -45,6 +45,14 @@ jobs:
       - name: Build (warnings are errors)
         run: swift build -c debug -Xswiftc -warnings-as-errors
 
+      - name: Verify frugalbar binary runs
+        run: |
+          # No release copy step here (that's release.yml's job) — exercise
+          # the debug binary SwiftPM just built directly. macOS runners ship
+          # no GNU `timeout`; perl's alarm() is the portable substitute, and
+          # its itimer survives exec() so a hang still gets killed.
+          perl -e 'alarm 10; exec @ARGV or die "exec failed: $!"' .build/debug/QuotaBar --version
+
       - name: Run tests
         run: swift test -c debug --parallel
 
