@@ -76,6 +76,20 @@ jobs:
           # frugalbar still gets killed after 10s.
           perl -e 'alarm 10; exec @ARGV or die "exec failed: $!"' bin/frugalbar --version
 
+      # After the build and the binary smoke check, but *before* the release:
+      # action-gh-release creates the tag itself when `tag_name` does not yet
+      # exist, and it creates a lightweight one. Tagging afterwards then tries
+      # to push an annotated tag object onto a ref that already exists, which
+      # git rejects ("already exists") and fails the job with the release
+      # already published. Tag first; the release action then just attaches to
+      # the existing tag.
+      - name: Tag commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.semver.outputs.tag }}" -m "Release ${{ steps.semver.outputs.tag }}"
+          git push origin "${{ steps.semver.outputs.tag }}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -87,13 +101,6 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-
-      - name: Tag commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.semver.outputs.tag }}" -m "Release ${{ steps.semver.outputs.tag }}"
-          git push origin "${{ steps.semver.outputs.tag }}"
 
       - name: Generate seankoji-com-ci App token
         id: app-token
@@ -149,5 +156,4 @@ jobs:
             --title "feat(formula): update frugalbar to ${TAG}" \
             --body "Automated formula update for ${TAG}.")
           gh pr merge --repo seankoji-com/homebrew-tap "${PR_URL}" --squash --auto
-
 
