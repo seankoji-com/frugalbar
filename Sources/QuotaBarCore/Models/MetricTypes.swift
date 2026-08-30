@@ -176,11 +176,18 @@ public enum MetricCategory: String, Sendable, CaseIterable, Codable {
 // MARK: - Dual-bar burndown metrics
 
 public struct DualBarMetrics: Sendable, Equatable {
-    public var primaryFraction: Double          // 0.0 to 1.0 (actual quota consumed)
+    /// 0.0 to 1.0 (actual quota consumed). `nil` when the vendor declared the
+    /// window blocked/critical (see `isBlocked`) but gave no percentage to
+    /// measure it with — never coerced to 0 or 1 to fill the gap.
+    public var primaryFraction: Double?
     public var expectedPaceFraction: Double?     // Pro-rata expected fraction elapsed in window (0.0 to 1.0)
     public var secondaryFraction: Double?       // delta / surge burndown fraction
     public var label: String                    // e.g. "5H", "WK", "REST", "GraphQL"
     public var statusColor: String?
+    /// The vendor told us outright that this window cannot be used at all
+    /// right now (e.g. rate-limited), independent of whatever percentage — or
+    /// lack of one — it also reported.
+    public var isBlocked: Bool
     public var usedText: String?
     public var resetText: String?
     /// When this window resets, and how long it runs — the same two figures
@@ -194,11 +201,12 @@ public struct DualBarMetrics: Sendable, Equatable {
     public var windowLength: TimeInterval?
 
     public init(
-        primaryFraction: Double,
+        primaryFraction: Double?,
         expectedPaceFraction: Double? = nil,
         secondaryFraction: Double? = nil,
         label: String,
         statusColor: String? = nil,
+        isBlocked: Bool = false,
         usedText: String? = nil,
         resetText: String? = nil,
         resetsAt: Date? = nil,
@@ -209,6 +217,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.secondaryFraction = secondaryFraction
         self.label = label
         self.statusColor = statusColor
+        self.isBlocked = isBlocked
         self.usedText = usedText
         self.resetText = resetText
         self.resetsAt = resetsAt
@@ -227,7 +236,8 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// behind it. A fabricated denominator is the same defect as a fabricated
     /// quota — it just looks like geometry instead of a number.
     public var burndownDelta: Double? {
-        expectedPaceFraction.map { primaryFraction - $0 }
+        guard let primaryFraction, let expectedPaceFraction else { return nil }
+        return primaryFraction - expectedPaceFraction
     }
 
     public var isAboveProrataPace: Bool {
@@ -240,7 +250,7 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// pace to compare against — a window barely open, or a vendor that gave
     /// no reset time at all.
     public var burnRateMultiplier: Double? {
-        guard let expectedPaceFraction, expectedPaceFraction > 0.001 else { return nil }
+        guard let primaryFraction, let expectedPaceFraction, expectedPaceFraction > 0.001 else { return nil }
         return primaryFraction / expectedPaceFraction
     }
 
@@ -253,7 +263,7 @@ public struct DualBarMetrics: Sendable, Equatable {
     public var projectedExhaustionDate: Date? {
         guard let resetsAt, let windowLength, windowLength > 0,
               let elapsedFraction = expectedPaceFraction, elapsedFraction > 0.001,
-              primaryFraction > elapsedFraction
+              let primaryFraction, primaryFraction > elapsedFraction
         else { return nil }
         let windowStart = resetsAt.addingTimeInterval(-windowLength)
         let secondsToExhaustion = elapsedFraction * windowLength / primaryFraction

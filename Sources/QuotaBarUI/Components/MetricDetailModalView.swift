@@ -234,7 +234,7 @@ public struct MetricDetailModalView: View {
     /// pace to compare against (a fresh window, or a vendor with no reset
     /// time), rather than a rate computed against nothing.
     private func burnRateText(_ bar: DualBarMetrics?) -> String? {
-        guard let bar, bar.primaryFraction < MetricRowPresentation.exhaustionThreshold,
+        guard let bar, (bar.primaryFraction ?? 0) < MetricRowPresentation.exhaustionThreshold,
               let rate = bar.burnRateMultiplier
         else { return nil }
         return "Burning \(String(format: "%.1f", rate))× pace"
@@ -310,7 +310,7 @@ public struct MetricDetailModalView: View {
           "vendor": "\(snapshot.displayName)",
           "category": "\(snapshot.category.rawValue)",
           "status": "\(snapshot.status.confidence == .measured ? "measured" : "unavailable")",
-          "5h_fraction": \(snapshot.row1.map { String($0.primaryFraction) } ?? "null"),
+          "5h_fraction": \(snapshot.row1?.primaryFraction.map { String($0) } ?? "null"),
           "last_updated": "\(snapshot.lastUpdated)"
         }
         """

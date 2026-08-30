@@ -117,7 +117,7 @@ public struct PopoverRootView: View {
                             // Coercing its missing fraction to 0 happened to be
                             // right here, but it is the same `?? 0.0` that read
                             // as "plenty left" elsewhere — so it is spelled out.
-                            let measured = snap.bars.map(\.primaryFraction)
+                            let measured = snap.bars.compactMap(\.primaryFraction)
                                 + [snap.consumptionFraction].compactMap { $0 }
                             return measured.contains { $0 >= 0.70 }
                         }

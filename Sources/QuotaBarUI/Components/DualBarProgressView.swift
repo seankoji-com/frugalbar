@@ -25,8 +25,11 @@ public struct DualBarProgressView: View {
         self.urgency = urgency
     }
 
-    private var consumedPct: Double {
-        max(0, min(1, metrics.primaryFraction))
+    /// nil when the vendor declared this window blocked/critical but reported
+    /// no percentage — never coerced to 0 or 1 to give the bar something to
+    /// draw against.
+    private var consumedPct: Double? {
+        metrics.primaryFraction.map { max(0, min(1, $0)) }
     }
 
     /// nil when the vendor gave us no way to know how far through the window we
@@ -37,13 +40,33 @@ public struct DualBarProgressView: View {
     }
 
     private var isExhausted: Bool {
-        consumedPct >= 0.999
+        (consumedPct ?? 0) >= 0.999
+    }
+
+    /// The vendor's own colour for a blocked/critical window. Reading this
+    /// lets a provider-declared "this window cannot be used" state win over
+    /// whatever the pace/exhaustion arithmetic below would otherwise paint —
+    /// a blocked window with a low percentage used to still render green.
+    private var vendorStatusColor: Color? {
+        guard metrics.isBlocked || urgency == .critical else { return nil }
+        return metrics.statusColor.flatMap(Color.init(hexString:))
+    }
+
+    /// True exactly in the case the vendor told us "blocked" but gave no
+    /// percentage to measure it with. The bar still has to draw *something*
+    /// here — omitting it entirely reads as "nothing to report" rather than
+    /// "this window is blocked" — but it must not fabricate a fraction to do
+    /// it.
+    private var isBlockedWithoutReading: Bool {
+        metrics.isBlocked && metrics.primaryFraction == nil
     }
 
     private var labelColor: Color {
-        if isExhausted {
+        if let vendorStatusColor {
+            return vendorStatusColor
+        } else if isExhausted {
             return Theme.errorBold
-        } else if let pace = targetPacePct, consumedPct > pace {
+        } else if let pace = targetPacePct, let consumedPct, consumedPct > pace {
             return Color(red: 0.96, green: 0.72, blue: 0.15) // Bright warning yellow
         } else {
             return Theme.healthy // Vibrant green
@@ -58,7 +81,7 @@ public struct DualBarProgressView: View {
         HStack(spacing: 8) {
             GeometryReader { geo in
                 let w = geo.size.width
-                let aX = consumedPct * w
+                let aX = (consumedPct ?? 0) * w
                 let mX = (targetPacePct ?? 0) * w
                 let hasPace = targetPacePct != nil
 
@@ -75,23 +98,40 @@ public struct DualBarProgressView: View {
                             .fill(trackColor)
                             .frame(height: Self.barHeight)
 
-                        if isExhausted {
+                        if isBlockedWithoutReading {
+                            // --- CASE B: BLOCKED, NO READING ---
+                            // The vendor told us this window cannot be used at
+                            // all but gave no percentage. Omitting the bar
+                            // here used to read as "nothing to report"; a
+                            // hatched placeholder in the vendor's declared
+                            // status colour says "blocked" without inventing
+                            // a fraction to fill it with.
+                            RoundedRectangle(cornerRadius: Self.barHeight / 2)
+                                .fill((vendorStatusColor ?? Theme.errorBold).opacity(0.30))
+                                .frame(width: w, height: Self.barHeight)
+                            RoundedRectangle(cornerRadius: Self.barHeight / 2)
+                                .strokeBorder(
+                                    vendorStatusColor ?? Theme.errorBold,
+                                    style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
+                                )
+                                .frame(width: w, height: Self.barHeight)
+                        } else if isExhausted {
                             // --- CASE 1: NOTHING LEFT ---
                             // Red end to end. Splitting this at the pace marker
                             // painted most of the bar in the vendor's brand colour
                             // and reddened only the tail, so a spent quota read as
                             // a mostly-healthy one with a red tip.
                             Rectangle()
-                                .fill(Theme.errorBold)
+                                .fill(vendorStatusColor ?? Theme.errorBold)
                                 .frame(width: w, height: Self.barHeight)
-                                .shadow(color: Theme.errorBold.opacity(0.6), radius: 2)
+                                .shadow(color: (vendorStatusColor ?? Theme.errorBold).opacity(0.6), radius: 2)
                         } else if !hasPace {
                             // --- CASE 0: NO PACE TARGET ---
                             // Consumption only. Nothing here is measured against a
                             // number we did not receive.
                             if aX > 0 {
                                 Rectangle()
-                                    .fill(accentColor)
+                                    .fill(vendorStatusColor ?? accentColor)
                                     .frame(width: max(4, aX), height: Self.barHeight)
                                     .animation(.easeOut(duration: 0.35), value: consumedPct)
                             }
@@ -144,7 +184,7 @@ public struct DualBarProgressView: View {
                     .clipShape(Capsule())
 
                     // 3. Target Pace Marker (vertical white tick at mX)
-                    if hasPace, mX > 0, mX < w {
+                    if hasPace, mX > 0, mX < w, !isBlockedWithoutReading {
                         Capsule()
                             .fill(Color.white)
                             .frame(width: 2.5, height: Self.tickHeight)
@@ -175,6 +215,13 @@ public struct DualBarProgressView: View {
 
 
     private var helpText: String {
+        guard let consumedPct else {
+            // Blocked with no percentage: say so plainly rather than
+            // printing a "0% used" that would misreport an unmeasured
+            // window as an empty one.
+            let detail = metrics.usedText ?? "blocked • no reading reported"
+            return "\(metrics.label): \(detail)"
+        }
         let usedPctInt = Int((consumedPct * 100).rounded())
         let detail = metrics.usedText ?? "\(usedPctInt)% used"
         guard let delta = metrics.burndownDelta else {
