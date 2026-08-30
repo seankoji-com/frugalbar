@@ -43,23 +43,39 @@ enum CLIArguments {
         return false
     }
 
+    /// The macOS floor this build actually requires — the one place `--doctor`
+    /// states it, kept as a value so the printed label cannot drift away from
+    /// the version actually tested. Must track `Package.swift`'s `.macOS(.v15)`.
+    private static let requiredMacOSFloor = OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)
+
     /// Startup diagnostic pass: the macOS floor this build actually requires
-    /// (`Package.swift`'s `.macOS(.v15)` / Info.plist's `LSMinimumSystemVersion`),
-    /// a Keychain read/write round-trip, and presence of the Gemini OAuth
-    /// client env vars. Prints one line per check and exits 0 regardless of
-    /// outcome — `--doctor` reports, it doesn't gate.
+    /// (`Package.swift`'s `.macOS(.v15)`), a Keychain read/write round-trip,
+    /// and presence of the Gemini OAuth client env vars. Prints one line per
+    /// check and exits 0 regardless of outcome — `--doctor` reports, it
+    /// doesn't gate.
     private static func runDoctor() {
         print("\(AppInfo.name) doctor")
 
-        let requiredFloor = OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)
-        let osOK = ProcessInfo.processInfo.isOperatingSystemAtLeast(requiredFloor)
-        report("macOS \(osVersionString()) meets the 15.0 floor", ok: osOK)
+        let floor = requiredMacOSFloor
+        let floorText = "\(floor.majorVersion).\(floor.minorVersion)"
+        let osOK = ProcessInfo.processInfo.isOperatingSystemAtLeast(floor)
+        report("macOS \(osVersionString()) meets the \(floorText) floor", ok: osOK)
 
         report("Keychain read/write round-trip", ok: keychainRoundTripSucceeds())
 
+        // Gemini OAuth is opt-in, and the env vars are only one of two ways to
+        // supply it (Settings → Keys → Gemini writes the same client to the
+        // Keychain). So an unset var reports as skipped, never as a failure: a
+        // doctor that prints [FAIL] on a correctly configured machine trains
+        // people to ignore it.
         let env = ProcessInfo.processInfo.environment
-        report("FRUGALBAR_GEMINI_CLIENT_ID is set", ok: !(env["FRUGALBAR_GEMINI_CLIENT_ID"] ?? "").isEmpty)
-        report("FRUGALBAR_GEMINI_CLIENT_SECRET is set", ok: !(env["FRUGALBAR_GEMINI_CLIENT_SECRET"] ?? "").isEmpty)
+        for name in ["FRUGALBAR_GEMINI_CLIENT_ID", "FRUGALBAR_GEMINI_CLIENT_SECRET"] {
+            report(
+                "\(name) is set (optional — Gemini OAuth via env)",
+                ok: !(env[name] ?? "").isEmpty,
+                optional: true
+            )
+        }
     }
 
     private static func osVersionString() -> String {
@@ -81,8 +97,17 @@ enum CLIArguments {
         }
     }
 
-    private static func report(_ label: String, ok: Bool) {
-        print("\(ok ? "[ok]  " : "[FAIL]") \(label)")
+    /// `optional: true` means "absent is a valid, healthy state" — it reports
+    /// `[--]` rather than `[FAIL]`, so the only FAIL lines are ones that
+    /// actually describe a broken install.
+    private static func report(_ label: String, ok: Bool, optional: Bool = false) {
+        let marker: String
+        if ok {
+            marker = "[ok]  "
+        } else {
+            marker = optional ? "[--]  " : "[FAIL]"
+        }
+        print("\(marker) \(label)")
     }
 }
 
@@ -299,19 +324,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
 
-        // 2. Set Attributed Title with remaining lowest quota, coloured by how
-        // urgent the recommended vendor's reading actually is — not always red.
+        // 2. Set Attributed Title with remaining lowest quota, coloured by
+        // urgency instead of always red. Deliberately the *same*
+        // `MenuBarPresentation.tint` the glyph above uses: a title in a
+        // different colour from the icon beside it reads as two conflicting
+        // readings. nil tint means "no quota pressure" — follow the menu bar's
+        // own label colour rather than forcing one.
         if let displayText = rec.displayText, !displayText.isEmpty {
-            let titleColor: NSColor
-            if rec.isUrgent {
-                switch summary.worstUrgency {
-                case .critical: titleColor = .systemRed
-                case .warning:  titleColor = .systemOrange
-                case .none:     titleColor = .labelColor
-                }
-            } else {
-                titleColor = .labelColor
-            }
+            let titleColor = MenuBarPresentation.tint(for: summary) ?? .labelColor
             let attr = NSAttributedString(
                 string: " " + displayText,
                 attributes: [
