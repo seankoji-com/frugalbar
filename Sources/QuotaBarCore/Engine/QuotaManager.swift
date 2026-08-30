@@ -119,10 +119,28 @@ public actor QuotaManager {
     private func parallelFetch() async -> [VendorIdentifier: QuotaSnapshot] {
         let providers: [any QuotaProvider] = providerFactory()
         let budget = cachePolicy.perProviderTimeout
+        let minPollInterval = cachePolicy.minPollInterval
+        let startNow = Date()
         var results: [VendorIdentifier: QuotaSnapshot] = [:]
 
+        // Per-vendor poll floor: a vendor fetched more recently than
+        // minPollInterval is served its cached snapshot instead of being
+        // re-hit. This applies even on the forceRefresh path (force only
+        // bypasses cacheTTL/lastCompleteFetch, not this per-vendor floor),
+        // so mashing the manual refresh button can't hammer a paid
+        // provider's API faster than the floor allows.
+        var providersToFetch: [any QuotaProvider] = []
+        for provider in providers {
+            if let entry = cache[provider.vendorId],
+               startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval {
+                results[provider.vendorId] = entry.snapshot
+            } else {
+                providersToFetch.append(provider)
+            }
+        }
+
         await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
-            for provider in providers {
+            for provider in providersToFetch {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
                     // does not bound a provider that issues several requests.
@@ -149,9 +167,13 @@ public actor QuotaManager {
         }
 
         let now = Date()
-        for (id, snap) in results {
+        for provider in providersToFetch {
+            let id = provider.vendorId
+            guard let snap = results[id] else { continue }
             // Keep the old cache entry if a previously successful provider now fails transiently
-            // so we don't wipe out the measured reading.
+            // so we don't wipe out the measured reading. Only vendors we actually
+            // fetched get their fetchedAt bumped — throttled vendors keep their
+            // original timestamp so the poll floor doesn't reset itself.
             if snap.status.confidence == .measured || cache[id] == nil {
                 cache[id] = CacheEntry(snapshot: snap, fetchedAt: now)
             }
