@@ -37,6 +37,11 @@ To start FrugalBar and have it launch automatically at login:
 brew services start frugalbar
 ```
 
+To stop it and remove it from login items:
+```bash
+brew services stop frugalbar
+```
+
 Or run it directly:
 ```bash
 frugalbar &
@@ -98,7 +103,7 @@ Two of these readings carry a cost the table can't show:
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools (`gh auth token`, `~/.local/share/opencode/auth.json`) is **disabled by default** and can be enabled under **Preferences → General**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, and `~/.config/github-copilot/hosts.json` — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---
 
@@ -118,6 +123,6 @@ CI runs on GitHub-hosted `macos-15` (Apple Silicon) with Xcode 16.
 
 ## Requirements
 
-- macOS 15.0+ (Sequoia) or macOS 14.0+
+- macOS 15.0+ (Sequoia)
 - Swift 6.0+ (Xcode 16+)
-- Apple Silicon or Intel Mac
+- Apple Silicon
