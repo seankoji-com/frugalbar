@@ -169,62 +169,63 @@ struct HeaderSummaryViewPresentationTests {
 
     // MARK: - elapsed
 
+    /// Every elapsed case pins an explicit `now` rather than letting the
+    /// helper read the clock: asserting on a duration derived from a live
+    /// `Date()` makes the boundary cases ("59s", "3599s") flake whenever the
+    /// machine stalls half a second between building the input and reading it.
+    private static let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    private func ago(_ seconds: TimeInterval) -> String {
+        HeaderSummaryView.elapsed(since: Self.now.addingTimeInterval(-seconds), now: Self.now)
+    }
+
     @Test("elapsed: 0s rounds to 0s")
     func elapsedZero() {
-        #expect(HeaderSummaryView.elapsed(since: Date()) == "0s")
+        #expect(ago(0) == "0s")
     }
 
     @Test("elapsed: 5s → '5s'")
     func elapsedSeconds() {
-        let d = Date().addingTimeInterval(-5)
-        #expect(HeaderSummaryView.elapsed(since: d) == "5s")
+        #expect(ago(5) == "5s")
     }
 
     @Test("elapsed: 30s → '30s'")
     func elapsedThirtySeconds() {
-        let d = Date().addingTimeInterval(-30)
-        #expect(HeaderSummaryView.elapsed(since: d) == "30s")
+        #expect(ago(30) == "30s")
     }
 
     @Test("elapsed: 59s → '59s' (still seconds)")
     func elapsedFiftyNineSeconds() {
-        let d = Date().addingTimeInterval(-59)
-        #expect(HeaderSummaryView.elapsed(since: d) == "59s")
+        #expect(ago(59) == "59s")
     }
 
     @Test("elapsed: 60s → '1m'")
     func elapsedOneMinute() {
-        let d = Date().addingTimeInterval(-60)
-        #expect(HeaderSummaryView.elapsed(since: d) == "1m")
+        #expect(ago(60) == "1m")
     }
 
     @Test("elapsed: 150s → '3m'")
     func elapsedMinutes() {
-        let d = Date().addingTimeInterval(-150)
-        #expect(HeaderSummaryView.elapsed(since: d) == "3m")
+        #expect(ago(150) == "3m")
     }
 
     @Test("elapsed: 3599s → '60m' (still minutes)")
     func elapsedFiftyNineMinutes() {
-        let d = Date().addingTimeInterval(-3599)
-        #expect(HeaderSummaryView.elapsed(since: d) == "60m")
+        #expect(ago(3599) == "60m")
     }
 
     @Test("elapsed: 3600s → '1h'")
     func elapsedOneHour() {
-        let d = Date().addingTimeInterval(-3600)
-        #expect(HeaderSummaryView.elapsed(since: d) == "1h")
+        #expect(ago(3600) == "1h")
     }
 
     @Test("elapsed: 7200s → '2h'")
     func elapsedTwoHours() {
-        let d = Date().addingTimeInterval(-7200)
-        #expect(HeaderSummaryView.elapsed(since: d) == "2h")
+        #expect(ago(7200) == "2h")
     }
 
     @Test("elapsed: future date returns 0s (clamped to 0)")
     func elapsedFutureDate() {
-        let d = Date().addingTimeInterval(300)
-        #expect(HeaderSummaryView.elapsed(since: d) == "0s")
+        #expect(ago(-300) == "0s")
     }
 }
