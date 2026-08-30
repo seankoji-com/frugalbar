@@ -111,11 +111,13 @@ struct HeaderSummaryView: View {
         return parts.joined(separator: " · ")
     }
 
-    static func elapsed(since date: Date) -> String {
-        let interval = max(0, -date.timeIntervalSinceNow)
+    /// `now` is a parameter, not a captured `Date()`, so a test can assert an
+    /// exact boundary ("59s", not "60s") instead of racing the clock between
+    /// building the input date and reading it back.
+    static func elapsed(since date: Date, now: Date = Date()) -> String {
+        let interval = max(0, now.timeIntervalSince(date))
         if interval < 60 { return "\(Int(interval.rounded()))s" }
         if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
         return "\(Int((interval / 3600).rounded()))h"
     }
 }
-
