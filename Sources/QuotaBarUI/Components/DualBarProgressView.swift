@@ -43,12 +43,19 @@ public struct DualBarProgressView: View {
         (consumedPct ?? 0) >= 0.999
     }
 
-    /// The vendor's own colour for a blocked/critical window. Reading this
-    /// lets a provider-declared "this window cannot be used" state win over
-    /// whatever the pace/exhaustion arithmetic below would otherwise paint —
+    /// The vendor's own colour, honoured only for a window the vendor itself
+    /// declared blocked. That per-bar flag is the one case where the vendor
+    /// knows something the pace/exhaustion arithmetic below cannot derive —
     /// a blocked window with a low percentage used to still render green.
+    ///
+    /// Deliberately *not* also keyed on `urgency == .critical`. `urgency` is
+    /// the whole snapshot's, applied to every one of its bars, and
+    /// `statusColor` is a brand colour for most providers (`#10a37f` for
+    /// OpenAI, `#d97757` for Claude, `#3b82f6` for Gemini). Letting critical
+    /// urgency pull it in painted a spent OpenAI bar green and repainted the
+    /// snapshot's still-healthy weekly/monthly bars along with it.
     private var vendorStatusColor: Color? {
-        guard metrics.isBlocked || urgency == .critical else { return nil }
+        guard metrics.isBlocked else { return nil }
         return metrics.statusColor.flatMap(Color.init(hexString:))
     }
 
@@ -234,9 +241,6 @@ public struct DualBarProgressView: View {
         return "\(metrics.label): \(usedPctInt)% used • \(paceStatus) • \(detail)"
     }
 }
-
-
-
 
 
 
