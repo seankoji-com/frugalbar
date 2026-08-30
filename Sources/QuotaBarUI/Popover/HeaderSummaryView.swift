@@ -24,20 +24,20 @@ struct HeaderSummaryView: View {
 
             HStack(spacing: 5) {
                 Circle()
-                    .fill(healthColor)
+                    .fill(Self.healthColor(for: summary))
                     .frame(width: 6, height: 6)
-                    .shadow(color: healthColor.opacity(0.5), radius: 2, x: 0, y: 0)
+                    .shadow(color: Self.healthColor(for: summary).opacity(0.5), radius: 2, x: 0, y: 0)
 
-                Text(healthText)
+                Text(Self.healthText(for: summary))
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(healthColor)
+                    .foregroundStyle(Self.healthColor(for: summary))
                     .lineLimit(1)
             }
 
             Spacer(minLength: 4)
 
             if let oldest = summary.oldestReading {
-                Text(elapsed(oldest))
+                Text(Self.elapsed(since: oldest))
                     .font(.system(size: 9, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
@@ -70,13 +70,13 @@ struct HeaderSummaryView: View {
                 .frame(height: 0.5)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FrugalBar. \(healthText)")
+        .accessibilityLabel("FrugalBar. \(Self.healthText(for: summary))")
 
     }
 
     // MARK: - Aggregate presentation
 
-    private var healthSymbol: String {
+    static func healthSymbol(for summary: SystemHealthSummary) -> String {
         guard summary.hasAnyReading else { return "minus.circle" }
         switch summary.worstUrgency {
         case .none:     return "checkmark.circle.fill"
@@ -85,7 +85,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    private var healthColor: Color {
+    static func healthColor(for summary: SystemHealthSummary) -> Color {
         guard summary.hasAnyReading else { return Theme.outline }
         switch summary.worstUrgency {
         case .none:     return Theme.secondary
@@ -94,7 +94,7 @@ struct HeaderSummaryView: View {
         }
     }
 
-    private var healthText: String {
+    static func healthText(for summary: SystemHealthSummary) -> String {
         var parts: [String] = []
         if summary.hasAnyReading {
             switch summary.worstUrgency {
@@ -111,7 +111,7 @@ struct HeaderSummaryView: View {
         return parts.joined(separator: " · ")
     }
 
-    private func elapsed(_ date: Date) -> String {
+    static func elapsed(since date: Date) -> String {
         let interval = max(0, -date.timeIntervalSinceNow)
         if interval < 60 { return "\(Int(interval.rounded()))s" }
         if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
