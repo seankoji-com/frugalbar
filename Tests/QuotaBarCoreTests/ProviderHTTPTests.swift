@@ -101,7 +101,9 @@ private func withStubbedHTTP<T: Sendable>(
 ) async throws -> T {
     URLProtocolStub.reset()
     URLProtocolStub.handler = handler
-    return try await QuotaHTTP.$session.withValue(URLProtocolStub.makeSession()) {
+    let session = URLProtocolStub.makeSession()
+    defer { session.finishTasksAndInvalidate() }
+    return try await QuotaHTTP.$session.withValue(session) {
         try await operation()
     }
 }
