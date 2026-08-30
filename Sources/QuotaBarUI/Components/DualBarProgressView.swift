@@ -176,10 +176,14 @@ public struct DualBarProgressView: View {
                             }
                         } else if aX > mX {
                             // --- CASE 2: OVERUSE (Marker is INSIDE the bar: aX > mX) ---
-                            // Actual usage bar within budget (0 -> mX) in vendor brand color
+                            // Actual usage bar within budget (0 -> mX) in vendor
+                            // brand color, or the vendor's declared blocked
+                            // colour when this bar's own isBlocked flag is set —
+                            // reaching pace is not "fine" for a window the
+                            // vendor has already cut off.
                             if mX > 0 {
                                 Rectangle()
-                                    .fill(accentColor)
+                                    .fill(vendorStatusColor ?? accentColor)
                                     .frame(width: max(4, mX), height: Self.barHeight)
                             }
 
@@ -193,8 +197,12 @@ public struct DualBarProgressView: View {
                             }
                         } else if aX < mX {
                             // --- CASE 3: UNDERUSE (Marker is OUTSIDE the bar: aX < mX) ---
-                            // Underuse buffer segment between actual usage and marker (aX -> mX) in GREEN
-                            if mX > aX {
+                            // Underuse buffer segment between actual usage and
+                            // marker (aX -> mX) in GREEN — but never for a
+                            // blocked window: "healthy margin before budget"
+                            // is exactly the false-health reading vendorStatusColor
+                            // exists to prevent, and pace alone can't override that.
+                            if mX > aX, !metrics.isBlocked {
                                 Rectangle()
                                     .fill(Theme.healthy)
                                     .frame(width: max(4, mX - aX), height: Self.barHeight)
@@ -202,10 +210,12 @@ public struct DualBarProgressView: View {
                                     .animation(.easeOut(duration: 0.35), value: consumedPct)
                             }
 
-                            // Actual usage bar (0 -> aX) in vendor brand color
+                            // Actual usage bar (0 -> aX) in vendor brand color,
+                            // or the vendor's declared blocked colour when
+                            // this bar's own isBlocked flag is set.
                             if aX > 0 {
                                 Rectangle()
-                                    .fill(accentColor)
+                                    .fill(vendorStatusColor ?? accentColor)
                                     .frame(width: max(4, aX), height: Self.barHeight)
                                     .animation(.easeOut(duration: 0.35), value: consumedPct)
                             }
@@ -213,7 +223,7 @@ public struct DualBarProgressView: View {
                             // --- CASE 4: AT PACE (aX == mX) ---
                             if aX > 0 {
                                 Rectangle()
-                                    .fill(accentColor)
+                                    .fill(vendorStatusColor ?? accentColor)
                                     .frame(width: max(4, aX), height: Self.barHeight)
                                     .animation(.easeOut(duration: 0.35), value: consumedPct)
                             }

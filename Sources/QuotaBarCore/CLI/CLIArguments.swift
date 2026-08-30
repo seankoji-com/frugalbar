@@ -56,7 +56,10 @@ public enum CLIArguments {
     /// — `frugalbar --doctor`, a `brew test`, a launchd health check — has a
     /// process exit code to act on instead of only printed text.
     @discardableResult
-    static func runDoctor(currentVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) -> Bool {
+    static func runDoctor(
+        currentVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion,
+        keychainProbeLabel: String = "com.quotabar.doctor.probe"
+    ) -> Bool {
         print("\(AppInfo.name) doctor")
         var allOK = true
 
@@ -68,7 +71,7 @@ public enum CLIArguments {
         report("macOS \(osVersionString(currentVersion)) meets the \(floorText) floor", ok: osOK)
         if !osOK { allOK = false }
 
-        let kcResult = keychainRoundTripResult()
+        let kcResult = keychainRoundTripResult(label: keychainProbeLabel)
         let kcOK: Bool
         if case .failure(let error) = kcResult {
             kcOK = false
@@ -114,19 +117,21 @@ public enum CLIArguments {
         "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    /// Uses one fixed, distinctive label — not a fresh UUID per run — so a
-    /// diagnostic run never reads or clobbers a real credential slot (no
-    /// vendor account name collides with it) while also never accumulating
-    /// orphans: a process killed between `set` and the `defer`-`delete`
-    /// below leaves at most this one stray item, and the *next* successful
-    /// `--doctor` run overwrites and then deletes that same slot rather than
-    /// planting a new UUID-named one next to it. `.failure` carries the
-    /// underlying error rather than collapsing to a bare `false` —
-    /// `--doctor` needs to say *why* a round-trip failed, and a locked
-    /// keychain (`errSecInteractionNotAllowed`) points at a different fix
-    /// than a genuinely broken build.
-    static func keychainRoundTripResult() -> Result<Void, Error> {
-        let label = "com.quotabar.doctor.probe"
+    /// Defaults to one fixed, distinctive label — not a fresh UUID per run —
+    /// so a *real* `--doctor` invocation never reads or clobbers a real
+    /// credential slot (no vendor account name collides with it) while also
+    /// never accumulating orphans: a process killed between `set` and the
+    /// `defer`-`delete` below leaves at most this one stray item, and the
+    /// *next* successful `--doctor` run overwrites and then deletes that
+    /// same slot rather than planting a new UUID-named one next to it.
+    /// Tests must never rely on that default — pass an isolated label so
+    /// concurrent tests can't race the same Keychain slot under
+    /// `swift test --parallel`. `.failure` carries the underlying error
+    /// rather than collapsing to a bare `false` — `--doctor` needs to say
+    /// *why* a round-trip failed, and a locked keychain
+    /// (`errSecInteractionNotAllowed`) points at a different fix than a
+    /// genuinely broken build.
+    static func keychainRoundTripResult(label: String = "com.quotabar.doctor.probe") -> Result<Void, Error> {
         let probe = "frugalbar-doctor-probe"
         do {
             try KeychainManager.shared.set(key: probe, label: label)
@@ -140,8 +145,8 @@ public enum CLIArguments {
         }
     }
 
-    static func keychainRoundTripSucceeds() -> Bool {
-        if case .success = keychainRoundTripResult() { return true }
+    static func keychainRoundTripSucceeds(label: String = "com.quotabar.doctor.probe") -> Bool {
+        if case .success = keychainRoundTripResult(label: label) { return true }
         return false
     }
 
