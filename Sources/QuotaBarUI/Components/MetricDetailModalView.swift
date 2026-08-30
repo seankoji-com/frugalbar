@@ -322,7 +322,11 @@ public struct MetricDetailModalView: View {
         }
     }
 
+    // Confidence gates urgency here, same as StatusIndicatorDot: an
+    // unreadable provider must never render as "All Systems Healthy" just
+    // because its unread urgency defaults to .none.
     private var statusBannerIcon: String {
+        if snapshot.status.confidence == .unavailable { return "minus.circle" }
         switch snapshot.status.urgency {
         case .none:     return "checkmark.circle.fill"
         case .warning:  return "exclamationmark.circle.fill"
@@ -331,6 +335,7 @@ public struct MetricDetailModalView: View {
     }
 
     private var statusBannerColor: Color {
+        if snapshot.status.confidence == .unavailable { return Theme.outline }
         switch snapshot.status.urgency {
         case .none:     return Theme.secondary
         case .warning:  return Theme.tertiary
@@ -339,6 +344,9 @@ public struct MetricDetailModalView: View {
     }
 
     private var statusBannerHeadline: String {
+        if let reason = snapshot.status.unavailableReason {
+            return reason.headline
+        }
         switch snapshot.status.urgency {
         case .none:     return "All Systems Healthy"
         case .warning:  return "Quota Warning (Elevated Burn)"
