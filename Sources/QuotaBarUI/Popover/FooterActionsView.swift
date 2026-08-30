@@ -33,6 +33,8 @@ struct FooterActionsView: View {
                         .help("Oldest reading in view")
                 }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("FrugalBar health status")
 
             Spacer()
 
