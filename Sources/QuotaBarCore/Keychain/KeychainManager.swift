@@ -245,10 +245,62 @@ public enum CredentialStore {
         return token?.isEmpty == false ? token : nil
     }
 
+    /// Short-lived memoisation for `gh auth token`, an out-of-process call.
+    ///
+    /// Three call sites resolve to the exact same answer: the REST provider
+    /// (`.githubRest`), the GraphQL provider (`.githubGraphql`), and the
+    /// Copilot fallback (which itself delegates to `.githubRest` below). One
+    /// polling cycle fans out to all three, and without sharing a result that
+    /// used to spawn `gh` three times for a token that had not changed.
+    actor CredentialCache {
+        static let shared = CredentialCache()
+
+        /// Long enough to cover one polling cycle's fan-out across providers;
+        /// short enough that a token rotated via `gh auth login` mid-session is
+        /// picked up well within the same session.
+        static let ghTokenTTL: TimeInterval = 30
+
+        private var ghTokenCache: (token: String?, expires: Date)?
+
+        func ghToken(now: Date, resolve: () -> String?) -> String? {
+            if let cached = ghTokenCache, cached.expires > now {
+                return cached.token
+            }
+            let token = resolve()
+            ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            return token
+        }
+    }
+
+    /// Synchronous bridge into `CredentialCache` for `discoverFromCLI`'s
+    /// non-async call sites.
+    ///
+    /// Blocking here is safe: every caller reaches `discoverFromCLI` by way of
+    /// `credentialQueue`, a plain concurrent `DispatchQueue`, never from the
+    /// cooperative thread pool that the `Task` below draws its own thread from.
+    static func cachedGhAuthToken(now: Date = Date()) -> String? {
+        // A plain `var` capture across the `Task` boundary is flagged under
+        // strict concurrency even though the semaphore fully serialises the
+        // write (inside the task) before the read (after `wait()`); boxing it
+        // in an `@unchecked Sendable` class documents that hand-proved
+        // ordering to the compiler instead of suppressing the check.
+        final class ResultBox: @unchecked Sendable {
+            var value: String?
+        }
+        let box = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            box.value = await CredentialCache.shared.ghToken(now: now) { runGhAuthToken() }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value
+    }
+
     private static func discoverFromCLI(vendor: VendorIdentifier) -> String? {
         switch vendor {
         case .githubRest, .githubGraphql:
-            return runGhAuthToken()
+            return cachedGhAuthToken()
 
         case .opencode:
             // ~/.local/share/opencode/auth.json
@@ -486,7 +538,8 @@ extension CredentialStore {
 
     /// Reads the tier off disk or the Keychain, on the credential queue.
     public static func claudePlanNameAsync() async -> String? {
-        await withCheckedContinuation { continuation in
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
                 let fileURL = URL(fileURLWithPath: NSHomeDirectory())
                     .appendingPathComponent(".claude/.credentials.json")
