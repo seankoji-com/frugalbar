@@ -1,7 +1,90 @@
 import SwiftUI
 import AppKit
+import Foundation
 import QuotaBarCore
 import QuotaBarUI
+
+/// Handles `--help`, `--version`, and `--doctor` before any AppKit/SwiftUI
+/// machinery spins up, so a CLI invocation gets a fast, plain-text answer
+/// instead of a menu bar icon flashing into existence and a popover it never
+/// wanted.
+enum CLIArguments {
+
+    static let helpText = """
+        \(AppInfo.name) — track AI usage & dev limits in the macOS menu bar.
+
+        Usage: frugalbar [options]
+
+        Options:
+          --help       Show this help text and exit.
+          --version    Print the installed version and exit.
+          --doctor     Run startup diagnostics and exit.
+        """
+
+    /// Returns `true` when a recognised flag was found and handled (its
+    /// output already printed). The caller is responsible for calling
+    /// `exit(0)` immediately afterward — this type never exits on its own,
+    /// so it stays trivially testable.
+    @discardableResult
+    static func handleIfPresent(_ arguments: [String] = CommandLine.arguments) -> Bool {
+        let flags = Set(arguments.dropFirst())
+        if flags.contains("--help") {
+            print(helpText)
+            return true
+        }
+        if flags.contains("--version") {
+            print(AppInfo.version)
+            return true
+        }
+        if flags.contains("--doctor") {
+            runDoctor()
+            return true
+        }
+        return false
+    }
+
+    /// Startup diagnostic pass: the macOS floor this build actually requires
+    /// (`Package.swift`'s `.macOS(.v15)` / Info.plist's `LSMinimumSystemVersion`),
+    /// a Keychain read/write round-trip, and presence of the Gemini OAuth
+    /// client env vars. Prints one line per check and exits 0 regardless of
+    /// outcome — `--doctor` reports, it doesn't gate.
+    private static func runDoctor() {
+        print("\(AppInfo.name) doctor")
+
+        let requiredFloor = OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)
+        let osOK = ProcessInfo.processInfo.isOperatingSystemAtLeast(requiredFloor)
+        report("macOS \(osVersionString()) meets the 15.0 floor", ok: osOK)
+
+        report("Keychain read/write round-trip", ok: keychainRoundTripSucceeds())
+
+        let env = ProcessInfo.processInfo.environment
+        report("FRUGALBAR_GEMINI_CLIENT_ID is set", ok: !(env["FRUGALBAR_GEMINI_CLIENT_ID"] ?? "").isEmpty)
+        report("FRUGALBAR_GEMINI_CLIENT_SECRET is set", ok: !(env["FRUGALBAR_GEMINI_CLIENT_SECRET"] ?? "").isEmpty)
+    }
+
+    private static func osVersionString() -> String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
+
+    /// Uses a randomised, throwaway label so a diagnostic run never reads or
+    /// clobbers a real credential slot, and cleans up after itself either way.
+    private static func keychainRoundTripSucceeds() -> Bool {
+        let label = "com.quotabar.doctor.\(UUID().uuidString)"
+        let probe = "frugalbar-doctor-probe"
+        do {
+            try KeychainManager.shared.set(key: probe, label: label)
+            defer { try? KeychainManager.shared.delete(label: label) }
+            return try KeychainManager.shared.get(label: label) == probe
+        } catch {
+            return false
+        }
+    }
+
+    private static func report(_ label: String, ok: Bool) {
+        print("\(ok ? "[ok]  " : "[FAIL]") \(label)")
+    }
+}
 
 /// Status item + popover lifecycle.
 @MainActor
@@ -26,11 +109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // domain before deciding whether this is a first launch — otherwise
         // renaming the binary reads as a fresh install.
         CredentialStore.migrateLegacyPreferences()
-
-        // Enable CLI discovery by default on first launch if not configured.
-        if CredentialStore.preferences.object(forKey: CredentialStore.cliDiscoveryDefaultsKey) == nil {
-            CredentialStore.preferences.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -221,13 +299,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
 
-        // 2. Set Attributed Title with remaining lowest quota and time left in red
+        // 2. Set Attributed Title with remaining lowest quota, coloured by how
+        // urgent the recommended vendor's reading actually is — not always red.
         if let displayText = rec.displayText, !displayText.isEmpty {
+            let titleColor: NSColor
+            if rec.isUrgent {
+                switch summary.worstUrgency {
+                case .critical: titleColor = .systemRed
+                case .warning:  titleColor = .systemOrange
+                case .none:     titleColor = .labelColor
+                }
+            } else {
+                titleColor = .labelColor
+            }
             let attr = NSAttributedString(
                 string: " " + displayText,
                 attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold),
-                    .foregroundColor: NSColor.systemRed
+                    .foregroundColor: titleColor
                 ]
             )
             button.attributedTitle = attr
@@ -258,6 +347,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct QuotaBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    /// Runs before any Scene is built or the app delegate fires, so a CLI
+    /// invocation exits here — before the app's window/menu-bar machinery
+    /// ever starts — rather than after a status item has already appeared.
+    init() {
+        if CLIArguments.handleIfPresent() {
+            exit(0)
+        }
+    }
 
     var body: some Scene {
         Settings { SettingsView() }
