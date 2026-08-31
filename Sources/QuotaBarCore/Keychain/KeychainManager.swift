@@ -228,15 +228,19 @@ public enum CredentialStore {
             return nil
         }
 
-        // Read before waiting: waiting first can deadlock if the child fills
-        // the pipe buffer.
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        
-        // Kill the process if it hasn't exited within 5 seconds.
+        // Scheduled before the blocking read below, not after: this task's
+        // own stdout pipe is what `readDataToEndOfFile()` blocks on, so a
+        // child that hangs without writing or closing it would never let
+        // control reach a kill timer registered afterward — the exact hang
+        // this timer exists to bound.
         let deadline = DispatchTime.now() + 5
         DispatchQueue.global().asyncAfter(deadline: deadline) { [task] in
             if task.isRunning { task.terminate() }
         }
+
+        // Read before waiting: waiting first can deadlock if the child fills
+        // the pipe buffer.
+        let data = out.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         guard task.terminationStatus == 0 else { return nil }
 
@@ -245,10 +249,72 @@ public enum CredentialStore {
         return token?.isEmpty == false ? token : nil
     }
 
+    /// Short-lived memoisation for `gh auth token`, an out-of-process call.
+    ///
+    /// Three call sites resolve to the exact same answer: the REST provider
+    /// (`.githubRest`), the GraphQL provider (`.githubGraphql`), and the
+    /// Copilot fallback (which itself delegates to `.githubRest` below). One
+    /// polling cycle fans out to all three, and without sharing a result that
+    /// used to spawn `gh` three times for a token that had not changed.
+    ///
+    /// A plain lock rather than an actor: every caller already reaches this
+    /// by way of `credentialQueue`, a background `DispatchQueue`, so there is
+    /// no main-thread-blocking concern to justify hopping through
+    /// `async`/`await`. An actor-backed cache did the opposite of what it
+    /// looked like it was protecting against — an `await` on a *synchronous*
+    /// actor method still runs that method's body (here, `runGhAuthToken()`'s
+    /// blocking `Process`/pipe work) on the cooperative thread pool, so
+    /// resolving it from a plain function required parking a
+    /// `credentialQueue` thread on a `DispatchSemaphore` waiting on an
+    /// unstructured `Task` drawing its own thread from that same pool — the
+    /// exact pool-starvation shape `apiKeyAsync`'s own comment above warns
+    /// against. A lock keeps everything, cache and subprocess alike, on the
+    /// caller's own `credentialQueue` thread.
+    final class CredentialCache: @unchecked Sendable {
+        static let shared = CredentialCache()
+
+        /// Long enough to cover one polling cycle's fan-out across providers;
+        /// short enough that a token rotated via `gh auth login` mid-session is
+        /// picked up well within the same session.
+        static let ghTokenTTL: TimeInterval = 30
+
+        private let lock = NSLock()
+        private var ghTokenCache: (token: String?, expires: Date)?
+
+        func ghToken(now: Date, resolve: () -> String?) -> String? {
+            lock.lock()
+            if let cached = ghTokenCache, cached.expires > now {
+                let token = cached.token
+                lock.unlock()
+                return token
+            }
+            lock.unlock()
+            // `resolve()` runs outside the lock: it can shell out to `gh` and
+            // block for up to 5s, and holding the lock across that would
+            // serialise every concurrent caller — REST, GraphQL, Copilot —
+            // onto one subprocess instead of just sharing its answer. A
+            // concurrent miss simply resolves twice and last-write-wins on
+            // the cache slot, which a 30s TTL doesn't need to dedupe.
+            let token = resolve()
+            lock.lock()
+            ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            lock.unlock()
+            return token
+        }
+    }
+
+    /// Synchronous bridge into `CredentialCache` for `discoverFromCLI`'s
+    /// non-async call sites. A direct call, not a `Task`/semaphore bridge:
+    /// `CredentialCache.ghToken` is itself synchronous now, so there is
+    /// nothing to bridge into.
+    static func cachedGhAuthToken(now: Date = Date()) -> String? {
+        CredentialCache.shared.ghToken(now: now) { runGhAuthToken() }
+    }
+
     private static func discoverFromCLI(vendor: VendorIdentifier) -> String? {
         switch vendor {
         case .githubRest, .githubGraphql:
-            return runGhAuthToken()
+            return cachedGhAuthToken()
 
         case .opencode:
             // ~/.local/share/opencode/auth.json
@@ -486,7 +552,8 @@ extension CredentialStore {
 
     /// Reads the tier off disk or the Keychain, on the credential queue.
     public static func claudePlanNameAsync() async -> String? {
-        await withCheckedContinuation { continuation in
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
                 let fileURL = URL(fileURLWithPath: NSHomeDirectory())
                     .appendingPathComponent(".claude/.credentials.json")

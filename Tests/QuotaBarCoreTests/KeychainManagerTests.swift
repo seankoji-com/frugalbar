@@ -122,4 +122,59 @@ struct KeychainManagerTests {
         #expect(try KeychainManager.shared.get(label: a) == "alpha")
         #expect(try KeychainManager.shared.get(label: b) == "beta")
     }
+
+    @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")
+    func credentialCacheHitAndExpiry() {
+        // A fresh instance, not .shared — this exercises the cache/expiry
+        // logic in isolation rather than the process-wide gh-token slot.
+        let cache = CredentialStore.CredentialCache()
+        let resolveCount = InvocationCounter()
+        let epoch = Date(timeIntervalSince1970: 0)
+
+        let first = cache.ghToken(now: epoch) {
+            resolveCount.increment()
+            return "token-a"
+        }
+        #expect(first == "token-a")
+        #expect(resolveCount.value == 1)
+
+        // Still within the TTL: the cached token is returned, resolve() is
+        // never called again.
+        let stillCached = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL - 1)) {
+            resolveCount.increment()
+            return "token-b"
+        }
+        #expect(stillCached == "token-a")
+        #expect(resolveCount.value == 1)
+
+        // Past the TTL: resolve() runs again and its fresh result replaces
+        // the expired entry.
+        let afterExpiry = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL + 1)) {
+            resolveCount.increment()
+            return "token-b"
+        }
+        #expect(afterExpiry == "token-b")
+        #expect(resolveCount.value == 2)
+    }
+}
+
+/// Counts invocations without touching a wall clock — safe for asserting
+/// "resolved exactly once" style expectations.
+private final class InvocationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+
+    @discardableResult
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        _value += 1
+        return _value
+    }
 }

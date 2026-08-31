@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Foundation
 import QuotaBarCore
 import QuotaBarUI
 
@@ -26,11 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // domain before deciding whether this is a first launch — otherwise
         // renaming the binary reads as a fresh install.
         CredentialStore.migrateLegacyPreferences()
-
-        // Enable CLI discovery by default on first launch if not configured.
-        if CredentialStore.preferences.object(forKey: CredentialStore.cliDiscoveryDefaultsKey) == nil {
-            CredentialStore.preferences.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -221,13 +217,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
 
-        // 2. Set Attributed Title with remaining lowest quota and time left in red
+        // 2. Set Attributed Title with remaining lowest quota, coloured by
+        // urgency instead of always red. Deliberately the *same*
+        // `MenuBarPresentation.tint` the glyph above uses: a title in a
+        // different colour from the icon beside it reads as two conflicting
+        // readings. nil tint means "no quota pressure" — follow the menu bar's
+        // own label colour rather than forcing one.
         if let displayText = rec.displayText, !displayText.isEmpty {
+            let titleColor = MenuBarPresentation.tint(for: summary) ?? .labelColor
             let attr = NSAttributedString(
                 string: " " + displayText,
                 attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold),
-                    .foregroundColor: NSColor.systemRed
+                    .foregroundColor: titleColor
                 ]
             )
             button.attributedTitle = attr
@@ -258,6 +260,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct QuotaBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    /// Runs before any Scene is built, and before `applicationDidFinishLaunching`
+    /// fires on the `@NSApplicationDelegateAdaptor`-constructed app delegate —
+    /// so a CLI invocation exits here, before the app's window/menu-bar
+    /// machinery ever starts, rather than after a status item has already
+    /// appeared.
+    init() {
+        if let exitCode = CLIArguments.handleIfPresent() {
+            exit(exitCode)
+        }
+    }
 
     var body: some Scene {
         Settings { SettingsView() }

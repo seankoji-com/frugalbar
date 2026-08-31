@@ -244,6 +244,38 @@ struct MenuBarPresentationTests {
         #expect(details.displayText == "41% 3.48hr")
     }
 
+    @Test("recommendationDetails picks the healthy measured vendor over one merely first in order")
+    func recommendationDetailsFallbackPrefersHealthy() {
+        // Claude sorts first but is at 75% used (warning); Gemini sorts
+        // second but is healthy at 10% used with no headline vendor named —
+        // the fallback must recommend the one with real headroom, not
+        // whichever measured vendor happens to come first.
+        let claude = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.75, label: "5H")
+        )
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.10, label: "5H")
+        )
+        let advice = QuotaAdvice(headline: "All Quotas Healthy & Balanced", message: "")
+        let summary = SystemHealthSummary.compute(from: [claude, gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [claude, gemini],
+            summary: summary
+        )
+
+        #expect(details.vendorId == .gemini)
+    }
+
     @Test("formatTimeLeft parses various duration formats")
     func formatTimeLeftParsesDurations() {
         #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3.48hr")

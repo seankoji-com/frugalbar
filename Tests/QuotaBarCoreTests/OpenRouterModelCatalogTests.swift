@@ -86,6 +86,20 @@ private func catalogBody(_ entries: [String]) -> String {
     #"{"data":[\#(entries.joined(separator: ","))]}"#
 }
 
+/// Runs `operation` under a fresh `QuotaHTTP.session` and a fresh
+/// `ModelCatalogCache.current`, so no memoised badge from a previous test can
+/// leak into this one.
+private func withCatalogSession<T: Sendable>(
+    _ session: URLSession,
+    _ operation: @Sendable () async throws -> T
+) async throws -> T {
+    try await QuotaHTTP.$session.withValue(session) {
+        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
+            try await operation()
+        }
+    }
+}
+
 @Suite("OpenRouter model catalog badges", .serialized)
 struct OpenRouterModelCatalogTests {
 
@@ -114,7 +128,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
 
@@ -137,7 +151,7 @@ struct OpenRouterModelCatalogTests {
     func emptyCatalog() async throws {
         CatalogStub.configure(modelsBody: catalogBody([]))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -151,7 +165,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -166,7 +180,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -185,7 +199,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge?.contains("Alpha Free") == true)
@@ -201,7 +215,7 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.cheapestLargeContextModelBadge?.contains("Alpha Cheap") == true)
@@ -217,7 +231,7 @@ struct OpenRouterModelCatalogTests {
             modelsStatus: 500
         )
         let provider = OpenRouterProvider(apiKey: "key")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.freeTierModelBadge == nil)
@@ -239,11 +253,36 @@ struct OpenRouterModelCatalogTests {
         ]
         CatalogStub.configure(modelsBody: catalogBody(entries))
         let provider = OpenRouterProvider(apiKey: "")
-        let snap = try await QuotaHTTP.$session.withValue(CatalogStub.makeSession()) {
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status == .unavailable(.notConfigured))
         #expect(snap.freeTierModelBadge?.contains("Big Free") == true)
         #expect(CatalogStub.modelsRequestCount == 1)
+    }
+
+    @Test("a second fetch within the TTL reuses the memoised catalog instead of re-requesting it")
+    func secondFetchWithinTTLIsMemoised() async throws {
+        // Every other test in this file wraps a single fetch in its own
+        // fresh withCatalogSession scope, which proves the catalog is
+        // fetched at all but never proves the memoisation this TTL exists
+        // for — this is the one that actually reuses the same cache scope
+        // across two fetches and checks the network was hit only once.
+        let entries = [
+            modelEntry(id: "big-free", name: "Big Free", contextLength: 128_000,
+                       promptPrice: "0", completionPrice: "0"),
+        ]
+        CatalogStub.configure(modelsBody: catalogBody(entries))
+        let provider = OpenRouterProvider(apiKey: "key")
+        let session = CatalogStub.makeSession()
+        try await withCatalogSession(session) {
+            let first = try await provider.fetchSnapshot()
+            #expect(first.freeTierModelBadge?.contains("Big Free") == true)
+            #expect(CatalogStub.modelsRequestCount == 1)
+
+            let second = try await provider.fetchSnapshot()
+            #expect(second.freeTierModelBadge?.contains("Big Free") == true)
+            #expect(CatalogStub.modelsRequestCount == 1) // still 1 — served from the TTL cache
+        }
     }
 }

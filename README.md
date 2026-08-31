@@ -1,7 +1,7 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img width="416" height="568" alt="image" src="https://github.com/user-attachments/assets/a6fed1ea-f879-4a98-828d-791f889221f8" />
+  <img width="652" height="1280" alt="image" src="https://github.com/user-attachments/assets/35c85ad5-6832-4095-a8d6-c6eaa5d505fa" />
 </p>
 
 
@@ -35,6 +35,11 @@ brew install seankoji-com/tap/frugalbar
 To start FrugalBar and have it launch automatically at login:
 ```bash
 brew services start frugalbar
+```
+
+To stop it and remove it from login items:
+```bash
+brew services stop frugalbar
 ```
 
 Or run it directly:
@@ -98,7 +103,7 @@ Two of these readings carry a cost the table can't show:
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools (`gh auth token`, `~/.local/share/opencode/auth.json`) is **disabled by default** and can be enabled under **Preferences → General**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, and `~/.config/github-copilot/hosts.json` — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---
 
@@ -118,6 +123,6 @@ CI runs on GitHub-hosted `macos-15` (Apple Silicon) with Xcode 16.
 
 ## Requirements
 
-- macOS 15.0+ (Sequoia) or macOS 14.0+
+- macOS 15.0+ (Sequoia)
 - Swift 6.0+ (Xcode 16+)
-- Apple Silicon or Intel Mac
+- Apple Silicon

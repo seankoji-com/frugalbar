@@ -37,8 +37,19 @@ public enum MenuBarPresentation {
     ) -> RecommendationDetails {
         var targetVendor = advice.vendorId
         if targetVendor == nil {
-            targetVendor = snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.urgency == .none })?.vendorId
-                ?? snapshots.first(where: { $0.category == .aiSubscriptions })?.vendorId
+            // Healthy-first: when advice names no specific vendor, prefer one
+            // with real headroom over one merely first in canonical order —
+            // recommending a 25%-remaining vendor over a 90%-remaining one
+            // just because it sorts earlier would be a bad recommendation.
+            // `status.urgency == .none` alone isn't enough to mean "healthy":
+            // an `.unavailable` status also reports urgency `.none`, so the
+            // `.measured` filter must apply to both clauses, or an unreadable
+            // provider could still win the first search and get presented as
+            // a reading nobody ever took.
+            targetVendor = snapshots.first(where: {
+                $0.category == .aiSubscriptions && $0.status.confidence == .measured && $0.status.urgency == .none
+            })?.vendorId
+                ?? snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.confidence == .measured })?.vendorId
         }
 
         guard let vendorId = targetVendor,
@@ -60,7 +71,10 @@ public enum MenuBarPresentation {
         var foundBar = false
 
         for bar in snapshot.bars {
-            let used = bar.primaryFraction
+            // A bar with no fraction (blocked, no percentage reported) has
+            // nothing to measure "remaining" against — skip it rather than
+            // coercing the missing reading to 0% or 100% remaining.
+            guard let used = bar.primaryFraction else { continue }
             let remaining = max(0.0, min(1.0, 1.0 - used))
             if !foundBar || remaining < lowestRemaining {
                 lowestRemaining = remaining
@@ -77,8 +91,13 @@ public enum MenuBarPresentation {
             }
         }
 
-        let remainingInt = Int((lowestRemaining * 100).rounded())
-        let remainingPctStr = "\(remainingInt)%"
+        let remainingPctStr: String?
+        if foundBar {
+            let remainingInt = Int((lowestRemaining * 100).rounded())
+            remainingPctStr = "\(remainingInt)%"
+        } else {
+            remainingPctStr = nil
+        }
 
         let timeLeftStr = formatTimeLeft(matchingResetText)
 

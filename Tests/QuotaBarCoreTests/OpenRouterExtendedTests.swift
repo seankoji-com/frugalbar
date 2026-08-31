@@ -67,7 +67,11 @@ private func withStubbedHTTP<T: Sendable>(
     LocalStub.reset()
     LocalStub.handler = handler
     return try await QuotaHTTP.$session.withValue(LocalStub.makeSession()) {
-        try await operation()
+        // A fresh cache instance per scope, exactly like the session above,
+        // so this test can never read back another test's memoised badges.
+        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
+            try await operation()
+        }
     }
 }
 
@@ -270,8 +274,8 @@ struct OpenRouterExtendedTests {
     func emptyKeyNoRequest() async throws {
         let provider = OpenRouterProvider(apiKey: "")
         // No key means the primary /auth/key call never fires — but the
-        // model-catalog call needs no key, so it still runs on every
-        // refresh (that's what lets its badges appear with no key configured).
+        // model-catalog call needs no key, so it still runs on a cache miss
+        // (that's what lets its badges appear with no key configured).
         let snap = try await withStubbedHTTP({ request in
             #expect(request.url?.absoluteString.contains("auth/key") != true)
             return canned(body: "unused")

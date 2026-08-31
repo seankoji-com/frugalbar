@@ -85,7 +85,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         DualBarMetrics(primaryFraction: reading.used,
                        expectedPaceFraction: DualBarMetrics.proRataPace(
                            resetsAt: reading.reset, windowLength: window),
-                       label: label, statusColor: "#d97757",
+                       label: label,
                        usedText: "\(Int((reading.used * 100).rounded()))% used",
                        resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: reading.reset, relativeTo: Date()))",
                        resetsAt: reading.reset, windowLength: window)

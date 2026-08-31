@@ -48,6 +48,50 @@ struct DeadlineTests {
         case .failure(let reason): #expect(reason == .badResponse)
         }
     }
+
+    @Test("URLError(.notConnectedToInternet) maps to .offline")
+    func urlErrorNotConnectedToInternetMapsToOffline() async {
+        let outcome: DeadlineOutcome<String> = await withDeadline(seconds: 2.0) {
+            throw URLError(.notConnectedToInternet)
+        }
+        switch outcome {
+        case .success: Issue.record("expected failure")
+        case .failure(let reason): #expect(reason == .offline)
+        }
+    }
+
+    @Test("URLError(.dnsLookupFailed) maps to .offline")
+    func urlErrorDnsLookupFailedMapsToOffline() async {
+        let outcome: DeadlineOutcome<String> = await withDeadline(seconds: 2.0) {
+            throw URLError(.dnsLookupFailed)
+        }
+        switch outcome {
+        case .success: Issue.record("expected failure")
+        case .failure(let reason): #expect(reason == .offline)
+        }
+    }
+
+    @Test("URLError(.timedOut) maps to .timedOut")
+    func urlErrorTimedOutMapsCorrectly() async {
+        let outcome: DeadlineOutcome<String> = await withDeadline(seconds: 2.0) {
+            throw URLError(.timedOut)
+        }
+        switch outcome {
+        case .success: Issue.record("expected failure")
+        case .failure(let reason): #expect(reason == .timedOut)
+        }
+    }
+
+    @Test("URLError(.badServerResponse) maps to .badResponse")
+    func urlErrorBadServerResponseMapsToBadResponse() async {
+        let outcome: DeadlineOutcome<String> = await withDeadline(seconds: 2.0) {
+            throw URLError(.badServerResponse)
+        }
+        switch outcome {
+        case .success: Issue.record("expected failure")
+        case .failure(let reason): #expect(reason == .badResponse)
+        }
+    }
 }
 
 // MARK: - Why this is not a TaskGroup

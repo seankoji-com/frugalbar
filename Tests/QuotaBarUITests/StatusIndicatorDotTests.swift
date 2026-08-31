@@ -5,15 +5,16 @@ import QuotaBarCore
 
 /// Tests for the StatusIndicatorDot's pure-logic symbol and tint mappings.
 ///
-/// The view itself uses private `symbol` and `tint` computed properties that
-/// are not exposed. We re-derive the same logic here as a contract test so any
-/// future refactor that changes the mapping is caught.
+/// These call `StatusIndicatorDot.symbol(for:)` / `.tint(for:)` directly —
+/// the same production statics the view's body renders — so a future
+/// refactor that changes the mapping is caught here rather than only in a
+/// re-derived copy that could silently drift from the real logic.
 @Suite("StatusIndicatorDot — symbol and tint")
 struct StatusIndicatorDotTests {
 
     // MARK: - Unavailable
 
-    @Test("unavailable status maps to minus.circle and secondary color")
+    @Test("unavailable status maps to minus.circle and outline color")
     func unavailableSymbolAndTint() {
         let statuses: [ProviderStatus] = [
             .unavailable(.notConfigured),
@@ -25,75 +26,56 @@ struct StatusIndicatorDotTests {
             .rateLimited(retryAfter: nil),
         ]
         for status in statuses {
-            let (symbol, tint) = mapDot(status)
-            #expect(symbol == "minus.circle", "wrong symbol for \(status)")
-            #expect(tint == .secondary, "wrong tint for \(status)")
+            #expect(StatusIndicatorDot.symbol(for: status) == "minus.circle", "wrong symbol for \(status)")
+            #expect(StatusIndicatorDot.tint(for: status) == Theme.outline, "wrong tint for \(status)")
         }
     }
 
     // MARK: - Measured: healthy
 
-    @Test("healthy status maps to checkmark.circle.fill and green")
+    @Test("healthy status maps to checkmark.circle.fill and Theme.secondary")
     func healthySymbolAndTint() {
         let healthy: ProviderStatus = .healthy
-        let (symbol, tint) = mapDot(healthy)
-        #expect(symbol == "checkmark.circle.fill")
-        #expect(tint == .green)
+        #expect(StatusIndicatorDot.symbol(for: healthy) == "checkmark.circle.fill")
+        #expect(StatusIndicatorDot.tint(for: healthy) == Theme.secondary)
     }
 
     @Test("measured(.none) is healthy")
     func measuredNoneIsHealthy() {
-        let (symbol, tint) = mapDot(.measured(.none))
-        #expect(symbol == "checkmark.circle.fill")
-        #expect(tint == .green)
+        let status: ProviderStatus = .measured(.none)
+        #expect(StatusIndicatorDot.symbol(for: status) == "checkmark.circle.fill")
+        #expect(StatusIndicatorDot.tint(for: status) == Theme.secondary)
     }
 
     // MARK: - Measured: warning
 
-    @Test("warning status maps to exclamationmark.circle.fill and orange")
+    @Test("warning status maps to exclamationmark.circle.fill and Theme.tertiary")
     func warningSymbolAndTint() {
         let status: ProviderStatus = .warning
-        let (symbol, tint) = mapDot(status)
-        #expect(symbol == "exclamationmark.circle.fill")
-        #expect(tint == .orange)
+        #expect(StatusIndicatorDot.symbol(for: status) == "exclamationmark.circle.fill")
+        #expect(StatusIndicatorDot.tint(for: status) == Theme.tertiary)
     }
 
     @Test("measured(.warning) is warning")
     func measuredWarningIsWarning() {
-        let (symbol, tint) = mapDot(.measured(.warning))
-        #expect(symbol == "exclamationmark.circle.fill")
-        #expect(tint == .orange)
+        let status: ProviderStatus = .measured(.warning)
+        #expect(StatusIndicatorDot.symbol(for: status) == "exclamationmark.circle.fill")
+        #expect(StatusIndicatorDot.tint(for: status) == Theme.tertiary)
     }
 
     // MARK: - Measured: critical
 
-    @Test("critical status maps to exclamationmark.octagon.fill and red")
+    @Test("critical status maps to exclamationmark.octagon.fill and Theme.error")
     func criticalSymbolAndTint() {
         let status: ProviderStatus = .critical
-        let (symbol, tint) = mapDot(status)
-        #expect(symbol == "exclamationmark.octagon.fill")
-        #expect(tint == .red)
+        #expect(StatusIndicatorDot.symbol(for: status) == "exclamationmark.octagon.fill")
+        #expect(StatusIndicatorDot.tint(for: status) == Theme.error)
     }
 
     @Test("measured(.critical) is critical")
     func measuredCriticalIsCritical() {
-        let (symbol, tint) = mapDot(.measured(.critical))
-        #expect(symbol == "exclamationmark.octagon.fill")
-        #expect(tint == .red)
-    }
-
-    // MARK: - Helpers (re-derives the same logic from StatusIndicatorDot)
-
-    /// Re-derives the mapping logic from `StatusIndicatorDot` so we can test
-    /// it without exposing private computed properties.
-    private func mapDot(_ status: ProviderStatus) -> (String, Color) {
-        if status.confidence == .unavailable {
-            return ("minus.circle", .secondary)
-        }
-        switch status.urgency {
-        case .none:     return ("checkmark.circle.fill", .green)
-        case .warning:  return ("exclamationmark.circle.fill", .orange)
-        case .critical: return ("exclamationmark.octagon.fill", .red)
-        }
+        let status: ProviderStatus = .measured(.critical)
+        #expect(StatusIndicatorDot.symbol(for: status) == "exclamationmark.octagon.fill")
+        #expect(StatusIndicatorDot.tint(for: status) == Theme.error)
     }
 }

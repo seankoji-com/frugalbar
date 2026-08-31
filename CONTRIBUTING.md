@@ -29,7 +29,7 @@ When submitting changes, adhere strictly to these principles:
 ## Development & Testing Workflow
 
 ### Prerequisites
-- macOS 15.0+ (Sequoia) or macOS 14.0+
+- macOS 15.0+ (Sequoia)
 - Swift 6.0+ / Xcode 16.0+
 
 ### Build & Run Tests
