@@ -449,7 +449,13 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// decide whether a row reads as exhausted.
     public static let exhaustionThreshold = 0.999
 
-    /// Every consumable window is spent-out or outright blocked.
+    /// At least one consumable window is spent-out or outright blocked.
+    ///
+    /// Deliberately "any", not "every": this backs `sortBand`'s exhausted
+    /// bucket, and a vendor with even one spent window — its five-hour
+    /// bucket, say, even with a healthy monthly allowance behind it — is not
+    /// somewhere to send work *right now*, whatever headroom sits in a
+    /// window that has not come up yet.
     ///
     /// Reads only `quotaBars`, so a billing cycle nearing its renewal date can
     /// never make an untouched allowance look exhausted.

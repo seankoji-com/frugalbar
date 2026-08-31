@@ -233,11 +233,34 @@ struct AttachTests {
         #expect(withTwo.row3?.label == "CYCLE")
     }
 
-    @Test("three vendor windows already fill the snapshot, so theirs win")
+    @Test("three informative vendor windows already fill the snapshot, so theirs win")
     func vendorWindowsWin() {
-        let full = snapshot(row1: bar("A"), row2: bar("B"), row3: bar("C"))
+        let now = Date()
+        let full = snapshot(
+            row1: DualBarMetrics(primaryFraction: 0.5, label: "A", resetsAt: now.addingTimeInterval(30 * 86_400), windowLength: 30 * 86_400),
+            row2: DualBarMetrics(primaryFraction: 0.5, label: "B", resetsAt: now.addingTimeInterval(7 * 86_400), windowLength: 7 * 86_400),
+            row3: DualBarMetrics(primaryFraction: 0.5, label: "C", resetsAt: now.addingTimeInterval(5 * 3600), windowLength: 5 * 3600))
         let result = QuotaManager.attachingCycleRow(to: full, cycle: SubscriptionCycle(anchorDate: Date()))
         #expect(result.bars.map(\.label) == ["A", "B", "C"])
+    }
+
+    @Test("a vendor row with neither a reset nor a window is replaced, not three real windows")
+    func uninformativeFilledSlotIsReplaced() {
+        // Kiro's shape: MO has a real reset, but BN/OV can both come back
+        // with no window to plan around. A cycle recorded for a vendor like
+        // this used to be dropped silently — the Settings editor still
+        // showed it as tracked, but it never rendered anywhere.
+        let now = Date()
+        let full = snapshot(
+            row1: DualBarMetrics(
+                primaryFraction: 0.5, label: "MO",
+                resetsAt: now.addingTimeInterval(30 * 86_400), windowLength: 30 * 86_400),
+            row2: bar("A"),
+            row3: bar("B"))
+        let result = QuotaManager.attachingCycleRow(to: full, cycle: SubscriptionCycle(anchorDate: now))
+        #expect(result.row1?.label == "MO")
+        #expect(result.row2?.label == "CYCLE")
+        #expect(result.row3?.label == "B")
     }
 
     @Test("a vendor that published no reset adopts the user's renewal date")

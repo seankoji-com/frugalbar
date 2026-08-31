@@ -305,7 +305,21 @@ public actor QuotaManager {
         if updated.row1 == nil { updated.row1 = row }
         else if updated.row2 == nil { updated.row2 = row }
         else if updated.row3 == nil { updated.row3 = row }
-        else { return snapshot }  // Three vendor windows already; theirs win.
+        else if let slot = leastInformativeFilledSlot(in: updated) {
+            // Three vendor rows, but one of them has neither a reset nor a
+            // window length — nothing to plan around, and the case a
+            // renewal date is most useful for is exactly a vendor with rows
+            // like that (e.g. Kiro's bonus/overage bars). Recording a cycle
+            // used to silently no-op here: the Settings editor still showed
+            // it as tracked, but it never rendered anywhere.
+            switch slot {
+            case 1: updated.row1 = row
+            case 2: updated.row2 = row
+            default: updated.row3 = row
+            }
+        } else {
+            return snapshot  // Three informative vendor windows; theirs win.
+        }
 
         // A vendor that published no reset can still show when the user's own
         // period turns over. `resetsAt` is a `let`, so this has to rebuild
@@ -340,6 +354,21 @@ public actor QuotaManager {
             updated = rebuilt
         }
         return updated
+    }
+
+    /// The row slot (1, 2, or 3) holding a bar with neither a reset nor a
+    /// window length — the one a hand-entered cycle can usefully replace
+    /// when all three are already filled. Nil when every row has something
+    /// to plan around, so the vendor's own data always wins.
+    private static func leastInformativeFilledSlot(in snapshot: QuotaSnapshot) -> Int? {
+        func isUninformative(_ bar: DualBarMetrics?) -> Bool {
+            guard let bar else { return false }
+            return bar.resetsAt == nil && bar.windowLength == nil
+        }
+        if isUninformative(snapshot.row1) { return 1 }
+        if isUninformative(snapshot.row2) { return 2 }
+        if isUninformative(snapshot.row3) { return 3 }
+        return nil
     }
 
     /// Strips a previously-attached hand-entered cycle row (and the
