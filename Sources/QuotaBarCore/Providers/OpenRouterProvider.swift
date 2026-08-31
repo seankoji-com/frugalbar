@@ -131,8 +131,21 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         // figures; the credit balance below is account-wide, so the two are
         // different scopes and are labelled as such rather than combined.
         // A window the API omits stays nil and renders as an absence.
+        // Longest period first, matching how the quota bars are ordered.
+        //
+        // The monthly figure is the one that carries information: OpenRouter
+        // reports these per-key, so a key idle this week reads $0.00 while
+        // still holding real spend for the month. Publishing only the short
+        // windows made an account with $100 of monthly spend look untouched.
+        //
+        // `usage_daily` is deliberately dropped. These buckets are calendar
+        // aligned to UTC, not rolling, and the API returns no reset timestamp
+        // for any of them — so a "daily" figure silently rolls over mid-morning
+        // for anyone well east of UTC and reads as spend that vanished. The
+        // coarser windows carry the same alignment, where a boundary a few
+        // hours out matters far less. None of them is drawn as a countdown.
         let spendWindows = [
-            SpendWindow(label: "1D", amount: decoded.data.usage_daily.map { Decimal($0) },
+            SpendWindow(label: "MO", amount: decoded.data.usage_monthly.map { Decimal($0) },
                         currencyCode: "USD"),
             SpendWindow(label: "WK", amount: decoded.data.usage_weekly.map { Decimal($0) },
                         currencyCode: "USD"),

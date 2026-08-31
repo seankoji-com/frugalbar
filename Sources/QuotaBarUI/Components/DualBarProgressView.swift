@@ -254,7 +254,9 @@ public struct DualBarProgressView: View {
                 .tracking(Theme.Tracking.token)
                 .foregroundStyle(labelColor)
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                // No `minimumScaleFactor`: every window code is two characters
+                // and always fits. Scaling was what made the column ragged —
+                // "5H" rendered at full size next to a shrunken "CREDITS".
                 .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
         }
         .help(helpText)

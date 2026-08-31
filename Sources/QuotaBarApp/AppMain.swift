@@ -39,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.appearance = NSAppearance(named: .darkAqua)
+        // An initial hint only. `sizingOptions` below hands sizing to SwiftUI,
+        // which is what keeps a taller-than-expected card from being clipped.
         popover.contentSize = NSSize(width: PopoverRootView.popoverWidth, height: PopoverRootView.popoverHeight)
         let hostingController = NSHostingController(
             rootView: PopoverRootView(
@@ -47,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         hostingController.view.appearance = NSAppearance(named: .darkAqua)
+        // Let the popover track the view's own height. Without this the
+        // hardcoded contentSize wins and any content past it is cut off.
+        hostingController.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hostingController
         self.popover = popover
 

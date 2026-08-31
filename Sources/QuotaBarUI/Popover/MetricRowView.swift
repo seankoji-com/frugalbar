@@ -94,23 +94,30 @@ struct MetricRowView: View {
         return parts.joined(separator: ". ")
     }
 
-    /// Both new badges in one compact line — not two stacked lines, which
-    /// would tower this row over its neighbours given OpenRouter's name
-    /// column already carries up to two lines of its own today.
+    /// One badge per line, each free to use the full card width.
+    ///
+    /// Side by side they got half the row each and truncated mid-model-name
+    /// ("Google: Lyria…", "DeepSeek: D…"), which is the half that carries the
+    /// information. A second line costs less than a name nobody can read.
     ///
     /// The pills themselves carry no accessibility label: the parent row
     /// ignores child accessibility elements entirely, so any label set here
     /// would be silently discarded. `combinedAccessibilityLabel` above is
     /// where the badge text actually reaches VoiceOver.
     private var openRouterBadgesRow: some View {
-        HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             if let free = snapshot.freeTierModelBadge {
-                BadgePillView(text: free)
+                HStack(spacing: 0) {
+                    BadgePillView(text: free)
+                    Spacer(minLength: 0)
+                }
             }
             if let cheap = snapshot.cheapestLargeContextModelBadge {
-                BadgePillView(text: cheap, tint: Theme.secondary)
+                HStack(spacing: 0) {
+                    BadgePillView(text: cheap, tint: Theme.secondary)
+                    Spacer(minLength: 0)
+                }
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -188,7 +195,7 @@ struct MetricRowView: View {
                                 .tracking(Theme.Tracking.token)
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.75)
+                                // Same fixed two-character column as a bar row.
                                 .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
                         }
                     }
