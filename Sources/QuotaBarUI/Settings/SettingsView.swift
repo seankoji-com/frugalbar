@@ -4,7 +4,7 @@ import QuotaBarCore
 /// Tabbed preferences: credentials and general behaviour.
 public struct SettingsView: View {
 
-    private enum Tab: String { case keys = "API Keys", general = "General" }
+    private enum Tab: String { case keys = "API Keys", cycles = "Cycles", general = "General" }
 
     /// Only vendors we can actually do something with are offered. Claude is
     /// absent because Anthropic publishes no quota API, so a key field there
@@ -32,9 +32,17 @@ public struct SettingsView: View {
         .init(id: .opencode, label: "OpenCode",
               placeholder: "oc_live_…",
               note: "Enables OpenCode Go monitoring."),
+        .init(id: .grok, label: "Grok",
+              placeholder: "Grok CLI access token",
+              note: "Discovered from ~/.grok/auth.json when CLI discovery is on. "
+                  + "Run `grok` to refresh an expired login."),
+        .init(id: .devpass, label: "DevPass",
+              placeholder: "llmgtwy_…",
+              note: "LLM Gateway API key. Plan credits and the weekly premium window."),
     ]
 
     @State private var selectedTab: Tab = .keys
+    @State private var cycles: [VendorIdentifier: SubscriptionCycle] = [:]
     @State private var entered: [VendorIdentifier: String] = [:]
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
@@ -67,6 +75,9 @@ public struct SettingsView: View {
             keysTab
                 .tabItem { Label(Tab.keys.rawValue, systemImage: "key") }
                 .tag(Tab.keys)
+            cyclesTab
+                .tabItem { Label(Tab.cycles.rawValue, systemImage: "calendar") }
+                .tag(Tab.cycles)
             generalTab
                 .tabItem { Label(Tab.general.rawValue, systemImage: "gearshape") }
                 .tag(Tab.general)
@@ -76,6 +87,7 @@ public struct SettingsView: View {
         .frame(width: 540, height: 520)
         .padding()
         .onAppear(perform: loadKeys)
+        .onAppear { cycles = SubscriptionCycleStore.all() }
         .task { await refreshSources() }
         // Turning discovery off can strip a row back to "Not configured";
         // saving a key can flip one to "Stored in Keychain". Both have to be
@@ -268,6 +280,53 @@ public struct SettingsView: View {
 
     // MARK: - General
 
+    // MARK: - Cycles
+
+    /// Renewal dates the user records for vendors that publish none.
+    ///
+    /// FrugalBar never fakes a quota, and this does not: a cycle row reports
+    /// elapsed time against a period the user stated, never consumption. It is
+    /// drawn as a separate `CYCLE` bar so a vendor's own window is never
+    /// confused with one typed in here.
+    private var cyclesTab: some View {
+        Form {
+            Section {
+                ForEach(Self.cycleVendors, id: \.self) { vendor in
+                    CycleEditorRow(
+                        vendor: vendor,
+                        cycle: Binding(
+                            get: { cycles[vendor] },
+                            set: { cycles[vendor] = $0 }
+                        ),
+                        onCommit: { SubscriptionCycleStore.set(cycles[vendor], for: vendor) }
+                    )
+                }
+            } header: {
+                Text("Subscription cycles")
+            } footer: {
+                Text("""
+                     For subscriptions whose vendor publishes no billing period. \
+                     A cycle adds a CYCLE bar showing how many days of the period \
+                     you have paid for remain — it reports no usage, only elapsed \
+                     time against the date you entered. DevPass is the case this \
+                     exists for: it meters credits but never says when the month \
+                     turns over.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Vendors worth offering a cycle for: every one FrugalBar tracks, since a
+    /// renewal date is just as useful for a vendor it cannot read at all.
+    private static let cycleVendors: [VendorIdentifier] = [
+        .claude, .openai, .gemini, .copilot, .opencode, .openrouter,
+        .grok, .kiro, .devpass,
+    ]
+
     private var generalTab: some View {
         Form {
             Section {
@@ -457,6 +516,11 @@ public struct SettingsView: View {
         case .gemini:      provider = GeminiQuotaProvider(accessToken: key)
         case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
         case .copilot:     provider = GitHubCopilotProvider(token: key)
+        case .grok:        provider = GrokQuotaProvider(accessToken: key)
+        // Kiro has no key slot — its token and profile ARN are read together
+        // from the CLI state database — but the switch must stay exhaustive.
+        case .kiro:        provider = KiroQuotaProvider()
+        case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 

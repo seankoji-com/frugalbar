@@ -84,6 +84,27 @@ public enum VendorSVGLogo {
               <path fill="#6366F1" d="M18.654 3.87a5.087 5.087 0 110 10.174L23.7 19.09c.64.641.187 1.737-.72 1.737H8.48a8.479 8.479 0 010-16.958h10.175zM8.479 7.26a5.087 5.087 0 100 10.176 5.087 5.087 0 000-10.175z"/>
             </svg>
             """
+        case .grok:
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#000000"/>
+              <path fill="#ffffff" d="M7.2 17.4l7.35-7.35 1.62 1.62-7.35 7.35H7.2v-1.62zm2.31-5.19L5.7 8.4 7.32 6.78l3.81 3.81-1.62 1.62zM16.8 6h1.62v8.55l-1.62-1.62V6z"/>
+            </svg>
+            """
+        case .kiro:
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#9046ff"/>
+              <path fill="#ffffff" d="M13.4 3.5L6.6 12.9h4.1l-1.1 7.6 6.8-9.4h-4.1l1.1-7.6z"/>
+            </svg>
+            """
+        case .devpass:
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#0f3d3a"/>
+              <path fill="#00b8a9" d="M4 8.5A1.5 1.5 0 015.5 7h13A1.5 1.5 0 0120 8.5v2a1.75 1.75 0 000 3.5v2A1.5 1.5 0 0118.5 17h-13A1.5 1.5 0 014 15.5v-2a1.75 1.75 0 000-3.5v-2zm5.6 1.1v4.8h1.5v-1.6h.9a1.6 1.6 0 100-3.2H9.6zm1.5 1.2h.7a.4.4 0 010 .8h-.7v-.8z"/>
+            </svg>
+            """
         case .githubRest, .githubGraphql:
             return """
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">

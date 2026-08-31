@@ -38,6 +38,9 @@ public actor QuotaManager {
             GitHubCopilotProvider(),
             OpenCodeGoProvider(),
             OpenRouterProvider(),
+            GrokQuotaProvider(),
+            KiroQuotaProvider(),
+            DevPassQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ]
@@ -51,14 +54,49 @@ public actor QuotaManager {
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
+    /// Fallback ordering, used only to break ties and to place vendors that
+    /// published no window at all. Not the primary sort — see below.
+    static let canonicalOrder: [VendorIdentifier] = [
+        .claude, .openai, .gemini, .copilot, .opencode,
+        .openrouter, .grok, .kiro, .devpass,
+        .githubRest, .githubGraphql,
+    ]
+
+    /// Vendors in the order they demand attention: whichever long window
+    /// turns over soonest comes first.
+    ///
+    /// A fixed vendor order put the thing expiring in an hour below the thing
+    /// expiring in three weeks. Sorting by each vendor's *longest* window is
+    /// what matches how the list gets read — a five-hour bucket refills on its
+    /// own, so it is the monthly or weekly deadline that decides whether a
+    /// vendor is worth planning around today.
+    ///
+    /// Three bands, in order:
+    ///   1. Has a dated window — earliest reset first.
+    ///   2. Published no window — canonical order, so the list stays stable.
+    ///   3. Exhausted — last regardless of reset, because a spent vendor is
+    ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
-        let order: [VendorIdentifier] = [
-            .claude, .openai, .gemini, .copilot, .opencode,
-            .openrouter,
-            .githubRest, .githubGraphql,
-        ]
-        let dict = cache.mapValues(\.snapshot)
-        return order.compactMap { dict[$0] }
+        let rank = Dictionary(
+            uniqueKeysWithValues: Self.canonicalOrder.enumerated().map { ($0.element, $0.offset) })
+        let snapshots = Self.canonicalOrder.compactMap { cache[$0]?.snapshot }
+
+        return snapshots.sorted { a, b in
+            let bandA = Self.sortBand(a), bandB = Self.sortBand(b)
+            if bandA != bandB { return bandA < bandB }
+
+            if bandA == 0, let resetA = a.longestWindowReset, let resetB = b.longestWindowReset,
+               resetA != resetB
+            {
+                return resetA < resetB
+            }
+            return (rank[a.vendorId] ?? .max) < (rank[b.vendorId] ?? .max)
+        }
+    }
+
+    static func sortBand(_ snapshot: QuotaSnapshot) -> Int {
+        if snapshot.isQuotaExhausted { return 2 }
+        return snapshot.longestWindowReset == nil ? 1 : 0
     }
 
 
@@ -185,9 +223,10 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.vendorId, snapshot)
+                        return (provider.vendorId, Self.attachingCycleRow(to: snapshot))
                     case .failure(let reason):
-                        return (provider.vendorId, Self.unavailableSnapshot(for: provider, reason: reason))
+                        let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
+                        return (provider.vendorId, Self.attachingCycleRow(to: placeholder))
                     }
                 }
             }
@@ -218,6 +257,52 @@ public actor QuotaManager {
         }
         lastCompleteFetch = now
         return cache.mapValues(\.snapshot)
+    }
+
+    /// Adds the user's hand-entered renewal countdown, when they recorded one
+    /// for this vendor and the snapshot has a free row.
+    ///
+    /// Done here rather than inside each provider so it applies uniformly —
+    /// including to a vendor FrugalBar could not read at all, which is exactly
+    /// the case a renewal date is most useful for. It only ever *adds* a row:
+    /// a vendor-published window always outranks a date typed by hand, and is
+    /// never overwritten by one.
+    static func attachingCycleRow(to snapshot: QuotaSnapshot, now: Date = Date()) -> QuotaSnapshot {
+        guard let cycle = SubscriptionCycleStore.cycle(for: snapshot.vendorId),
+              let row = cycle.cycleRow(now: now)
+        else { return snapshot }
+
+        var updated = snapshot
+        if updated.row1 == nil { updated.row1 = row }
+        else if updated.row2 == nil { updated.row2 = row }
+        else if updated.row3 == nil { updated.row3 = row }
+        else { return snapshot }  // Three vendor windows already; theirs win.
+
+        // A vendor that published no reset can still show when the user's own
+        // period turns over.
+        if updated.resetsAt == nil, let renewal = row.resetsAt {
+            updated = QuotaSnapshot(
+                id: updated.id,
+                vendorId: updated.vendorId,
+                displayName: updated.displayName,
+                category: updated.category,
+                metric: updated.metric,
+                status: updated.status,
+                resetsAt: renewal,
+                lastUpdated: updated.lastUpdated,
+                auxiliaryInfo: updated.auxiliaryInfo,
+                row1: updated.row1,
+                row2: updated.row2,
+                row3: updated.row3,
+                badgeText: updated.badgeText,
+                planName: updated.planName,
+                latencyMs: updated.latencyMs,
+                keyMasked: updated.keyMasked,
+                cliSource: updated.cliSource,
+                currencyBasis: updated.currencyBasis
+            )
+        }
+        return updated
     }
 
     /// Builds the placeholder shown when a provider could not be read.

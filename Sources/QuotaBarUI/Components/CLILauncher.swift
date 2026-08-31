@@ -25,6 +25,12 @@ public enum CLILauncher {
         case .opencode:                     "opencode"
         case .copilot:                      "opencode"
         case .openrouter:                   "opencode"
+        case .grok:                         "grok"
+        case .kiro:                         "kiro-cli"
+        // DevPass is an OpenAI-compatible gateway rather than an agent of its
+        // own, so it opens whichever tool the key is pointed at — OpenCode
+        // being the one FrugalBar can name with confidence.
+        case .devpass:                      "opencode"
         case .githubRest, .githubGraphql:   nil
         }
     }
