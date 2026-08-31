@@ -1,7 +1,7 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img width="416" height="568" alt="image" src="https://github.com/user-attachments/assets/a6fed1ea-f879-4a98-828d-791f889221f8" />
+  <img width="652" height="1280" alt="image" src="https://github.com/user-attachments/assets/35c85ad5-6832-4095-a8d6-c6eaa5d505fa" />
 </p>
 
 
