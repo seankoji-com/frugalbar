@@ -338,16 +338,21 @@ struct OpenRouterSpendWindowTests {
     /// Both figures are published by `/auth/key`; neither is derived. The row
     /// shows them as amounts, never as a bar — spend has no cap to measure
     /// against, so a gauge would invent a denominator.
-    @Test("daily and weekly spend come straight from the API")
+    @Test("monthly and weekly spend come straight from the API")
     func spendWindowsArePublished() async throws {
         let snap = try await snapshot(body: #"""
         {"data":{"usage":96.02,"usage_daily":0.835992537,"usage_weekly":13.000224144,
+                 "usage_monthly":102.918365099,
                  "limit":null,"limit_remaining":null,"is_free_tier":false}}
         """#)
         #expect(snap.spendWindows.count == 2)
-        #expect(snap.spendWindows[0].label == "1D")
-        #expect(snap.spendWindows[1].label == "WK")
-        #expect(snap.spendWindows[0].amount == Decimal(0.835992537))
+        // Longest period first, like the quota bars. `usage_daily` is not
+        // shown: it is a UTC calendar day with no reset timestamp, so it turns
+        // over mid-morning in eastern timezones with nothing to explain it.
+        #expect(snap.spendWindows.map(\.label) == ["MO", "WK"])
+        // Omitting the monthly figure made an account with real spend read as
+        // $0.00, because a key idle today and this week reports 0 for both.
+        #expect(snap.spendWindows[0].amount == Decimal(102.918365099))
         #expect(snap.spendWindows[1].amount == Decimal(13.000224144))
         // No bars: there is no denominator for spend.
         #expect(snap.bars.isEmpty)

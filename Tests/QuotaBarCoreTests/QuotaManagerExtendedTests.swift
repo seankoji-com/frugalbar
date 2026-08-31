@@ -245,8 +245,11 @@ struct QuotaManagerExtendedTests {
         #expect(sorted[3].vendorId == .copilot)
         #expect(sorted[4].vendorId == .opencode)
         #expect(sorted[5].vendorId == .openrouter)
-        #expect(sorted[6].vendorId == .githubRest)
-        #expect(sorted[7].vendorId == .githubGraphql)
+        #expect(sorted[6].vendorId == .grok)
+        #expect(sorted[7].vendorId == .kiro)
+        #expect(sorted[8].vendorId == .devpass)
+        #expect(sorted[9].vendorId == .githubRest)
+        #expect(sorted[10].vendorId == .githubGraphql)
 
     }
 

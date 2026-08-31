@@ -6,13 +6,14 @@ import Foundation
 /// cache, and state distribution to the UI.
 public actor QuotaManager {
 
-    public static let shared = QuotaManager()
+    public static let shared = QuotaManager(cycleLookup: SubscriptionCycleStore.cycle(for:))
 
     // --- State ---
     private var cache: [VendorIdentifier: CacheEntry] = [:]
     private var lastCompleteFetch: Date?
     private let cachePolicy: CachePolicy
     private let providerFactory: @Sendable () -> [any QuotaProvider]
+    private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private var activeTask: Task<[VendorIdentifier: QuotaSnapshot], Never>?
 
     private struct CacheEntry: Sendable {
@@ -22,12 +23,21 @@ public actor QuotaManager {
 
     /// Designated initialiser. `providerFactory` is injectable so tests can
     /// drive the engine with stubs instead of reaching the network.
+    ///
+    /// `cycleLookup` defaults to reporting no cycle for any vendor rather
+    /// than to the real `SubscriptionCycleStore` — that store is backed by
+    /// process-wide `UserDefaults`, and a test that doesn't ask for it should
+    /// never be able to observe (or race against) another test's writes to
+    /// it. `.shared`, the app's real instance, opts into the live store
+    /// explicitly above.
     public init(
         cachePolicy: CachePolicy = .default,
-        providerFactory: @escaping @Sendable () -> [any QuotaProvider] = QuotaManager.defaultProviders
+        providerFactory: @escaping @Sendable () -> [any QuotaProvider] = QuotaManager.defaultProviders,
+        cycleLookup: @escaping @Sendable (VendorIdentifier) -> SubscriptionCycle? = { _ in nil }
     ) {
         self.cachePolicy = cachePolicy
         self.providerFactory = providerFactory
+        self.cycleLookup = cycleLookup
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -38,6 +48,9 @@ public actor QuotaManager {
             GitHubCopilotProvider(),
             OpenCodeGoProvider(),
             OpenRouterProvider(),
+            GrokQuotaProvider(),
+            KiroQuotaProvider(),
+            DevPassQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ]
@@ -51,14 +64,49 @@ public actor QuotaManager {
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
+    /// Fallback ordering, used only to break ties and to place vendors that
+    /// published no window at all. Not the primary sort — see below.
+    static let canonicalOrder: [VendorIdentifier] = [
+        .claude, .openai, .gemini, .copilot, .opencode,
+        .openrouter, .grok, .kiro, .devpass,
+        .githubRest, .githubGraphql,
+    ]
+
+    /// Vendors in the order they demand attention: whichever long window
+    /// turns over soonest comes first.
+    ///
+    /// A fixed vendor order put the thing expiring in an hour below the thing
+    /// expiring in three weeks. Sorting by each vendor's *longest* window is
+    /// what matches how the list gets read — a five-hour bucket refills on its
+    /// own, so it is the monthly or weekly deadline that decides whether a
+    /// vendor is worth planning around today.
+    ///
+    /// Three bands, in order:
+    ///   1. Has a dated window — earliest reset first.
+    ///   2. Published no window — canonical order, so the list stays stable.
+    ///   3. Exhausted — last regardless of reset, because a spent vendor is
+    ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
-        let order: [VendorIdentifier] = [
-            .claude, .openai, .gemini, .copilot, .opencode,
-            .openrouter,
-            .githubRest, .githubGraphql,
-        ]
-        let dict = cache.mapValues(\.snapshot)
-        return order.compactMap { dict[$0] }
+        let rank = Dictionary(
+            uniqueKeysWithValues: Self.canonicalOrder.enumerated().map { ($0.element, $0.offset) })
+        let snapshots = Self.canonicalOrder.compactMap { cache[$0]?.snapshot }
+
+        return snapshots.sorted { a, b in
+            let bandA = Self.sortBand(a), bandB = Self.sortBand(b)
+            if bandA != bandB { return bandA < bandB }
+
+            if bandA == 0, let resetA = a.longestWindowReset, let resetB = b.longestWindowReset,
+               resetA != resetB
+            {
+                return resetA < resetB
+            }
+            return (rank[a.vendorId] ?? .max) < (rank[b.vendorId] ?? .max)
+        }
+    }
+
+    static func sortBand(_ snapshot: QuotaSnapshot) -> Int {
+        if snapshot.isQuotaExhausted { return 2 }
+        return snapshot.longestWindowReset == nil ? 1 : 0
     }
 
 
@@ -168,6 +216,7 @@ public actor QuotaManager {
                   "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce.map(\.rawValue))")
         }
         var results: [VendorIdentifier: QuotaSnapshot] = [:]
+        let cycleLookup = self.cycleLookup
 
         await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
             for provider in providersToFetch {
@@ -178,6 +227,7 @@ public actor QuotaManager {
                     let outcome = await withDeadline(seconds: budget) {
                         try await provider.fetchSnapshot()
                     }
+                    let cycle = cycleLookup(provider.vendorId)
                     switch outcome {
                     case .success(var snapshot):
                         // Measured here rather than guessed in each provider:
@@ -185,9 +235,10 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.vendorId, snapshot)
+                        return (provider.vendorId, Self.attachingCycleRow(to: snapshot, cycle: cycle))
                     case .failure(let reason):
-                        return (provider.vendorId, Self.unavailableSnapshot(for: provider, reason: reason))
+                        let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
+                        return (provider.vendorId, Self.attachingCycleRow(to: placeholder, cycle: cycle))
                     }
                 }
             }
@@ -211,13 +262,157 @@ public actor QuotaManager {
             // duration of an outage, so every subsequent forceRefresh
             // re-hit the failing vendor once the floor's window (measured
             // from that stale timestamp) had elapsed.
-            let displaySnapshot = (snap.status.confidence == .measured || cache[id] == nil)
-                ? snap
-                : cache[id]!.snapshot
+            let displaySnapshot: QuotaSnapshot
+            if snap.status.confidence == .measured || cache[id] == nil {
+                displaySnapshot = snap
+            } else {
+                // The retained snapshot's hand-entered cycle row (if any) was
+                // computed at the last successful fetch and frozen there — a
+                // vendor down for days would otherwise keep showing e.g. "3
+                // days left in monthly cycle" for the whole outage, the one
+                // figure here that doesn't depend on the provider at all.
+                // Re-attach against `now` so it keeps counting down.
+                let retained = cache[id]!.snapshot
+                displaySnapshot = Self.attachingCycleRow(
+                    to: Self.removingStaleCycleRow(from: retained), cycle: cycleLookup(id), now: now)
+            }
             cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
         return cache.mapValues(\.snapshot)
+    }
+
+    /// Adds the user's hand-entered renewal countdown, when they recorded one
+    /// for this vendor and the snapshot has a free row.
+    ///
+    /// Done here rather than inside each provider so it applies uniformly —
+    /// including to a vendor FrugalBar could not read at all, which is exactly
+    /// the case a renewal date is most useful for. It only ever *adds* a row:
+    /// a vendor-published window always outranks a date typed by hand, and is
+    /// never overwritten by one.
+    ///
+    /// Takes the cycle as a parameter rather than looking it up itself, so
+    /// this stays a pure function of its arguments: callers that don't care
+    /// about hand-entered cycles (most tests) never have to touch
+    /// `SubscriptionCycleStore`'s process-wide preference store at all.
+    static func attachingCycleRow(
+        to snapshot: QuotaSnapshot, cycle: SubscriptionCycle?, now: Date = Date()
+    ) -> QuotaSnapshot {
+        guard let cycle, let row = cycle.cycleRow(now: now)
+        else { return snapshot }
+
+        var updated = snapshot
+        if updated.row1 == nil { updated.row1 = row }
+        else if updated.row2 == nil { updated.row2 = row }
+        else if updated.row3 == nil { updated.row3 = row }
+        else if let slot = leastInformativeFilledSlot(in: updated) {
+            // Three vendor rows, but one of them has neither a reset nor a
+            // window length — nothing to plan around, and the case a
+            // renewal date is most useful for is exactly a vendor with rows
+            // like that (e.g. Kiro's bonus/overage bars). Recording a cycle
+            // used to silently no-op here: the Settings editor still showed
+            // it as tracked, but it never rendered anywhere.
+            switch slot {
+            case 1: updated.row1 = row
+            case 2: updated.row2 = row
+            default: updated.row3 = row
+            }
+        } else {
+            return snapshot  // Three informative vendor windows; theirs win.
+        }
+
+        // A vendor that published no reset can still show when the user's own
+        // period turns over. `resetsAt` is a `let`, so this has to rebuild
+        // the snapshot rather than assign in place — which means every field
+        // the initializer doesn't accept (spendWindows, the two catalog
+        // badges) has to be copied across explicitly, or it silently reverts
+        // to its default on this one path.
+        if updated.resetsAt == nil, let renewal = row.resetsAt {
+            var rebuilt = QuotaSnapshot(
+                id: updated.id,
+                vendorId: updated.vendorId,
+                displayName: updated.displayName,
+                category: updated.category,
+                metric: updated.metric,
+                status: updated.status,
+                resetsAt: renewal,
+                lastUpdated: updated.lastUpdated,
+                auxiliaryInfo: updated.auxiliaryInfo,
+                row1: updated.row1,
+                row2: updated.row2,
+                row3: updated.row3,
+                badgeText: updated.badgeText,
+                planName: updated.planName,
+                latencyMs: updated.latencyMs,
+                keyMasked: updated.keyMasked,
+                cliSource: updated.cliSource,
+                currencyBasis: updated.currencyBasis
+            )
+            rebuilt.spendWindows = updated.spendWindows
+            rebuilt.freeTierModelBadge = updated.freeTierModelBadge
+            rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+            updated = rebuilt
+        }
+        return updated
+    }
+
+    /// The row slot (1, 2, or 3) holding a bar with neither a reset nor a
+    /// window length — the one a hand-entered cycle can usefully replace
+    /// when all three are already filled. Nil when every row has something
+    /// to plan around, so the vendor's own data always wins.
+    private static func leastInformativeFilledSlot(in snapshot: QuotaSnapshot) -> Int? {
+        func isUninformative(_ bar: DualBarMetrics?) -> Bool {
+            guard let bar else { return false }
+            return bar.resetsAt == nil && bar.windowLength == nil
+        }
+        if isUninformative(snapshot.row1) { return 1 }
+        if isUninformative(snapshot.row2) { return 2 }
+        if isUninformative(snapshot.row3) { return 3 }
+        return nil
+    }
+
+    /// Strips a previously-attached hand-entered cycle row (and the
+    /// snapshot-level `resetsAt` it adopted, if that's where it came from)
+    /// so `attachingCycleRow` can be called again on an already-attached
+    /// snapshot and actually recompute the row against a new `now`, instead
+    /// of hitting the "row slot already occupied" guard and being a no-op.
+    static func removingStaleCycleRow(from snapshot: QuotaSnapshot) -> QuotaSnapshot {
+        let staleResetsAt = [snapshot.row1, snapshot.row2, snapshot.row3]
+            .compactMap { $0 }
+            .first { $0.measuresElapsedTimeOnly }?
+            .resetsAt
+
+        var updated = snapshot
+        if updated.row1?.measuresElapsedTimeOnly == true { updated.row1 = nil }
+        if updated.row2?.measuresElapsedTimeOnly == true { updated.row2 = nil }
+        if updated.row3?.measuresElapsedTimeOnly == true { updated.row3 = nil }
+
+        guard let staleResetsAt, updated.resetsAt == staleResetsAt else { return updated }
+
+        var rebuilt = QuotaSnapshot(
+            id: updated.id,
+            vendorId: updated.vendorId,
+            displayName: updated.displayName,
+            category: updated.category,
+            metric: updated.metric,
+            status: updated.status,
+            resetsAt: nil,
+            lastUpdated: updated.lastUpdated,
+            auxiliaryInfo: updated.auxiliaryInfo,
+            row1: updated.row1,
+            row2: updated.row2,
+            row3: updated.row3,
+            badgeText: updated.badgeText,
+            planName: updated.planName,
+            latencyMs: updated.latencyMs,
+            keyMasked: updated.keyMasked,
+            cliSource: updated.cliSource,
+            currencyBasis: updated.currencyBasis
+        )
+        rebuilt.spendWindows = updated.spendWindows
+        rebuilt.freeTierModelBadge = updated.freeTierModelBadge
+        rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+        return rebuilt
     }
 
     /// Builds the placeholder shown when a provider could not be read.

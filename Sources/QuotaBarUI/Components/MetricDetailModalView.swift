@@ -27,6 +27,13 @@ public struct MetricDetailModalView: View {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
     }
 
+    /// The two longest consumable windows, longest first — matches `bars`'
+    /// ordering but excludes elapsed-time-only cycle rows, which have no
+    /// burn rate or exhaustion projection to show here.
+    private var displayBars: [DualBarMetrics] {
+        Array(snapshot.quotaBars.prefix(2))
+    }
+
     public var body: some View {
         ZStack {
             // Semi-transparent backdrop
@@ -139,22 +146,29 @@ public struct MetricDetailModalView: View {
                     .stroke(statusBannerColor.opacity(0.3), lineWidth: 0.5)
             )
 
-            // Quick metrics grid (5H & Weekly)
+            // Quick metrics grid — the two longest consumable windows, in the
+            // vendor's own order. Hardcoded "5H"/"Weekly" titles assumed every
+            // vendor shaped its rows the way Claude does; Kiro's row1 is a
+            // monthly credit pool and row2 is a bonus-credit bar, so those
+            // titles rendered the wrong window's data under the wrong label.
+            // `quotaBars`, not `bars`: burn rate and exhaustion projection
+            // below are consumption metrics that don't apply to a
+            // hand-entered cycle countdown.
             HStack(spacing: 8) {
                 metricCard(
-                    title: "5H Window Usage",
+                    title: displayBars.first.map { "\($0.label) Window Usage" } ?? "Window Usage",
                     icon: "clock",
-                    primaryValue: snapshot.row1?.usedText ?? "—",
-                    secondaryValue: snapshot.row1?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
-                    bar: snapshot.row1
+                    primaryValue: displayBars.first?.usedText ?? "—",
+                    secondaryValue: displayBars.first?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
+                    bar: displayBars.first
                 )
 
                 metricCard(
-                    title: "Weekly Velocity",
+                    title: displayBars.count > 1 ? "\(displayBars[1].label) Window Usage" : "Window Usage",
                     icon: "cpu",
-                    primaryValue: snapshot.row2?.usedText ?? "—",
-                    secondaryValue: snapshot.row2?.resetText ?? "—",
-                    bar: snapshot.row2
+                    primaryValue: displayBars.count > 1 ? (displayBars[1].usedText ?? "—") : "—",
+                    secondaryValue: displayBars.count > 1 ? (displayBars[1].resetText ?? "—") : "—",
+                    bar: displayBars.count > 1 ? displayBars[1] : nil
                 )
             }
 
