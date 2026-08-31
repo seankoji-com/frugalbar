@@ -9,6 +9,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case opencode
     case copilot
     case openrouter
+    case grok
+    case kiro
+    case devpass
     case githubRest   = "github_rest"
     case githubGraphql = "github_graphql"
 
@@ -20,6 +23,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "OpenCode"
         case .copilot:       "GitHub Copilot"
         case .openrouter:    "OpenRouter"
+        case .grok:          "Grok"
+        case .kiro:          "Kiro"
+        case .devpass:       "DevPass"
         case .githubRest:    "GitHub REST"
         case .githubGraphql: "GitHub GraphQL"
         }
@@ -33,6 +39,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "#d47b00"
         case .copilot:       "#6e7681"
         case .openrouter:    "#d47b00"
+        case .grok:          "#1a9fff"
+        case .kiro:          "#9046ff"
+        case .devpass:       "#00b8a9"
         case .githubRest:    "#ffb4ab"
         case .githubGraphql: "#ffb4ab"
         }
@@ -46,6 +55,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "chevron.left.forwardslash.chevron.right"
         case .copilot:       "curlybraces"
         case .openrouter:    "arrow.triangle.branch"
+        case .grok:          "xmark"
+        case .kiro:          "bolt"
+        case .devpass:       "ticket"
         case .githubRest:    "network"
         case .githubGraphql: "point.3.connected.trianglepath.dotted"
         }
@@ -202,6 +214,15 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// right now (e.g. rate-limited), independent of whatever percentage — or
     /// lack of one — it also reported.
     public var isBlocked: Bool
+    /// This bar measures elapsed time, not consumption.
+    ///
+    /// A billing cycle is drawn as a bar because a bar is the right picture of
+    /// "how far through the period are we" — but 90% elapsed is not 10% of
+    /// quota left, and every place that ranks headroom, picks a vendor to
+    /// recommend, or decides a row is exhausted must skip it. Reading a cycle
+    /// as consumption made the popover advise "DevPass has 97% remaining" from
+    /// a plan whose credits were entirely untouched.
+    public var measuresElapsedTimeOnly: Bool = false
     public var usedText: String?
     public var resetText: String?
     /// When this window resets, and how long it runs — the same two figures
@@ -221,6 +242,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         label: String,
         blockedColor: String? = nil,
         isBlocked: Bool = false,
+        measuresElapsedTimeOnly: Bool = false,
         usedText: String? = nil,
         resetText: String? = nil,
         resetsAt: Date? = nil,
@@ -232,6 +254,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.label = label
         self.blockedColor = blockedColor
         self.isBlocked = isBlocked
+        self.measuresElapsedTimeOnly = measuresElapsedTimeOnly
         self.usedText = usedText
         self.resetText = resetText
         self.resetsAt = resetsAt
@@ -399,8 +422,72 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var freeTierModelBadge: String? = nil
     public var cheapestLargeContextModelBadge: String? = nil
 
+    /// The vendor's windows, longest period first — month, then week, then
+    /// the five-hour bucket.
+    ///
+    /// Providers assign `row1…row3` in whatever order their payload arrives,
+    /// which put Claude's 5H above its WK and OpenCode's 5H above its MO. The
+    /// long window is the one that constrains planning, so it leads. Windows
+    /// with no length at all (a bonus pool, an overage allowance) have no
+    /// period to rank and sort last, keeping their relative order.
     public var bars: [DualBarMetrics] {
         [row1, row2, row3].compactMap { $0 }
+            .enumerated()
+            .sorted { lhs, rhs in
+                switch (lhs.element.windowLength, rhs.element.windowLength) {
+                case let (l?, r?) where l != r: return l > r
+                case (nil, .some):             return false
+                case (.some, nil):             return true
+                default:                       return lhs.offset < rhs.offset
+                }
+            }
+            .map(\.element)
+    }
+
+    /// At or past this fraction a window is spent. Not 1.0: a vendor that
+    /// reports 0.9999 has nothing left either, and float residue should not
+    /// decide whether a row reads as exhausted.
+    public static let exhaustionThreshold = 0.999
+
+    /// At least one consumable window is spent-out or outright blocked.
+    ///
+    /// Deliberately "any", not "every": this backs `sortBand`'s exhausted
+    /// bucket, and a vendor with even one spent window — its five-hour
+    /// bucket, say, even with a healthy monthly allowance behind it — is not
+    /// somewhere to send work *right now*, whatever headroom sits in a
+    /// window that has not come up yet.
+    ///
+    /// Reads only `quotaBars`, so a billing cycle nearing its renewal date can
+    /// never make an untouched allowance look exhausted.
+    public var isQuotaExhausted: Bool {
+        quotaBars.contains { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold || $0.isBlocked }
+    }
+
+    /// When this vendor's *longest* window turns over.
+    ///
+    /// The longest window is the one that governs planning — a five-hour
+    /// bucket refills before you have finished reading the row, while the
+    /// monthly one is the deadline that actually constrains the month. Nil
+    /// when the vendor published no window with both a length and a reset.
+    ///
+    /// Reads `quotaBars`, not `bars`: a hand-entered cycle row is usually the
+    /// longest window in the snapshot (a monthly or annual renewal), so
+    /// reading `bars` would sort a vendor by its billing-cycle date instead
+    /// of by when its actual quota refills — the opposite of what this
+    /// property exists to answer.
+    public var longestWindowReset: Date? {
+        let dated = quotaBars.compactMap { bar -> (TimeInterval, Date)? in
+            guard let length = bar.windowLength, let reset = bar.resetsAt else { return nil }
+            return (length, reset)
+        }
+        return dated.max { $0.0 < $1.0 }?.1 ?? resetsAt
+    }
+
+    /// The bars that actually measure consumption — everything `bars` holds,
+    /// minus the ones that only track elapsed time. Use this for headroom,
+    /// exhaustion, urgency, and recommendations; `bars` is for drawing.
+    public var quotaBars: [DualBarMetrics] {
+        bars.filter { !$0.measuresElapsedTimeOnly }
     }
 
     public init(
@@ -493,6 +580,9 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .opencode:      return "OpenCode"
         case .copilot:       return "GitHub Copilot"
         case .openrouter:    return "OpenRouter"
+        case .grok:          return "Grok"
+        case .kiro:          return "Kiro"
+        case .devpass:       return "DevPass"
         case .githubRest, .githubGraphql: return "GitHub"
         }
     }

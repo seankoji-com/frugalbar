@@ -4,11 +4,16 @@ import QuotaBarCore
 
 /// Popover contents: header, three category sections, footer.
 ///
-/// The layout is intrinsically sized rather than pinned to a fixed height. The
-/// previous revision advertised "zero-scroll" while wrapping the rows in a
-/// `ScrollView` with a hardcoded 360pt frame — which scrolls as soon as text
-/// scales. Here the popover grows to fit its content, and only falls back to
-/// scrolling past a ceiling that large accessibility text sizes can reach.
+/// The layout is intrinsically sized rather than pinned to a fixed height, and
+/// the popover follows it via `NSHostingController.sizingOptions`. Both halves
+/// of that are load-bearing: the height constant alone was advisory, and while
+/// `NSPopover.contentSize` stayed pinned to it any extra row was silently
+/// clipped — which is exactly what a third OpenRouter spend window did, cutting
+/// the card's name off mid-glyph.
+///
+/// Past `maxContentHeight` the rows scroll rather than grow. That ceiling was
+/// declared but never applied for several revisions, so the "falls back to
+/// scrolling" this comment used to claim was not true of the code.
 public struct PopoverRootView: View {
 
     @State private var store: QuotaStore
@@ -35,8 +40,17 @@ public struct PopoverRootView: View {
     public var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                sections
-                    .frame(maxWidth: .infinity)
+                // `fixedSize` first so the scroll view adopts its content's
+                // height, then the frame clamps it: the popover is exactly as
+                // tall as it needs to be until it hits the ceiling, and scrolls
+                // from there instead of growing off the screen.
+                ScrollView(.vertical) {
+                    sections
+                        .frame(maxWidth: .infinity)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: Self.maxContentHeight)
+                .scrollBounceBehavior(.basedOnSize)
 
                 FooterActionsView(
                     summary: store.summary,
@@ -117,7 +131,7 @@ public struct PopoverRootView: View {
                             // Coercing its missing fraction to 0 happened to be
                             // right here, but it is the same `?? 0.0` that read
                             // as "plenty left" elsewhere — so it is spelled out.
-                            let measured = snap.bars.compactMap(\.primaryFraction)
+                            let measured = snap.quotaBars.compactMap(\.primaryFraction)
                                 + [snap.consumptionFraction].compactMap { $0 }
                             return measured.contains { $0 >= 0.70 }
                         }

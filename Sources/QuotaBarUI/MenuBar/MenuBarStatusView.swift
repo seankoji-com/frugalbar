@@ -70,7 +70,7 @@ public enum MenuBarPresentation {
         var matchingResetText: String? = nil
         var foundBar = false
 
-        for bar in snapshot.bars {
+        for bar in snapshot.quotaBars {
             // A bar with no fraction (blocked, no percentage reported) has
             // nothing to measure "remaining" against — skip it rather than
             // coercing the missing reading to 0% or 100% remaining.

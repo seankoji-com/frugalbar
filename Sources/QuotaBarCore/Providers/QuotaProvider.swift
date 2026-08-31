@@ -24,6 +24,14 @@ extension QuotaProvider {
     }
 }
 
+// MARK: - Shared parsing helpers
+
+extension String {
+    /// Vendors pad plan names and tier tokens inconsistently; every provider
+    /// that reads one needs this, so it is named once here.
+    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
 // MARK: - Shared HTTP utilities
 
 public enum QuotaHTTP {

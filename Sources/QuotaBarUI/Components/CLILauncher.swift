@@ -25,6 +25,12 @@ public enum CLILauncher {
         case .opencode:                     "opencode"
         case .copilot:                      "opencode"
         case .openrouter:                   "opencode"
+        case .grok:                         "grok"
+        case .kiro:                         "kiro-cli"
+        // DevPass is an OpenAI-compatible gateway rather than an agent of its
+        // own, so it opens whichever tool the key is pointed at — OpenCode
+        // being the one FrugalBar can name with confidence.
+        case .devpass:                      "opencode"
         case .githubRest, .githubGraphql:   nil
         }
     }
@@ -50,6 +56,16 @@ public enum CLILauncher {
     @MainActor
     public static func launch(for vendor: VendorIdentifier) {
         guard let command = command(for: vendor) else { return }
+        // Copilot, OpenRouter and DevPass have no terminal agent of their
+        // own — the advice card still reads "Use DevPass", but the launch
+        // opens whichever backend the *shared* OpenCode session happens to
+        // be configured for, which is not necessarily this vendor. Logged
+        // rather than silent, so a session that lands on the wrong backend
+        // is at least traceable from here.
+        if command == "opencode", vendor != .opencode {
+            NSLog("frugalbar: advice for \(vendor.rawValue) launched opencode, " +
+                  "which may be configured for a different backend")
+        }
         launch(command: command)
     }
 

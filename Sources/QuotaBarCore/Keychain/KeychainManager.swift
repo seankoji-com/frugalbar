@@ -401,6 +401,26 @@ public enum CredentialStore {
             }
             // 3. Fallback to gh auth token
             return Self.apiKey(for: .githubRest)
+
+        case .grok:
+            // The Grok CLI's cached OIDC access token. Short-lived — the CLI
+            // refreshes it roughly every six hours, and FrugalBar deliberately
+            // does not, so an expired one surfaces as "Credential rejected"
+            // rather than being renewed behind the CLI's back.
+            return GrokQuotaProvider.discoverCLIToken()
+
+        case .kiro:
+            // Deliberately nothing. Kiro's credential is a bearer token paired
+            // with a CodeWhisperer profile ARN, and one without the other is
+            // useless — so the provider reads both together straight from the
+            // CLI's state database rather than routing half of it through here.
+            return nil
+
+        case .devpass:
+            // Deliberately nothing. DevPass ships no CLI: the key is a gateway
+            // API key the user creates on the dashboard and pastes into
+            // Settings, so there is no local file to discover it from.
+            return nil
         }
     }
 }
@@ -478,6 +498,9 @@ extension CredentialStore {
         case .opencode:      "OpenCode auth.json"
         case .copilot:       "OpenCode auth.json"
         case .openrouter:    "OpenCode auth.json"
+        case .grok:          "grok CLI auth.json"
+        case .kiro:          "kiro-cli state database"
+        case .devpass:       "DevPass dashboard key"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }

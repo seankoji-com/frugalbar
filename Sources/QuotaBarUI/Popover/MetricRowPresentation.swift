@@ -28,7 +28,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
 
     /// A bar is only exhausted at the top of its range. `>= 1` would miss the
     /// floating-point residue of a percentage that arrived as 100.
-    static let exhaustionThreshold = 0.999
+    /// Defined in `QuotaSnapshot` so the popover's idea of "spent" and the
+    /// sort order's cannot drift apart.
+    static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
         self.name = snapshot.displayName
@@ -38,7 +40,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
 
         // An unreadable provider has no bars, so this reads false there — a
         // quota we could not fetch is not a quota we know is spent.
-        let spentBar = snapshot.bars.first { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
+        let spentBar = snapshot.quotaBars.first { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
         self.isExhausted = spentBar != nil
         self.exhaustedResetText = spentBar?.resetText
 
