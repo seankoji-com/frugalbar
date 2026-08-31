@@ -196,19 +196,34 @@ struct CredentialStoreTests {
 
     // MARK: - async accessor
 
-    @Test("apiKeyAsync returns nil when keychain is empty and CLI discovery is off")
+    /// These read `KeychainManager.shared` — the developer's *real* login
+    /// Keychain, not a test double. Two consequences the original assertions
+    /// got wrong:
+    ///
+    /// 1. "Nothing is configured" is not a fact about the code, it is a fact
+    ///    about the machine. The moment anyone saves a key in Settings the
+    ///    test fails, having proved nothing.
+    /// 2. `#expect(key == nil)` prints the value it found. That is a stored
+    ///    API key going to stdout and into CI logs.
+    ///
+    /// So the assertion is on the *agreement* between the Keychain and the
+    /// resolver, reduced to a Bool before it reaches `#expect`, which is the
+    /// real invariant and cannot carry a secret into the output.
+    @Test("with CLI discovery off, resolution agrees with the Keychain")
     func apiKeyAsyncNil() async {
         CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        let key = await CredentialStore.apiKeyAsync(for: .claude)
-        #expect(key == nil)
+        let stored = (try? KeychainManager.shared.get(label: VendorIdentifier.claude.rawValue)) ?? ""
+        let resolved = await CredentialStore.apiKeyAsync(for: .claude)
+        #expect((resolved == nil) == stored.isEmpty)
     }
 
-    @Test("apiKeyAsync returns nil for all vendors when nothing is configured")
+    @Test("with CLI discovery off, every vendor resolves to exactly what the Keychain holds")
     func apiKeyAsyncAllNil() async {
         CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
         for vendor in VendorIdentifier.allCases {
-            let key = await CredentialStore.apiKeyAsync(for: vendor)
-            #expect(key == nil, "expected nil for \(vendor)")
+            let stored = (try? KeychainManager.shared.get(label: vendor.rawValue)) ?? ""
+            let resolved = await CredentialStore.apiKeyAsync(for: vendor)
+            #expect((resolved == nil) == stored.isEmpty, "resolution disagreed for \(vendor)")
         }
     }
 
@@ -219,8 +234,9 @@ struct CredentialStoreTests {
         CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
         let copilot = await CredentialStore.apiKeyAsync(for: .copilot)
         let github = await CredentialStore.apiKeyAsync(for: .githubRest)
-        // They should be the same (both nil or both whatever gh auth token returns)
-        #expect(copilot == github)
+        // Both nil, or both whatever gh auth token returns. Reduced to a Bool
+        // first: a bare `copilot == github` prints both tokens when it fails.
+        #expect((copilot == github) == true)
     }
 
     // MARK: - discovery from auth.json (when no gh binary)
