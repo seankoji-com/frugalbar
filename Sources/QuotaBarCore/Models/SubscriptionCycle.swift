@@ -108,6 +108,20 @@ public struct SubscriptionCycle: Sendable, Equatable, Codable {
             steps += 1
             candidate = previous
         }
+        // The backward walk above (a future anchor extrapolating to the
+        // renewal actually next up) can still have whole periods left to
+        // correct when it exits solely because the step budget ran out —
+        // `candidate` is then some period still ahead of `now`, not
+        // necessarily the *next* one, and would otherwise be returned as if
+        // it were correct. An anchor entered far enough ahead of its cadence
+        // (unvalidated hand-typed input) hits exactly this. One more
+        // budget-free probe distinguishes "converged" from "truncated".
+        if steps == Self.maxCorrectionSteps,
+           let previous = calendar.date(byAdding: cadence.unit, value: periods - 1, to: anchorDate),
+           previous > now
+        {
+            return nil
+        }
         return candidate > now ? candidate : nil
     }
 
@@ -169,9 +183,12 @@ extension SubscriptionCycle {
 
         return DualBarMetrics(
             primaryFraction: elapsed,
-            // Labelled by the period it measures, like every other window in
-            // the popover — a cycle that renews monthly reads "MO".
-            label: cadence.windowCode,
+            // Literal "CYCLE", not the cadence's window code: a monthly
+            // hand-entered cycle would otherwise render "MO", identical to a
+            // vendor-published monthly window, and be indistinguishable from
+            // real telemetry — exactly what the doc comment above promises
+            // this label prevents.
+            label: "CYCLE",
             measuresElapsedTimeOnly: true,
             usedText: days.map { "\($0) day\($0 == 1 ? "" : "s") left in \(cadence.displayName.lowercased()) cycle\(costText)" },
             resetText: "Renews \(RelativeDateTimeFormatter().localizedString(for: renewal, relativeTo: now))",
@@ -198,13 +215,29 @@ public enum SubscriptionCycleStore {
 
     public static let defaultsKey = "QuotaBarSubscriptionCycles"
 
-    /// Every configured cycle, keyed by vendor.
-    public static func all() -> [VendorIdentifier: SubscriptionCycle] {
-        guard let data = CredentialStore.preferences.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([String: SubscriptionCycle].self, from: data)
-        else { return [:] }
+    /// The raw persisted dictionary, keyed by vendor raw value — including
+    /// any key this build's `VendorIdentifier` does not recognize. `set(_:for:)`
+    /// reads and re-encodes through this, not the filtered `all()`, so a save
+    /// from this build never silently erases a cycle a different build wrote
+    /// for a vendor this one doesn't know about. `all()`/`cycle(for:)` stay
+    /// the typed, filtered read API for callers that only care about known
+    /// vendors.
+    ///
+    /// An undecodable blob (corrupt bytes, not a schema mismatch) has no
+    /// entries left to preserve either way — logged so a wipe is at least
+    /// visible, rather than a silent `[:]`.
+    private static func rawAll() -> [String: SubscriptionCycle] {
+        guard let data = CredentialStore.preferences.data(forKey: defaultsKey) else { return [:] }
+        guard let decoded = try? JSONDecoder().decode([String: SubscriptionCycle].self, from: data) else {
+            NSLog("frugalbar: subscription-cycle store failed to decode — treating as empty for this read")
+            return [:]
+        }
+        return decoded
+    }
 
-        return decoded.reduce(into: [:]) { result, entry in
+    /// Every configured cycle this build recognizes, keyed by vendor.
+    public static func all() -> [VendorIdentifier: SubscriptionCycle] {
+        rawAll().reduce(into: [:]) { result, entry in
             guard let vendor = VendorIdentifier(rawValue: entry.key) else { return }
             result[vendor] = entry.value
         }
@@ -215,13 +248,19 @@ public enum SubscriptionCycleStore {
     }
 
     /// Saves a cycle, or clears the vendor's cycle when `cycle` is nil.
+    ///
+    /// Round-trips through `rawAll()`, not the typed `all()` view — this
+    /// build added three vendors to `VendorIdentifier` in the same release as
+    /// this store, a demonstrated case of exactly the cross-version skew this
+    /// guards against. Filtering to known vendors before re-encoding would
+    /// permanently drop any vendor key a newer or older build wrote.
     public static func set(_ cycle: SubscriptionCycle?, for vendor: VendorIdentifier) {
-        var stored = all()
-        stored[vendor] = cycle
-        let encodable = stored.reduce(into: [String: SubscriptionCycle]()) { result, entry in
-            result[entry.key.rawValue] = entry.value
+        var stored = rawAll()
+        stored[vendor.rawValue] = cycle
+        guard let data = try? JSONEncoder().encode(stored) else {
+            NSLog("frugalbar: subscription-cycle store failed to encode — save for \(vendor.rawValue) was dropped")
+            return
         }
-        guard let data = try? JSONEncoder().encode(encodable) else { return }
         CredentialStore.preferences.set(data, forKey: defaultsKey)
     }
 }

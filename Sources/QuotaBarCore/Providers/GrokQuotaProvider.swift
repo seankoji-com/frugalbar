@@ -47,6 +47,13 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         // Issued together: the plan name is a second endpoint, and serialising
         // them would add its latency to every refresh for a string that
         // changes about once a year.
+        //
+        // The settings fetch is bounded by its own short deadline, separate
+        // from the provider's own — it is best-effort by design (a label,
+        // never thrown on failure), and without its own bound a slow or hung
+        // `/v1/settings` could consume the whole per-provider budget and flip
+        // the entire vendor to `.timedOut` even though `/v1/billing` already
+        // came back with a valid gauge.
         async let billing = QuotaHTTP.get(
             url: Self.billingURL,
             headers: [
@@ -55,7 +62,7 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
             ],
             auth: .bearer(token)
         )
-        async let tierName = Self.fetchPlanName(token: token)
+        async let tierNameOutcome = withDeadline(seconds: 2) { await Self.fetchPlanName(token: token) }
 
         let (data, http) = try await billing
         if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
@@ -64,10 +71,12 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
               let config = response.config
         else { return unavailable(.badResponse) }
 
+        let planOverride: String? = if case .success(let name) = await tierNameOutcome { name } else { nil }
+
         return Self.snapshot(
             from: config,
             tier: response.subscriptionTier,
-            planOverride: await tierName,
+            planOverride: planOverride,
             provider: self,
             now: Date()
         )
@@ -79,6 +88,11 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     /// cost the user the usage gauge they actually came for. Every failure path
     /// returns nil rather than throwing.
     static func fetchPlanName(token: String) async -> String? {
+        // Every failure path returns nil identically to the caller, but each
+        // is logged once here — otherwise a broken endpoint is indistinguishable
+        // from a vendor that simply publishes no plan name, and nothing
+        // signals *when* the settings endpoint starts failing versus a
+        // payload shape changing underneath it.
         guard let (data, http) = try? await QuotaHTTP.get(
             url: Self.settingsURL,
             headers: [
@@ -86,9 +100,18 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
                 "Accept": "application/json",
             ],
             auth: .bearer(token)
-        ), http.statusCode == 200,
-        let settings = try? JSONDecoder().decode(SettingsResponse.self, from: data)
-        else { return nil }
+        ) else {
+            NSLog("frugalbar: Grok plan-name request failed — network error or no response")
+            return nil
+        }
+        guard http.statusCode == 200 else {
+            NSLog("frugalbar: Grok plan-name request returned status \(http.statusCode)")
+            return nil
+        }
+        guard let settings = try? JSONDecoder().decode(SettingsResponse.self, from: data) else {
+            NSLog("frugalbar: Grok plan-name response failed to decode")
+            return nil
+        }
         return planDisplayName(settings.subscriptionTierDisplay)
     }
 
@@ -117,20 +140,17 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
 
         let planName = planOverride ?? planDisplayName(config.subscriptionTier ?? tier)
 
-        // `creditUsagePercent` is the plan gauge. Fall back to the on-demand
-        // cap only when the plan reports nothing, since that is a different
-        // denominator and must not be mixed into the same bar.
-        let fraction: Double? = {
-            if let percent = config.creditUsagePercent, percent.isFinite {
-                return min(max(percent / 100, 0), 1)
-            }
-            if let cap = config.onDemandCap?.val, cap > 0, cap.isFinite,
-               let used = config.onDemandUsed?.val, used.isFinite
-            {
-                return min(max(used / cap, 0), 1)
-            }
-            return nil
-        }()
+        // `creditUsagePercent` is the plan gauge, and the only thing that may
+        // drive it — on-demand spend is a different denominator (dollars
+        // against a spend cap, not credits against a plan allowance) and is
+        // drawn only as its own `OD` bar below, never promoted into the
+        // headline. A plan with no percentage but a live on-demand cap used
+        // to fall back to the OD ratio here, which then showed the same
+        // number twice: once mislabeled as plan usage (headline gauge,
+        // badge, row1 "% used"), and again correctly as the OD bar.
+        let fraction: Double? = config.creditUsagePercent.flatMap { percent in
+            percent.isFinite ? min(max(percent / 100, 0), 1) : nil
+        }
 
         // No usage figure and no period is nothing to draw. Saying so beats a
         // zeroed bar that reads as "plenty left".
@@ -143,10 +163,32 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
             "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
         }
 
+        // On-demand spend is a separate budget that only exists once the user
+        // has enabled it, and it is billed on top of the plan — drawn as its
+        // own bar regardless of whether the plan itself reported a usage
+        // percentage, never folded into the headline gauge above.
+        let odRow: DualBarMetrics? = {
+            guard let cap = config.onDemandCap?.val, cap > 0, cap.isFinite,
+                  let used = config.onDemandUsed?.val, used.isFinite
+            else { return nil }
+            return DualBarMetrics(
+                primaryFraction: min(max(used / cap, 0), 1),
+                label: "OD",
+                usedText: "\(SubscriptionCycle.formatCost(Decimal(used), currencyCode: "USD"))"
+                    + " of \(SubscriptionCycle.formatCost(Decimal(cap), currencyCode: "USD")) cap used",
+                resetText: resetText,
+                resetsAt: periodEnd,
+                windowLength: windowLength
+            )
+        }()
+
         guard let fraction else {
             // A period with no usage number: report the cycle honestly and
             // leave the gauge unmeasured rather than inventing a percentage.
-            return QuotaSnapshot(
+            // The on-demand bar, if any, still draws — it is a real,
+            // independently-measured figure regardless of whether the plan
+            // published one.
+            var snapshot = QuotaSnapshot(
                 id: provider.vendorId.rawValue,
                 vendorId: provider.vendorId,
                 displayName: provider.displayName,
@@ -167,6 +209,8 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
                 planName: planName,
                 cliSource: "grok CLI"
             )
+            snapshot.row2 = odRow
+            return snapshot
         }
 
         let urgency: Urgency = fraction >= 0.95 ? .critical
@@ -200,21 +244,7 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
             cliSource: "grok CLI"
         )
 
-        // On-demand spend is a separate budget that only exists once the user
-        // has enabled it, and it is billed on top of the plan.
-        if let cap = config.onDemandCap?.val, cap > 0, cap.isFinite,
-           let used = config.onDemandUsed?.val, used.isFinite
-        {
-            snapshot.row2 = DualBarMetrics(
-                primaryFraction: min(max(used / cap, 0), 1),
-                label: "OD",
-                usedText: "\(SubscriptionCycle.formatCost(Decimal(used), currencyCode: "USD"))"
-                    + " of \(SubscriptionCycle.formatCost(Decimal(cap), currencyCode: "USD")) cap used",
-                resetText: resetText,
-                resetsAt: periodEnd,
-                windowLength: windowLength
-            )
-        }
+        snapshot.row2 = odRow
 
         return snapshot
     }

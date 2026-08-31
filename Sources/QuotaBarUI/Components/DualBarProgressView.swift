@@ -254,9 +254,14 @@ public struct DualBarProgressView: View {
                 .tracking(Theme.Tracking.token)
                 .foregroundStyle(labelColor)
                 .lineLimit(1)
-                // No `minimumScaleFactor`: every window code is two characters
-                // and always fits. Scaling was what made the column ragged —
-                // "5H" rendered at full size next to a shrunken "CREDITS".
+                // Most window codes are two characters and need no scaling —
+                // that's what kept the column from looking ragged when every
+                // label shrank together regardless of length. But not every
+                // label is two characters: GitHub's REST/GraphQL rows, an
+                // absent-limit OpenAI "PLAN", and the hand-entered "CYCLE"
+                // row all run longer, and were truncating silently without a
+                // fallback. Only those get scaled.
+                .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
                 .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
         }
         .help(helpText)

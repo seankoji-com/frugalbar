@@ -463,8 +463,14 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// bucket refills before you have finished reading the row, while the
     /// monthly one is the deadline that actually constrains the month. Nil
     /// when the vendor published no window with both a length and a reset.
+    ///
+    /// Reads `quotaBars`, not `bars`: a hand-entered cycle row is usually the
+    /// longest window in the snapshot (a monthly or annual renewal), so
+    /// reading `bars` would sort a vendor by its billing-cycle date instead
+    /// of by when its actual quota refills — the opposite of what this
+    /// property exists to answer.
     public var longestWindowReset: Date? {
-        let dated = bars.compactMap { bar -> (TimeInterval, Date)? in
+        let dated = quotaBars.compactMap { bar -> (TimeInterval, Date)? in
             guard let length = bar.windowLength, let reset = bar.resetsAt else { return nil }
             return (length, reset)
         }

@@ -14,6 +14,7 @@ struct CycleEditorRow: View {
     let onCommit: () -> Void
 
     @State private var costText: String = ""
+    @State private var costCommitTask: Task<Void, Never>?
 
     /// A vendor with no cycle yet starts from today, the one date the user is
     /// certain to be able to correct from.
@@ -59,8 +60,11 @@ struct CycleEditorRow: View {
                     TextField("Cost", text: $costText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 86)
-                        .onSubmit(commitCost)
-                        .onChange(of: costText) { commitCost() }
+                        .onSubmit {
+                            costCommitTask?.cancel()
+                            commitCost()
+                        }
+                        .onChange(of: costText) { scheduleCostCommit() }
                 }
                 Text("Any date the subscription renewed on, or will renew on — "
                    + "every later renewal is counted forward from it.")
@@ -119,13 +123,44 @@ struct CycleEditorRow: View {
         )
     }
 
+    /// Debounces `commitCost()` behind the last keystroke — each commit
+    /// re-encodes and writes the *entire* cycles dictionary to `UserDefaults`
+    /// (`SubscriptionCycleStore.set`'s read-modify-write), so committing on
+    /// every keystroke turned typing a cost into a burst of full JSON
+    /// serializations and disk writes. `onSubmit` still commits immediately.
+    private func scheduleCostCommit() {
+        costCommitTask?.cancel()
+        costCommitTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            commitCost()
+        }
+    }
+
     /// Blank clears the cost rather than storing zero — "I did not say" and
     /// "it is free" are different claims, and only one of them is the user's.
+    ///
+    /// Text that isn't blank but also isn't a valid decimal (a locale comma
+    /// separator, a stray character mid-edit) is a third case, and the one
+    /// that used to be silently conflated with "I did not say": `Decimal(string:)`
+    /// returns nil for that too, which then overwrote a previously-valid cost
+    /// with nil on every keystroke of an in-progress edit. Only a successful
+    /// parse or an explicit blank commits; unparsable text leaves the stored
+    /// value untouched while the field keeps showing exactly what was typed.
     private func commitCost() {
         guard var updated = cycle else { return }
         let trimmed = costText.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "$", with: "")
-        let parsed = trimmed.isEmpty ? nil : Decimal(string: trimmed)
+
+        if trimmed.isEmpty {
+            guard updated.cost != nil else { return }
+            updated.cost = nil
+            cycle = updated
+            onCommit()
+            return
+        }
+
+        guard let parsed = Decimal(string: trimmed) else { return }
         guard updated.cost != parsed else { return }
         updated.cost = parsed
         cycle = updated

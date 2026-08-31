@@ -55,8 +55,19 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
             resolvedDatabase = Self.stateDatabaseURL()
         }
 
-        guard let identity = Self.readIdentity(databaseURL: resolvedDatabase) else {
+        let identity: Identity
+        switch await Self.readIdentityAsync(databaseURL: resolvedDatabase) {
+        case .found(let found):
+            identity = found
+        case .notLoggedIn:
             return unavailable(.notConfigured)
+        case .transientFailure:
+            // The CLI was mid-write when the busy-timeout expired, or the
+            // file was briefly unreadable — a real remedy exists (retry), but
+            // it is not "add a key", which is what `.notConfigured` tells the
+            // user. `.badResponse` is the closest existing reason that
+            // doesn't claim either a credential or a network problem.
+            return unavailable(.badResponse)
         }
 
         let body = try JSONSerialization.data(withJSONObject: ["profileArn": identity.profileARN])
@@ -248,6 +259,21 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
         let profileARN: String
     }
 
+    /// `readIdentity` used to collapse every failure into `nil` — a genuinely
+    /// logged-out user and a database the CLI happened to be mid-write on
+    /// looked identical, and both surfaced as "Not configured", telling a
+    /// signed-in user to add a key. This distinguishes the two so the
+    /// caller can report a transient read failure instead.
+    enum IdentityReadOutcome: Sendable, Equatable {
+        case found(Identity)
+        /// No token row for either login method — a real "not signed in".
+        case notLoggedIn
+        /// The file couldn't be opened, or every read hit `SQLITE_BUSY`/
+        /// `SQLITE_LOCKED` after the busy-timeout — the CLI was using the
+        /// database, not evidence the user is logged out.
+        case transientFailure
+    }
+
     /// Where the Kiro CLI keeps its state database.
     static func stateDatabaseURL(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -267,44 +293,67 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
 
     /// Reads the CLI's credentials without disturbing them. Read-only: the CLI
     /// owns this file and its refresh cycle.
-    static func readIdentity(databaseURL: URL) -> Identity? {
+    ///
+    /// Blocking SQLite work (`sqlite3_open_v2`, prepare/step, plus up to
+    /// 250ms of busy-wait) — call `readIdentityAsync` from `fetchSnapshot()`,
+    /// which hops this off the cooperative thread pool. `QuotaManager`
+    /// fetches every provider concurrently inside a `withTaskGroup`, and a
+    /// blocking call parked directly on a pool thread there is a
+    /// pool-starvation risk with enough providers in flight — the same
+    /// shape `CredentialStore.apiKeyAsync`/`credentialQueue` exist to avoid.
+    static func readIdentity(databaseURL: URL) -> IdentityReadOutcome {
         #if canImport(SQLite3)
-        guard FileManager.default.isReadableFile(atPath: databaseURL.path) else { return nil }
+        guard FileManager.default.isReadableFile(atPath: databaseURL.path) else { return .notLoggedIn }
 
         var db: OpaquePointer?
         guard sqlite3_open_v2(databaseURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             sqlite3_close(db)
-            return nil
+            return .transientFailure
         }
         defer { sqlite3_close(db) }
         // The CLI may be mid-write. Wait briefly rather than reporting the
         // user as logged out because their editor happened to be busy.
         sqlite3_busy_timeout(db, 250)
 
+        var sawBusy = false
         var accessToken: String?
         var tokenProfileARN: String?
         for key in tokenKeys {
-            guard let json = queryValue(db: db, table: "auth_kv", key: key),
+            guard let json = queryValue(db: db, table: "auth_kv", key: key, sawBusy: &sawBusy),
                   let token = jsonString(in: json, key: "access_token")
             else { continue }
             accessToken = token
             tokenProfileARN = jsonString(in: json, key: "profile_arn")
             break
         }
-        guard let accessToken else { return nil }
+        guard let accessToken else { return sawBusy ? .transientFailure : .notLoggedIn }
 
         // The `state` row is authoritative — it is what the CLI sends — but a
         // social login also stamps the ARN into the token blob, which covers a
         // profile that has not been written out yet.
-        let profileARN = queryValue(db: db, table: "state", key: "api.codewhisperer.profile")
+        let profileARN = queryValue(db: db, table: "state", key: "api.codewhisperer.profile", sawBusy: &sawBusy)
             .flatMap { jsonString(in: $0, key: "arn") }
             ?? tokenProfileARN
-        guard let profileARN else { return nil }
+        guard let profileARN else { return sawBusy ? .transientFailure : .notLoggedIn }
 
-        return Identity(accessToken: accessToken, profileARN: profileARN)
+        return .found(Identity(accessToken: accessToken, profileARN: profileARN))
         #else
-        return nil
+        return .notLoggedIn
         #endif
+    }
+
+    private static let sqliteQueue = DispatchQueue(
+        label: "com.quotabar.kiro-sqlite",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
+    static func readIdentityAsync(databaseURL: URL) async -> IdentityReadOutcome {
+        await withCheckedContinuation { continuation in
+            sqliteQueue.async {
+                continuation.resume(returning: readIdentity(databaseURL: databaseURL))
+            }
+        }
     }
 
     #if canImport(SQLite3)
@@ -313,17 +362,21 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
     private static let transientDestructor = unsafeBitCast(
         -1, to: sqlite3_destructor_type.self)
 
-    private static func queryValue(db: OpaquePointer?, table: String, key: String) -> String? {
+    private static func queryValue(db: OpaquePointer?, table: String, key: String, sawBusy: inout Bool) -> String? {
         // Table names cannot be bound, so they come from `tokenKeys`-style
         // literals above and never from a response. The key is bound.
         let sql = "SELECT value FROM \(table) WHERE key = ? LIMIT 1"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_bind_text(statement, 1, key, -1, transientDestructor) == SQLITE_OK,
-              sqlite3_step(statement) == SQLITE_ROW,
-              let text = sqlite3_column_text(statement, 0)
-        else { return nil }
+        guard sqlite3_bind_text(statement, 1, key, -1, transientDestructor) == SQLITE_OK else { return nil }
+
+        let stepResult = sqlite3_step(statement)
+        guard stepResult == SQLITE_ROW else {
+            if stepResult == SQLITE_BUSY || stepResult == SQLITE_LOCKED { sawBusy = true }
+            return nil
+        }
+        guard let text = sqlite3_column_text(statement, 0) else { return nil }
         return String(cString: text)
     }
     #endif

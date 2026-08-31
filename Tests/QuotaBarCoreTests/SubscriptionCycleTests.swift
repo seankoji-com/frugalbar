@@ -88,7 +88,7 @@ struct SubscriptionCycleTests {
         // Fifteen days into a 31-day March.
         let row = try #require(cycle.cycleRow(now: date(2026, 3, 16), calendar: utc))
 
-        #expect(row.label == "MO")
+        #expect(row.label == "CYCLE")
         #expect(row.resetsAt == date(2026, 4, 1))
         #expect(row.windowLength == TimeInterval(31 * 86_400))
         #expect(abs(try #require(row.primaryFraction) - 15.0 / 31.0) < 0.0001)
@@ -222,15 +222,15 @@ struct AttachTests {
     func firstFreeSlot() {
         let cycle = SubscriptionCycle(anchorDate: Date())
 
-        #expect(QuotaManager.attachingCycleRow(to: snapshot(), cycle: cycle).row1?.label == "MO")
+        #expect(QuotaManager.attachingCycleRow(to: snapshot(), cycle: cycle).row1?.label == "CYCLE")
 
         let withOne = QuotaManager.attachingCycleRow(to: snapshot(row1: bar("MO")), cycle: cycle)
         #expect(withOne.row1?.label == "MO")
-        #expect(withOne.row2?.label == "MO")
+        #expect(withOne.row2?.label == "CYCLE")
 
         let withTwo = QuotaManager.attachingCycleRow(
             to: snapshot(row1: bar("MO"), row2: bar("WK")), cycle: cycle)
-        #expect(withTwo.row3?.label == "MO")
+        #expect(withTwo.row3?.label == "CYCLE")
     }
 
     @Test("three vendor windows already fill the snapshot, so theirs win")
@@ -268,7 +268,7 @@ struct AttachTests {
 
         // Longest window first: the cycle's month outranks the undated
         // stand-in bar, which has no period to rank by.
-        #expect(result.bars.map(\.label) == ["MO", "WK"])
+        #expect(result.bars.map(\.label) == ["CYCLE", "WK"])
         #expect(result.quotaBars.map(\.label) == ["WK"])
     }
 
@@ -279,7 +279,7 @@ struct AttachTests {
         let result = QuotaManager.attachingCycleRow(
             to: snapshot(row1: DualBarMetrics(primaryFraction: 0.0, label: "WK")),
             cycle: SubscriptionCycle(anchorDate: anchor, cadence: .monthly))
-        let cycle = try #require(result.bars.first { $0.label == "MO" })
+        let cycle = try #require(result.bars.first { $0.label == "CYCLE" })
 
         #expect(try #require(cycle.primaryFraction) > 0.9)
         // Nothing that reasons about spend may see it.
@@ -293,6 +293,33 @@ struct AttachTests {
         let result = QuotaManager.attachingCycleRow(
             to: placeholder, cycle: SubscriptionCycle(anchorDate: Date()))
         #expect(result.status == .unavailable(.notConfigured))
-        #expect(result.row1?.label == "MO")
+        #expect(result.row1?.label == "CYCLE")
+    }
+
+    @Test("removingStaleCycleRow lets an already-attached cycle countdown be recomputed against a later now")
+    func staleCycleRowCanBeRefreshed() {
+        // The bug this pins: attachingCycleRow only ever fills a *free* row
+        // slot, so calling it again on a snapshot that already carries a
+        // cycle row was a no-op — a provider outage left the countdown
+        // frozen at whatever it read on the last successful fetch.
+        // removingStaleCycleRow clears just that row (and the resetsAt it
+        // adopted) so the countdown can be recomputed from scratch.
+        let cycle = SubscriptionCycle(anchorDate: Date(), cadence: .monthly)
+        let attached = QuotaManager.attachingCycleRow(to: snapshot(), cycle: cycle, now: Date())
+        let firstFraction = attached.row1?.primaryFraction
+
+        let stale = QuotaManager.removingStaleCycleRow(from: attached)
+        #expect(stale.row1 == nil)
+        #expect(stale.resetsAt == nil)
+
+        // Ten days later, still inside the same monthly period — the
+        // renewal date is unchanged, but meaningfully more of it has
+        // elapsed.
+        let later = Date().addingTimeInterval(10 * 86_400)
+        let refreshed = QuotaManager.attachingCycleRow(to: stale, cycle: cycle, now: later)
+        let laterFraction = refreshed.row1?.primaryFraction
+
+        #expect(refreshed.row1 != nil)
+        #expect(laterFraction != nil && firstFraction != laterFraction)
     }
 }

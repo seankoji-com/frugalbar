@@ -262,9 +262,20 @@ public actor QuotaManager {
             // duration of an outage, so every subsequent forceRefresh
             // re-hit the failing vendor once the floor's window (measured
             // from that stale timestamp) had elapsed.
-            let displaySnapshot = (snap.status.confidence == .measured || cache[id] == nil)
-                ? snap
-                : cache[id]!.snapshot
+            let displaySnapshot: QuotaSnapshot
+            if snap.status.confidence == .measured || cache[id] == nil {
+                displaySnapshot = snap
+            } else {
+                // The retained snapshot's hand-entered cycle row (if any) was
+                // computed at the last successful fetch and frozen there — a
+                // vendor down for days would otherwise keep showing e.g. "3
+                // days left in monthly cycle" for the whole outage, the one
+                // figure here that doesn't depend on the provider at all.
+                // Re-attach against `now` so it keeps counting down.
+                let retained = cache[id]!.snapshot
+                displaySnapshot = Self.attachingCycleRow(
+                    to: Self.removingStaleCycleRow(from: retained), cycle: cycleLookup(id), now: now)
+            }
             cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
@@ -297,9 +308,13 @@ public actor QuotaManager {
         else { return snapshot }  // Three vendor windows already; theirs win.
 
         // A vendor that published no reset can still show when the user's own
-        // period turns over.
+        // period turns over. `resetsAt` is a `let`, so this has to rebuild
+        // the snapshot rather than assign in place — which means every field
+        // the initializer doesn't accept (spendWindows, the two catalog
+        // badges) has to be copied across explicitly, or it silently reverts
+        // to its default on this one path.
         if updated.resetsAt == nil, let renewal = row.resetsAt {
-            updated = QuotaSnapshot(
+            var rebuilt = QuotaSnapshot(
                 id: updated.id,
                 vendorId: updated.vendorId,
                 displayName: updated.displayName,
@@ -319,8 +334,56 @@ public actor QuotaManager {
                 cliSource: updated.cliSource,
                 currencyBasis: updated.currencyBasis
             )
+            rebuilt.spendWindows = updated.spendWindows
+            rebuilt.freeTierModelBadge = updated.freeTierModelBadge
+            rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+            updated = rebuilt
         }
         return updated
+    }
+
+    /// Strips a previously-attached hand-entered cycle row (and the
+    /// snapshot-level `resetsAt` it adopted, if that's where it came from)
+    /// so `attachingCycleRow` can be called again on an already-attached
+    /// snapshot and actually recompute the row against a new `now`, instead
+    /// of hitting the "row slot already occupied" guard and being a no-op.
+    static func removingStaleCycleRow(from snapshot: QuotaSnapshot) -> QuotaSnapshot {
+        let staleResetsAt = [snapshot.row1, snapshot.row2, snapshot.row3]
+            .compactMap { $0 }
+            .first { $0.measuresElapsedTimeOnly }?
+            .resetsAt
+
+        var updated = snapshot
+        if updated.row1?.measuresElapsedTimeOnly == true { updated.row1 = nil }
+        if updated.row2?.measuresElapsedTimeOnly == true { updated.row2 = nil }
+        if updated.row3?.measuresElapsedTimeOnly == true { updated.row3 = nil }
+
+        guard let staleResetsAt, updated.resetsAt == staleResetsAt else { return updated }
+
+        var rebuilt = QuotaSnapshot(
+            id: updated.id,
+            vendorId: updated.vendorId,
+            displayName: updated.displayName,
+            category: updated.category,
+            metric: updated.metric,
+            status: updated.status,
+            resetsAt: nil,
+            lastUpdated: updated.lastUpdated,
+            auxiliaryInfo: updated.auxiliaryInfo,
+            row1: updated.row1,
+            row2: updated.row2,
+            row3: updated.row3,
+            badgeText: updated.badgeText,
+            planName: updated.planName,
+            latencyMs: updated.latencyMs,
+            keyMasked: updated.keyMasked,
+            cliSource: updated.cliSource,
+            currencyBasis: updated.currencyBasis
+        )
+        rebuilt.spendWindows = updated.spendWindows
+        rebuilt.freeTierModelBadge = updated.freeTierModelBadge
+        rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+        return rebuilt
     }
 
     /// Builds the placeholder shown when a provider could not be read.

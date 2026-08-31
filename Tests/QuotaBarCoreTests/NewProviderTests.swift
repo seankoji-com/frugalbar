@@ -251,7 +251,10 @@ struct KiroCredentialTests {
         let url = try makeDatabase(tokenKey: key, arnInState: true)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let identity = try #require(KiroQuotaProvider.readIdentity(databaseURL: url))
+        guard case .found(let identity) = KiroQuotaProvider.readIdentity(databaseURL: url) else {
+            Issue.record("expected .found, got no identity")
+            return
+        }
         #expect(identity.accessToken == "tok-abc")
         #expect(identity.profileARN == "arn:from:state")
     }
@@ -261,13 +264,17 @@ struct KiroCredentialTests {
         let url = try makeDatabase(tokenKey: "kirocli:social:token", arnInState: false)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        #expect(KiroQuotaProvider.readIdentity(databaseURL: url)?.profileARN == "arn:from:token")
+        guard case .found(let identity) = KiroQuotaProvider.readIdentity(databaseURL: url) else {
+            Issue.record("expected .found, got no identity")
+            return
+        }
+        #expect(identity.profileARN == "arn:from:token")
     }
 
-    @Test("a missing database is not configured, not a crash")
+    @Test("a missing database is not logged in, not a crash")
     func missingDatabase() {
         let url = URL(fileURLWithPath: "/nonexistent/kiro/data.sqlite3")
-        #expect(KiroQuotaProvider.readIdentity(databaseURL: url) == nil)
+        #expect(KiroQuotaProvider.readIdentity(databaseURL: url) == .notLoggedIn)
     }
 
     @Test("KIRO_DATA_DIR overrides the default location")
@@ -364,6 +371,26 @@ struct GrokQuotaProviderTests {
         #expect(snapshot.status.confidence == .unavailable)
         #expect(snapshot.row1?.primaryFraction == nil)
         #expect(snapshot.resetsAt != nil)
+    }
+
+    @Test("no plan percentage but a live on-demand cap leaves the gauge unmeasured, not doubled")
+    func onDemandNeverPromotedToHeadline() async throws {
+        // The bug this pins: a plan reporting no creditUsagePercent but a
+        // live on-demand cap used to fall back to the on-demand ratio for
+        // the headline gauge — showing the same figure twice, once
+        // mislabeled as plan usage and again correctly as the OD bar.
+        let body = grokLiveBody
+            .replacingOccurrences(of: "\"creditUsagePercent\":21.0,", with: "")
+            .replacingOccurrences(of: "\"onDemandCap\":{\"val\":0}", with: "\"onDemandCap\":{\"val\":50}")
+            .replacingOccurrences(of: "\"onDemandUsed\":{\"val\":0}", with: "\"onDemandUsed\":{\"val\":10}")
+        let snapshot = try await withStubbedHTTP(host: StubHost.grok, body: body) {
+            try await GrokQuotaProvider(accessToken: "tok").fetchSnapshot()
+        }
+        #expect(snapshot.status.confidence == .unavailable)
+        #expect(snapshot.row1?.primaryFraction == nil)
+        #expect(snapshot.row1?.usedText == "Usage not published")
+        #expect(snapshot.row2?.label == "OD")
+        #expect(abs(try #require(snapshot.row2?.primaryFraction) - 0.2) < 0.0001)
     }
 
     @Test("the plan name comes from /v1/settings, which is where xAI puts it")
@@ -515,9 +542,27 @@ struct DevPassQuotaProviderTests {
         }
         // The only reset the API states is the weekly premium one, and it is
         // the only one drawn. Nothing claims to know when the month turns over.
-        #expect(snapshot.resetsAt == DevPassQuotaProvider.parseISO8601("2026-09-06T00:00:00Z"))
         #expect(snapshot.bars.count == 1)
         #expect(snapshot.bars.allSatisfy { $0.label != "MO" })
+        // The default fixture's plan credits (79.50/237.00 ≈ 0.34) are worse
+        // than its premium window (10/40 = 0.25), so the badge and headline
+        // are driven by the window that has no reset date at all — reporting
+        // the premium reset here would attribute the badge's pressure to the
+        // wrong window's clock.
+        #expect(snapshot.resetsAt == nil)
+    }
+
+    @Test("when the premium window is the binding one, its reset is reported")
+    func resetReportedWhenPremiumBinds() async throws {
+        // Premium window (30/40 = 0.75) now worse than plan credits (10/237
+        // ≈ 0.04) — the reverse of the default fixture — so the visible bar
+        // and the headline pressure now refer to the same window, and its
+        // real reset date is safe to surface.
+        let body = devPassBody(creditsUsed: "\"10.00\"", premiumUsed: "\"30.00\"")
+        let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: body) {
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+        }
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.parseISO8601("2026-09-06T00:00:00Z"))
     }
 
     @Test("decimal strings are parsed exactly, not through binary floating point")

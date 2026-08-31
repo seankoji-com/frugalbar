@@ -72,6 +72,16 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             : worst >= 0.80 ? .warning
             : .none
 
+        // The headline is the worse of two independently-resetting windows,
+        // but only the premium one ever gets a reset date — the vendor
+        // publishes none for the monthly cycle. Attaching the premium reset
+        // regardless of which window is actually binding used to point the
+        // headline at a date that had nothing to do with it: a plan 95%
+        // through its monthly credits but barely into its premium week would
+        // show a critical badge next to "Resets in 3 days", implying the
+        // premium window's reset fixes the very thing driving the badge.
+        let cycleIsBinding = cycleFraction != nil && cycleFraction == worst
+
         var snapshot = QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
@@ -79,11 +89,9 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             category: provider.category,
             metric: .percentage(usedFraction: worst, displayDetails: nil),
             status: .measured(urgency),
-            // The vendor publishes no cycle date; the weekly premium reset is
-            // the only real one, so it is the only one reported here.
-            resetsAt: premiumResetsAt,
+            resetsAt: cycleIsBinding ? nil : premiumResetsAt,
             lastUpdated: now,
-            auxiliaryInfo: "DevPass plan credits",
+            auxiliaryInfo: cycleIsBinding ? "DevPass plan credits — no vendor cycle date" : "DevPass plan credits",
             row1: nil,
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: cycleFraction),
