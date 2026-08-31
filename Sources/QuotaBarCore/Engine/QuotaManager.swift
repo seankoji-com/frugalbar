@@ -6,13 +6,14 @@ import Foundation
 /// cache, and state distribution to the UI.
 public actor QuotaManager {
 
-    public static let shared = QuotaManager()
+    public static let shared = QuotaManager(cycleLookup: SubscriptionCycleStore.cycle(for:))
 
     // --- State ---
     private var cache: [VendorIdentifier: CacheEntry] = [:]
     private var lastCompleteFetch: Date?
     private let cachePolicy: CachePolicy
     private let providerFactory: @Sendable () -> [any QuotaProvider]
+    private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private var activeTask: Task<[VendorIdentifier: QuotaSnapshot], Never>?
 
     private struct CacheEntry: Sendable {
@@ -22,12 +23,21 @@ public actor QuotaManager {
 
     /// Designated initialiser. `providerFactory` is injectable so tests can
     /// drive the engine with stubs instead of reaching the network.
+    ///
+    /// `cycleLookup` defaults to reporting no cycle for any vendor rather
+    /// than to the real `SubscriptionCycleStore` — that store is backed by
+    /// process-wide `UserDefaults`, and a test that doesn't ask for it should
+    /// never be able to observe (or race against) another test's writes to
+    /// it. `.shared`, the app's real instance, opts into the live store
+    /// explicitly above.
     public init(
         cachePolicy: CachePolicy = .default,
-        providerFactory: @escaping @Sendable () -> [any QuotaProvider] = QuotaManager.defaultProviders
+        providerFactory: @escaping @Sendable () -> [any QuotaProvider] = QuotaManager.defaultProviders,
+        cycleLookup: @escaping @Sendable (VendorIdentifier) -> SubscriptionCycle? = { _ in nil }
     ) {
         self.cachePolicy = cachePolicy
         self.providerFactory = providerFactory
+        self.cycleLookup = cycleLookup
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -206,6 +216,7 @@ public actor QuotaManager {
                   "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce.map(\.rawValue))")
         }
         var results: [VendorIdentifier: QuotaSnapshot] = [:]
+        let cycleLookup = self.cycleLookup
 
         await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
             for provider in providersToFetch {
@@ -216,6 +227,7 @@ public actor QuotaManager {
                     let outcome = await withDeadline(seconds: budget) {
                         try await provider.fetchSnapshot()
                     }
+                    let cycle = cycleLookup(provider.vendorId)
                     switch outcome {
                     case .success(var snapshot):
                         // Measured here rather than guessed in each provider:
@@ -223,10 +235,10 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.vendorId, Self.attachingCycleRow(to: snapshot))
+                        return (provider.vendorId, Self.attachingCycleRow(to: snapshot, cycle: cycle))
                     case .failure(let reason):
                         let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
-                        return (provider.vendorId, Self.attachingCycleRow(to: placeholder))
+                        return (provider.vendorId, Self.attachingCycleRow(to: placeholder, cycle: cycle))
                     }
                 }
             }
@@ -267,9 +279,15 @@ public actor QuotaManager {
     /// the case a renewal date is most useful for. It only ever *adds* a row:
     /// a vendor-published window always outranks a date typed by hand, and is
     /// never overwritten by one.
-    static func attachingCycleRow(to snapshot: QuotaSnapshot, now: Date = Date()) -> QuotaSnapshot {
-        guard let cycle = SubscriptionCycleStore.cycle(for: snapshot.vendorId),
-              let row = cycle.cycleRow(now: now)
+    ///
+    /// Takes the cycle as a parameter rather than looking it up itself, so
+    /// this stays a pure function of its arguments: callers that don't care
+    /// about hand-entered cycles (most tests) never have to touch
+    /// `SubscriptionCycleStore`'s process-wide preference store at all.
+    static func attachingCycleRow(
+        to snapshot: QuotaSnapshot, cycle: SubscriptionCycle?, now: Date = Date()
+    ) -> QuotaSnapshot {
+        guard let cycle, let row = cycle.cycleRow(now: now)
         else { return snapshot }
 
         var updated = snapshot

@@ -126,10 +126,16 @@ struct SubscriptionCycleTests {
     }
 }
 
-/// Both suites below mutate one process-wide preference store, so they are
-/// nested under a single serialized parent. `.serialized` on each of them
-/// separately only ordered tests *within* each suite, which let one suite's
-/// saved cycle leak into the other's "no cycle configured" case.
+/// `StoreTests` below mutates one process-wide preference store — real
+/// `UserDefaults`, shared by every test in the process — so its tests are
+/// serialized against each other. They used to also race against
+/// `QuotaManagerExtendedTests`' `forceRefresh()` calls, which read that same
+/// store through `QuotaManager.attachingCycleRow`; a cycle written here for
+/// `.devpass` could leak into an unrelated sort-order assertion running
+/// concurrently. `attachingCycleRow` now takes its cycle as a plain
+/// parameter instead of reading the store itself, so `AttachTests` below no
+/// longer touches `UserDefaults` at all, and this is the only suite that
+/// still needs the store to be real.
 @Suite("Subscription cycle persistence", .serialized)
 struct SubscriptionCyclePersistenceTests {
 
@@ -179,127 +185,114 @@ struct SubscriptionCyclePersistenceTests {
             #expect(SubscriptionCycleStore.cycle(for: .kiro) == nil)
         }
     }
+}
 
-    @Suite("QuotaManager cycle rows")
-    struct AttachTests {
+/// Exercises `QuotaManager.attachingCycleRow`'s merge logic directly, passing
+/// the cycle as an argument rather than going through `SubscriptionCycleStore`
+/// — this suite is pure and needs no isolation from anything else.
+@Suite("QuotaManager cycle rows")
+struct AttachTests {
 
-        private func snapshot(
-            vendor: VendorIdentifier = .devpass,
-            row1: DualBarMetrics? = nil,
-            row2: DualBarMetrics? = nil,
-            row3: DualBarMetrics? = nil,
-            resetsAt: Date? = nil
-        ) -> QuotaSnapshot {
-            QuotaSnapshot(
-                id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
-                category: .aiSubscriptions,
-                metric: .percentage(usedFraction: 0.5, displayDetails: nil),
-                status: .measured(.none), resetsAt: resetsAt, lastUpdated: Date(),
-                auxiliaryInfo: nil, row1: row1, row2: row2, row3: row3)
-        }
+    private func snapshot(
+        vendor: VendorIdentifier = .devpass,
+        row1: DualBarMetrics? = nil,
+        row2: DualBarMetrics? = nil,
+        row3: DualBarMetrics? = nil,
+        resetsAt: Date? = nil
+    ) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+            category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+            status: .measured(.none), resetsAt: resetsAt, lastUpdated: Date(),
+            auxiliaryInfo: nil, row1: row1, row2: row2, row3: row3)
+    }
 
-        private func bar(_ label: String) -> DualBarMetrics {
-            DualBarMetrics(primaryFraction: 0.5, label: label)
-        }
+    private func bar(_ label: String) -> DualBarMetrics {
+        DualBarMetrics(primaryFraction: 0.5, label: label)
+    }
 
-        @Test("no configured cycle leaves the snapshot untouched")
-        func noCycle() {
-            SubscriptionCycleStore.set(nil, for: .devpass)
-            let original = snapshot()
-            #expect(QuotaManager.attachingCycleRow(to: original) == original)
-        }
+    @Test("no configured cycle leaves the snapshot untouched")
+    func noCycle() {
+        let original = snapshot()
+        #expect(QuotaManager.attachingCycleRow(to: original, cycle: nil) == original)
+    }
 
-        @Test("the cycle row takes the first free slot")
-        func firstFreeSlot() {
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
+    @Test("the cycle row takes the first free slot")
+    func firstFreeSlot() {
+        let cycle = SubscriptionCycle(anchorDate: Date())
 
-            #expect(QuotaManager.attachingCycleRow(to: snapshot()).row1?.label == "MO")
+        #expect(QuotaManager.attachingCycleRow(to: snapshot(), cycle: cycle).row1?.label == "MO")
 
-            let withOne = QuotaManager.attachingCycleRow(to: snapshot(row1: bar("MO")))
-            #expect(withOne.row1?.label == "MO")
-            #expect(withOne.row2?.label == "MO")
+        let withOne = QuotaManager.attachingCycleRow(to: snapshot(row1: bar("MO")), cycle: cycle)
+        #expect(withOne.row1?.label == "MO")
+        #expect(withOne.row2?.label == "MO")
 
-            let withTwo = QuotaManager.attachingCycleRow(
-                to: snapshot(row1: bar("MO"), row2: bar("WK")))
-            #expect(withTwo.row3?.label == "MO")
-        }
+        let withTwo = QuotaManager.attachingCycleRow(
+            to: snapshot(row1: bar("MO"), row2: bar("WK")), cycle: cycle)
+        #expect(withTwo.row3?.label == "MO")
+    }
 
-        @Test("three vendor windows already fill the snapshot, so theirs win")
-        func vendorWindowsWin() {
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
+    @Test("three vendor windows already fill the snapshot, so theirs win")
+    func vendorWindowsWin() {
+        let full = snapshot(row1: bar("A"), row2: bar("B"), row3: bar("C"))
+        let result = QuotaManager.attachingCycleRow(to: full, cycle: SubscriptionCycle(anchorDate: Date()))
+        #expect(result.bars.map(\.label) == ["A", "B", "C"])
+    }
 
-            let full = snapshot(row1: bar("A"), row2: bar("B"), row3: bar("C"))
-            let result = QuotaManager.attachingCycleRow(to: full)
-            #expect(result.bars.map(\.label) == ["A", "B", "C"])
-        }
+    @Test("a vendor that published no reset adopts the user's renewal date")
+    func adoptsRenewalDate() {
+        let result = QuotaManager.attachingCycleRow(
+            to: snapshot(resetsAt: nil), cycle: SubscriptionCycle(anchorDate: Date()))
+        #expect(result.resetsAt != nil)
+        #expect(result.resetsAt == result.row1?.resetsAt)
+    }
 
-        @Test("a vendor that published no reset adopts the user's renewal date")
-        func adoptsRenewalDate() {
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
+    @Test("a vendor-published reset is never overwritten by a hand-entered one")
+    func vendorResetWins() {
+        let vendorReset = Date(timeIntervalSince1970: 1_800_000_000)
+        let result = QuotaManager.attachingCycleRow(
+            to: snapshot(resetsAt: vendorReset), cycle: SubscriptionCycle(anchorDate: Date()))
+        #expect(result.resetsAt == vendorReset)
+    }
 
-            let result = QuotaManager.attachingCycleRow(to: snapshot(resetsAt: nil))
-            #expect(result.resetsAt != nil)
-            #expect(result.resetsAt == result.row1?.resetsAt)
-        }
+    @Test("a cycle bar is drawn but never counted as consumable headroom")
+    func cycleIsNotHeadroom() {
+        // The bug this pins: DevPass with every credit unspent but three
+        // weeks into its month advertised "97% remaining", then "10%
+        // remaining" — a countdown read as a fuel gauge. `bars` still
+        // carries it (the popover draws it); `quotaBars` must not.
+        let result = QuotaManager.attachingCycleRow(
+            to: snapshot(row1: DualBarMetrics(primaryFraction: 0.0, label: "WK")),
+            cycle: SubscriptionCycle(anchorDate: Date()))
 
-        @Test("a vendor-published reset is never overwritten by a hand-entered one")
-        func vendorResetWins() {
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
+        // Longest window first: the cycle's month outranks the undated
+        // stand-in bar, which has no period to rank by.
+        #expect(result.bars.map(\.label) == ["MO", "WK"])
+        #expect(result.quotaBars.map(\.label) == ["WK"])
+    }
 
-            let vendorReset = Date(timeIntervalSince1970: 1_800_000_000)
-            let result = QuotaManager.attachingCycleRow(to: snapshot(resetsAt: vendorReset))
-            #expect(result.resetsAt == vendorReset)
-        }
+    @Test("a nearly elapsed cycle does not make an untouched plan look exhausted")
+    func lateCycleIsNotExhaustion() throws {
+        // 29 days into a 30-day period: the cycle bar sits near 1.0.
+        let anchor = Calendar.current.date(byAdding: .day, value: -29, to: Date())!
+        let result = QuotaManager.attachingCycleRow(
+            to: snapshot(row1: DualBarMetrics(primaryFraction: 0.0, label: "WK")),
+            cycle: SubscriptionCycle(anchorDate: anchor, cadence: .monthly))
+        let cycle = try #require(result.bars.first { $0.label == "MO" })
 
-        @Test("a cycle bar is drawn but never counted as consumable headroom")
-        func cycleIsNotHeadroom() {
-            // The bug this pins: DevPass with every credit unspent but three
-            // weeks into its month advertised "97% remaining", then "10%
-            // remaining" — a countdown read as a fuel gauge. `bars` still
-            // carries it (the popover draws it); `quotaBars` must not.
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
+        #expect(try #require(cycle.primaryFraction) > 0.9)
+        // Nothing that reasons about spend may see it.
+        #expect(result.quotaBars.allSatisfy { $0.primaryFractionOrUnmeasured == 0 })
+    }
 
-            let result = QuotaManager.attachingCycleRow(
-                to: snapshot(row1: DualBarMetrics(primaryFraction: 0.0, label: "WK")))
-
-            // Longest window first: the cycle's month outranks the undated
-            // stand-in bar, which has no period to rank by.
-            #expect(result.bars.map(\.label) == ["MO", "WK"])
-            #expect(result.quotaBars.map(\.label) == ["WK"])
-        }
-
-        @Test("a nearly elapsed cycle does not make an untouched plan look exhausted")
-        func lateCycleIsNotExhaustion() throws {
-            // 29 days into a 30-day period: the cycle bar sits near 1.0.
-            let anchor = Calendar.current.date(byAdding: .day, value: -29, to: Date())!
-            SubscriptionCycleStore.set(
-                SubscriptionCycle(anchorDate: anchor, cadence: .monthly), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
-
-            let result = QuotaManager.attachingCycleRow(
-                to: snapshot(row1: DualBarMetrics(primaryFraction: 0.0, label: "WK")))
-            let cycle = try #require(result.bars.first { $0.label == "MO" })
-
-            #expect(try #require(cycle.primaryFraction) > 0.9)
-            // Nothing that reasons about spend may see it.
-            #expect(result.quotaBars.allSatisfy { $0.primaryFractionOrUnmeasured == 0 })
-        }
-
-        @Test("an unreadable provider still gets its countdown — the case it matters most for")
-        func unavailableSnapshotKeepsCycle() {
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: Date()), for: .devpass)
-            defer { SubscriptionCycleStore.set(nil, for: .devpass) }
-
-            let placeholder = QuotaManager.unavailableSnapshot(
-                for: DevPassQuotaProvider(), reason: .notConfigured)
-            let result = QuotaManager.attachingCycleRow(to: placeholder)
-            #expect(result.status == .unavailable(.notConfigured))
-            #expect(result.row1?.label == "MO")
-        }
+    @Test("an unreadable provider still gets its countdown — the case it matters most for")
+    func unavailableSnapshotKeepsCycle() {
+        let placeholder = QuotaManager.unavailableSnapshot(
+            for: DevPassQuotaProvider(), reason: .notConfigured)
+        let result = QuotaManager.attachingCycleRow(
+            to: placeholder, cycle: SubscriptionCycle(anchorDate: Date()))
+        #expect(result.status == .unavailable(.notConfigured))
+        #expect(result.row1?.label == "MO")
     }
 }
