@@ -70,7 +70,8 @@ private func modelEntry(
     promptPrice: String? = nil,
     completionPrice: String? = nil,
     omitPricing: Bool = false,
-    outputModalities: [String] = ["text"]
+    outputModalities: [String] = ["text"],
+    omitArchitecture: Bool = false
 ) -> String {
     var fields = [#""id":"\#(id)""#]
     if let name { fields.append(#""name":"\#(name)""#) }
@@ -80,8 +81,13 @@ private func modelEntry(
         let completionField = completionPrice.map { #""completion":"\#($0)""# } ?? #""completion":null"#
         fields.append(#""pricing":{\#(promptField),\#(completionField)}"#)
     }
-    let modalitiesJSON = outputModalities.map { #""\#($0)""# }.joined(separator: ",")
-    fields.append(#""architecture":{"output_modalities":[\#(modalitiesJSON)]}"#)
+    // Omit modality data entirely when a test wants a model whose
+    // architecture the catalog failed to publish — production excludes such
+    // models, so the helper has to be able to build one.
+    if !omitArchitecture {
+        let modalitiesJSON = outputModalities.map { #""\#($0)""# }.joined(separator: ",")
+        fields.append(#""architecture":{"output_modalities":[\#(modalitiesJSON)]}"#)
+    }
     return "{\(fields.joined(separator: ","))}"
 }
 
@@ -216,6 +222,29 @@ struct OpenRouterModelCatalogTests {
         #expect(snap.freeTierModelBadge != nil)
         #expect(snap.freeTierModelBadge?.localizedCaseInsensitiveContains("lyria") == false)
         #expect(snap.freeTierModelBadge?.contains("MiniMax M3") == true)
+    }
+
+    @Test("a model with no modality data is excluded, never assumed text-safe")
+    func missingModalityExcluded() async throws {
+        // Production excludes any model without modality info (architecture
+        // absent or empty output list) rather than assuming it outputs text.
+        // This fixture's "no-modality" entry is free with 1M context and would
+        // win the free badge if that guard were relaxed back to "assume
+        // text-only" — so the badge must point at the smaller text model.
+        let entries = [
+            modelEntry(id: "no-modality", name: "No Modality", contextLength: 1_000_000,
+                       promptPrice: "0", completionPrice: "0", omitArchitecture: true),
+            modelEntry(id: "real-text", name: "Real Text", contextLength: 128_000,
+                       promptPrice: "0", completionPrice: "0"),
+        ]
+        CatalogStub.configure(modelsBody: catalogBody(entries))
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.freeTierModelBadge != nil)
+        #expect(snap.freeTierModelBadge?.localizedCaseInsensitiveContains("no modality") == false)
+        #expect(snap.freeTierModelBadge?.contains("Real Text") == true)
     }
 
     @Test("ties on context length break alphabetically by id for the free badge")
