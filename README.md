@@ -94,7 +94,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **Anthropic Claude** | `anthropic-ratelimit-unified-*` response headers | Live 5-hour and 7-day quota from the Claude Code OAuth login |
 | **Grok** | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI's token | Live gauge: percentage of the plan's credit allowance used, plus the billing period xAI names (weekly or monthly) and its reset. On-demand spend appears as a second bar once enabled |
 | **Kiro** | `POST https://codewhisperer.us-east-1.amazonaws.com/` (`AmazonCodeWhispererService.GetUsageLimits`) with the Kiro CLI's token | Live gauge: plan credits used against the monthly allowance with reset date, plus separate bars for bonus credits (with expiry) and for overage once the account has it switched on |
-| **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used this cycle, and the weekly premium-model window with its reset. LLM Gateway publishes no monthly cycle date — see Subscription cycles below |
+| **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
 
 ### Caveats worth knowing
 
@@ -108,7 +108,7 @@ Two of these readings carry a cost the table can't show:
 
 ## Subscription cycles
 
-Some vendors meter usage but never say when the billing period turns over — DevPass reports credits spent this cycle and a weekly premium reset, but no monthly renewal date. Rather than guess one, **Preferences → Cycles** lets you record the renewal date yourself for any provider.
+Some vendors meter usage but never say when the billing period turns over. Rather than guess one, **Preferences → Cycles** lets you record the renewal date yourself for any provider.
 
 A recorded cycle adds a `CYCLE` bar showing how many days of the period you have paid for remain, with the pro-rata marker set from the real calendar month rather than a 30-day constant. It reports **no usage** — only elapsed time against the date you entered — and is labelled separately so a vendor's own window is never confused with one typed in by hand. A vendor-published window always wins: the cycle bar only ever fills a slot the vendor left empty. It also attaches to providers FrugalBar cannot read at all, which is the case a renewal countdown is most useful for.
 

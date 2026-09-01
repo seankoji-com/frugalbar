@@ -10,9 +10,9 @@ import Foundation
 /// already paid for is left. Every figure in it came from the user, and the UI
 /// labels the row `CYCLE` so it is never mistaken for vendor telemetry.
 ///
-/// It exists because several vendors meter usage but publish no period. DevPass
-/// is the clearest case: `/v1/key` reports cycle credits and a weekly premium
-/// reset, but never says when the monthly cycle itself turns over.
+/// It exists because several vendors meter usage but publish no period, so the
+/// user's hand-entered date is the only countdown available for the window
+/// FrugalBar cannot read.
 public struct SubscriptionCycle: Sendable, Equatable, Codable {
 
     /// How often the subscription renews.

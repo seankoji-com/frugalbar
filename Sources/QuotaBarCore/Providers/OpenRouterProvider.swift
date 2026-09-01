@@ -271,10 +271,22 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             let prompt: String?
             let completion: String?
         }
+        /// The advertised modalities, used to exclude models that are not
+        /// usable for agentic coding. `architecture.modality` is a compact
+        /// string like `"text->text"` or `"text+image->text+audio"`;
+        /// `output_modalities` is the machine-readable list. Both are optional
+        /// because an entry missing them is excluded from consideration below,
+        /// never treated as a text-only model.
+        struct Architecture: Decodable, Sendable {
+            let modality: String?
+            let input_modalities: [String]?
+            let output_modalities: [String]?
+        }
         let id: String
         let name: String?
         let context_length: Int?
         let pricing: Pricing?
+        let architecture: Architecture?
     }
 
     private struct ModelCatalogResponse: Decodable, Sendable {
@@ -350,12 +362,20 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
         // A model with a missing/unparseable context_length or pricing is
         // dropped from consideration entirely — it never becomes a `0` or a
-        // false qualifier for either ranking.
+        // false qualifier for either ranking. So is a model that is not usable
+        // for agentic coding: an audio/music generator (e.g. Google Lyria)
+        // advertises a huge context at $0 but cannot hold a coding session, and
+        // would otherwise win the "free" badge. Excluding any model whose
+        // output modalities include audio keeps the badges to text-capable
+        // coding models. A model with no modality data at all is excluded the
+        // same way — never assumed text-safe.
         let candidates: [RankedModel] = decoded.data.compactMap { entry in
             guard let pricing = entry.pricing,
                   let promptStr = pricing.prompt, let promptPrice = Double(promptStr),
                   let completionStr = pricing.completion, let completionPrice = Double(completionStr),
-                  let contextLength = entry.context_length
+                  let contextLength = entry.context_length,
+                  let modalities = entry.architecture?.output_modalities,
+                  !modalities.contains("audio")
             else { return nil }
             return RankedModel(
                 id: entry.id, name: entry.name ?? entry.id, contextLength: contextLength,
@@ -364,7 +384,9 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         }
 
         // Badge 1: $0 prompt AND $0 completion, largest context wins. Ties
-        // broken alphabetically by id for determinism.
+        // broken alphabetically by id for determinism. Candidates are already
+        // filtered to text-capable coding models, so a free audio generator
+        // can never take this badge.
         let free = candidates
             .filter { $0.promptPrice == 0.0 && $0.completionPrice == 0.0 }
             .min { lhs, rhs in

@@ -38,7 +38,7 @@ public struct SettingsView: View {
                   + "Run `grok` to refresh an expired login."),
         .init(id: .devpass, label: "DevPass",
               placeholder: "llmgtwy_…",
-              note: "LLM Gateway API key. Plan credits and the weekly premium window."),
+              note: "LLM Gateway API key. Monthly plan-credit allowance."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -308,9 +308,8 @@ public struct SettingsView: View {
                      For subscriptions whose vendor publishes no billing period. \
                      A cycle adds a CYCLE bar showing how many days of the period \
                      you have paid for remain — it reports no usage, only elapsed \
-                     time against the date you entered. DevPass is the case this \
-                     exists for: it meters credits but never says when the month \
-                     turns over.
+                     time against the date you entered. A vendor-published window \
+                     always wins where one exists.
                      """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -324,7 +323,7 @@ public struct SettingsView: View {
     /// renewal date is just as useful for a vendor it cannot read at all.
     private static let cycleVendors: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode, .openrouter,
-        .grok, .kiro, .devpass,
+        .grok, .kiro,
     ]
 
     private var generalTab: some View {
