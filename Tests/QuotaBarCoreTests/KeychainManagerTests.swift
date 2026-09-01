@@ -158,7 +158,8 @@ struct KeychainManagerTests {
     }
 
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")
-    func credentialCacheHitAndExpiry() {        // A fresh instance, not .shared — this exercises the cache/expiry
+    func credentialCacheHitAndExpiry() {
+        // A fresh instance, not .shared — this exercises the cache/expiry
         // logic in isolation rather than the process-wide gh-token slot.
         let cache = CredentialStore.CredentialCache()
         let resolveCount = InvocationCounter()

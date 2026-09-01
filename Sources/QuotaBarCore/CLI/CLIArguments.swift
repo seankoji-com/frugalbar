@@ -52,7 +52,7 @@ public enum CLIArguments {
         // unknown-flag branch so the GUI still starts. (Today the release is a
         // CLI binary run from a terminal/LaunchAgent, so this is defensive —
         // but it is exactly the classic footgun otherwise.)
-        let flags = Array(arguments.dropFirst()).filter { !$0.hasPrefix("-psn") }
+        let flags = Array(arguments.dropFirst()).filter { !$0.hasPrefix("-psn_") }
         if flags.contains("--help") {
             print(helpText)
             return 0
