@@ -496,6 +496,10 @@ struct GrokQuotaProviderTests {
 
 // MARK: - DevPass
 
+/// A full `/v1/key` response, including the weekly premium fields that
+/// FrugalBar deliberately ignores. Keeping them in the fixture proves the
+/// decode-and-ignore path: a paid premium window must never surface, because
+/// DevPass is a monthly product.
 private func devPassBody(
     plan: String = "pro",
     creditsUsed: String = "\"79.50\"",
@@ -516,7 +520,7 @@ private func devPassBody(
 @Suite("DevPassQuotaProvider", .serialized)
 struct DevPassQuotaProviderTests {
 
-    @Test("a plan key produces a cycle bar and a weekly premium bar")
+    @Test("a plan key reports only the monthly allowance")
     func planUsage() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
             try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
@@ -524,45 +528,41 @@ struct DevPassQuotaProviderTests {
 
         #expect(snapshot.status.confidence == .measured)
         #expect(snapshot.planName == "DevPass Pro")
-        // The weekly premium window is the only bar: it is the only allowance
-        // the vendor gives a reset date for.
-        #expect(snapshot.row1?.label == "WK")
-        #expect(abs(try #require(snapshot.row1?.primaryFraction) - 0.25) < 0.0001)
-        #expect(snapshot.row2 == nil)
-        // Plan credits still drive the badge and the overall pressure reading,
-        // they just have no bar to be drawn in.
+        // Monthly only: the weekly premium window (present in the fixture at
+        // 10/40) is ignored, so there are no bars — the monthly allowance is
+        // the headline gauge and the badge, and nothing else.
+        #expect(snapshot.bars.isEmpty)
+        #expect(snapshot.row1 == nil)
+        #expect(snapshot.resetsAt == nil)
+        // The monthly plan allowance drives the badge and the pressure reading.
         #expect(snapshot.badgeText == "\(DevPassQuotaProvider.money(Decimal(string: "157.50")!)) left")
         #expect(abs(try #require(snapshot.consumptionFraction) - 79.5 / 237.0) < 0.0001)
     }
 
-    @Test("the vendor publishes no monthly cycle date, and none is invented")
+    @Test("the monthly allowance is the headline, and no reset date is invented")
     func noCycleDate() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
             try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
         }
-        // The only reset the API states is the weekly premium one, and it is
-        // the only one drawn. Nothing claims to know when the month turns over.
-        #expect(snapshot.bars.count == 1)
-        #expect(snapshot.bars.allSatisfy { $0.label != "MO" })
-        // The default fixture's plan credits (79.50/237.00 ≈ 0.34) are worse
-        // than its premium window (10/40 = 0.25), so the badge and headline
-        // are driven by the window that has no reset date at all — reporting
-        // the premium reset here would attribute the badge's pressure to the
-        // wrong window's clock.
+        // The vendor publishes no monthly turnover date, only the (ignored)
+        // weekly premium reset, so there is no countdown at all.
+        #expect(snapshot.bars.isEmpty)
         #expect(snapshot.resetsAt == nil)
     }
 
-    @Test("when the premium window is the binding one, its reset is reported")
-    func resetReportedWhenPremiumBinds() async throws {
-        // Premium window (30/40 = 0.75) now worse than plan credits (10/237
-        // ≈ 0.04) — the reverse of the default fixture — so the visible bar
-        // and the headline pressure now refer to the same window, and its
-        // real reset date is safe to surface.
+    @Test("a high premium window never leaks into a monthly reading")
+    func premiumWindowIgnored() async throws {
+        // Premium window (30/40 = 0.75) far worse than plan credits (10/237 ≈
+        // 0.04). If the weekly premium were tracked, this would read 75% —
+        // instead the monthly allowance stays the sole figure, at ~4%.
         let body = devPassBody(creditsUsed: "\"10.00\"", premiumUsed: "\"30.00\"")
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: body) {
             try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
         }
-        #expect(snapshot.resetsAt == DevPassQuotaProvider.parseISO8601("2026-09-06T00:00:00Z"))
+        #expect(abs(try #require(snapshot.consumptionFraction) - 10.0 / 237.0) < 0.0001)
+        #expect(snapshot.status.urgency == .none)
+        #expect(snapshot.bars.isEmpty)
+        #expect(snapshot.resetsAt == nil)
     }
 
     @Test("decimal strings are parsed exactly, not through binary floating point")
@@ -637,7 +637,7 @@ struct DevPassQuotaProviderTests {
     /// The exact body `/v1/key` returned for a freshly created Lite plan.
     /// Two things a hand-written fixture would have missed: the weekly reset is
     /// `null` until the first premium call, and `usage`/`limit` are "0"/null.
-    @Test("a brand-new Lite plan, with no premium reset yet, still reads cleanly")
+    @Test("a brand-new Lite plan still reads cleanly and draws no premium bar")
     func freshLitePlan() async throws {
         let body = """
         {"data":{"label":"Dev Plan API Key","usage":"0","limit":null,"devPlan":"lite",
@@ -651,15 +651,9 @@ struct DevPassQuotaProviderTests {
 
         #expect(snapshot.status == .measured(.none))
         #expect(snapshot.planName == "DevPass Lite")
-        #expect(snapshot.row1?.label == "WK")
-        #expect(snapshot.row1?.primaryFraction == 0)
-        // No premium call yet means no week to reset: the bar must carry no
-        // window and no pace marker rather than a fabricated seven-day one.
+        #expect(snapshot.consumptionFraction == 0)
+        #expect(snapshot.bars.isEmpty)
         #expect(snapshot.resetsAt == nil)
-        #expect(snapshot.row1?.resetsAt == nil)
-        #expect(snapshot.row1?.windowLength == nil)
-        #expect(snapshot.row1?.expectedPaceFraction == nil)
-        #expect(snapshot.row1?.resetText == nil)
     }
 
     @Test("plan tiers map to their marketed names", arguments: [

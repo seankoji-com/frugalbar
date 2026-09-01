@@ -6,7 +6,16 @@ import Foundation
 /// cache, and state distribution to the UI.
 public actor QuotaManager {
 
-    public static let shared = QuotaManager(cycleLookup: SubscriptionCycleStore.cycle(for:))
+    public static let shared = QuotaManager(
+        cycleLookup: { vendor in
+            // DevPass is a fixed monthly-budget product and reports its own
+            // allowance, so the hand-entered renewal cycle — a feature for
+            // vendors that publish no billing period — no longer applies to it.
+            // Guarding here (rather than in the store) means a cycle recorded
+            // before this change is never resurrected as a CYCLE bar, and there
+            // is no UI left to clear it from.
+            vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
+        })
 
     // --- State ---
     private var cache: [VendorIdentifier: CacheEntry] = [:]

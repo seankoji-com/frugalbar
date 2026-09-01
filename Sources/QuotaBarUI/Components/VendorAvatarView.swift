@@ -85,10 +85,17 @@ public enum VendorSVGLogo {
             </svg>
             """
         case .grok:
+            // The xAI Grok mark used since February 2025. The two `#mark` paths
+            // of the official logotype carry the glyph; the rest of that SVG is
+            // the "Grok" wordmark, which has no place in a 24pt badge. They are
+            // drawn at their native coordinates inside a viewBox sized to the
+            // mark (plus margin) so there is no `<g transform>`, which macOS
+            // SVG support handles unevenly.
             return """
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="24" height="24" rx="4.5" fill="#000000"/>
-              <path fill="#ffffff" d="M7.2 17.4l7.35-7.35 1.62 1.62-7.35 7.35H7.2v-1.62zm2.31-5.19L5.7 8.4 7.32 6.78l3.81 3.81-1.62 1.62zM16.8 6h1.62v8.55l-1.62-1.62V6z"/>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="-1.5 -1 36 36" width="24" height="24" fill="none">
+              <rect x="-1.5" y="-1" width="36" height="36" rx="7" fill="#000000"/>
+              <path fill="#ffffff" d="M13.2371 21.0407L24.3186 12.8506C24.8619 12.4491 25.6384 12.6057 25.8973 13.2294C27.2597 16.5185 26.651 20.4712 23.9403 23.1851C21.2297 25.8989 17.4581 26.4941 14.0108 25.1386L10.2449 26.8843C15.6463 30.5806 22.2053 29.6665 26.304 25.5601C29.5551 22.3051 30.562 17.8683 29.6205 13.8673L29.629 13.8758C28.2637 7.99809 29.9647 5.64871 33.449 0.844576C33.5314 0.730667 33.6139 0.616757 33.6964 0.5L29.1113 5.09055V5.07631L13.2343 21.0436"/>
+              <path fill="#ffffff" d="M10.9503 23.0313C7.07343 19.3235 7.74185 13.5853 11.0498 10.2763C13.4959 7.82722 17.5036 6.82767 21.0021 8.2971L24.7595 6.55998C24.0826 6.07017 23.215 5.54334 22.2195 5.17313C17.7198 3.31926 12.3326 4.24192 8.67479 7.90126C5.15635 11.4239 4.0499 16.8403 5.94992 21.4622C7.36924 24.9165 5.04257 27.3598 2.69884 29.826C1.86829 30.7002 1.0349 31.5745 0.36364 32.5L10.9474 23.0341"/>
             </svg>
             """
         case .kiro:

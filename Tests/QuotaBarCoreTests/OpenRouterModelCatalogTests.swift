@@ -69,7 +69,8 @@ private func modelEntry(
     contextLength: Int? = nil,
     promptPrice: String? = nil,
     completionPrice: String? = nil,
-    omitPricing: Bool = false
+    omitPricing: Bool = false,
+    outputModalities: [String] = ["text"]
 ) -> String {
     var fields = [#""id":"\#(id)""#]
     if let name { fields.append(#""name":"\#(name)""#) }
@@ -79,6 +80,8 @@ private func modelEntry(
         let completionField = completionPrice.map { #""completion":"\#($0)""# } ?? #""completion":null"#
         fields.append(#""pricing":{\#(promptField),\#(completionField)}"#)
     }
+    let modalitiesJSON = outputModalities.map { #""\#($0)""# }.joined(separator: ",")
+    fields.append(#""architecture":{"output_modalities":[\#(modalitiesJSON)]}"#)
     return "{\(fields.joined(separator: ","))}"
 }
 
@@ -188,6 +191,32 @@ struct OpenRouterModelCatalogTests {
     }
 
     // MARK: - Tie-breaking
+
+    @Test("an audio-output model is excluded: it can never take the free badge")
+    func audioModelExcluded() async throws {
+        // Mirrors the real defect: Google's Lyria music generator is free with
+        // a 1M context and a `text+audio` output — alphabetically first among
+        // the 1M-context free models, so it used to win the free badge despite
+        // being unusable as a coding model. An audio-output model must lose to
+        // a text model that matches on price and context.
+        let entries = [
+            modelEntry(id: "google/lyria-3-clip-preview", name: "Lyria", contextLength: 1_000_000,
+                       promptPrice: "0", completionPrice: "0",
+                       outputModalities: ["text", "audio"]),
+            modelEntry(id: "minimax/minimax-m3:free", name: "MiniMax M3", contextLength: 1_000_000,
+                       promptPrice: "0", completionPrice: "0"),
+            modelEntry(id: "thinkingmachines/inkling:free", name: "Inkling", contextLength: 512_000,
+                       promptPrice: "0", completionPrice: "0"),
+        ]
+        CatalogStub.configure(modelsBody: catalogBody(entries))
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.freeTierModelBadge != nil)
+        #expect(snap.freeTierModelBadge?.localizedCaseInsensitiveContains("lyria") == false)
+        #expect(snap.freeTierModelBadge?.contains("MiniMax M3") == true)
+    }
 
     @Test("ties on context length break alphabetically by id for the free badge")
     func freeTieBreak() async throws {

@@ -3,14 +3,22 @@ import Foundation
 /// DevPass (LLM Gateway) plan usage.
 ///
 /// `GET https://api.llmgateway.io/v1/key` with the gateway API key. It reports
-/// the plan tier, credits spent against the cycle allowance, and a separate
-/// weekly premium-model window with its own reset.
+/// the plan tier and credits spent against the *monthly* plan allowance — a
+/// fixed per-month budget (the gateway's own dashboard calls it "spend this
+/// cycle"). DevPass is a monthly product, so that allowance is the only figure
+/// FrugalBar tracks for it.
 ///
-/// One gap worth naming: the response gives no date for the *monthly* cycle,
-/// only for the weekly premium window. FrugalBar will not invent one, so the
-/// cycle bar appears only if the user records their renewal date under
-/// Preferences → Cycles — and it is labelled `CYCLE` there to keep it distinct
-/// from anything the vendor actually published.
+/// The gateway also publishes a separate *weekly* premium-model window, but it
+/// is deliberately ignored here. It is a pay-as-you-go add-on, turns on only
+/// once you opt in, and is reset by redeeming separate passes — none of it is
+/// the subscription's monthly budget. Tracking it made a monthly product look
+/// like two windows with two clocks.
+///
+/// One gap worth naming: the response gives no date for the monthly cycle
+/// turning over, only for the weekly premium window — and since that window is
+/// no longer tracked, no reset date is published at all. FrugalBar will not
+/// invent one, so there is no countdown, only the allowance gauge and the
+/// credits remaining.
 public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .devpass
@@ -55,72 +63,44 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             return lifetimeSnapshot(from: key, provider: provider, now: now)
         }
 
+        // The monthly plan allowance is the whole story for a monthly product.
+        // It carries the gauge, the badge, and the pressure reading; the
+        // weekly premium window is a separate pay-as-you-go feature and is not
+        // tracked.
         let creditsUsed = key.devPlanCreditsUsed.flatMap(\.decimalValue)
         let creditsLimit = key.devPlanCreditsLimit.flatMap(\.decimalValue)
-        let premiumUsed = key.devPlanPremiumCreditsUsed.flatMap(\.decimalValue)
-        let premiumLimit = key.devPlanPremiumWeeklyLimit.flatMap(\.decimalValue)
-        let premiumResetsAt = key.devPlanPremiumWeekResetsAt.flatMap(parseISO8601)
+        let planFraction = fraction(used: creditsUsed, limit: creditsLimit)
 
-        let cycleFraction = fraction(used: creditsUsed, limit: creditsLimit)
-        let premiumFraction = fraction(used: premiumUsed, limit: premiumLimit)
-
-        guard let worst = [cycleFraction, premiumFraction].compactMap({ $0 }).max() else {
+        guard let planFraction else {
             return provider.unavailable(.unsupported("DevPass published no plan allowance"))
         }
 
-        let urgency: Urgency = worst >= 0.95 ? .critical
-            : worst >= 0.80 ? .warning
+        let urgency: Urgency = planFraction >= 0.95 ? .critical
+            : planFraction >= 0.80 ? .warning
             : .none
 
-        // The headline is the worse of two independently-resetting windows,
-        // but only the premium one ever gets a reset date — the vendor
-        // publishes none for the monthly cycle. Attaching the premium reset
-        // regardless of which window is actually binding used to point the
-        // headline at a date that had nothing to do with it: a plan 95%
-        // through its monthly credits but barely into its premium week would
-        // show a critical badge next to "Resets in 3 days", implying the
-        // premium window's reset fixes the very thing driving the badge.
-        let cycleIsBinding = cycleFraction != nil && cycleFraction == worst
-
-        var snapshot = QuotaSnapshot(
+        // The allowance is drawn as the headline gauge and the badge; there is
+        // no bar for it. LLM Gateway publishes no monthly turnover date, so a
+        // bar would have no reset, no pace marker, and no window — three empty
+        // columns next to a number already carried by the badge. It also means
+        // no reset countdown at all: pretending the month turns over would
+        // fabricate a date the vendor did not publish.
+        return QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,
-            metric: .percentage(usedFraction: worst, displayDetails: nil),
+            metric: .percentage(usedFraction: planFraction, displayDetails: nil),
             status: .measured(urgency),
-            resetsAt: cycleIsBinding ? nil : premiumResetsAt,
+            resetsAt: nil,
             lastUpdated: now,
-            auxiliaryInfo: cycleIsBinding ? "DevPass plan credits — no vendor cycle date" : "DevPass plan credits",
+            auxiliaryInfo: "DevPass monthly plan credits",
             row1: nil,
             row2: nil,
-            badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: cycleFraction),
+            badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
             planName: planName,
             cliSource: nil
         )
-
-        // The plan-credit total is deliberately not drawn as a bar. LLM Gateway
-        // publishes no cycle date to go with it, so the bar had no reset, no
-        // pace marker, and no window — three empty columns next to a number
-        // already carried by the badge and the detail view.
-        _ = creditsLimit
-
-        if let premiumFraction, let premiumUsed, let premiumLimit {
-            snapshot.row1 = DualBarMetrics(
-                primaryFraction: premiumFraction,
-                expectedPaceFraction: DualBarMetrics.proRataPace(
-                    resetsAt: premiumResetsAt, windowLength: QuotaWindow.week, now: now),
-                label: "WK",
-                usedText: "\(money(premiumUsed))/\(plain(premiumLimit)) premium credits used",
-                resetText: premiumResetsAt.map {
-                    "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
-                },
-                resetsAt: premiumResetsAt,
-                windowLength: premiumResetsAt == nil ? nil : QuotaWindow.week
-            )
-        }
-
-        return snapshot
     }
 
     /// A working key with no DevPass plan. Lifetime spend is real telemetry, so
@@ -217,14 +197,6 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
-    static func parseISO8601(_ raw: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: raw) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: raw)
-    }
-
     // MARK: - Response shape
 
     struct KeyResponse: Decodable, Sendable {
@@ -243,9 +215,6 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         let devPlanCreditsUsed: DecimalString?
         let devPlanCreditsLimit: DecimalString?
         let devPlanCreditsRemaining: DecimalString?
-        let devPlanPremiumWeeklyLimit: DecimalString?
-        let devPlanPremiumCreditsUsed: DecimalString?
-        let devPlanPremiumWeekResetsAt: String?
     }
 
     /// A decimal the gateway sends as a string. Also accepts a bare JSON number,
