@@ -171,8 +171,7 @@ struct MetricRowView: View {
                     ForEach(Array(snapshot.bars.enumerated()), id: \.offset) { _, barMetrics in
                         DualBarProgressView(
                             metrics: barMetrics,
-                            accentColor: accentColor,
-                            urgency: snapshot.status.urgency
+                            accentColor: accentColor
                         )
                     }
                 }
