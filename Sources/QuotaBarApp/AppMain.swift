@@ -229,7 +229,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // readings. nil tint means "no quota pressure" — follow the menu bar's
         // own label colour rather than forcing one.
         if let displayText = rec.displayText, !displayText.isEmpty {
-            let titleColor = MenuBarPresentation.tint(for: summary) ?? .labelColor
+            // Recommended-vendor path: colour the *recommended vendor's own*
+            // reading, not the whole-summary worst urgency. A healthy
+            // recommendation must stay untinted (`.labelColor`) even when some
+            // other vendor is critical.
+            let titleColor = rec.recommendedTint ?? .labelColor
             let attr = NSAttributedString(
                 string: " " + displayText,
                 attributes: [

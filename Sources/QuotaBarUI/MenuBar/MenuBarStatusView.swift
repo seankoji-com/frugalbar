@@ -12,6 +12,11 @@ public enum MenuBarPresentation {
         public let timeLeftText: String?
         public let displayText: String?
         public let isUrgent: Bool
+        /// Tint for the *recommended vendor's own* reading, keyed to that
+        /// snapshot's urgency rather than the whole-summary worst urgency.
+        /// nil means "no pressure from this vendor" — follow the menu bar's
+        /// own label/template colour.
+        public let recommendedTint: NSColor?
 
         public init(
             vendorId: VendorIdentifier?,
@@ -19,7 +24,8 @@ public enum MenuBarPresentation {
             remainingPctText: String?,
             timeLeftText: String?,
             displayText: String?,
-            isUrgent: Bool
+            isUrgent: Bool,
+            recommendedTint: NSColor? = nil
         ) {
             self.vendorId = vendorId
             self.lowestRemainingFraction = lowestRemainingFraction
@@ -27,6 +33,7 @@ public enum MenuBarPresentation {
             self.timeLeftText = timeLeftText
             self.displayText = displayText
             self.isUrgent = isUrgent
+            self.recommendedTint = recommendedTint
         }
     }
 
@@ -104,13 +111,25 @@ public enum MenuBarPresentation {
         let displayParts: [String] = [remainingPctStr, timeLeftStr].compactMap { $0 }
         let displayText = displayParts.isEmpty ? nil : displayParts.joined(separator: " ")
 
+        // Tint the recommended vendor's own number, not the whole-summary worst
+        // urgency. An unrelated vendor being critical must not paint this
+        // healthy recommendation red. Only a genuine `.measured` reading earns
+        // a colour; an unreadable provider has no pressure to display.
+        let recommendedTint: NSColor?
+        if snapshot.status.confidence == .measured {
+            recommendedTint = tint(forUrgency: snapshot.status.urgency)
+        } else {
+            recommendedTint = nil
+        }
+
         return RecommendationDetails(
             vendorId: vendorId,
             lowestRemainingFraction: foundBar ? lowestRemaining : nil,
             remainingPctText: remainingPctStr,
             timeLeftText: timeLeftStr,
             displayText: displayText,
-            isUrgent: true
+            isUrgent: true,
+            recommendedTint: recommendedTint
         )
     }
 
@@ -174,7 +193,15 @@ public enum MenuBarPresentation {
     /// earns a colour.
     public static func tint(for summary: SystemHealthSummary) -> NSColor? {
         guard summary.hasAnyReading else { return nil }
-        switch summary.worstUrgency {
+        return tint(forUrgency: summary.worstUrgency)
+    }
+
+    /// Maps an `Urgency` to a menu bar colour. Shared by `tint(for:)` and
+    /// `recommendationDetails` so the colour scheme is defined in exactly one
+    /// place. Reusing the same mapping is what lets a healthy recommended
+    /// vendor stay untinted even when the whole summary is critical.
+    private static func tint(forUrgency urgency: Urgency) -> NSColor? {
+        switch urgency {
         case .none:     return nil
         case .warning:  return .systemOrange
         case .critical: return .systemRed
