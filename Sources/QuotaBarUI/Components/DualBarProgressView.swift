@@ -279,7 +279,11 @@ public struct DualBarProgressView: View {
     /// windows name the state plainly; a window that is merely unmeasured
     /// (e.g. a real pace target with no usage to compare it against) is not
     /// "blocked" and must not say it is.
-    static func blockedFallbackDetail(for metrics: DualBarMetrics) -> String {
+    /// `nonisolated`: a pure function of its argument, and `View`'s `body`
+    /// requirement can infer main-actor isolation onto every member of a
+    /// conforming type under some toolchains — which would make this uncallable
+    /// from the synchronous, non-isolated `@Test` functions that exercise it.
+    nonisolated static func blockedFallbackDetail(for metrics: DualBarMetrics) -> String {
         if let usedText = metrics.usedText {
             return usedText
         }
