@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import LocalAuthentication
 
 // MARK: - Keychain wrapper (macOS Security framework)
 
@@ -10,7 +11,22 @@ public enum KeychainError: Error, Sendable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unknown(let s): "Keychain error \(s)"
+        case .unknown(let s):
+            switch s {
+            case errSecInteractionNotAllowed:
+                "Keychain access not allowed (your keychain may be locked)"
+            case errSecAuthFailed:
+                "Keychain authentication failed"
+            case errSecMissingEntitlement:
+                "Keychain access requires a signed, entitled app"
+            case errSecDuplicateItem:
+                "A matching keychain item already exists"
+            default:
+                // Raw OSStatus is acceptable for statuses we do not recognise:
+                // the number is all we have, and showing it is better than a
+                // guess at what it means.
+                "Keychain error \(s)"
+            }
         case .itemNotFound:   "No matching keychain item found"
         case .invalidData:    "Invalid keychain data"
         }
@@ -26,7 +42,7 @@ public final class KeychainManager: Sendable {
 
     // MARK: Public API
 
-    public func set(key: String, label: String) throws {
+    public func set(key: String, label: String, allowsAuthenticationPrompt: Bool = true) throws {
         guard let data = key.data(using: .utf8) else { throw KeychainError.invalidData }
 
         let query: [String: Any] = [
@@ -48,6 +64,9 @@ public final class KeychainManager: Sendable {
         ]
 
         var addQuery = query
+        if !allowsAuthenticationPrompt {
+            addQuery[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        }
         for (k, v) in attributes { addQuery[k] = v }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
 
@@ -64,8 +83,8 @@ public final class KeychainManager: Sendable {
         }
     }
 
-    public func get(label: String) throws -> String {
-        let query: [String: Any] = [
+    public func get(label: String, allowsAuthenticationPrompt: Bool = true) throws -> String {
+        var query: [String: Any] = [
             kSecClass as String:              kSecClassGenericPassword,
             kSecAttrService as String:        service,
             kSecAttrAccount as String:        label,
@@ -73,6 +92,9 @@ public final class KeychainManager: Sendable {
             kSecMatchLimit as String:         kSecMatchLimitOne,
             kSecAttrSynchronizable as String: false,
         ]
+        if !allowsAuthenticationPrompt {
+            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -99,6 +121,19 @@ public final class KeychainManager: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unknown(status)
         }
+    }
+
+    /// An `LAContext` whose `interactionNotAllowed` is true. Attached to a
+    /// query via `kSecUseAuthenticationContext`, it makes the call return
+    /// `errSecInteractionNotAllowed` instead of presenting a lock/permission
+    /// prompt — exactly what the `--doctor` probe (T9) needs to test the
+    /// keychain non-interactively. This is the non-deprecated replacement for
+    /// the old `kSecUseAuthenticationUIFail`, which is unavailable from
+    /// `swift run` anyway.
+    private static func nonPromptingAuthContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 }
 
@@ -297,7 +332,14 @@ public enum CredentialStore {
             // the cache slot, which a 30s TTL doesn't need to dedupe.
             let token = resolve()
             lock.lock()
-            ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            // Cache only non-nil tokens. A nil resolves to a transient `gh auth
+            // token` failure (non-zero exit / spawn error / 5s watchdog killing
+            // a hung child), and pinning that to nil for the full TTL would make
+            // every provider report "Not configured" until the cache expires.
+            // The next call re-runs resolve() and gets a fresh answer.
+            if token != nil {
+                ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            }
             lock.unlock()
             return token
         }
@@ -575,7 +617,10 @@ extension CredentialStore {
 
     /// Reads the tier off disk or the Keychain, on the credential queue.
     public static func claudePlanNameAsync() async -> String? {
-        guard isCLIDiscoveryEnabled else { return nil }
+        guard isCLIDiscoveryEnabled else {
+            NSLog("frugalbar: Claude plan-name lookup skipped (CLI credential discovery disabled)")
+            return nil
+        }
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
                 let fileURL = URL(fileURLWithPath: NSHomeDirectory())

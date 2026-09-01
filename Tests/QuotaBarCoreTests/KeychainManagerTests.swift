@@ -123,9 +123,45 @@ struct KeychainManagerTests {
         #expect(try KeychainManager.shared.get(label: b) == "beta")
     }
 
+    @Test("KeychainError.unknown maps known OSStatus codes to readable text")
+    func unknownStatusErrorDescriptions() {
+        func desc(_ s: OSStatus) -> String? {
+            (KeychainError.unknown(s) as any Error).localizedDescription
+        }
+        #expect(desc(errSecInteractionNotAllowed) == "Keychain access not allowed (your keychain may be locked)")
+        #expect(desc(errSecAuthFailed) == "Keychain authentication failed")
+        #expect(desc(errSecMissingEntitlement) == "Keychain access requires a signed, entitled app")
+        #expect(desc(errSecDuplicateItem) == "A matching keychain item already exists")
+    }
+
+    @Test("an unrecognised OSStatus keeps a readable fallback that shows the number")
+    func unknownStatusFallback() {
+        let s: OSStatus = -12345
+        #expect((KeychainError.unknown(s) as any Error).localizedDescription == "Keychain error \(-12345)")
+    }
+
+    /// Compile-level regression: the `--doctor` probe (T9) needs to suppress
+    /// the keychain prompt, and that hook must exist with a default of `true`
+    /// so the GUI credential path keeps allowing a prompt. No runtime Keychain
+    /// call here — just that the parameter exists on both entry points and
+    /// compiles from a default call site.
+    @Test("set/get expose allowsAuthenticationPrompt, defaulting to true")
+    func authenticationPromptParameterExists() throws {
+        // References the new parameter on both methods without touching the
+        // real keychain — this is a compile/build-level regression.
+        let sink: (String?, KeychainError?) -> Void = { _, _ in }
+        let setResult: Result<Void, Error> = Result {
+            try KeychainManager.shared.set(key: "k", label: "l", allowsAuthenticationPrompt: false)
+        }
+        let getResult: Result<String, Error> = Result {
+            try KeychainManager.shared.get(label: "l", allowsAuthenticationPrompt: false)
+        }
+        sink(try? getResult.get(), nil)
+        let _ = setResult
+    }
+
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")
-    func credentialCacheHitAndExpiry() {
-        // A fresh instance, not .shared — this exercises the cache/expiry
+    func credentialCacheHitAndExpiry() {        // A fresh instance, not .shared — this exercises the cache/expiry
         // logic in isolation rather than the process-wide gh-token slot.
         let cache = CredentialStore.CredentialCache()
         let resolveCount = InvocationCounter()

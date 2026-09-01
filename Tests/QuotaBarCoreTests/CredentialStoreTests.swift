@@ -181,6 +181,71 @@ struct CredentialStoreTests {
 
     // MARK: - gh auth token discovery
 
+    /// A nil resolve — a transient `gh auth token` failure — must NOT be
+    /// cached, so the next call re-runs resolve() instead of pinning the
+    /// providers to "Not configured" for the full TTL.
+    @Test("CredentialCache.ghToken does not cache a nil resolve")
+    func ghTokenNilIsNotCached() {
+        let cache = CredentialStore.CredentialCache()
+        let epoch = Date(timeIntervalSince1970: 0)
+        var calls = 0
+
+        // First resolve returns nil.
+        let first = cache.ghToken(now: epoch) {
+            calls += 1
+            return nil
+        }
+        #expect(first == nil)
+        #expect(calls == 1)
+
+        // Immediately after (even within what would have been the TTL), a nil
+        // must not have been cached: the next call re-runs resolve().
+        let second = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL - 1)) {
+            calls += 1
+            return "now-resolved"
+        }
+        #expect(second == "now-resolved")
+        #expect(calls == 2)
+        // ... and now that a non-nil answer arrived, it IS cached.
+        let third = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL - 1)) {
+            calls += 1
+            return "ignored"
+        }
+        #expect(third == "now-resolved")
+        #expect(calls == 2)
+    }
+
+    /// A non-nil token is cached within the TTL and re-resolved after expiry.
+    @Test("CredentialCache.ghToken caches a non-nil token within the TTL and re-resolves after expiry")
+    func ghTokenNonNilCachesAndExpires() {
+        let cache = CredentialStore.CredentialCache()
+        let epoch = Date(timeIntervalSince1970: 0)
+        var calls = 0
+
+        let first = cache.ghToken(now: epoch) {
+            calls += 1
+            return "token-x"
+        }
+        #expect(first == "token-x")
+        #expect(calls == 1)
+
+        // Within TTL: cached answer, resolve() not re-run.
+        let within = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL - 1)) {
+            calls += 1
+            return "other"
+        }
+        #expect(within == "token-x")
+        #expect(calls == 1)
+
+        // After expiry: re-resolves.
+        let after = cache.ghToken(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.ghTokenTTL + 1)) {
+            calls += 1
+            return "token-y"
+        }
+        #expect(after == "token-y")
+        #expect(calls == 2)
+    }
+
     @Test("runGhAuthToken returns nil when gh is not installed")
     func runGhAuthTokenNoGh() {
         // The method checks known paths. In a test environment, gh is unlikely
