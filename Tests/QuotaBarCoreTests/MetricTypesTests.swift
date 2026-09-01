@@ -124,6 +124,59 @@ struct ProviderStatusTests {
     }
 }
 
+@Suite("Dual-bar never-coerced invariant")
+struct DualBarNeverCoercedTests {
+
+    /// A measured snapshot whose single quota bar is described by `bar` (or
+    /// absent). The candidate division/`category` are irrelevant here —
+    /// `isQuotaExhausted` reads only `quotaBars`.
+    private func snapshot(_ bar: DualBarMetrics?) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: "t", vendorId: .githubRest, displayName: "t",
+            category: .developerLimits,
+            metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .healthy, resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: bar
+        )
+    }
+
+    /// The whole invariant hangs on these two named helpers as the single
+    /// choke-point. Any future consumer that reaches for its own `?? 0`
+    /// (threshold) or `?? 0` (ranking) instead of these re-opens I27. Pinning
+    /// the exact values also pins that the helpers exist and stay wired.
+    @Test("a nil fraction reads as 'not reached', not coerced to spent")
+    func nilFractionNotCoercedUp() {
+        let bar = DualBarMetrics(primaryFraction: nil, label: "5H")
+        #expect(bar.primaryFractionOrUnmeasured == 0)
+    }
+
+    @Test("a nil fraction sinks below every real reading for worst-bar ranking")
+    func nilFractionSinksToBottomForRanking() {
+        let nilBar = DualBarMetrics(primaryFraction: nil, label: "5H")
+        let emptyBar = DualBarMetrics(primaryFraction: 0.0, label: "5H")
+        // -1 sits strictly below a genuine zero: a bar with no reading must
+        // never outrank one that actually reports a number.
+        #expect(nilBar.primaryFractionForWorstBarRanking == -1)
+        #expect(emptyBar.primaryFractionForWorstBarRanking == 0.0)
+        #expect(nilBar.primaryFractionForWorstBarRanking < emptyBar.primaryFractionForWorstBarRanking)
+    }
+
+    /// I27's core regression: a window the vendor reported with *no percentage*
+    /// must not read as "100% spent". Coercing the nil fraction to 1 here would
+    /// paint a full red bar and strike through the logo on zero data.
+    @Test("a nil-fraction, non-blocked bar does not read as exhausted")
+    func nilFractionNotExhausted() {
+        let snap = snapshot(DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: false))
+        #expect(snap.isQuotaExhausted == false)
+    }
+
+    @Test("a blocked bar with no fraction reads as exhausted — blocked is unusable")
+    func blockedCountsAsExhausted() {
+        let snap = snapshot(DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: true))
+        #expect(snap.isQuotaExhausted == true)
+    }
+}
+
 @Suite("VendorIdentifier")
 struct VendorIdentifierTests {
 
