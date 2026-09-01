@@ -46,7 +46,13 @@ public enum CLIArguments {
     /// afterward — this type never exits on its own, so it stays testable.
     @discardableResult
     public static func handleIfPresent(_ arguments: [String] = CommandLine.arguments) -> Int32? {
-        let flags = Array(arguments.dropFirst())
+        // LaunchServices launches a bare executable with a leading `-psn_…`
+        // (process serial number) argument, e.g. when opened from Finder/Dock.
+        // That is a bare launch, not a typo: strip such args before the
+        // unknown-flag branch so the GUI still starts. (Today the release is a
+        // CLI binary run from a terminal/LaunchAgent, so this is defensive —
+        // but it is exactly the classic footgun otherwise.)
+        let flags = Array(arguments.dropFirst()).filter { !$0.hasPrefix("-psn") }
         if flags.contains("--help") {
             print(helpText)
             return 0

@@ -142,22 +142,19 @@ struct KeychainManagerTests {
 
     /// Compile-level regression: the `--doctor` probe (T9) needs to suppress
     /// the keychain prompt, and that hook must exist with a default of `true`
-    /// so the GUI credential path keeps allowing a prompt. No runtime Keychain
-    /// call here — just that the parameter exists on both entry points and
-    /// compiles from a default call site.
+    /// so the GUI credential path keeps allowing a prompt.
+    ///
+    /// Forming an unapplied method reference (with the `allowsAuthenticationPrompt`
+    /// label spelled out) makes the compiler type-check the signature without
+    /// *invoking* the body — so nothing is ever written to or read from the
+    /// real keychain. A `Result { try … }` initializer would be a live call
+    /// (its closure runs eagerly) and is deliberately avoided here: that writes
+    /// a real SecItemAdd under a non-randomised label and never deletes it.
     @Test("set/get expose allowsAuthenticationPrompt, defaulting to true")
-    func authenticationPromptParameterExists() throws {
-        // References the new parameter on both methods without touching the
-        // real keychain — this is a compile/build-level regression.
-        let sink: (String?, KeychainError?) -> Void = { _, _ in }
-        let setResult: Result<Void, Error> = Result {
-            try KeychainManager.shared.set(key: "k", label: "l", allowsAuthenticationPrompt: false)
-        }
-        let getResult: Result<String, Error> = Result {
-            try KeychainManager.shared.get(label: "l", allowsAuthenticationPrompt: false)
-        }
-        sink(try? getResult.get(), nil)
-        let _ = setResult
+    func authenticationPromptParameterExists() {
+        // Method references, never called — a hermetic compile guard.
+        let _: (String, String, Bool) throws -> Void = KeychainManager.shared.set(key:label:allowsAuthenticationPrompt:)
+        let _: (String, Bool) throws -> String = KeychainManager.shared.get(label:allowsAuthenticationPrompt:)
     }
 
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")

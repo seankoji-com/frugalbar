@@ -144,6 +144,12 @@ struct DualBarNeverCoercedTests {
     /// choke-point. Any future consumer that reaches for its own `?? 0`
     /// (threshold) or `?? 0` (ranking) instead of these re-opens I27. Pinning
     /// the exact values also pins that the helpers exist and stay wired.
+    ///
+    /// Note this is the *bar-level* `DualBarMetrics.primaryFraction` sentinel —
+    /// a purely internal threshold/ranking convenience, never a rendered
+    /// denominator. It is distinct from `QuotaSnapshot.consumptionFraction`,
+    /// which nil means "no denominator" and which AGENTS.md forbids coercing to
+    /// 0 or 1 for display.
     @Test("a nil fraction reads as 'not reached', not coerced to spent")
     func nilFractionNotCoercedUp() {
         let bar = DualBarMetrics(primaryFraction: nil, label: "5H")

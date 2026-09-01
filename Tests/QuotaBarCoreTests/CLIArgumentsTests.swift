@@ -25,6 +25,18 @@ struct CLIArgumentsTests {
         #expect(CLIArguments.handleIfPresent(["frugalbar", "--unknown"]) == 64)
     }
 
+    @Test("a LaunchServices -psn argument is a bare launch, not a usage error")
+    func launchServicesPsnArgumentIsBareLaunch() {
+        // Finder/Dock launches pass a leading `-psn_…` (process serial
+        // number); that must start the GUI, not be rejected as a typo.
+        #expect(CLIArguments.handleIfPresent(["frugalbar", "-psn_0_123456"]) == nil)
+    }
+
+    @Test("a -psn launch arg does not mask a real unknown flag")
+    func psnDoesNotMaskUnknownFlag() {
+        #expect(CLIArguments.handleIfPresent(["frugalbar", "-psn_0_123456", "--bogus"]) == 64)
+    }
+
     @Test("--doctor exits 0 when every non-optional check passes")
     func doctorExitsZeroOnSuccess() {
         // The real machine running this test is, by construction, at or
