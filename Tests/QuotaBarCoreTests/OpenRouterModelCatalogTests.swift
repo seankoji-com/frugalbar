@@ -249,6 +249,31 @@ struct OpenRouterModelCatalogTests {
         #expect(snap.freeTierModelBadge?.contains("Real Text") == true)
     }
 
+    @Test("an empty or non-text modality list is excluded, never assumed text-capable")
+    func emptyOrNonTextModalityExcluded() async throws {
+        // Review hardening: `output_modalities` can be present-but-empty, or
+        // list only non-text outputs (e.g. ["image"]). Neither is a text-capable
+        // coding model, so neither may win the badge — the guard must require a
+        // modality list that actually includes "text". All three fixtures are
+        // free with 1M context (they would win the free badge if admitted).
+        let entries = [
+            modelEntry(id: "empty-mod", name: "Empty Modality", contextLength: 1_000_000,
+                       promptPrice: "0", completionPrice: "0", outputModalities: []),
+            modelEntry(id: "image-only", name: "Image Only", contextLength: 1_000_000,
+                       promptPrice: "0", completionPrice: "0", outputModalities: ["image"]),
+            modelEntry(id: "real-text", name: "Real Text", contextLength: 128_000,
+                       promptPrice: "0", completionPrice: "0"),
+        ]
+        CatalogStub.configure(modelsBody: catalogBody(entries))
+        let provider = OpenRouterProvider(apiKey: "key")
+        let snap = try await withCatalogSession(CatalogStub.makeSession()) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(snap.freeTierModelBadge?.localizedCaseInsensitiveContains("empty modality") == false)
+        #expect(snap.freeTierModelBadge?.localizedCaseInsensitiveContains("image only") == false)
+        #expect(snap.freeTierModelBadge?.contains("Real Text") == true)
+    }
+
     @Test("ties on context length break alphabetically by id for the free badge")
     func freeTieBreak() async throws {
         let entries = [

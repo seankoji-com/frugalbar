@@ -45,7 +45,15 @@ public final class KeychainManager: Sendable {
     public func set(key: String, label: String, allowsAuthenticationPrompt: Bool = true) throws {
         guard let data = key.data(using: .utf8) else { throw KeychainError.invalidData }
 
-        let query: [String: Any] = [
+        // When the caller is an unattended context (the `--doctor` probe), the
+        // probe must never trigger the interactive unlock prompt. The
+        // non-interactive context is attached to `query` itself — NOT only to
+        // the item-insert query — so it also reaches the `SecItemUpdate` call
+        // in the `errSecDuplicateItem` path below. A re-run of `--doctor` over
+        // a lingering probe item (a previous run killed between set and its
+        // delete) would otherwise update that item WITHOUT the context and
+        // still prompt/hang on a locked keychain.
+        var query: [String: Any] = [
             kSecClass as String:              kSecClassGenericPassword,
             kSecAttrService as String:        service,
             kSecAttrAccount as String:        label,
@@ -58,15 +66,15 @@ public final class KeychainManager: Sendable {
             // all. Add it together with proper .app signing, not before.
             kSecAttrSynchronizable as String: false,
         ]
+        if !allowsAuthenticationPrompt {
+            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        }
         let attributes: [String: Any] = [
             kSecValueData as String:          data,
             kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
 
         var addQuery = query
-        if !allowsAuthenticationPrompt {
-            addQuery[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
-        }
         for (k, v) in attributes { addQuery[k] = v }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
 

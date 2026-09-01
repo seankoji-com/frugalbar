@@ -388,6 +388,13 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                   let completionStr = pricing.completion, let completionPrice = Double(completionStr),
                   let contextLength = entry.context_length,
                   let modalities = entry.architecture?.output_modalities,
+                  // The badge claims a *text-capable* coding model. Requiring
+                  // "text" output excludes both a genuinely empty modality list
+                  // and any entry whose only outputs are image/audio/video —
+                  // never assuming one is text-safe. Audio is also excluded
+                  // explicitly: a `text+audio` music generator is still not a
+                  // coding model and must not win a badge.
+                  modalities.contains("text"),
                   !modalities.contains("audio")
             else { return nil }
             return RankedModel(
