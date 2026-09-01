@@ -41,18 +41,35 @@ print_usage() {
 	echo "usage: verify-cli.sh --binary <path> --version-text \"<expected>\" --usage <name>" >&2
 }
 
+# Value-taking option branches shift past their value, so a trailing flag with
+# no value (e.g. a bare `--binary`) must be caught here rather than left to a
+# failed `shift 2` — which in bash leaves the positional parameters unchanged
+# and would re-parse the same flag forever (a hang in the script's own arg
+# parser, the very failure mode the script exists to surface for the binary).
+require_value() {
+	local flag="${1:-}" value="${2:-}"
+	if [ -z "$value" ]; then
+		echo "::error::verify-cli.sh: $flag requires a value"
+		print_usage
+		exit 2
+	fi
+}
+
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--binary)
-		binary="${2:-}"
+		require_value "$1" "${2:-}"
+		binary="$2"
 		shift 2
 		;;
 	--version-text)
-		expected_version="${2:-}"
+		require_value "$1" "${2:-}"
+		expected_version="$2"
 		shift 2
 		;;
 	--usage)
-		usage_name="${2:-}"
+		require_value "$1" "${2:-}"
+		usage_name="$2"
 		shift 2
 		;;
 	-h | --help)

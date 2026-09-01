@@ -360,6 +360,11 @@ public actor QuotaManager {
             rebuilt.spendWindows = updated.spendWindows
             rebuilt.freeTierModelBadge = updated.freeTierModelBadge
             rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+            // A rebuild must not drop a real measurement fact: if the catalog
+            // fetch failed, the "couldn't load" placeholder must survive the
+            // attach pass or it silently disappears until the next poll, even
+            // though the failure is still real.
+            rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
             updated = rebuilt
         }
         return updated
@@ -421,6 +426,11 @@ public actor QuotaManager {
         rebuilt.spendWindows = updated.spendWindows
         rebuilt.freeTierModelBadge = updated.freeTierModelBadge
         rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
+        // A rebuild must not drop a real measurement fact: if the catalog
+        // fetch failed, the "couldn't load" placeholder must survive the
+        // retention pass or it silently disappears until the next poll, even
+        // though the failure is still real.
+        rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
         return rebuilt
     }
 

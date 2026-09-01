@@ -259,7 +259,8 @@ public enum CredentialStore {
         task.arguments = ["auth", "token"]
         let out = Pipe()
         task.standardOutput = out
-        task.standardError = Pipe()   // don't inherit stderr into the app's log
+        let err = Pipe()
+        task.standardError = err
         task.standardInput = FileHandle.nullDevice
 
         // `run()` throws when the binary cannot be launched. The previous code
@@ -268,6 +269,11 @@ public enum CredentialStore {
         do {
             try task.run()
         } catch {
+            // gh is installed but cannot be launched — a genuinely broken
+            // state, distinct from "no gh installed" (which returns silently
+            // above) so an operator can pin the root cause rather than seeing
+            // only "Not configured" from every GitHub provider.
+            NSLog("frugalbar: gh auth token: failed to launch \(ghPath): \(error.localizedDescription)")
             return nil
         }
 
@@ -285,7 +291,16 @@ public enum CredentialStore {
         // the pipe buffer.
         let data = out.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
-        guard task.terminationStatus == 0 else { return nil }
+        guard task.terminationStatus == 0 else {
+            // gh is installed but `gh auth token` failed (not logged in, or
+            // broken). Surface it in the unified log with gh's own stderr so
+            // an operator can tell a broken gh from a clean no-credential
+            // state instead of seeing only "Not configured".
+            let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("frugalbar: gh auth token exited with status \(task.terminationStatus)\(errText.isEmpty ? "" : ": \(errText)")")
+            return nil
+        }
 
         let token = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -623,10 +638,22 @@ extension CredentialStore {
         return "\(base) (\(multiplier))"
     }
 
+    /// Logged at most once per process so a user who simply has CLI discovery
+    /// off (the default) doesn't get a `frugalbar:` line every two-minute poll,
+    /// drowning the actionable lines. A process-lifetime flag, not a per-poll
+    /// one: the configuration is static, so past the first poll the same line
+    /// would add nothing — the point is to distinguish "discovery disabled"
+    /// from "plan genuinely absent" in any single captured log, and one line
+    /// does that.
+    nonisolated(unsafe) private static var claudePlanDiscoveryDisabledLogged = false
+
     /// Reads the tier off disk or the Keychain, on the credential queue.
     public static func claudePlanNameAsync() async -> String? {
         guard isCLIDiscoveryEnabled else {
-            NSLog("frugalbar: Claude plan-name lookup skipped (CLI credential discovery disabled)")
+            if !Self.claudePlanDiscoveryDisabledLogged {
+                Self.claudePlanDiscoveryDisabledLogged = true
+                NSLog("frugalbar: Claude plan-name lookup skipped (CLI credential discovery disabled)")
+            }
             return nil
         }
         return await withCheckedContinuation { continuation in
