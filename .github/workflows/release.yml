@@ -71,38 +71,24 @@ jobs:
 
       - name: Verify frugalbar binary runs
         run: |
-          # macOS runners ship no GNU `timeout`; use perl's alarm() as a
-          # portable substitute. The itimer survives exec(), so a hang in
-          # frugalbar still gets killed after 10s.
+          # Shared CLI smoke check (scripts/verify-cli.sh) — the same script
+          # quotabar-ci.yml runs against the debug binary, so the two verify
+          # paths stay in sync. It exercises the built release artifact under
+          # a 10s perl watchdog (macOS ships no GNU `timeout`; perl's alarm()
+          # itimer survives exec(), so a hang still gets killed), and tells a
+          # watchdog kill (142) apart from a normal crash with a ::error:: line.
           #
           # The sed check in the previous step only confirms the *source*
           # got stamped — it says nothing about the binary SwiftPM actually
           # produced. A stale .build object or a bad `cp` could still ship a
-          # release whose --version prints "development build"; assert the
+          # release whose --version prints the development label; assert the
           # built artifact's own output instead of just its exit code.
           VER="${{ steps.semver.outputs.tag }}"
           VER="${VER#v}"
-          # Captured explicitly rather than left to `set -e`: an unchecked
-          # `VAR=$(cmd)` failure aborts the step on perl's own exit status
-          # with no line naming what happened, so a hang surfaces only as a
-          # bare "exit 142" with no indication that was the 10s watchdog
-          # firing rather than the binary itself crashing.
-          set +e
-          OUTPUT=$(perl -e 'alarm 10; exec @ARGV or die "exec failed: $!"' bin/frugalbar --version)
-          STATUS=$?
-          set -e
-          if [ "$STATUS" -eq 142 ]; then
-            echo "::error::bin/frugalbar --version did not exit within the 10s watchdog (hung)"
-            exit 1
-          elif [ "$STATUS" -ne 0 ]; then
-            echo "::error::bin/frugalbar --version exited with status $STATUS"
-            exit 1
-          fi
-          echo "$OUTPUT"
-          [ "$OUTPUT" = "$VER" ] || {
-            echo "::error::bin/frugalbar --version printed '$OUTPUT', expected '$VER'"
-            exit 1
-          }
+          scripts/verify-cli.sh \
+            --binary bin/frugalbar \
+            --version-text "FrugalBar ${VER}" \
+            --usage frugalbar
 
       # After the build and the binary smoke check, but *before* the release:
       # action-gh-release creates the tag itself when `tag_name` does not yet
@@ -139,9 +125,17 @@ jobs:
       # cleans up when the tag push succeeded and the release publish did
       # not: a failure in a later step (e.g. the Homebrew tap update) means
       # the release already shipped, and the tag must stay.
+      #
+      # `always()` rather than `failure()`: a cancelled job reports neither
+      # success nor failure, so `failure()` would skip cleanup and leave the
+      # orphaned tag behind on a cancel between tag-push and release.
       - name: Delete orphaned tag if the release failed to publish
-        if: failure() && steps.tag_commit.outcome == 'success' && steps.create_release.outcome != 'success'
-        run: git push --delete origin "${{ steps.semver.outputs.tag }}" || true
+        if: always() && steps.tag_commit.outcome == 'success' && steps.create_release.outcome != 'success'
+        run: |
+          if ! git push --delete origin "${{ steps.semver.outputs.tag }}"; then
+            echo "::error::delete of orphaned tag failed: ${{ steps.semver.outputs.tag }}"
+            exit 1
+          fi
 
       - name: Generate seankoji-com-ci App token
         id: app-token

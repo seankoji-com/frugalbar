@@ -47,33 +47,31 @@ jobs:
 
       - name: Verify frugalbar binary runs
         run: |
-          # No release copy step here (that's release.yml's job) — exercise
-          # the debug binary SwiftPM just built directly. macOS runners ship
-          # no GNU `timeout`; perl's alarm() is the portable substitute, and
-          # its itimer survives exec() so a hang still gets killed.
+          # Shared CLI smoke check (scripts/verify-cli.sh), which release.yml
+          # also calls, so the two never drift. No release copy step here
+          # (that's release.yml's job) — exercise the debug binary SwiftPM
+          # just built directly, under a 10s perl watchdog.
           #
           # A plain exit-0 check can't tell "printed the right thing" from
           # "printed nothing and exited clean" — assert the actual output. An
           # unstamped debug build always resolves to AppInfo.developmentLabel;
           # anything else here means the version-resolution fallback broke.
-          OUTPUT=$(perl -e 'alarm 10; exec @ARGV or die "exec failed: $!"' .build/debug/QuotaBar --version)
-          echo "$OUTPUT"
-          [ "$OUTPUT" = "development build" ] || {
-            echo "::error::expected --version to print 'development build' on an unstamped CI build, got: $OUTPUT"
-            exit 1
-          }
+          scripts/verify-cli.sh \
+            --binary .build/debug/QuotaBar \
+            --version-text "FrugalBar development build" \
+            --usage QuotaBar
 
       - name: Verify frugalbar --help
         run: |
           # The Homebrew formula's own `test do` block runs `frugalbar --help`,
           # not `--version` — this CI job otherwise never exercises that path,
           # so a broken --help could ship and only fail `brew test` downstream.
-          HELP=$(perl -e 'alarm 10; exec @ARGV or die "exec failed: $!"' .build/debug/QuotaBar --help)
-          echo "$HELP"
-          echo "$HELP" | grep -q "Usage: frugalbar" || {
-            echo "::error::--help output did not contain the expected 'Usage: frugalbar' line"
-            exit 1
-          }
+          # The shared script greps the help for "Usage: QuotaBar" (the
+          # basename of argv0 on the debug binary).
+          scripts/verify-cli.sh \
+            --binary .build/debug/QuotaBar \
+            --version-text "FrugalBar development build" \
+            --usage QuotaBar
 
       - name: Run tests
         run: swift test -c debug --parallel
