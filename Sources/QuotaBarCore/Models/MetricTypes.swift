@@ -421,6 +421,15 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// existing initializer, nor any other provider's call site, has to change.
     public var freeTierModelBadge: String? = nil
     public var cheapestLargeContextModelBadge: String? = nil
+    /// True when OpenRouter's model catalog could not be fetched this poll
+    /// (network/HTTP/decode failure or the 5s deadline elapsing). A MEASUREMENT
+    /// FACT — drives whether the UI draws a "couldn't load model info"
+    /// placeholder instead of silently omitting the badges anyway. Deliberately
+    /// distinct from a genuine zero-match, where the catalog *was* read and no
+    /// model qualified: that is a real answer and stays `false`, drawing
+    /// nothing. Defaulted here (not as an init parameter) so neither existing
+    /// initializer, nor any other provider's call site, has to change.
+    public var openRouterCatalogUnavailable: Bool = false
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
