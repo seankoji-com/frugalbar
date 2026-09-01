@@ -210,14 +210,20 @@ struct DoctorReport {
         // Keychain). So an unset var reports as skipped, never as a failure: a
         // doctor that prints [FAIL] on a correctly configured machine trains
         // people to ignore it. Optional checks never affect the exit code.
-        // The names come from GeminiOAuthSession's constants so a rename can't
-        // silently desync this check from the provider that actually reads them.
+        //
+        // Presence is read through GeminiOAuthSession's constants so a rename
+        // can't silently desync this check from the provider that reads them —
+        // but the *printed* label is plain prose that never reproduces a
+        // secret-named env identifier. Doctor output must never carry (or even
+        // look like it carries) a credential (AGENTS.md); CodeQL flags exactly
+        // this kind of name-in-log as cleartext secrets.
         let env = ProcessInfo.processInfo.environment
-        for name in [GeminiOAuthSession.clientIDEnvVar, GeminiOAuthSession.clientSecretEnvVar] {
-            let ok = !(env[name] ?? "").isEmpty
-            report.envChecks.append(Check(label: name, ok: ok, optional: true))
-            report.report("\(name) present (optional — Gemini OAuth via env)", ok: ok, optional: true)
-        }
+        let geminiOAuthEnvConfigured =
+            !(env[GeminiOAuthSession.clientIDEnvVar] ?? "").isEmpty
+            && !(env[GeminiOAuthSession.clientSecretEnvVar] ?? "").isEmpty
+        let envLabel = "Gemini OAuth client env configured"
+        report.envChecks.append(Check(label: envLabel, ok: geminiOAuthEnvConfigured, optional: true))
+        report.report(envLabel, ok: geminiOAuthEnvConfigured, optional: true)
         return report
     }
 

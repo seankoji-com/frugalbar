@@ -56,18 +56,11 @@ jobs:
           # "printed nothing and exited clean" — assert the actual output. An
           # unstamped debug build always resolves to AppInfo.developmentLabel;
           # anything else here means the version-resolution fallback broke.
-          scripts/verify-cli.sh \
-            --binary .build/debug/QuotaBar \
-            --version-text "FrugalBar development build" \
-            --usage QuotaBar
-
-      - name: Verify frugalbar --help
-        run: |
-          # The Homebrew formula's own `test do` block runs `frugalbar --help`,
-          # not `--version` — this CI job otherwise never exercises that path,
-          # so a broken --help could ship and only fail `brew test` downstream.
-          # The shared script greps the help for "Usage: QuotaBar" (the
-          # basename of argv0 on the debug binary).
+          #
+          # The script checks BOTH --version (exact text) and --help
+          # (containing "Usage: <usage-name>") — so this single invocation
+          # also covers the --help path the Homebrew formula's `test do` runs,
+          # which would otherwise only fail downstream on `brew test`.
           scripts/verify-cli.sh \
             --binary .build/debug/QuotaBar \
             --version-text "FrugalBar development build" \
