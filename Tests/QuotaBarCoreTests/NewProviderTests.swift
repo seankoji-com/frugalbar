@@ -75,6 +75,7 @@ private final class NewProviderStub: URLProtocol {
 private enum StubHost {
     static let grok = "cli-chat-proxy.grok.com"
     static let devpass = "api.llmgateway.io"
+    static let opencode = "opencode.ai"
 }
 
 private func withRoutedHTTP<T: Sendable>(
@@ -667,5 +668,42 @@ struct DevPassQuotaProviderTests {
     func noneIsNotAPlan() {
         #expect(DevPassQuotaProvider.planDisplayName("none") == nil)
         #expect(DevPassQuotaProvider.planDisplayName(nil) == nil)
+    }
+}
+
+// MARK: - OpenCode Go
+
+/// The regression this pins: a fully rate-limited account (every window
+/// blocked, no window publishing a percent) used to fall through the
+/// `measured.max()` guard to `.unavailable(.unsupported(...))` — rendering the
+/// generic "No usage API" message and never letting the blocked-placeholder
+/// rows this provider deliberately builds get drawn.
+@Suite("OpenCodeGoProvider", .serialized)
+struct OpenCodeGoProviderTests {
+
+    @Test("a fully rate-limited account renders blocked placeholders, not 'unsupported'")
+    func fullyRateLimited() async throws {
+        let body = #"""
+        {"usage":{"rolling":{"status":"rate-limited"},
+                  "weekly":{"status":"rate-limited"},
+                  "monthly":{"status":"rate-limited"}}}
+        """#
+        let snapshot = try await withStubbedHTTP(host: StubHost.opencode, body: body) {
+            try await OpenCodeGoProvider(apiKey: "k").fetchSnapshot()
+        }
+
+        // The reading is *measured*, never the generic unsupported path — a
+        // blocked window is meaningful, not "OpenCode published nothing".
+        #expect(snapshot.status.confidence == .measured)
+        #expect(snapshot.status.urgency == .critical)
+        // Each row is a blocked placeholder: flagged, with no invented percent.
+        #expect(snapshot.row1?.isBlocked == true)
+        #expect(snapshot.row1?.primaryFraction == nil)
+        #expect(snapshot.row2?.isBlocked == true)
+        #expect(snapshot.row2?.primaryFraction == nil)
+        #expect(snapshot.row3?.isBlocked == true)
+        #expect(snapshot.row3?.primaryFraction == nil)
+        // The stub was actually exercised.
+        #expect(NewProviderStub.lastRequest(host: StubHost.opencode) != nil)
     }
 }
