@@ -78,4 +78,28 @@ struct StatusIndicatorDotTests {
         #expect(StatusIndicatorDot.symbol(for: status) == "exclamationmark.octagon.fill")
         #expect(StatusIndicatorDot.tint(for: status) == Theme.error)
     }
+
+    // MARK: - shouldShowIndicator (dot only when something is wrong)
+
+    @Test("healthy avatar shows no indicator")
+    func healthyShowsNoIndicator() {
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .healthy) == false)
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .measured(.none)) == false)
+    }
+
+    @Test("warning avatar shows an indicator")
+    func warningShowsIndicator() {
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .measured(.warning)) == true)
+    }
+
+    @Test("critical avatar shows an indicator")
+    func criticalShowsIndicator() {
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .measured(.critical)) == true)
+    }
+
+    @Test("unavailable avatar shows an indicator")
+    func unavailableShowsIndicator() {
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .unavailable(.notConfigured)) == true)
+        #expect(StatusIndicatorDot.shouldShowIndicator(for: .unavailable(.badResponse)) == true)
+    }
 }

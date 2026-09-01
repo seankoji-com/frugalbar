@@ -10,6 +10,10 @@ import QuotaBarCore
 struct StatusIndicatorDot: View {
 
     let status: ProviderStatus
+    /// Side length of the avatar this dot overlays. The glyph and frame are
+    /// derived from it so the mark always fits inside the avatar's corner
+    /// rather than hanging off it at the smallest used size (30pt).
+    var size: CGFloat = 14
 
     // `nonisolated`: pure functions of their arguments, but `View`'s `body`
     // requirement is main-actor-isolated and the compiler can infer that
@@ -27,6 +31,22 @@ struct StatusIndicatorDot: View {
         }
     }
 
+    /// Whether the avatar should draw a status badge at all.
+    ///
+    /// The badge exists to flag *something wrong* — quota pressure or an
+    /// unreadable provider. A healthy avatar is already identified by its logo
+    /// and a redundant checkmark over it is noise (issue #39 / I17). Only
+    /// non-healthy states show a mark; the glyphs (`symbol(for:)`) still carry
+    /// shape meaning for exactly the states that do appear.
+    nonisolated static func shouldShowIndicator(for status: ProviderStatus) -> Bool {
+        switch (status.confidence, status.urgency) {
+        case (.unavailable, _):      return true
+        case (_, .warning):          return true
+        case (_, .critical):         return true
+        default:                     return false
+        }
+    }
+
     nonisolated static func tint(for status: ProviderStatus) -> Color {
         if status.confidence == .unavailable { return Theme.outline }
         switch status.urgency {
@@ -37,10 +57,14 @@ struct StatusIndicatorDot: View {
     }
 
     var body: some View {
+        // Proportional to the avatar, not fixed 14pt/11pt, so the mark stays
+        // inside the corner of even the smallest avatar (30pt). The frame is
+        // ~0.42 of the avatar side and the glyph ~72% of that (~size*0.30).
+        let frame = size * 0.42
         Image(systemName: Self.symbol(for: status))
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: frame * 0.72, weight: .semibold))
             .foregroundStyle(Self.tint(for: status))
-            .frame(width: 14)
+            .frame(width: frame, height: frame)
             .accessibilityHidden(true)   // the row supplies the spoken label
     }
 }

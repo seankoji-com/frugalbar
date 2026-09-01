@@ -179,10 +179,14 @@ public struct VendorAvatarView: View {
             }
             .frame(width: size, height: size)
 
-            // The ✗ already says everything the dot would, louder.
-            if !isExhausted {
-                StatusIndicatorDot(status: status)
-                    .offset(x: 3, y: -3)
+            // The ✗ already says everything the dot would, louder. Beyond
+            // that, the badge only appears for a status that is *wrong* — a
+            // healthy avatar gets no redundant checkmark. Size it from the
+            // avatar and tuck it toward the inside so it never hangs off the
+            // corner.
+            if !isExhausted && StatusIndicatorDot.shouldShowIndicator(for: status) {
+                StatusIndicatorDot(status: status, size: size)
+                    .offset(x: -size * 0.08, y: size * 0.08)
             }
         }
         .frame(width: size, height: size)
