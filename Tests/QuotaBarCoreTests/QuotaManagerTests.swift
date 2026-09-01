@@ -74,7 +74,7 @@ struct QuotaManagerTests {
     @Test("a throwing provider does not prevent its peers from returning")
     func throwingProviderDoesNotBlockPeers() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [
                     StubProvider(vendorId: .claude, behavior: .throwError(.badResponse)),
@@ -90,7 +90,7 @@ struct QuotaManagerTests {
     @Test("a hanging provider is cut off by the per-provider deadline")
     func hangingProviderTimesOut() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 0.3),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 0.3, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, behavior: .hang(seconds: 5))]
             }
@@ -103,7 +103,7 @@ struct QuotaManagerTests {
     func freshCacheShortCircuitsSecondRefresh() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, counter: counter, behavior: .succeed(.none))]
             }
@@ -118,7 +118,7 @@ struct QuotaManagerTests {
     func forceRefreshBypassesCache() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, counter: counter, behavior: .succeed(.none))]
             }
@@ -133,7 +133,7 @@ struct QuotaManagerTests {
     func concurrentRefreshesCollapseIntoOneFetch() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 // A short hang widens the window so all three refresh() calls
                 // are guaranteed to observe the in-flight fetch and join it,
@@ -162,7 +162,7 @@ struct QuotaManagerTests {
     @Test("sortedSnapshots returns entries in canonical provider order")
     func sortedSnapshotsCanonicalOrder() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [
                     StubProvider(vendorId: .githubGraphql, behavior: .succeed(.none)),
@@ -179,7 +179,7 @@ struct QuotaManagerTests {
     @Test("worstUrgency reflects the highest urgency among cached snapshots")
     func worstUrgencyReflectsCache() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [
                     StubProvider(vendorId: .claude, behavior: .succeed(.warning)),
@@ -318,7 +318,7 @@ struct QuotaManagerTests {
     func transientErrorPreservesMeasuredCache() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 let call = counter.increment()
                 if call == 1 {

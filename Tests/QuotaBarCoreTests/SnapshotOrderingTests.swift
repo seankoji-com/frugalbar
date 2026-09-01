@@ -48,7 +48,7 @@ private func snapshot(
 
 private func manager(_ snapshots: [QuotaSnapshot]) -> QuotaManager {
     QuotaManager(
-        cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+        cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
         providerFactory: { snapshots.map { FixedProvider(vendorId: $0.vendorId, snapshot: $0) } }
     )
 }
