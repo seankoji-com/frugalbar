@@ -12,12 +12,14 @@ struct MetricRowPresentationTests {
         name: String = "Vendor",
         metric: MetricType,
         status: ProviderStatus,
-        resetsAt: Date? = nil
+        resetsAt: Date? = nil,
+        row1: DualBarMetrics? = nil
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             id: name, vendorId: .githubRest, displayName: name,
             category: .developerLimits, metric: metric, status: status,
-            resetsAt: resetsAt, lastUpdated: now, auxiliaryInfo: nil
+            resetsAt: resetsAt, lastUpdated: now, auxiliaryInfo: nil,
+            row1: row1
         )
     }
 
@@ -71,6 +73,35 @@ struct MetricRowPresentationTests {
         #expect(p.isMeasured)
         #expect(p.valueLabel.contains("12.34"))
         #expect(p.accessibilityLabel.contains("spent"))
+    }
+
+    /// I27's regression: a measured provider whose window came back with *no
+    /// percentage* (a nil-fraction, non-blocked `DualBarMetrics` bar) must not
+    /// be rendered as a fabricated "0%"/"100%" consumption. The row has no
+    /// denominator — so no bar, no percentage, and crucially not "exhausted" —
+    /// even though the snapshot is a real measured one.
+    @Test("a nil-fraction, non-blocked bar renders no fabricated percentage")
+    func nilFractionBarRendersNoFabricatedPercent() {
+        let p = MetricRowPresentation(
+            snapshot: snapshot(
+                name: "Gemini",
+                metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+                status: .measured(.none),
+                row1: DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: false)
+            ),
+            now: now
+        )
+        // No denominator → no bar, no computed fraction.
+        #expect(p.fraction == nil)
+        // Coercing the nil fraction to 1.0 would flip this to `true` and paint
+        // a spent row from zero data — the exact fabrication I27 forbids.
+        #expect(p.isExhausted == false)
+        // The row says what it actually knows — the plan name — and nothing
+        // that implies a measured percentage.
+        #expect(p.valueLabel == "AI Studio")
+        #expect(!p.valueLabel.contains("%"))
+        #expect(!p.accessibilityLabel.contains("%"))
+        #expect(!p.accessibilityLabel.lowercased().contains("percent"))
     }
 
     // MARK: - Measured readings
