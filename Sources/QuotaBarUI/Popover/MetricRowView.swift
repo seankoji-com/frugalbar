@@ -109,7 +109,7 @@ struct MetricRowView: View {
         if showOpenRouterCatalogPlaceholder {
             // Mirror how the badges are folded in: the placeholder is not a
             // pill with its own reachable label, so it must be spoken here.
-            parts.append("Couldn't load model info")
+            parts.append(catalogUnavailableText)
         }
         return parts.joined(separator: ". ")
     }
@@ -144,18 +144,25 @@ struct MetricRowView: View {
     /// Muted placeholder shown when OpenRouter's catalog could not be read at
     /// all this poll. Deliberately a faint text line, not a filled pill: a
     /// real badge would read as a real model ranking, and this is the honest
-    /// absence of one. Spoken via `combinedAccessibilityLabel`, never a
-    /// colour-only channel (WCAG 1.4.1).
+    /// absence of one. Copy frames it as transient/harmless (it's a
+    /// supplementary nicety, not the whole row failing) and the face is the
+    /// subtitle — the same tier of secondary text as the plan/reset line, not
+    /// the monospaced two-character token face. Spoken via
+    /// `combinedAccessibilityLabel`, never a colour-only channel (WCAG 1.4.1).
     private var openRouterCatalogPlaceholderRow: some View {
         HStack(spacing: 0) {
-            Text("Couldn't load model info")
-                .font(Theme.Typography.token)
-                .tracking(Theme.Tracking.token)
+            Text(catalogUnavailableText)
+                .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
+    }
+
+    /// The spoken and visible wording for a catalog that could not be read.
+    private var catalogUnavailableText: String {
+        "Model info unavailable — will retry"
     }
 
     private var row: some View {

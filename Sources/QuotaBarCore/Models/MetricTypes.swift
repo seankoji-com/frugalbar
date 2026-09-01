@@ -472,6 +472,19 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         quotaBars.contains { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold || $0.isBlocked }
     }
 
+    /// Every consumable window is blocked with no percentage at all — a fully
+    /// rate-limited / cut-off account (e.g. OpenCode's `rate-limited` signal).
+    ///
+    /// Distinct from "spent": spent is a *number* we measured hitting ~100%,
+    /// whereas here nothing can be used right now and no number exists to back
+    /// that. The UI reads this as "blocked" (the vendor's own word), never as
+    /// "nearly used up" — an avatar ✗, a spoken "blocked", and a modal
+    /// headline all key off it.
+    public var isFullyBlockedWithoutReading: Bool {
+        let bars = quotaBars
+        return !bars.isEmpty && bars.allSatisfy { $0.isBlocked && $0.primaryFraction == nil }
+    }
+
     /// When this vendor's *longest* window turns over.
     ///
     /// The longest window is the one that governs planning — a five-hour

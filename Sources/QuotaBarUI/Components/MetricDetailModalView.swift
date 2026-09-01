@@ -378,7 +378,15 @@ public struct MetricDetailModalView: View {
         case .unavailable(let reason): return reason.headline
         case .measured(.none):     return "All Systems Healthy"
         case .measured(.warning):  return "Quota Warning (Elevated Burn)"
-        case .measured(.critical): return "Critical Limits Approaching"
+        case .measured(.critical):
+            // A fully rate-limited account is already cut off, not merely
+            // "approaching" its limit — the vendor's own word is "blocked",
+            // so say that rather than fusing "may hit the cap soon" with
+            // "you can't use it right now".
+            if snapshot.isFullyBlockedWithoutReading {
+                return "Rate Limited — No Usage Available"
+            }
+            return "Critical Limits Approaching"
         }
     }
 }

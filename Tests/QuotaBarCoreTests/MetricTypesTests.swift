@@ -181,6 +181,37 @@ struct DualBarNeverCoercedTests {
         let snap = snapshot(DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: true))
         #expect(snap.isQuotaExhausted == true)
     }
+
+    @Test("isFullyBlockedWithoutReading is true only when every window is blocked with no reading")
+    func fullyBlockedPredicate() {
+        func two(_ a: DualBarMetrics?, _ b: DualBarMetrics?) -> QuotaSnapshot {
+            QuotaSnapshot(
+                id: "t", vendorId: .githubRest, displayName: "t",
+                category: .developerLimits,
+                metric: .subscription(tierName: "Pro", renewalDate: nil),
+                status: .healthy, resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+                row1: a, row2: b
+            )
+        }
+
+        // All windows blocked, no percentages: a fully rate-limited account.
+        let blocked = two(
+            DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: true),
+            DualBarMetrics(primaryFraction: nil, label: "MO", isBlocked: true)
+        )
+        #expect(blocked.isFullyBlockedWithoutReading)
+
+        // One healthy measured window alongside a blocked one is not *fully*
+        // blocked (some usage is still possible / known).
+        let partial = two(
+            DualBarMetrics(primaryFraction: 0.5, label: "MO"),
+            DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: true)
+        )
+        #expect(partial.isFullyBlockedWithoutReading == false)
+
+        // No windows at all is not "fully blocked" — it is an absence.
+        #expect(snapshot(nil).isFullyBlockedWithoutReading == false)
+    }
 }
 
 @Suite("VendorIdentifier")
