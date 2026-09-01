@@ -421,6 +421,15 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// existing initializer, nor any other provider's call site, has to change.
     public var freeTierModelBadge: String? = nil
     public var cheapestLargeContextModelBadge: String? = nil
+    /// True when OpenRouter's model catalog could not be fetched this poll
+    /// (network/HTTP/decode failure or the 5s deadline elapsing). A MEASUREMENT
+    /// FACT — drives whether the UI draws a "couldn't load model info"
+    /// placeholder instead of silently omitting the badges anyway. Deliberately
+    /// distinct from a genuine zero-match, where the catalog *was* read and no
+    /// model qualified: that is a real answer and stays `false`, drawing
+    /// nothing. Defaulted here (not as an init parameter) so neither existing
+    /// initializer, nor any other provider's call site, has to change.
+    public var openRouterCatalogUnavailable: Bool = false
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
@@ -461,6 +470,19 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// never make an untouched allowance look exhausted.
     public var isQuotaExhausted: Bool {
         quotaBars.contains { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold || $0.isBlocked }
+    }
+
+    /// Every consumable window is blocked with no percentage at all — a fully
+    /// rate-limited / cut-off account (e.g. OpenCode's `rate-limited` signal).
+    ///
+    /// Distinct from "spent": spent is a *number* we measured hitting ~100%,
+    /// whereas here nothing can be used right now and no number exists to back
+    /// that. The UI reads this as "blocked" (the vendor's own word), never as
+    /// "nearly used up" — an avatar ✗, a spoken "blocked", and a modal
+    /// headline all key off it.
+    public var isFullyBlockedWithoutReading: Bool {
+        let bars = quotaBars
+        return !bars.isEmpty && bars.allSatisfy { $0.isBlocked && $0.primaryFraction == nil }
     }
 
     /// When this vendor's *longest* window turns over.

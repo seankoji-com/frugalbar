@@ -112,4 +112,28 @@ struct MetricRowExhaustionTests {
         #expect(p.accessibilityLabel.contains("exhausted"))
         #expect(p.accessibilityLabel.contains("Resets on 1st of month"))
     }
+
+    @Test("a fully rate-limited account reads as blocked, not merely critically low")
+    func fullyBlockedIsExhaustedAndSpokenBlocked() {
+        // Every window blocked with no percentage (OpenCodeGo's rate-limited
+        // reading). There is no spent bar (nil fractions), yet the account is
+        // unusable — so the row must be treated as exhausted (avatar ✗) and the
+        // user must *hear* "blocked", never the "critically low" phrasing that
+        // would imply it is merely low-but-usable.
+        let p = MetricRowPresentation(
+            snapshot: snapshot(
+                bars: [
+                    DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: true, resetText: "Resets in 2 hours"),
+                    DualBarMetrics(primaryFraction: nil, label: "MO", isBlocked: true, resetText: "Resets on 1st of month"),
+                ],
+                status: .measured(.critical)
+            ),
+            now: now
+        )
+        #expect(p.isExhausted)
+        // Reset text is drawn from the first blocked bar, not lost.
+        #expect(p.exhaustedResetText == "Resets in 2 hours")
+        #expect(p.accessibilityLabel.contains("blocked"))
+        #expect(!p.accessibilityLabel.contains("critically low"))
+    }
 }

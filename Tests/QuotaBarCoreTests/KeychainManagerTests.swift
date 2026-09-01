@@ -123,6 +123,40 @@ struct KeychainManagerTests {
         #expect(try KeychainManager.shared.get(label: b) == "beta")
     }
 
+    @Test("KeychainError.unknown maps known OSStatus codes to readable text")
+    func unknownStatusErrorDescriptions() {
+        func desc(_ s: OSStatus) -> String? {
+            (KeychainError.unknown(s) as any Error).localizedDescription
+        }
+        #expect(desc(errSecInteractionNotAllowed) == "Keychain access not allowed (your keychain may be locked)")
+        #expect(desc(errSecAuthFailed) == "Keychain authentication failed")
+        #expect(desc(errSecMissingEntitlement) == "Keychain access requires a signed, entitled app")
+        #expect(desc(errSecDuplicateItem) == "A matching keychain item already exists")
+    }
+
+    @Test("an unrecognised OSStatus keeps a readable fallback that shows the number")
+    func unknownStatusFallback() {
+        let s: OSStatus = -12345
+        #expect((KeychainError.unknown(s) as any Error).localizedDescription == "Keychain error \(-12345)")
+    }
+
+    /// Compile-level regression: the `--doctor` probe (T9) needs to suppress
+    /// the keychain prompt, and that hook must exist with a default of `true`
+    /// so the GUI credential path keeps allowing a prompt.
+    ///
+    /// Forming an unapplied method reference (with the `allowsAuthenticationPrompt`
+    /// label spelled out) makes the compiler type-check the signature without
+    /// *invoking* the body — so nothing is ever written to or read from the
+    /// real keychain. A `Result { try … }` initializer would be a live call
+    /// (its closure runs eagerly) and is deliberately avoided here: that writes
+    /// a real SecItemAdd under a non-randomised label and never deletes it.
+    @Test("set/get expose allowsAuthenticationPrompt, defaulting to true")
+    func authenticationPromptParameterExists() {
+        // Method references, never called — a hermetic compile guard.
+        let _: (String, String, Bool) throws -> Void = KeychainManager.shared.set(key:label:allowsAuthenticationPrompt:)
+        let _: (String, Bool) throws -> String = KeychainManager.shared.get(label:allowsAuthenticationPrompt:)
+    }
+
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")
     func credentialCacheHitAndExpiry() {
         // A fresh instance, not .shared — this exercises the cache/expiry

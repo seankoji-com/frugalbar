@@ -52,11 +52,26 @@ struct MetricRowView: View {
         (snapshot.freeTierModelBadge != nil || snapshot.cheapestLargeContextModelBadge != nil)
     }
 
+    /// A catalog failure surfaces a muted placeholder instead of silently
+    /// omitting the badge row. Deliberately gated on *no badges being present*:
+    /// `openRouterCatalogUnavailable` means "the catalog could not be read at
+    /// all this poll", so if badges did come through the failure is moot and
+    /// the real badges win. Distinct from a genuine zero-match (`failed ==
+    /// false`, no badges), which is a real "nothing qualified" answer and
+    /// draws nothing.
+    private var showOpenRouterCatalogPlaceholder: Bool {
+        snapshot.vendorId == .openrouter &&
+        snapshot.openRouterCatalogUnavailable == true &&
+        !hasOpenRouterBadges
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             row
             if hasOpenRouterBadges {
                 openRouterBadgesRow
+            } else if showOpenRouterCatalogPlaceholder {
+                openRouterCatalogPlaceholderRow
             }
         }
         .padding(.vertical, 9)
@@ -91,6 +106,11 @@ struct MetricRowView: View {
         if let cheap = snapshot.cheapestLargeContextModelBadge {
             parts.append("Cheapest model with 1 million or more context: \(cheap)")
         }
+        if showOpenRouterCatalogPlaceholder {
+            // Mirror how the badges are folded in: the placeholder is not a
+            // pill with its own reachable label, so it must be spoken here.
+            parts.append(catalogUnavailableText)
+        }
         return parts.joined(separator: ". ")
     }
 
@@ -119,6 +139,30 @@ struct MetricRowView: View {
                 }
             }
         }
+    }
+
+    /// Muted placeholder shown when OpenRouter's catalog could not be read at
+    /// all this poll. Deliberately a faint text line, not a filled pill: a
+    /// real badge would read as a real model ranking, and this is the honest
+    /// absence of one. Copy frames it as transient/harmless (it's a
+    /// supplementary nicety, not the whole row failing) and the face is the
+    /// subtitle — the same tier of secondary text as the plan/reset line, not
+    /// the monospaced two-character token face. Spoken via
+    /// `combinedAccessibilityLabel`, never a colour-only channel (WCAG 1.4.1).
+    private var openRouterCatalogPlaceholderRow: some View {
+        HStack(spacing: 0) {
+            Text(catalogUnavailableText)
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The spoken and visible wording for a catalog that could not be read.
+    private var catalogUnavailableText: String {
+        "Model info unavailable — will retry"
     }
 
     private var row: some View {
@@ -171,8 +215,7 @@ struct MetricRowView: View {
                     ForEach(Array(snapshot.bars.enumerated()), id: \.offset) { _, barMetrics in
                         DualBarProgressView(
                             metrics: barMetrics,
-                            accentColor: accentColor,
-                            urgency: snapshot.status.urgency
+                            accentColor: accentColor
                         )
                     }
                 }

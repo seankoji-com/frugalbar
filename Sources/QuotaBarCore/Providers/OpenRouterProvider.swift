@@ -41,7 +41,10 @@ actor ModelCatalogCache {
             return cached.badges
         }
         guard let badges = await fetch() else {
-            return OpenRouterProvider.ModelBadges()
+            // `fetch` returned nil on a network/HTTP/decode failure. It must
+            // not be cached, but it must carry the failure bit so the caller
+            // can distinguish it from a genuine zero-match.
+            return OpenRouterProvider.ModelBadges(failed: true)
         }
         cached = (badges, Date())
         return badges
@@ -82,6 +85,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         let badges = await badgesTask
         snapshot.freeTierModelBadge = badges.freeTier
         snapshot.cheapestLargeContextModelBadge = badges.cheapestLargeContext
+        snapshot.openRouterCatalogUnavailable = badges.failed
         return snapshot
     }
 
@@ -299,6 +303,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     fileprivate struct ModelBadges: Sendable {
         var freeTier: String?
         var cheapestLargeContext: String?
+        var failed: Bool = false
     }
 
     private struct RankedModel {
@@ -313,8 +318,14 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     /// call re-fetches. The public model list changes on the order of days,
     /// not seconds, so a multi-hour TTL trades a little staleness for
     /// sparing every poll of every OpenRouter provider instance a redundant
-    /// `/api/v1/models` round trip and re-rank.
-    static let catalogTTL: TimeInterval = 4 * 60 * 60
+    /// `/api/v1/models` round trip and re-rank. One hour, not four: the badge
+    /// pills sit in the same popover as live spend, and a four-hour-old
+    /// catalog had no freshness cue — an hour bounds that staleness to a
+    /// window that reads as current while still sparing 23 of 24 polls per
+    /// day on a hourly refresh cycle. (A separate "as of" date pill was
+    /// considered and rejected: it would only label the staleness, not reduce
+    /// it, for a row whose whole value is at-a-glance.)
+    static let catalogTTL: TimeInterval = 1 * 60 * 60
 
     /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
     /// public catalog, which needs no key. Bounded to a deadline well under
@@ -340,9 +351,11 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             // the 5s deadline itself elapsing. Logged so a degraded/slow
             // catalog is distinguishable in the unified log from the
             // legitimate "fetched fine, nothing qualified" case below, which
-            // stays silent on purpose.
+            // stays silent on purpose. The failure bit surfaces this to the
+            // UI, which draws a placeholder instead of silently omitting the
+            // badges row.
             NSLog("frugalbar: OpenRouter model-catalog fetch timed out after 5s; badges omitted this poll")
-            return ModelBadges()
+            return ModelBadges(failed: true)
         }
     }
 
@@ -375,6 +388,13 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                   let completionStr = pricing.completion, let completionPrice = Double(completionStr),
                   let contextLength = entry.context_length,
                   let modalities = entry.architecture?.output_modalities,
+                  // The badge claims a *text-capable* coding model. Requiring
+                  // "text" output excludes both a genuinely empty modality list
+                  // and any entry whose only outputs are image/audio/video —
+                  // never assuming one is text-safe. Audio is also excluded
+                  // explicitly: a `text+audio` music generator is still not a
+                  // coding model and must not win a badge.
+                  modalities.contains("text"),
                   !modalities.contains("audio")
             else { return nil }
             return RankedModel(

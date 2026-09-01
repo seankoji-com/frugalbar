@@ -69,13 +69,21 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         // A structurally valid response carrying no window is "OpenCode
         // published nothing", not a malformed payload.
         let measured = windows.compactMap { $0?.fraction }
+        let anyBlocked = windows.contains(where: { $0?.isBlocked == true })
         guard let worst = measured.max() else {
-            return unavailable(.unsupported("OpenCode reported no usage window"))
+            // No window publishes a percent. A blocked window still counts as
+            // a reading here: a fully rate-limited account (every window
+            // blocked / percent unpublished) must render its blocked rows, not
+            // fall through to the generic "No usage API" unsupported page.
+            guard anyBlocked else {
+                return unavailable(.unsupported("OpenCode reported no usage window"))
+            }
+            return Self.blockedSnapshot(usage: usage, now: Date())
         }
 
         // A blocked window cannot be used at all, whatever its percentage
         // rounds to. Otherwise the fullest window sets the pressure.
-        let urgency: Urgency = windows.contains(where: { $0?.isBlocked == true }) || worst >= 0.95
+        let urgency: Urgency = anyBlocked || worst >= 0.95
             ? .critical
             : worst >= 0.80 ? .warning : .none
 
@@ -98,6 +106,35 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
             row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
             badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",
+            planName: "OpenCode Go",
+            keyMasked: nil,
+            cliSource: "macOS Keychain / auth.json"
+        )
+    }
+
+    /// A fully rate-limited reading: no window publishes a percent, but at
+    /// least one reports `status == "rate-limited"`. Rendered as a measured,
+    /// exhausted (critical) reading whose rows are blocked placeholders — no
+    /// invented percentages — rather than the generic "no usage API"
+    /// unsupported page.
+    ///
+    /// Reuses `Self.row`, which already draws a blocked window with no percent
+    /// as a placeholder instead of dropping it.
+    private static func blockedSnapshot(usage: Response.Usage, now: Date) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: VendorIdentifier.opencode.rawValue,
+            vendorId: .opencode,
+            displayName: VendorIdentifier.opencode.displayName,
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Go", renewalDate: nil),
+            status: .measured(.critical),
+            resetsAt: usage.rolling?.reset ?? usage.weekly?.reset ?? usage.monthly?.reset,
+            lastUpdated: now,
+            auxiliaryInfo: "Live OpenCode Go subscription quota",
+            row1: Self.row(usage.rolling, "5H", length: QuotaWindow.fiveHours, now: now),
+            row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
+            row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
+            badgeText: "Blocked",
             planName: "OpenCode Go",
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"

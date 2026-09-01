@@ -9,6 +9,7 @@ struct CachePolicyTests {
         #expect(policy.cacheTTL == 30)
         #expect(policy.backgroundRefreshInterval == 120)
         #expect(policy.perProviderTimeout == 10)
+        #expect(policy.minPollInterval == 30)
     }
 
     /// Gemini and OpenRouter each issue two sequential requests under one
@@ -20,14 +21,15 @@ struct CachePolicyTests {
     }
 
     @Test func customPolicy_usesSuppliedValues() {
-        let policy = CachePolicy(cacheTTL: 60, backgroundRefreshInterval: 300, perProviderTimeout: 10)
+        let policy = CachePolicy(cacheTTL: 60, backgroundRefreshInterval: 300, perProviderTimeout: 10, minPollInterval: 0)
         #expect(policy.cacheTTL == 60)
         #expect(policy.backgroundRefreshInterval == 300)
         #expect(policy.perProviderTimeout == 10)
+        #expect(policy.minPollInterval == 0)
     }
 
     @Test func customPolicy_defaultsPerProviderTimeoutWhenOmitted() {
-        let policy = CachePolicy(cacheTTL: 15, backgroundRefreshInterval: 45)
+        let policy = CachePolicy(cacheTTL: 15, backgroundRefreshInterval: 45, minPollInterval: 0)
         #expect(policy.perProviderTimeout == 10)
     }
 }

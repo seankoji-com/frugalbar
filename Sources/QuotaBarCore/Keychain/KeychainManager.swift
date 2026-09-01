@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import LocalAuthentication
 
 // MARK: - Keychain wrapper (macOS Security framework)
 
@@ -10,7 +11,22 @@ public enum KeychainError: Error, Sendable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unknown(let s): "Keychain error \(s)"
+        case .unknown(let s):
+            switch s {
+            case errSecInteractionNotAllowed:
+                "Keychain access not allowed (your keychain may be locked)"
+            case errSecAuthFailed:
+                "Keychain authentication failed"
+            case errSecMissingEntitlement:
+                "Keychain access requires a signed, entitled app"
+            case errSecDuplicateItem:
+                "A matching keychain item already exists"
+            default:
+                // Raw OSStatus is acceptable for statuses we do not recognise:
+                // the number is all we have, and showing it is better than a
+                // guess at what it means.
+                "Keychain error \(s)"
+            }
         case .itemNotFound:   "No matching keychain item found"
         case .invalidData:    "Invalid keychain data"
         }
@@ -26,10 +42,18 @@ public final class KeychainManager: Sendable {
 
     // MARK: Public API
 
-    public func set(key: String, label: String) throws {
+    public func set(key: String, label: String, allowsAuthenticationPrompt: Bool = true) throws {
         guard let data = key.data(using: .utf8) else { throw KeychainError.invalidData }
 
-        let query: [String: Any] = [
+        // When the caller is an unattended context (the `--doctor` probe), the
+        // probe must never trigger the interactive unlock prompt. The
+        // non-interactive context is attached to `query` itself — NOT only to
+        // the item-insert query — so it also reaches the `SecItemUpdate` call
+        // in the `errSecDuplicateItem` path below. A re-run of `--doctor` over
+        // a lingering probe item (a previous run killed between set and its
+        // delete) would otherwise update that item WITHOUT the context and
+        // still prompt/hang on a locked keychain.
+        var query: [String: Any] = [
             kSecClass as String:              kSecClassGenericPassword,
             kSecAttrService as String:        service,
             kSecAttrAccount as String:        label,
@@ -42,6 +66,9 @@ public final class KeychainManager: Sendable {
             // all. Add it together with proper .app signing, not before.
             kSecAttrSynchronizable as String: false,
         ]
+        if !allowsAuthenticationPrompt {
+            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        }
         let attributes: [String: Any] = [
             kSecValueData as String:          data,
             kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -64,8 +91,8 @@ public final class KeychainManager: Sendable {
         }
     }
 
-    public func get(label: String) throws -> String {
-        let query: [String: Any] = [
+    public func get(label: String, allowsAuthenticationPrompt: Bool = true) throws -> String {
+        var query: [String: Any] = [
             kSecClass as String:              kSecClassGenericPassword,
             kSecAttrService as String:        service,
             kSecAttrAccount as String:        label,
@@ -73,6 +100,9 @@ public final class KeychainManager: Sendable {
             kSecMatchLimit as String:         kSecMatchLimitOne,
             kSecAttrSynchronizable as String: false,
         ]
+        if !allowsAuthenticationPrompt {
+            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -99,6 +129,19 @@ public final class KeychainManager: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unknown(status)
         }
+    }
+
+    /// An `LAContext` whose `interactionNotAllowed` is true. Attached to a
+    /// query via `kSecUseAuthenticationContext`, it makes the call return
+    /// `errSecInteractionNotAllowed` instead of presenting a lock/permission
+    /// prompt — exactly what the `--doctor` probe (T9) needs to test the
+    /// keychain non-interactively. This is the non-deprecated replacement for
+    /// the old `kSecUseAuthenticationUIFail`, which is unavailable from
+    /// `swift run` anyway.
+    private static func nonPromptingAuthContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 }
 
@@ -216,7 +259,8 @@ public enum CredentialStore {
         task.arguments = ["auth", "token"]
         let out = Pipe()
         task.standardOutput = out
-        task.standardError = Pipe()   // don't inherit stderr into the app's log
+        let err = Pipe()
+        task.standardError = err
         task.standardInput = FileHandle.nullDevice
 
         // `run()` throws when the binary cannot be launched. The previous code
@@ -225,6 +269,11 @@ public enum CredentialStore {
         do {
             try task.run()
         } catch {
+            // gh is installed but cannot be launched — a genuinely broken
+            // state, distinct from "no gh installed" (which returns silently
+            // above) so an operator can pin the root cause rather than seeing
+            // only "Not configured" from every GitHub provider.
+            NSLog("frugalbar: gh auth token: failed to launch \(ghPath): \(error.localizedDescription)")
             return nil
         }
 
@@ -242,7 +291,16 @@ public enum CredentialStore {
         // the pipe buffer.
         let data = out.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
-        guard task.terminationStatus == 0 else { return nil }
+        guard task.terminationStatus == 0 else {
+            // gh is installed but `gh auth token` failed (not logged in, or
+            // broken). Surface it in the unified log with gh's own stderr so
+            // an operator can tell a broken gh from a clean no-credential
+            // state instead of seeing only "Not configured".
+            let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("frugalbar: gh auth token exited with status \(task.terminationStatus)\(errText.isEmpty ? "" : ": \(errText)")")
+            return nil
+        }
 
         let token = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -297,7 +355,14 @@ public enum CredentialStore {
             // the cache slot, which a 30s TTL doesn't need to dedupe.
             let token = resolve()
             lock.lock()
-            ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            // Cache only non-nil tokens. A nil resolves to a transient `gh auth
+            // token` failure (non-zero exit / spawn error / 5s watchdog killing
+            // a hung child), and pinning that to nil for the full TTL would make
+            // every provider report "Not configured" until the cache expires.
+            // The next call re-runs resolve() and gets a fresh answer.
+            if token != nil {
+                ghTokenCache = (token, now.addingTimeInterval(Self.ghTokenTTL))
+            }
             lock.unlock()
             return token
         }
@@ -573,9 +638,24 @@ extension CredentialStore {
         return "\(base) (\(multiplier))"
     }
 
+    /// Logged at most once per process so a user who simply has CLI discovery
+    /// off (the default) doesn't get a `frugalbar:` line every two-minute poll,
+    /// drowning the actionable lines. A process-lifetime flag, not a per-poll
+    /// one: the configuration is static, so past the first poll the same line
+    /// would add nothing — the point is to distinguish "discovery disabled"
+    /// from "plan genuinely absent" in any single captured log, and one line
+    /// does that.
+    nonisolated(unsafe) private static var claudePlanDiscoveryDisabledLogged = false
+
     /// Reads the tier off disk or the Keychain, on the credential queue.
     public static func claudePlanNameAsync() async -> String? {
-        guard isCLIDiscoveryEnabled else { return nil }
+        guard isCLIDiscoveryEnabled else {
+            if !Self.claudePlanDiscoveryDisabledLogged {
+                Self.claudePlanDiscoveryDisabledLogged = true
+                NSLog("frugalbar: Claude plan-name lookup skipped (CLI credential discovery disabled)")
+            }
+            return nil
+        }
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
                 let fileURL = URL(fileURLWithPath: NSHomeDirectory())

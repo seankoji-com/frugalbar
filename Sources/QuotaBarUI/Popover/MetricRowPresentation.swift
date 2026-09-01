@@ -41,8 +41,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
         // An unreadable provider has no bars, so this reads false there — a
         // quota we could not fetch is not a quota we know is spent.
         let spentBar = snapshot.quotaBars.first { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
-        self.isExhausted = spentBar != nil
+        // A fully rate-limited account (every window blocked, no percentage
+        // published) has no spent bar, but is every bit as unusable as a spent
+        // one — arguably more, since nothing is "left" to measure. It counts as
+        // exhausted so the avatar strikes the logo and the ✗ shows, matching
+        // the energetic weight the vendor actually declared. (The spoken copy
+        // below distinguishes "exhausted" from "blocked".)
+        self.isExhausted = spentBar != nil || snapshot.isFullyBlockedWithoutReading
+        // Reset text from a spent bar, or the first blocked bar when the whole
+        // account is cut off.
         self.exhaustedResetText = spentBar?.resetText
+            ?? snapshot.quotaBars.first(where: { $0.isBlocked })?.resetText
 
         if let reason = snapshot.status.unavailableReason {
             self.valueLabel = reason.headline
@@ -56,18 +65,29 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.resetLabel = ResetCountdownBadge.format(snapshot.resetsAt, now: now)
 
         var parts = [snapshot.displayName, Self.spoken(for: snapshot.metric)]
-        if isExhausted {
-            // Said outright rather than left to "critically low", which a
-            // screen reader user cannot distinguish from 5% remaining.
-            parts.append("exhausted")
+        if snapshot.isFullyBlockedWithoutReading {
+            // The bars' own language. A screen reader must hear "blocked", not
+            // "critically low" — the vendor cut the account off; it is not
+            // merely low-but-usable. (Same distinction the bars draw between
+            // CASE B blocked and CASE B' unmeasured.)
+            parts.append("blocked")
             if let exhaustedResetText {
                 parts.append(exhaustedResetText)
             }
-        }
-        switch snapshot.status.urgency {
-        case .none:     break
-        case .warning:  parts.append("running low")
-        case .critical: parts.append("critically low")
+        } else {
+            if isExhausted {
+                // Said outright rather than left to "critically low", which a
+                // screen reader user cannot distinguish from 5% remaining.
+                parts.append("exhausted")
+                if let exhaustedResetText {
+                    parts.append(exhaustedResetText)
+                }
+            }
+            switch snapshot.status.urgency {
+            case .none:     break
+            case .warning:  parts.append("running low")
+            case .critical: parts.append("critically low")
+            }
         }
         if snapshot.resetsAt != nil {
             parts.append(ResetCountdownBadge.description(snapshot.resetsAt, now: now))

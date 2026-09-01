@@ -12,12 +12,14 @@ struct MetricRowPresentationTests {
         name: String = "Vendor",
         metric: MetricType,
         status: ProviderStatus,
-        resetsAt: Date? = nil
+        resetsAt: Date? = nil,
+        row1: DualBarMetrics? = nil
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             id: name, vendorId: .githubRest, displayName: name,
             category: .developerLimits, metric: metric, status: status,
-            resetsAt: resetsAt, lastUpdated: now, auxiliaryInfo: nil
+            resetsAt: resetsAt, lastUpdated: now, auxiliaryInfo: nil,
+            row1: row1
         )
     }
 
@@ -71,6 +73,35 @@ struct MetricRowPresentationTests {
         #expect(p.isMeasured)
         #expect(p.valueLabel.contains("12.34"))
         #expect(p.accessibilityLabel.contains("spent"))
+    }
+
+    /// I27's regression: a measured provider whose window came back with *no
+    /// percentage* (a nil-fraction, non-blocked `DualBarMetrics` bar) must not
+    /// be rendered as a fabricated "0%"/"100%" consumption. The row has no
+    /// denominator — so no bar, no percentage, and crucially not "exhausted" —
+    /// even though the snapshot is a real measured one.
+    @Test("a nil-fraction, non-blocked bar renders no fabricated percentage")
+    func nilFractionBarRendersNoFabricatedPercent() {
+        let p = MetricRowPresentation(
+            snapshot: snapshot(
+                name: "Gemini",
+                metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+                status: .measured(.none),
+                row1: DualBarMetrics(primaryFraction: nil, label: "5H", isBlocked: false)
+            ),
+            now: now
+        )
+        // No denominator → no bar, no computed fraction.
+        #expect(p.fraction == nil)
+        // Coercing the nil fraction to 1.0 would flip this to `true` and paint
+        // a spent row from zero data — the exact fabrication I27 forbids.
+        #expect(p.isExhausted == false)
+        // The row says what it actually knows — the plan name — and nothing
+        // that implies a measured percentage.
+        #expect(p.valueLabel == "AI Studio")
+        #expect(!p.valueLabel.contains("%"))
+        #expect(!p.accessibilityLabel.contains("%"))
+        #expect(!p.accessibilityLabel.lowercased().contains("percent"))
     }
 
     // MARK: - Measured readings
@@ -274,6 +305,86 @@ struct MenuBarPresentationTests {
         )
 
         #expect(details.vendorId == .gemini)
+    }
+
+    @Test("recommended tint follows the recommended vendor, not the whole-summary worst urgency")
+    func recommendedTintFollowsRecommendedVendor() {
+        // The recommended (advised) vendor is healthy, while a *different*
+        // vendor is critical. The summary's worst urgency is critical, but the
+        // carried tint must reflect the healthy recommendation — so nil, not
+        // red. This is the regression: the previous title colour re-derived
+        // from the whole-summary worst urgency and painted the healthy number
+        // red.
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.10, label: "5H")
+        )
+        let claude = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.99, label: "5H")
+        )
+        // Name the healthy vendor directly to isolate the tint logic from the
+        // advisor's own selection.
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini, claude])
+        #expect(summary.worstUrgency == .critical)
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini, claude],
+            summary: summary
+        )
+
+        #expect(details.vendorId == .gemini)
+        #expect(details.recommendedTint == nil)
+        #expect(MenuBarPresentation.tint(for: summary) == .systemRed)
+    }
+
+    @Test("recommended tint is orange when the recommended vendor itself is under warning pressure")
+    func recommendedVendorWarningTintsOrange() {
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.75, label: "5H")
+        )
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini],
+            summary: summary
+        )
+
+        #expect(details.recommendedTint == .systemOrange)
+    }
+
+    @Test("recommended tint is nil when the recommended vendor is unreadable")
+    func unavailableRecommendedHasNoTint() {
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .unavailable(.unsupported("no API")), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
+        )
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini],
+            summary: summary
+        )
+
+        #expect(details.recommendedTint == nil)
     }
 
     @Test("formatTimeLeft parses various duration formats")

@@ -4,16 +4,15 @@ import SwiftUI
 import QuotaBarCore
 @testable import QuotaBarUI
 
-/// Tests for the pure-logic derived statics on HeaderSummaryView.
+/// Tests for the pure-logic presentation mapping on SystemHealthPresentation.
 ///
-/// These call `HeaderSummaryView.healthSymbol(for:)`, `.healthColor(for:)`,
-/// `.healthText(for:)`, and `.elapsed(since:)` directly — the same
-/// production statics the view's body renders — so a future refactor that
+/// These call `SystemHealthPresentation.symbol(for:)`, `.color(for:)`,
+/// `.text(for:)`, and `.elapsed(since:)` directly — the same production
+/// statics both the header and footer render — so a future refactor that
 /// changes the mapping is caught here rather than only in a re-derived copy
 /// that could silently drift from the real logic.
 @Suite("HeaderSummaryView — presentation logic")
 struct HeaderSummaryViewPresentationTests {
-
     /// Build a summary from snapshots rather than calling the internal init.
     private func summary(
         snapshots: [(status: ProviderStatus, lastUpdated: Date)]
@@ -37,7 +36,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.unavailable(.notConfigured), Date())
         ])
-        #expect(HeaderSummaryView.healthSymbol(for: s) == "minus.circle")
+        #expect(SystemHealthPresentation.symbol(for: s) == "minus.circle")
     }
 
     @Test("symbol: all healthy → checkmark.circle.fill")
@@ -45,7 +44,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.healthy, Date())
         ])
-        #expect(HeaderSummaryView.healthSymbol(for: s) == "checkmark.circle.fill")
+        #expect(SystemHealthPresentation.symbol(for: s) == "checkmark.circle.fill")
     }
 
     @Test("symbol: warning → exclamationmark.circle.fill")
@@ -53,7 +52,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.warning, Date())
         ])
-        #expect(HeaderSummaryView.healthSymbol(for: s) == "exclamationmark.circle.fill")
+        #expect(SystemHealthPresentation.symbol(for: s) == "exclamationmark.circle.fill")
     }
 
     @Test("symbol: critical → exclamationmark.octagon.fill")
@@ -61,7 +60,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.critical, Date())
         ])
-        #expect(HeaderSummaryView.healthSymbol(for: s) == "exclamationmark.octagon.fill")
+        #expect(SystemHealthPresentation.symbol(for: s) == "exclamationmark.octagon.fill")
     }
 
     // MARK: - healthColor
@@ -71,7 +70,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.unavailable(.offline), Date())
         ])
-        #expect(HeaderSummaryView.healthColor(for: s) == Theme.outline)
+        #expect(SystemHealthPresentation.color(for: s) == Theme.outline)
     }
 
     @Test("color: healthy → Theme.secondary")
@@ -79,7 +78,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.healthy, Date())
         ])
-        #expect(HeaderSummaryView.healthColor(for: s) == Theme.secondary)
+        #expect(SystemHealthPresentation.color(for: s) == Theme.secondary)
     }
 
     @Test("color: warning → Theme.tertiary")
@@ -87,7 +86,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.warning, Date())
         ])
-        #expect(HeaderSummaryView.healthColor(for: s) == Theme.tertiary)
+        #expect(SystemHealthPresentation.color(for: s) == Theme.tertiary)
     }
 
     @Test("color: critical → Theme.error")
@@ -95,7 +94,7 @@ struct HeaderSummaryViewPresentationTests {
         let s = summary(snapshots: [
             (.critical, Date())
         ])
-        #expect(HeaderSummaryView.healthColor(for: s) == Theme.error)
+        #expect(SystemHealthPresentation.color(for: s) == Theme.error)
     }
 
     // MARK: - healthText
@@ -106,13 +105,13 @@ struct HeaderSummaryViewPresentationTests {
             (.unavailable(.notConfigured), Date()),
             (.unavailable(.offline), Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "No readings · 2 not readable")
+        #expect(SystemHealthPresentation.text(for: s) == "No readings · 2 not readable")
     }
 
     @Test("text: no readings, zero unavailable → 'No readings' without unavailable count")
     func textNoReadingsNoUnavailable() {
         let s = summary(snapshots: [])
-        #expect(HeaderSummaryView.healthText(for: s) == "No readings")
+        #expect(SystemHealthPresentation.text(for: s) == "No readings")
     }
 
     @Test("text: all healthy → 'All quotas healthy'")
@@ -122,7 +121,7 @@ struct HeaderSummaryViewPresentationTests {
             (.healthy, Date()),
             (.healthy, Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "All quotas healthy")
+        #expect(SystemHealthPresentation.text(for: s) == "All quotas healthy")
     }
 
     @Test("text: warning → 'N running low'")
@@ -132,7 +131,7 @@ struct HeaderSummaryViewPresentationTests {
             (.warning, Date()),
             (.healthy, Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "2 running low")
+        #expect(SystemHealthPresentation.text(for: s) == "2 running low")
     }
 
     @Test("text: critical → 'N critical'")
@@ -141,7 +140,7 @@ struct HeaderSummaryViewPresentationTests {
             (.critical, Date()),
             (.healthy, Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "1 critical")
+        #expect(SystemHealthPresentation.text(for: s) == "1 critical")
     }
 
     @Test("text: healthy + unavailable → appended")
@@ -154,7 +153,7 @@ struct HeaderSummaryViewPresentationTests {
             (.healthy, Date()),
             (.unavailable(.notConfigured), Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "All quotas healthy · 1 not readable")
+        #expect(SystemHealthPresentation.text(for: s) == "All quotas healthy · 1 not readable")
     }
 
     @Test("text: warning + unavailable → appended")
@@ -164,7 +163,7 @@ struct HeaderSummaryViewPresentationTests {
             (.unavailable(.notConfigured), Date()),
             (.unavailable(.offline), Date()),
         ])
-        #expect(HeaderSummaryView.healthText(for: s) == "1 running low · 2 not readable")
+        #expect(SystemHealthPresentation.text(for: s) == "1 running low · 2 not readable")
     }
 
     // MARK: - elapsed
@@ -176,7 +175,7 @@ struct HeaderSummaryViewPresentationTests {
     private static let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
     private func ago(_ seconds: TimeInterval) -> String {
-        HeaderSummaryView.elapsed(since: Self.now.addingTimeInterval(-seconds), now: Self.now)
+        SystemHealthPresentation.elapsed(since: Self.now.addingTimeInterval(-seconds), now: Self.now)
     }
 
     @Test("elapsed: 0s rounds to 0s")

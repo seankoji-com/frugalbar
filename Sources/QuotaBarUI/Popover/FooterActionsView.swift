@@ -22,16 +22,16 @@ struct FooterActionsView: View {
                     .foregroundStyle(Theme.onSurface)
 
                 // A shape, not colour alone, carries the status (WCAG 1.4.1) —
-                // shares HeaderSummaryView's symbol mapping so the header and
-                // footer indicators can never disagree about what a given
-                // summary means.
-                Image(systemName: HeaderSummaryView.healthSymbol(for: summary))
+                // shares SystemHealthPresentation's symbol mapping so the
+                // header and footer indicators can never disagree about what a
+                // given summary means.
+                Image(systemName: SystemHealthPresentation.symbol(for: summary))
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(HeaderSummaryView.healthColor(for: summary))
-                    .shadow(color: HeaderSummaryView.healthColor(for: summary).opacity(0.6), radius: 2)
+                    .foregroundStyle(SystemHealthPresentation.color(for: summary))
+                    .shadow(color: SystemHealthPresentation.color(for: summary).opacity(0.6), radius: 2)
 
                 if let oldest = summary.oldestReading {
-                    Text(HeaderSummaryView.elapsed(since: oldest))
+                    Text(SystemHealthPresentation.elapsed(since: oldest))
                         .font(Theme.Typography.footerMeta)
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
                         .help("Oldest reading in view")
@@ -125,13 +125,13 @@ struct FooterActionsView: View {
     /// Spoken form of the branding group: the health text the dot only shows
     /// in colour, plus the age of the oldest reading when there is one.
     ///
-    /// Derived from `HeaderSummaryView`'s statics rather than a second copy of
+    /// Derived from `SystemHealthPresentation` rather than a second copy of
     /// the mapping — the footer dot and the header dot must never be able to
     /// disagree about what a given summary means.
     private var footerAccessibilityLabel: String {
-        var label = "FrugalBar. \(HeaderSummaryView.healthText(for: summary))"
+        var label = "FrugalBar. \(SystemHealthPresentation.text(for: summary))"
         if let oldest = summary.oldestReading {
-            label += ". Oldest reading \(HeaderSummaryView.elapsed(since: oldest)) ago"
+            label += ". Oldest reading \(SystemHealthPresentation.elapsed(since: oldest)) ago"
         }
         return label
     }

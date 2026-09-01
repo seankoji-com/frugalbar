@@ -8,7 +8,6 @@ public struct DualBarProgressView: View {
 
     let metrics: DualBarMetrics
     let accentColor: Color
-    let urgency: Urgency
 
     /// Track and fill thickness.
     static let barHeight: CGFloat = 8
@@ -17,12 +16,10 @@ public struct DualBarProgressView: View {
 
     public init(
         metrics: DualBarMetrics,
-        accentColor: Color,
-        urgency: Urgency
+        accentColor: Color
     ) {
         self.metrics = metrics
         self.accentColor = accentColor
-        self.urgency = urgency
     }
 
     /// nil when the vendor declared this window blocked/critical but reported
@@ -61,6 +58,14 @@ public struct DualBarProgressView: View {
     private var vendorStatusColor: Color? {
         guard metrics.isBlocked else { return nil }
         return metrics.blockedColor.flatMap(Color.init(hexString:))
+    }
+
+    /// The colour a blocked placeholder must fall back to when the vendor gave
+    /// no colour of its own: the shared error tone, so a hatched placeholder,
+    /// its stroke, and an exhausted-fill bar all agree rather than drawing the
+    /// same state in different colours.
+    private var blockedFillColor: Color {
+        vendorStatusColor ?? Theme.errorBold
     }
 
     /// True whenever the vendor gave no percentage to measure this window
@@ -138,11 +143,11 @@ public struct DualBarProgressView: View {
                             // status colour says "blocked" without inventing
                             // a fraction to fill it with.
                             RoundedRectangle(cornerRadius: Self.barHeight / 2)
-                                .fill((vendorStatusColor ?? Theme.errorBold).opacity(0.30))
+                                .fill(blockedFillColor.opacity(0.30))
                                 .frame(width: w, height: Self.barHeight)
                             RoundedRectangle(cornerRadius: Self.barHeight / 2)
                                 .strokeBorder(
-                                    vendorStatusColor ?? Theme.errorBold,
+                                    blockedFillColor,
                                     style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
                                 )
                                 .frame(width: w, height: Self.barHeight)
@@ -161,9 +166,9 @@ public struct DualBarProgressView: View {
                             // and reddened only the tail, so a spent quota read as
                             // a mostly-healthy one with a red tip.
                             Rectangle()
-                                .fill(vendorStatusColor ?? Theme.errorBold)
+                                .fill(blockedFillColor)
                                 .frame(width: w, height: Self.barHeight)
-                                .shadow(color: (vendorStatusColor ?? Theme.errorBold).opacity(0.6), radius: 2)
+                                .shadow(color: blockedFillColor.opacity(0.6), radius: 2)
                         } else if !hasPace {
                             // --- CASE 0: NO PACE TARGET ---
                             // Consumption only. Nothing here is measured against a
@@ -270,12 +275,30 @@ public struct DualBarProgressView: View {
 
 
 
+    /// The fallback detail shown for a window with no percentage. Blocked
+    /// windows name the state plainly; a window that is merely unmeasured
+    /// (e.g. a real pace target with no usage to compare it against) is not
+    /// "blocked" and must not say it is.
+    /// `nonisolated`: a pure function of its argument, and `View`'s `body`
+    /// requirement can infer main-actor isolation onto every member of a
+    /// conforming type under some toolchains — which would make this uncallable
+    /// from the synchronous, non-isolated `@Test` functions that exercise it.
+    nonisolated static func blockedFallbackDetail(for metrics: DualBarMetrics) -> String {
+        if let usedText = metrics.usedText {
+            return usedText
+        }
+        return metrics.isBlocked
+            ? "blocked • no reading reported"
+            : "no reading reported"
+    }
+
     private var helpText: String {
         guard let consumedPct else {
-            // Blocked with no percentage: say so plainly rather than
-            // printing a "0% used" that would misreport an unmeasured
-            // window as an empty one.
-            let detail = metrics.usedText ?? "blocked • no reading reported"
+            // No percentage with no usedText: say so plainly rather than
+            // printing a "0% used" that would misreport an unmeasured window
+            // as an empty one — and don't call an unmeasured window "blocked"
+            // unless the vendor actually declared it so.
+            let detail = Self.blockedFallbackDetail(for: metrics)
             return "\(metrics.label): \(detail)"
         }
         let usedPctInt = Int((consumedPct * 100).rounded())

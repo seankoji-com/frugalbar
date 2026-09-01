@@ -80,7 +80,7 @@ struct QuotaManagerExtendedTests {
     @Test("cachedSnapshots returns values after forceRefresh")
     func cachedSnapshotsAfterFetch() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, behavior: .succeed(.none))]
             }
@@ -96,7 +96,7 @@ struct QuotaManagerExtendedTests {
     @Test("forceRefresh with no providers returns empty and cache is fresh")
     func emptyProviderList() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: { [] }
         )
         let results = await manager.forceRefresh()
@@ -130,7 +130,7 @@ struct QuotaManagerExtendedTests {
     @Test("worstUrgency reflects mixed statuses")
     func worstUrgencyMixed() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [
                     StubProvider(vendorId: .claude, behavior: .succeed(.none)),
@@ -148,7 +148,7 @@ struct QuotaManagerExtendedTests {
     func allUnavailable() async {
         let manager = QuotaManager(
             // Use a non-zero TTL so cache IS fresh after fetch
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, behavior: .throwError(.badResponse))]
             }
@@ -164,7 +164,7 @@ struct QuotaManagerExtendedTests {
     @Test("a provider that times out produces .timedOut and does not crash")
     func providerTimesOut() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 0.1),
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 0.1, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, behavior: .hang(seconds: 5))]
             }
@@ -178,7 +178,7 @@ struct QuotaManagerExtendedTests {
     @Test("all providers throwing errors results in all unavailable")
     func allThrow() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 1),
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 1, minPollInterval: 0),
             providerFactory: {
                 [
                     StubProvider(vendorId: .claude, behavior: .throwError(.badResponse)),
@@ -201,7 +201,7 @@ struct QuotaManagerExtendedTests {
     func transientErrorPreservesMeasuredData() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 let call = counter.increment()
                 if call == 1 {
@@ -228,7 +228,7 @@ struct QuotaManagerExtendedTests {
     @Test("sortedSnapshots includes all vendors in canonical order")
     func sortedSnapshotsFullOrder() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 VendorIdentifier.allCases.map {
                     StubProvider(vendorId: $0, behavior: .succeed(.none))
@@ -280,7 +280,7 @@ struct QuotaManagerExtendedTests {
     @Test("isCacheFresh returns false before first fetch even with default TTL")
     func isCacheFreshFalseBeforeFirstFetch() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 60, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 60, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: { [] }
         )
         #expect(await manager.isCacheFresh() == false)
@@ -289,7 +289,7 @@ struct QuotaManagerExtendedTests {
     @Test("isCacheFresh returns true after forceRefresh")
     func isCacheFreshTrueAfterFetch() async {
         let manager = QuotaManager(
-            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2),
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: {
                 [StubProvider(vendorId: .claude, behavior: .succeed(.none))]
             }
