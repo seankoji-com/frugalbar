@@ -165,6 +165,8 @@ struct OpenRouterModelCatalogTests {
         }
         #expect(snap.freeTierModelBadge == nil)
         #expect(snap.cheapestLargeContextModelBadge == nil)
+        // A genuine zero-match is a real answer, not a failure: no signal.
+        #expect(snap.openRouterCatalogUnavailable == false)
     }
 
     @Test("a model missing pricing entirely is excluded from both rankings")
@@ -294,6 +296,10 @@ struct OpenRouterModelCatalogTests {
         }
         #expect(snap.freeTierModelBadge == nil)
         #expect(snap.cheapestLargeContextModelBadge == nil)
+        // A failure must be distinguishable from a genuine zero-match: it
+        // carries the unavailable signal, so the row can surface a placeholder
+        // instead of reading as "no free/cheap model qualified".
+        #expect(snap.openRouterCatalogUnavailable == true)
         // Primary key-based snapshot is untouched by the catalog failure.
         guard case .currency(let balance, let limit, _, _) = snap.metric else {
             Issue.record("expected .currency, got \(snap.metric)")
