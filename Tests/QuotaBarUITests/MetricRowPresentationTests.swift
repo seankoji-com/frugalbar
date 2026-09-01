@@ -276,6 +276,86 @@ struct MenuBarPresentationTests {
         #expect(details.vendorId == .gemini)
     }
 
+    @Test("recommended tint follows the recommended vendor, not the whole-summary worst urgency")
+    func recommendedTintFollowsRecommendedVendor() {
+        // The recommended (advised) vendor is healthy, while a *different*
+        // vendor is critical. The summary's worst urgency is critical, but the
+        // carried tint must reflect the healthy recommendation — so nil, not
+        // red. This is the regression: the previous title colour re-derived
+        // from the whole-summary worst urgency and painted the healthy number
+        // red.
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.10, label: "5H")
+        )
+        let claude = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.99, label: "5H")
+        )
+        // Name the healthy vendor directly to isolate the tint logic from the
+        // advisor's own selection.
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini, claude])
+        #expect(summary.worstUrgency == .critical)
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini, claude],
+            summary: summary
+        )
+
+        #expect(details.vendorId == .gemini)
+        #expect(details.recommendedTint == nil)
+        #expect(MenuBarPresentation.tint(for: summary) == .systemRed)
+    }
+
+    @Test("recommended tint is orange when the recommended vendor itself is under warning pressure")
+    func recommendedVendorWarningTintsOrange() {
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.75, label: "5H")
+        )
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini],
+            summary: summary
+        )
+
+        #expect(details.recommendedTint == .systemOrange)
+    }
+
+    @Test("recommended tint is nil when the recommended vendor is unreadable")
+    func unavailableRecommendedHasNoTint() {
+        let gemini = QuotaSnapshot(
+            id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
+            status: .unavailable(.unsupported("no API")), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
+        )
+        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
+        let summary = SystemHealthSummary.compute(from: [gemini])
+
+        let details = MenuBarPresentation.recommendationDetails(
+            advice: advice,
+            snapshots: [gemini],
+            summary: summary
+        )
+
+        #expect(details.recommendedTint == nil)
+    }
+
     @Test("formatTimeLeft parses various duration formats")
     func formatTimeLeftParsesDurations() {
         #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3.48hr")
