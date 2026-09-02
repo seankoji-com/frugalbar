@@ -278,6 +278,36 @@ struct CredentialStoreTests {
         #expect(calls == 2)
     }
 
+    @Test("CredentialCache.claudeBlob caches nil resolve for failure TTL to prevent prompt storms")
+    func claudeBlobNilFailureCaches() {
+        let cache = CredentialStore.CredentialCache()
+        let epoch = Date(timeIntervalSince1970: 1_000_000)
+        var calls = 0
+
+        let first = cache.claudeBlob(now: epoch) {
+            calls += 1
+            return nil
+        }
+        #expect(first == nil)
+        #expect(calls == 1)
+
+        // Within failure TTL (30s): resolve() not re-run
+        let within = cache.claudeBlob(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.claudeBlobFailureTTL - 1)) {
+            calls += 1
+            return Data("fresh".utf8)
+        }
+        #expect(within == nil)
+        #expect(calls == 1)
+
+        // After failure TTL: re-resolves
+        let after = cache.claudeBlob(now: epoch.addingTimeInterval(CredentialStore.CredentialCache.claudeBlobFailureTTL + 1)) {
+            calls += 1
+            return Data("fresh".utf8)
+        }
+        #expect(after == Data("fresh".utf8))
+        #expect(calls == 2)
+    }
+
     @Test("runGhAuthToken returns nil when gh is not installed")
     func runGhAuthTokenNoGh() {
         // The method checks known paths. In a test environment, gh is unlikely

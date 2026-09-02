@@ -336,6 +336,7 @@ public enum CredentialStore {
         /// picked up well within the same session.
         static let ghTokenTTL: TimeInterval = 30
         static let claudeBlobTTL: TimeInterval = 300
+        static let claudeBlobFailureTTL: TimeInterval = 30
 
         private let lock = NSLock()
         private var ghTokenCache: (token: String?, expires: Date)?
@@ -391,6 +392,8 @@ public enum CredentialStore {
                     }
                 }
                 claudeBlobCache = (data, now.addingTimeInterval(ttl))
+            } else {
+                claudeBlobCache = (nil, now.addingTimeInterval(Self.claudeBlobFailureTTL))
             }
             lock.unlock()
             return data

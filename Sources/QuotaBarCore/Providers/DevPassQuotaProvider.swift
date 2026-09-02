@@ -67,11 +67,10 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         // It carries the gauge, the badge, and the pressure reading; the
         // weekly premium window is a separate pay-as-you-go feature and is not
         // tracked.
-        let creditsUsed = key.devPlanCreditsUsed.flatMap(\.decimalValue)
-        let creditsLimit = key.devPlanCreditsLimit.flatMap(\.decimalValue)
-        let planFraction = fraction(used: creditsUsed, limit: creditsLimit)
-
-        guard let planFraction else {
+        guard let creditsUsed = key.devPlanCreditsUsed.flatMap(\.decimalValue),
+              let creditsLimit = key.devPlanCreditsLimit.flatMap(\.decimalValue),
+              let planFraction = fraction(used: creditsUsed, limit: creditsLimit)
+        else {
             return provider.unavailable(.unsupported("DevPass published no plan allowance"))
         }
 
@@ -79,12 +78,10 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             : planFraction >= 0.80 ? .warning
             : .none
 
-        // The allowance is drawn as the headline gauge and the badge; there is
-        // no bar for it. LLM Gateway publishes no monthly turnover date, so a
-        // bar would have no reset, no pace marker, and no window — three empty
-        // columns next to a number already carried by the badge. It also means
-        // no reset countdown at all: pretending the month turns over would
-        // fabricate a date the vendor did not publish.
+        // The allowance is drawn as the headline gauge, the badge, and a monthly
+        // burndown bar (row1). LLM Gateway publishes no turnover date for the
+        // monthly cycle, so the bar has no reset date and no pace marker, but
+        // renders consumption cleanly under the "MO" label.
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
@@ -98,7 +95,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             row1: DualBarMetrics(
                 primaryFraction: planFraction,
                 label: "MO",
-                usedText: "\(money(creditsUsed ?? 0))/\(plain(creditsLimit ?? 0)) credits used"
+                usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used"
             ),
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
