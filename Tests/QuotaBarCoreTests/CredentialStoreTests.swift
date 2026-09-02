@@ -246,6 +246,38 @@ struct CredentialStoreTests {
         #expect(calls == 2)
     }
 
+    @Test("CredentialCache.claudeBlob caches and respects TTL / token expiry")
+    func claudeBlobCachesAndExpires() {
+        let cache = CredentialStore.CredentialCache()
+        let epoch = Date(timeIntervalSince1970: 1_000_000)
+        var calls = 0
+        let data1 = Data(#"{"claudeAiOauth":{"accessToken":"tok1","expiresAt":1000300000}}"#.utf8) // expires at epoch + 300s
+        let data2 = Data(#"{"claudeAiOauth":{"accessToken":"tok2"}}"#.utf8)
+
+        let first = cache.claudeBlob(now: epoch) {
+            calls += 1
+            return data1
+        }
+        #expect(first == data1)
+        #expect(calls == 1)
+
+        // Within cached TTL: resolve() not called
+        let within = cache.claudeBlob(now: epoch.addingTimeInterval(100)) {
+            calls += 1
+            return data2
+        }
+        #expect(within == data1)
+        #expect(calls == 1)
+
+        // After token expiry window (300s - 30s = 270s): re-resolves
+        let after = cache.claudeBlob(now: epoch.addingTimeInterval(280)) {
+            calls += 1
+            return data2
+        }
+        #expect(after == data2)
+        #expect(calls == 2)
+    }
+
     @Test("runGhAuthToken returns nil when gh is not installed")
     func runGhAuthTokenNoGh() {
         // The method checks known paths. In a test environment, gh is unlikely

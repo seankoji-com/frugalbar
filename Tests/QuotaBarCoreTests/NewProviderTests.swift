@@ -529,11 +529,9 @@ struct DevPassQuotaProviderTests {
 
         #expect(snapshot.status.confidence == .measured)
         #expect(snapshot.planName == "DevPass Pro")
-        // Monthly only: the weekly premium window (present in the fixture at
-        // 10/40) is ignored, so there are no bars — the monthly allowance is
-        // the headline gauge and the badge, and nothing else.
-        #expect(snapshot.bars.isEmpty)
-        #expect(snapshot.row1 == nil)
+        #expect(snapshot.bars.count == 1)
+        #expect(snapshot.row1?.label == "MO")
+        #expect(abs(try #require(snapshot.row1?.primaryFraction) - 79.5 / 237.0) < 0.0001)
         #expect(snapshot.resetsAt == nil)
         // The monthly plan allowance drives the badge and the pressure reading.
         #expect(snapshot.badgeText == "\(DevPassQuotaProvider.money(Decimal(string: "157.50")!)) left")
@@ -547,7 +545,7 @@ struct DevPassQuotaProviderTests {
         }
         // The vendor publishes no monthly turnover date, only the (ignored)
         // weekly premium reset, so there is no countdown at all.
-        #expect(snapshot.bars.isEmpty)
+        #expect(snapshot.row1?.label == "MO")
         #expect(snapshot.resetsAt == nil)
     }
 
@@ -562,7 +560,7 @@ struct DevPassQuotaProviderTests {
         }
         #expect(abs(try #require(snapshot.consumptionFraction) - 10.0 / 237.0) < 0.0001)
         #expect(snapshot.status.urgency == .none)
-        #expect(snapshot.bars.isEmpty)
+        #expect(snapshot.row1?.label == "MO")
         #expect(snapshot.resetsAt == nil)
     }
 
@@ -653,7 +651,8 @@ struct DevPassQuotaProviderTests {
         #expect(snapshot.status == .measured(.none))
         #expect(snapshot.planName == "DevPass Lite")
         #expect(snapshot.consumptionFraction == 0)
-        #expect(snapshot.bars.isEmpty)
+        #expect(snapshot.row1?.label == "MO")
+        #expect(snapshot.row1?.primaryFraction == 0)
         #expect(snapshot.resetsAt == nil)
     }
 

@@ -335,9 +335,11 @@ public enum CredentialStore {
         /// short enough that a token rotated via `gh auth login` mid-session is
         /// picked up well within the same session.
         static let ghTokenTTL: TimeInterval = 30
+        static let claudeBlobTTL: TimeInterval = 300
 
         private let lock = NSLock()
         private var ghTokenCache: (token: String?, expires: Date)?
+        private var claudeBlobCache: (data: Data?, expires: Date)?
 
         func ghToken(now: Date, resolve: () -> String?) -> String? {
             lock.lock()
@@ -366,6 +368,89 @@ public enum CredentialStore {
             lock.unlock()
             return token
         }
+
+        func claudeBlob(now: Date, resolve: () -> Data?) -> Data? {
+            lock.lock()
+            if let cached = claudeBlobCache, cached.expires > now {
+                let data = cached.data
+                lock.unlock()
+                return data
+            }
+            lock.unlock()
+            let data = resolve()
+            lock.lock()
+            if let data {
+                var ttl = Self.claudeBlobTTL
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let oauth = json["claudeAiOauth"] as? [String: Any],
+                   let expiresAt = oauth["expiresAt"] as? Double {
+                    let tokenExpiry = Date(timeIntervalSince1970: expiresAt / 1000)
+                    let remaining = tokenExpiry.timeIntervalSince(now) - 30
+                    if remaining > 0 {
+                        ttl = min(ttl, remaining)
+                    }
+                }
+                claudeBlobCache = (data, now.addingTimeInterval(ttl))
+            }
+            lock.unlock()
+            return data
+        }
+    }
+
+    private static let securityCandidatePaths = [
+        "/usr/bin/security",
+    ]
+
+    static func runSecurityClaudeCredentials() -> Data? {
+        guard !TestHost.isActive else { return nil }
+        guard let securityPath = securityCandidatePaths.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else { return nil }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: securityPath)
+        task.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+        let out = Pipe()
+        task.standardOutput = out
+        let err = Pipe()
+        task.standardError = err
+        task.standardInput = FileHandle.nullDevice
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        let deadline = DispatchTime.now() + 5
+        DispatchQueue.global().asyncAfter(deadline: deadline) { [task] in
+            if task.isRunning { task.terminate() }
+        }
+
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else {
+            return nil
+        }
+
+        return data.isEmpty ? nil : data
+    }
+
+    private static func discoverClaudeBlob() -> Data? {
+        let fileURL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude/.credentials.json")
+        if let fileData = try? Data(contentsOf: fileURL), !fileData.isEmpty {
+            return fileData
+        }
+        if let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
+            return secData
+        }
+        guard !TestHost.isActive else { return nil }
+        return claudeCodeKeychainBlob()
+    }
+
+    static func cachedClaudeBlob(now: Date = Date()) -> Data? {
+        CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob() }
     }
 
     /// Synchronous bridge into `CredentialCache` for `discoverFromCLI`'s
@@ -432,13 +517,11 @@ public enum CredentialStore {
             //
             // On macOS the CLI keeps this blob in the login Keychain, not on
             // disk; ~/.claude/.credentials.json is the Linux (and older
-            // install) location. Reading another app's Keychain item prompts
-            // the user for consent the first time, which is the right gate for
-            // a credential they did not type into us.
-            let fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".claude/.credentials.json")
-            return claudeOAuthToken(from: claudeCodeKeychainBlob())
-                ?? claudeOAuthToken(from: try? Data(contentsOf: fileURL))
+            // install) location. Reading another app's Keychain item directly via
+            // SecItemCopyMatching prompts the user every time from an unbundled
+            // process; using /usr/bin/security and caching the blob in memory
+            // resolves it cleanly without repetitive prompts.
+            return claudeOAuthToken(from: cachedClaudeBlob())
 
         case .copilot:
             // 1. Check ~/.local/share/opencode/auth.json.
@@ -658,10 +741,7 @@ extension CredentialStore {
         }
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                let fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                    .appendingPathComponent(".claude/.credentials.json")
-                let name = claudePlanName(from: claudeCodeKeychainBlob())
-                    ?? claudePlanName(from: try? Data(contentsOf: fileURL))
+                let name = claudePlanName(from: cachedClaudeBlob())
                 continuation.resume(returning: name)
             }
         }

@@ -284,6 +284,58 @@ struct RegressionTests {
     func testHostIsDetected() {
         #expect(TestHost.isActive)
     }
+
+    // MARK: DevPass monthly bar & Claude credential caching regressions
+
+    /// DevPass without row1 fell into the no-denominator fallback layout,
+    /// which drew a micro-progress bar and a clipped chip ("1...").
+    /// A measured DevPass plan must draw a single "MO" burndown bar.
+    @Test("DevPass plan usage renders as a monthly burndown bar with label MO")
+    func devPassPlanRendersMonthlyBar() throws {
+        let json = """
+        {"label":"key","usage":"0","limit":null,"devPlan":"lite",
+         "devPlanCreditsUsed":"20.00","devPlanCreditsLimit":"80.00",
+         "devPlanCreditsRemaining":"60.00"}
+        """
+        let data = try JSONDecoder().decode(DevPassQuotaProvider.KeyData.self, from: Data(json.utf8))
+        let snap = DevPassQuotaProvider.snapshot(from: data, provider: DevPassQuotaProvider(), now: Date())
+
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.planName == "DevPass Lite")
+        #expect(snap.bars.count == 1)
+        #expect(snap.row1?.label == "MO")
+        #expect(abs(try #require(snap.row1?.primaryFraction) - 0.25) < 0.0001)
+        #expect(snap.row1?.usedText?.contains("20.00") == true)
+        #expect(snap.row1?.usedText?.contains("80.00") == true)
+    }
+
+    /// Calling SecItemCopyMatching for "Claude Code-credentials" on every 60-second
+    /// poll triggered repetitive Keychain authorization prompts.
+    /// CredentialCache memoises the blob in memory until near expiry.
+    @Test("Claude OAuth credentials blob is memoised within TTL")
+    func claudeBlobIsMemoised() {
+        let cache = CredentialStore.CredentialCache()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var resolveCount = 0
+        let blob = Data(#"{"claudeAiOauth":{"accessToken":"test_tok","expiresAt":1000600000}}"#.utf8)
+
+        let first = cache.claudeBlob(now: now) {
+            resolveCount += 1
+            return blob
+        }
+        #expect(first == blob)
+        #expect(resolveCount == 1)
+
+        // Multiple rapid reads within the TTL return the cached blob without re-resolving
+        for step in 1...10 {
+            let subsequent = cache.claudeBlob(now: now.addingTimeInterval(Double(step * 10))) {
+                resolveCount += 1
+                return Data()
+            }
+            #expect(subsequent == blob)
+            #expect(resolveCount == 1)
+        }
+    }
 }
 
 /// Drives the Gemini provider against canned Cloud Code responses.

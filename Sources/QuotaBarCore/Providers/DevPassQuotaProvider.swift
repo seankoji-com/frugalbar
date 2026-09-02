@@ -95,7 +95,11 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             resetsAt: nil,
             lastUpdated: now,
             auxiliaryInfo: "DevPass monthly plan credits",
-            row1: nil,
+            row1: DualBarMetrics(
+                primaryFraction: planFraction,
+                label: "MO",
+                usedText: "\(money(creditsUsed ?? 0))/\(plain(creditsLimit ?? 0)) credits used"
+            ),
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
             planName: planName,
