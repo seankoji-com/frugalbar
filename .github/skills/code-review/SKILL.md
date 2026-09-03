@@ -18,8 +18,8 @@ treat them as the review checklist, not hypotheticals.
   `consumptionFraction`, `expectedPaceFraction`, `planName`, and `spent`
   must stay optional all the way through.
 - **HTTP status before decode.** A response handler that parses JSON
-  without checking `http.statusCode` first — a 404/429 must map to
-  `.unavailable`/`.badResponse`, never render as a full or critical bar.
+  without checking `http.statusCode` first — 404 must map to `.badResponse`,
+  429 must map to `.rateLimited`, never render as a full or critical bar.
 - **New `ProviderStatus` / `UnavailableReason` cases** (`MetricTypes.swift`).
   These compile fine and silently fall into an existing `Urgency`/
   `Confidence` bucket if not mapped on purpose — check both axes are set
