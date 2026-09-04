@@ -253,11 +253,12 @@ public struct DualBarProgressView: View {
 
                     // 3. Caret above: where current usage actually is. A
                     // down-pointing caret (apex toward the bar) hangs from the
-                    // top edge of the track at the consumed fraction. Never for
-                    // a window that reported no percentage, and never in the
-                    // blocked-without-reading slot where a caret would assert a
-                    // usage nobody measured.
-                    if let consumedPct, !isBlockedWithoutReading, consumedPct > 0 {
+                    // top edge of the track at the consumed fraction. Drawn for
+                    // any real reading — including exactly 0% used, which is a
+                    // valid answer — and never for a window that reported no
+                    // percentage, nor in the blocked-without-reading slot where
+                    // a caret would assert a usage nobody measured.
+                    if !hasNoReading {
                         Triangle(pointingUp: false)
                             .fill(Color.white)
                             .frame(width: Self.caretSize, height: Self.caretSize)

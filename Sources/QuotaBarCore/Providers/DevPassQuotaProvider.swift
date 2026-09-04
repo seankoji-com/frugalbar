@@ -86,12 +86,16 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
         // The allowance is drawn as the headline gauge, the badge, and a monthly
         // burndown bar (row1). LLM Gateway publishes no turnover date for the
-        // monthly cycle, so the bar uses the subscriber's pinned renewal below to
-        // place its pace marker and countdown.
-        let renewal = provider.monthlyRenewalDate
+        // monthly cycle, so the bar uses the subscriber's pinned renewal below —
+        // rolled forward to the next monthly occurrence so it never goes stale —
+        // to place its pace marker and countdown.
+        let renewal = provider.nextMonthlyRenewal(after: now)
         let windowLength = renewal.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
-        let pace = DualBarMetrics.proRataPace(
-            resetsAt: renewal, windowLength: windowLength ?? 0, now: now)
+        // Preserve nil: an unknown/absent window yields no pace, exactly like
+        // the other providers, rather than leaning on a `?? 0` fallback.
+        let pace = windowLength.flatMap {
+            DualBarMetrics.proRataPace(resetsAt: renewal, windowLength: $0, now: now)
+        }
 
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
@@ -108,7 +112,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                 expectedPaceFraction: pace,
                 label: "MO",
                 usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used",
-                resetText: provider.monthlyRenewalText,
+                resetText: renewal.map(Self.renewalText(for:)),
                 resetsAt: renewal,
                 windowLength: windowLength
             ),
@@ -196,21 +200,18 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         return components.calendar?.date(from: components)
     }
 
-    /// The `resetText` paired with `pinnedMonthlyRenewal`: the literal
-    /// "Renews Oct 1, 2026 09:10 GMT+10" line, derived from the date so the two
-    /// never drift apart.
-    static var pinnedMonthlyRenewalText: String? {
-        guard let date = pinnedMonthlyRenewal else { return nil }
-        return Self.renewalText(for: date)
-    }
-
-    /// This provider instance's renewal — whatever was injected, or the pinned
-    /// default.
-    var monthlyRenewalDate: Date? { monthlyRenewal }
-
-    /// `resetText` for this instance's renewal.
-    var monthlyRenewalText: String? {
-        monthlyRenewalDate.map(Self.renewalText(for:))
+    /// The next monthly renewal on or after `now`, preserving the anchor's
+    /// day-of-month and time. A pinned or injected date is a recurring point
+    /// (e.g. the 1st at 09:10), so once the moment passes the cycle rolls to
+    /// the following month instead of going stale — the countdown and pace
+    /// marker stay meaningful forever, not just until the first occurrence.
+    func nextMonthlyRenewal(after now: Date, calendar: Calendar = .current) -> Date? {
+        guard let anchor = monthlyRenewal else { return nil }
+        var candidate = anchor
+        while candidate < now, let next = calendar.date(byAdding: .month, value: 1, to: candidate) {
+            candidate = next
+        }
+        return candidate
     }
 
     /// Render a renewal date as the "Renews …" line in GMT+10.
