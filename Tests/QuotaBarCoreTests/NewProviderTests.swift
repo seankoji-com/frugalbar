@@ -532,21 +532,57 @@ struct DevPassQuotaProviderTests {
         #expect(snapshot.bars.count == 1)
         #expect(snapshot.row1?.label == "MO")
         #expect(abs(try #require(snapshot.row1?.primaryFraction) - 79.5 / 237.0) < 0.0001)
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt != nil)
+        #expect(snapshot.row1?.expectedPaceFraction != nil)
+        #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
         // The monthly plan allowance drives the badge and the pressure reading.
         #expect(snapshot.badgeText == "\(DevPassQuotaProvider.money(Decimal(string: "157.50")!)) left")
         #expect(abs(try #require(snapshot.consumptionFraction) - 79.5 / 237.0) < 0.0001)
     }
 
-    @Test("the monthly allowance is the headline, and no reset date is invented")
-    func noCycleDate() async throws {
+    @Test("the monthly allowance pins the subscriber's renewal so the bar gets a pace marker and countdown")
+    func monthlyCycleMarker() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
             try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
         }
-        // The vendor publishes no monthly turnover date, only the (ignored)
-        // weekly premium reset, so there is no countdown at all.
+        // The vendor publishes no monthly turnover date (only the ignored
+        // weekly premium reset), so the renewal is the pinned, known one — which
+        // is what lets the MO bar draw a period-time marker at all.
         #expect(snapshot.row1?.label == "MO")
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.expectedPaceFraction != nil)
+        #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
+    }
+
+    /// The pinned/injected renewal is a recurring monthly point; once the
+    /// anchored moment passes, the next renewal must roll to the following
+    /// month (same day/time) rather than going stale. Uses an explicit calendar
+    /// and fixed dates so the assertion never depends on `Date()`.
+    @Test("the monthly renewal rolls forward to the next occurrence after now")
+    func renewalRollsForward() throws {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 10 * 3600)! // GMT+10, always valid
+        let make = { (y: Int, mo: Int, d: Int, h: Int, mi: Int) in
+            var c = DateComponents()
+            c.year = y; c.month = mo; c.day = d; c.hour = h; c.minute = mi
+            return cal.date(from: c)
+        }
+        // Anchored on the 15th at 10:00; now well past that date.
+        let anchor = try #require(make(2026, 10, 15, 10, 0))
+        let provider = DevPassQuotaProvider(monthlyRenewal: anchor)
+        let now = try #require(make(2026, 11, 20, 0, 0))
+        let next = try #require(provider.nextMonthlyRenewal(after: now, calendar: cal))
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: next)
+        #expect(comps.year == 2026)
+        #expect(comps.month == 12)
+        #expect(comps.day == 15)   // same day-of-month preserved
+        #expect(comps.hour == 10)
+        #expect(comps.minute == 0)
+
+        // A now before the anchor returns the anchor itself.
+        let before = try #require(make(2026, 9, 1, 0, 0))
+        #expect(provider.nextMonthlyRenewal(after: before, calendar: cal) == anchor)
     }
 
     @Test("a high premium window never leaks into a monthly reading")
@@ -561,7 +597,12 @@ struct DevPassQuotaProviderTests {
         #expect(abs(try #require(snapshot.consumptionFraction) - 10.0 / 237.0) < 0.0001)
         #expect(snapshot.status.urgency == .none)
         #expect(snapshot.row1?.label == "MO")
-        #expect(snapshot.resetsAt == nil)
+        // The exact pinned monthly renewal — not merely non-nil — so a leaked
+        // weekly-premium reset (2026-09-06) could never slip through as the
+        // snapshot's "renewal".
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
     }
 
     @Test("decimal strings are parsed exactly, not through binary floating point")
@@ -653,7 +694,8 @@ struct DevPassQuotaProviderTests {
         #expect(snapshot.consumptionFraction == 0)
         #expect(snapshot.row1?.label == "MO")
         #expect(snapshot.row1?.primaryFraction == 0)
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
     }
 
     @Test("plan tiers map to their marketed names", arguments: [

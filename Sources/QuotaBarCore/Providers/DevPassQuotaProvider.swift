@@ -16,9 +16,9 @@ import Foundation
 ///
 /// One gap worth naming: the response gives no date for the monthly cycle
 /// turning over, only for the weekly premium window — and since that window is
-/// no longer tracked, no reset date is published at all. FrugalBar will not
-/// invent one, so there is no countdown, only the allowance gauge and the
-/// credits remaining.
+/// no longer tracked, no reset date is published at all. The monthly cycle is
+/// therefore pinned to the subscriber's real renewal (a known, hand-entered
+/// date, not a synthetic one) so the bar gets a pace marker and a countdown.
 public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .devpass
@@ -26,9 +26,15 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
 
     private let apiKey: String?
+    /// The monthly plan cycle's renewal. Defaults to the pinned known renewal
+    /// (Oct 1, 2026 09:10 GMT+10); injectable so a differently-subscribed key,
+    /// or this one once the date has passed, can supply its own without
+    /// editing source. `nil` only if the pinned date fails to build.
+    private let monthlyRenewal: Date?
 
-    public init(apiKey: String? = nil) {
+    public init(apiKey: String? = nil, monthlyRenewal: Date? = nil) {
         self.apiKey = apiKey
+        self.monthlyRenewal = monthlyRenewal ?? Self.pinnedMonthlyRenewal
     }
 
     static let usageURL = "https://api.llmgateway.io/v1/key"
@@ -80,8 +86,17 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
         // The allowance is drawn as the headline gauge, the badge, and a monthly
         // burndown bar (row1). LLM Gateway publishes no turnover date for the
-        // monthly cycle, so the bar has no reset date and no pace marker, but
-        // renders consumption cleanly under the "MO" label.
+        // monthly cycle, so the bar uses the subscriber's pinned renewal below —
+        // rolled forward to the next monthly occurrence so it never goes stale —
+        // to place its pace marker and countdown.
+        let renewal = provider.nextMonthlyRenewal(after: now)
+        let windowLength = renewal.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
+        // Preserve nil: an unknown/absent window yields no pace, exactly like
+        // the other providers, rather than leaning on a `?? 0` fallback.
+        let pace = windowLength.flatMap {
+            DualBarMetrics.proRataPace(resetsAt: renewal, windowLength: $0, now: now)
+        }
+
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
@@ -89,13 +104,17 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             category: provider.category,
             metric: .percentage(usedFraction: planFraction, displayDetails: nil),
             status: .measured(urgency),
-            resetsAt: nil,
+            resetsAt: renewal,
             lastUpdated: now,
             auxiliaryInfo: "DevPass monthly plan credits",
             row1: DualBarMetrics(
                 primaryFraction: planFraction,
+                expectedPaceFraction: pace,
                 label: "MO",
-                usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used"
+                usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used",
+                resetText: renewal.map(Self.renewalText(for:)),
+                resetsAt: renewal,
+                windowLength: windowLength
             ),
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
@@ -160,6 +179,49 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     }
 
     // MARK: - Helpers
+
+    /// The date the monthly plan cycle turns over.
+    ///
+    /// DevPass publishes no turnover date for the monthly allowance (only the
+    /// ignored weekly premium reset), so the default is pinned to this
+    /// subscriber's actual renewal — Oct 1, 2026 09:10 GMT+10 — rather than
+    /// synthesized. A fixed, known date in the owner's own timezone, kept as
+    /// real calendar components so the pace marker measures a true window
+    /// length instead of a guessed constant.
+    static var pinnedMonthlyRenewal: Date? {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 10 * 3600) // GMT+10
+        components.year = 2026
+        components.month = 10
+        components.day = 1
+        components.hour = 9
+        components.minute = 10
+        return components.calendar?.date(from: components)
+    }
+
+    /// The next monthly renewal on or after `now`, preserving the anchor's
+    /// day-of-month and time. A pinned or injected date is a recurring point
+    /// (e.g. the 1st at 09:10), so once the moment passes the cycle rolls to
+    /// the following month instead of going stale — the countdown and pace
+    /// marker stay meaningful forever, not just until the first occurrence.
+    func nextMonthlyRenewal(after now: Date, calendar: Calendar = .current) -> Date? {
+        guard let anchor = monthlyRenewal else { return nil }
+        var candidate = anchor
+        while candidate < now, let next = calendar.date(byAdding: .month, value: 1, to: candidate) {
+            candidate = next
+        }
+        return candidate
+    }
+
+    /// Render a renewal date as the "Renews …" line in GMT+10.
+    private static func renewalText(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 10 * 3600)
+        formatter.dateFormat = "MMM d, yyyy HH:mm 'GMT+10'"
+        return "Renews \(formatter.string(from: date))"
+    }
 
     static func fraction(used: Decimal?, limit: Decimal?) -> Double? {
         guard let used, let limit, limit > 0 else { return nil }

@@ -11,8 +11,14 @@ public struct DualBarProgressView: View {
 
     /// Track and fill thickness.
     static let barHeight: CGFloat = 8
-    /// Pace marker height, and therefore the bar's layout height.
-    static let tickHeight: CGFloat = 14
+    /// Edge length of each triangular caret marker.
+    static let caretSize: CGFloat = 6
+    /// Gap between a caret and the track's edge.
+    static let caretGap: CGFloat = 2
+    /// Full layout height: the 8pt track plus the current-usage caret hanging
+    /// above it and the period-time-expired caret risen below it, with ~2pt of
+    /// margin so neither clips.
+    static let markerHeight: CGFloat = barHeight + caretSize * 2 + caretGap * 2 + 4
 
     public init(
         metrics: DualBarMetrics,
@@ -111,6 +117,14 @@ public struct DualBarProgressView: View {
 
     private var trackColor: Color {
         Color.white.opacity(0.08)
+    }
+
+    /// Keeps a caret's centre inside the track even when the position it marks
+    /// sits at (or past) the track's ends, so the triangle never overhangs the
+    /// rounded capsule into the neighbouring column.
+    private static func clampedCaretX(_ x: CGFloat, boxWidth: CGFloat) -> CGFloat {
+        let half = Self.caretSize / 2
+        return min(max(x, half), boxWidth - half)
     }
 
     public var body: some View {
@@ -237,20 +251,46 @@ public struct DualBarProgressView: View {
                     .frame(width: w, height: Self.barHeight, alignment: .leading)
                     .clipShape(Capsule())
 
-                    // 3. Target Pace Marker (vertical white tick at mX)
-                    if hasPace, mX > 0, mX < w, !isBlockedWithoutReading {
-                        Capsule()
+                    // 3. Caret above: where current usage actually is. A
+                    // down-pointing caret (apex toward the bar) hangs from the
+                    // top edge of the track at the consumed fraction. Drawn for
+                    // any real reading — including exactly 0% used, which is a
+                    // valid answer — and never for a window that reported no
+                    // percentage, nor in the blocked-without-reading slot where
+                    // a caret would assert a usage nobody measured.
+                    if !hasNoReading {
+                        Triangle(pointingUp: false)
                             .fill(Color.white)
-                            .frame(width: 2.5, height: Self.tickHeight)
-                            .offset(x: min(w - 2.5, max(0, mX - 1.25)))
+                            .frame(width: Self.caretSize, height: Self.caretSize)
+                            .position(
+                                x: Self.clampedCaretX(aX, boxWidth: w),
+                                y: Self.markerHeight / 2 - Self.barHeight / 2 - Self.caretGap - Self.caretSize / 2
+                            )
+                            .shadow(color: Color.black.opacity(0.65), radius: 2, x: 0, y: 0)
+                    }
+
+                    // 4. Caret below: how far through the period we are. An
+                    // up-pointing caret (apex toward the bar) rises from the
+                    // bottom edge of the track at the pro-rata pace — the share
+                    // of the period that has already elapsed. Only when the
+                    // vendor gave us a real window to measure it against, at a
+                    // marker that is actually inside the track.
+                    if hasPace, mX > 0, mX < w, !isBlockedWithoutReading {
+                        Triangle(pointingUp: true)
+                            .fill(Color.white)
+                            .frame(width: Self.caretSize, height: Self.caretSize)
+                            .position(
+                                x: Self.clampedCaretX(mX, boxWidth: w),
+                                y: Self.markerHeight / 2 + Self.barHeight / 2 + Self.caretGap + Self.caretSize / 2
+                            )
                             .shadow(color: Color.black.opacity(0.65), radius: 2, x: 0, y: 0)
                     }
                 }
                 .frame(height: geo.size.height, alignment: .center)
             }
-            // Taller than the track so the 14pt pace tick has room to stand
-            // proud of it instead of overflowing an 8pt layout box.
-            .frame(height: Self.tickHeight)
+            // Taller than the track so the two carets have room to stand above
+            // and below it instead of overflowing the 8pt layout box.
+            .frame(height: Self.markerHeight)
 
             // The window token, always. Colour carries the state: green at or
             // under pace, amber ahead of it, red once it is spent.
@@ -316,6 +356,27 @@ public struct DualBarProgressView: View {
 
 
 
+
+/// A small triangular caret used to mark a position on a progress bar.
+///
+/// `pointingUp` picks which edge holds the apex: an up-pointing caret draws its
+/// apex at the top (a "^" risen from below the bar, pointing up at the track)
+/// and a down-pointing one draws its apex at the bottom (a "v" hanging from
+/// above, pointing down at the track) — each triangular tip aiming at the bar.
+private struct Triangle: Shape {
+    let pointingUp: Bool
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let apexY: CGFloat = pointingUp ? rect.minY : rect.maxY
+        let baseY: CGFloat = pointingUp ? rect.maxY : rect.minY
+        path.move(to: CGPoint(x: rect.midX, y: apexY))
+        path.addLine(to: CGPoint(x: rect.minX, y: baseY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: baseY))
+        path.closeSubpath()
+        return path
+    }
+}
 
 extension Color {
     init?(hexString: String) {
