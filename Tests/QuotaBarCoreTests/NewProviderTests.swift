@@ -549,8 +549,8 @@ struct DevPassQuotaProviderTests {
         // weekly premium reset), so the renewal is the pinned, known one — which
         // is what lets the MO bar draw a period-time marker at all.
         #expect(snapshot.row1?.label == "MO")
-        #expect(snapshot.resetsAt == DevPassQuotaProvider.monthlyRenewalDate)
-        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.monthlyRenewalDate)
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
+        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.pinnedMonthlyRenewal)
         #expect(snapshot.row1?.expectedPaceFraction != nil)
         #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
     }

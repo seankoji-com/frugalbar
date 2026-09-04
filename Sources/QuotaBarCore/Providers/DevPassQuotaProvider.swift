@@ -26,9 +26,15 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
 
     private let apiKey: String?
+    /// The monthly plan cycle's renewal. Defaults to the pinned known renewal
+    /// (Oct 1, 2026 09:10 GMT+10); injectable so a differently-subscribed key,
+    /// or this one once the date has passed, can supply its own without
+    /// editing source. `nil` only if the pinned date fails to build.
+    private let monthlyRenewal: Date?
 
-    public init(apiKey: String? = nil) {
+    public init(apiKey: String? = nil, monthlyRenewal: Date? = nil) {
         self.apiKey = apiKey
+        self.monthlyRenewal = monthlyRenewal ?? Self.pinnedMonthlyRenewal
     }
 
     static let usageURL = "https://api.llmgateway.io/v1/key"
@@ -82,7 +88,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         // burndown bar (row1). LLM Gateway publishes no turnover date for the
         // monthly cycle, so the bar uses the subscriber's pinned renewal below to
         // place its pace marker and countdown.
-        let renewal = Self.monthlyRenewalDate
+        let renewal = provider.monthlyRenewalDate
         let windowLength = renewal.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
         let pace = DualBarMetrics.proRataPace(
             resetsAt: renewal, windowLength: windowLength ?? 0, now: now)
@@ -102,7 +108,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                 expectedPaceFraction: pace,
                 label: "MO",
                 usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used",
-                resetText: Self.monthlyRenewalText,
+                resetText: provider.monthlyRenewalText,
                 resetsAt: renewal,
                 windowLength: windowLength
             ),
@@ -173,12 +179,12 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     /// The date the monthly plan cycle turns over.
     ///
     /// DevPass publishes no turnover date for the monthly allowance (only the
-    /// ignored weekly premium reset), so this is pinned to the subscriber's
-    /// actual renewal — Oct 1, 2026 09:10 GMT+10 — rather than synthesized.
-    /// A fixed, known date in the owner's own timezone, kept as real calendar
-    /// components so the pace marker measures a true window length instead of a
-    /// guessed constant.
-    static var monthlyRenewalDate: Date? {
+    /// ignored weekly premium reset), so the default is pinned to this
+    /// subscriber's actual renewal — Oct 1, 2026 09:10 GMT+10 — rather than
+    /// synthesized. A fixed, known date in the owner's own timezone, kept as
+    /// real calendar components so the pace marker measures a true window
+    /// length instead of a guessed constant.
+    static var pinnedMonthlyRenewal: Date? {
         var components = DateComponents()
         components.calendar = Calendar(identifier: .gregorian)
         components.timeZone = TimeZone(secondsFromGMT: 10 * 3600) // GMT+10
@@ -190,11 +196,25 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         return components.calendar?.date(from: components)
     }
 
-    /// The `resetText` paired with `monthlyRenewalDate`: the literal
+    /// The `resetText` paired with `pinnedMonthlyRenewal`: the literal
     /// "Renews Oct 1, 2026 09:10 GMT+10" line, derived from the date so the two
     /// never drift apart.
-    static var monthlyRenewalText: String? {
-        guard let date = monthlyRenewalDate else { return nil }
+    static var pinnedMonthlyRenewalText: String? {
+        guard let date = pinnedMonthlyRenewal else { return nil }
+        return Self.renewalText(for: date)
+    }
+
+    /// This provider instance's renewal — whatever was injected, or the pinned
+    /// default.
+    var monthlyRenewalDate: Date? { monthlyRenewal }
+
+    /// `resetText` for this instance's renewal.
+    var monthlyRenewalText: String? {
+        monthlyRenewalDate.map(Self.renewalText(for:))
+    }
+
+    /// Render a renewal date as the "Renews …" line in GMT+10.
+    private static func renewalText(for date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 10 * 3600)
