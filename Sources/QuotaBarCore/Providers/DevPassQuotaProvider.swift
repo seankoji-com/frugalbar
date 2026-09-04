@@ -16,9 +16,9 @@ import Foundation
 ///
 /// One gap worth naming: the response gives no date for the monthly cycle
 /// turning over, only for the weekly premium window — and since that window is
-/// no longer tracked, no reset date is published at all. FrugalBar will not
-/// invent one, so there is no countdown, only the allowance gauge and the
-/// credits remaining.
+/// no longer tracked, no reset date is published at all. The monthly cycle is
+/// therefore pinned to the subscriber's real renewal (a known, hand-entered
+/// date, not a synthetic one) so the bar gets a pace marker and a countdown.
 public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .devpass
@@ -80,8 +80,13 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
 
         // The allowance is drawn as the headline gauge, the badge, and a monthly
         // burndown bar (row1). LLM Gateway publishes no turnover date for the
-        // monthly cycle, so the bar has no reset date and no pace marker, but
-        // renders consumption cleanly under the "MO" label.
+        // monthly cycle, so the bar uses the subscriber's pinned renewal below to
+        // place its pace marker and countdown.
+        let renewal = Self.monthlyRenewalDate
+        let windowLength = renewal.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
+        let pace = DualBarMetrics.proRataPace(
+            resetsAt: renewal, windowLength: windowLength ?? 0, now: now)
+
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
@@ -89,13 +94,17 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             category: provider.category,
             metric: .percentage(usedFraction: planFraction, displayDetails: nil),
             status: .measured(urgency),
-            resetsAt: nil,
+            resetsAt: renewal,
             lastUpdated: now,
             auxiliaryInfo: "DevPass monthly plan credits",
             row1: DualBarMetrics(
                 primaryFraction: planFraction,
+                expectedPaceFraction: pace,
                 label: "MO",
-                usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used"
+                usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used",
+                resetText: Self.monthlyRenewalText,
+                resetsAt: renewal,
+                windowLength: windowLength
             ),
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
@@ -160,6 +169,38 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     }
 
     // MARK: - Helpers
+
+    /// The date the monthly plan cycle turns over.
+    ///
+    /// DevPass publishes no turnover date for the monthly allowance (only the
+    /// ignored weekly premium reset), so this is pinned to the subscriber's
+    /// actual renewal — Oct 1, 2026 09:10 GMT+10 — rather than synthesized.
+    /// A fixed, known date in the owner's own timezone, kept as real calendar
+    /// components so the pace marker measures a true window length instead of a
+    /// guessed constant.
+    static var monthlyRenewalDate: Date? {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 10 * 3600) // GMT+10
+        components.year = 2026
+        components.month = 10
+        components.day = 1
+        components.hour = 9
+        components.minute = 10
+        return components.calendar?.date(from: components)
+    }
+
+    /// The `resetText` paired with `monthlyRenewalDate`: the literal
+    /// "Renews Oct 1, 2026 09:10 GMT+10" line, derived from the date so the two
+    /// never drift apart.
+    static var monthlyRenewalText: String? {
+        guard let date = monthlyRenewalDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 10 * 3600)
+        formatter.dateFormat = "MMM d, yyyy HH:mm 'GMT+10'"
+        return "Renews \(formatter.string(from: date))"
+    }
 
     static func fraction(used: Decimal?, limit: Decimal?) -> Double? {
         guard let used, let limit, limit > 0 else { return nil }

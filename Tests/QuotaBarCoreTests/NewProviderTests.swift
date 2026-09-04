@@ -532,21 +532,27 @@ struct DevPassQuotaProviderTests {
         #expect(snapshot.bars.count == 1)
         #expect(snapshot.row1?.label == "MO")
         #expect(abs(try #require(snapshot.row1?.primaryFraction) - 79.5 / 237.0) < 0.0001)
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt != nil)
+        #expect(snapshot.row1?.expectedPaceFraction != nil)
+        #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
         // The monthly plan allowance drives the badge and the pressure reading.
         #expect(snapshot.badgeText == "\(DevPassQuotaProvider.money(Decimal(string: "157.50")!)) left")
         #expect(abs(try #require(snapshot.consumptionFraction) - 79.5 / 237.0) < 0.0001)
     }
 
-    @Test("the monthly allowance is the headline, and no reset date is invented")
-    func noCycleDate() async throws {
+    @Test("the monthly allowance pins the subscriber's renewal so the bar gets a pace marker and countdown")
+    func monthlyCycleMarker() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
             try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
         }
-        // The vendor publishes no monthly turnover date, only the (ignored)
-        // weekly premium reset, so there is no countdown at all.
+        // The vendor publishes no monthly turnover date (only the ignored
+        // weekly premium reset), so the renewal is the pinned, known one — which
+        // is what lets the MO bar draw a period-time marker at all.
         #expect(snapshot.row1?.label == "MO")
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt == DevPassQuotaProvider.monthlyRenewalDate)
+        #expect(snapshot.row1?.resetsAt == DevPassQuotaProvider.monthlyRenewalDate)
+        #expect(snapshot.row1?.expectedPaceFraction != nil)
+        #expect(snapshot.row1?.resetText == "Renews Oct 1, 2026 09:10 GMT+10")
     }
 
     @Test("a high premium window never leaks into a monthly reading")
@@ -561,7 +567,7 @@ struct DevPassQuotaProviderTests {
         #expect(abs(try #require(snapshot.consumptionFraction) - 10.0 / 237.0) < 0.0001)
         #expect(snapshot.status.urgency == .none)
         #expect(snapshot.row1?.label == "MO")
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt != nil)
     }
 
     @Test("decimal strings are parsed exactly, not through binary floating point")
@@ -653,7 +659,7 @@ struct DevPassQuotaProviderTests {
         #expect(snapshot.consumptionFraction == 0)
         #expect(snapshot.row1?.label == "MO")
         #expect(snapshot.row1?.primaryFraction == 0)
-        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.resetsAt != nil)
     }
 
     @Test("plan tiers map to their marketed names", arguments: [
