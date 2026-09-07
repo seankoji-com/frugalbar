@@ -3,8 +3,11 @@
 # Default Setup ran Swift analysis via `autobuild` on a fresh macos-latest VM
 # every time, with no cache — a full `swift build` under CodeQL's trace was
 # taking ~18 of the job's ~19 minutes on every single run. This workflow
-# builds manually and caches `.build` across runs so incremental builds stay
-# fast; only actually-changed compile units get re-traced.
+# builds manually (`swift build -c debug`) and caches `.build`, but in
+# practice the traced build recompiles essentially everything on every run:
+# it still costs ~16-19 min on cache hits with unchanged Sources (measured on
+# main, Sep 2026). `timeout-minutes` on analyze-swift is sized for that full
+# rebuild, not for an incremental one.
 
 name: CodeQL
 
@@ -52,7 +55,11 @@ jobs:
   analyze-swift:
     name: Analyze (swift)
     runs-on: macos-15
-    timeout-minutes: 20
+    # A traced `swift build -c debug` costs ~16-19 min here even on a cache
+    # hit with no source changes. 20 minutes left no room for init + analyze +
+    # runner noise: run 34107996448 was killed at the 20m0s limit with the
+    # analysis step never allowed to run. 30 keeps the worst observed case in.
+    timeout-minutes: 30
     permissions:
       security-events: write
       actions: read
