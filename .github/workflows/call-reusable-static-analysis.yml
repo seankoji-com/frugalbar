@@ -9,9 +9,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
-
 # Every push to a PR queues a fresh scan; without this, rapid successive
 # pushes (force-push loops, auto-rebase branches) stack up several full runs
 # of the same diff on the shared self-hosted pool. Cancel in favor of the
