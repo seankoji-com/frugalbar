@@ -13,8 +13,43 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
 
     private let accessToken: String?
+    private let apiBaseOverride: String?
+    private let configuredAPIBase: (value: String?, invalid: Bool)
 
-    public init(accessToken: String? = nil) { self.accessToken = accessToken }
+    private static let productionAPIBase = "https://cloudcode-pa.googleapis.com/v1internal:"
+
+    static func apiBase(from rawValue: String?) -> (value: String?, invalid: Bool) {
+        guard let value = rawValue, !value.isEmpty else { return (nil, false) }
+        guard var components = URLComponents(string: value),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty,
+              host.lowercased() == "googleapis.com" || host.lowercased().hasSuffix(".googleapis.com"),
+              components.port == nil, components.user == nil,
+              components.query == nil, components.fragment == nil else {
+            NSLog("frugalbar: ignoring invalid FRUGALBAR_GEMINI_API_BASE; expected an https URL")
+            return (nil, true)
+        }
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/:").union(.whitespacesAndNewlines))
+        guard path.isEmpty || path == "v1internal" else {
+            NSLog("frugalbar: ignoring invalid FRUGALBAR_GEMINI_API_BASE; expected an https URL")
+            return (nil, true)
+        }
+        components.path = "/v1internal"
+        let normalized = components
+        return (normalized.url.map { $0.absoluteString + ":" }, false)
+    }
+
+    public init(accessToken: String? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.accessToken = accessToken
+        self.apiBaseOverride = nil
+        self.configuredAPIBase = Self.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
+    }
+
+    init(accessToken: String?, apiBaseOverride: String?) {
+        self.accessToken = accessToken
+        self.apiBaseOverride = apiBaseOverride
+        self.configuredAPIBase = (nil, false)
+    }
 
     private struct CodeAssist: Decodable {
         struct Plan: Decodable { let planType: String? }
@@ -43,6 +78,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        let configured = configuredAPIBase
+        if apiBaseOverride == nil, configured.invalid {
+            return unavailable(.unsupported("FRUGALBAR_GEMINI_API_BASE is not a valid https://*.googleapis.com URL"))
+        }
+
         var resolvedToken = accessToken
         // Ambient credential lookup is skipped under a test host. Otherwise
         // whether "no key short-circuits" passes depends on whether the
@@ -60,19 +100,24 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             return unavailable(.notConfigured)
         }
 
-        // The quota summary takes an empty body — it is scoped by the token,
-        // needs no project, and so cannot fail on project resolution.
-        let (data, http) = try await QuotaHTTP.post(
-            url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-            body: Data("{}".utf8),
-            headers: ["User-Agent": "antigravity"], auth: .bearer(token)
-        )
-        if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
-        guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
-            return unavailable(.badResponse)
-        }
-        guard let group = Self.geminiGroup(in: summary) else {
-            return unavailable(.unsupported("Antigravity reported no Gemini quota"))
+        let base = apiBaseOverride ?? configured.value ?? Self.productionAPIBase
+        let group: QuotaSummary.Group
+        do {
+            let (data, http) = try await QuotaHTTP.post(
+                url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
+                headers: ["User-Agent": "antigravity"], auth: .bearer(token)
+            )
+            if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
+            guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
+                return unavailable(.badResponse)
+            }
+            guard let decodedGroup = Self.geminiGroup(in: summary) else {
+                return unavailable(.unsupported("Antigravity reported no Gemini quota"))
+            }
+            group = decodedGroup
+        } catch {
+            NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
+            throw error
         }
 
         let now = Date()
@@ -89,17 +134,19 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         // The plan is decoration, so it is fetched best-effort: losing it must
         // not cost us a reading we already hold.
-        let plan = await Self.plan(token: token)
+        let plan = await Self.plan(token: token, bases: [base])
+        let sourceHost = URL(string: base)?.host ?? base
+        let sourceSuffix = base == Self.productionAPIBase ? "" : " · Source: \(sourceHost)"
 
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: plan ?? displayName, renewalDate: nil),
             status: .measured(urgency), resetsAt: ordered.first?.reset, lastUpdated: now,
-            auxiliaryInfo: group.description ?? "Live Antigravity subscription quota",
+            auxiliaryInfo: (group.description ?? "Live Antigravity subscription quota") + sourceSuffix,
             row1: ordered[safe: 0].map { $0.bar }, row2: ordered[safe: 1].map { $0.bar },
             row3: ordered[safe: 2].map { $0.bar },
             badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
-            planName: plan, cliSource: "Google OAuth"
+            planName: plan, cliSource: "Google OAuth\(sourceSuffix)"
         )
     }
 
@@ -160,21 +207,22 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
-    private static func plan(token: String) async -> String? {
+    private static func plan(token: String, bases: [String]) async -> String? {
         let body = try? JSONEncoder().encode(
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
-        guard let body,
-              let (data, http) = try? await QuotaHTTP.post(
-                  url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", body: body,
-                  headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
-              (200...299).contains(http.statusCode),
-              let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
-        else { return nil }
-        // Two tiers live in this response and only one is the subscription.
-        // `currentTier` is the Code Assist licence — "free-tier" for almost any
-        // personal account — so showing it told a paying subscriber they were
-        // on the free tier. `paidTier` is what the account actually pays for.
-        return assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name
+        guard let body else { return nil }
+        for base in bases {
+            guard let (data, http) = try? await QuotaHTTP.post(
+                url: base + "loadCodeAssist", body: body,
+                headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
+                (200...299).contains(http.statusCode),
+                let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
+            else { continue }
+            if let name = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name {
+                return name
+            }
+        }
+        return nil
     }
 
     private static func parseDate(_ text: String) -> Date? {

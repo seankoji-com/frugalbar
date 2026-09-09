@@ -166,7 +166,7 @@ struct MetricRowView: View {
     }
 
     private var row: some View {
-        HStack(spacing: 9) {
+        HStack(alignment: snapshot.bars.count > 1 ? .top : .center, spacing: 9) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
@@ -211,7 +211,7 @@ struct MetricRowView: View {
 
             if !snapshot.bars.isEmpty {
                 // Multi-bar (5H / WK / MO) burndown charts
-                VStack(spacing: 5) {
+                VStack(spacing: 2) {
                     ForEach(Array(snapshot.bars.enumerated()), id: \.offset) { _, barMetrics in
                         DualBarProgressView(
                             metrics: barMetrics,

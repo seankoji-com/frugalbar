@@ -70,6 +70,7 @@ public struct AdviceSectionView: View {
 
             Spacer(minLength: 0)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isActionable && isHovered ? Theme.surfaceContainerHigh : Theme.card)

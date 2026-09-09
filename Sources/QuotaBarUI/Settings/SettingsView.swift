@@ -532,7 +532,7 @@ public struct SettingsView: View {
         case .offline, .timedOut: return "Could not reach the vendor"
         case .badResponse:        return "Unexpected response"
         case .rateLimited:        return "Vendor is throttling — try again shortly"
-        case .unsupported:        return "Saved — no usage to read"
+        case .unsupported(let detail): return "Saved — \(detail)"
         case nil:                 return "Key accepted"
         }
     }
