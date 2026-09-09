@@ -8,6 +8,15 @@
 # it still costs ~16-19 min on cache hits with unchanged Sources (measured on
 # main, Sep 2026). `timeout-minutes` on analyze-swift is sized for that full
 # rebuild, not for an incremental one.
+#
+# "Analyze (swift)" is a required status check (see the `required-checks`
+# ruleset), so the workflow cannot simply be path-filtered off PRs that do
+# not touch Swift — a filtered workflow never reports its check and PRs
+# stall in "Expected — Waiting for status to be reported". Instead a cheap
+# `changes` job decides, and analyze-swift is *skipped* by a job-level
+# condition when the PR leaves Sources/, Tests/ and Package.swift untouched.
+# GitHub treats a conditionally-skipped job as Success for required checks,
+# so PRs stay mergeable without paying for a ~17-minute traced build.
 
 name: CodeQL
 
@@ -32,6 +41,34 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Swift changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      swift: ${{ steps.diff.outputs.swift }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect Swift changes
+        id: diff
+        # PRs: diff the merge-base against the PR head so only the PR's own
+        # changes count. All other events run analyze-swift unconditionally.
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "swift=true"
+            exit 0
+          fi
+          BASE="${{ github.event.pull_request.base.sha }}"
+          MERGE_BASE="$(git merge-base "$BASE" HEAD)"
+          if git diff --name-only "$MERGE_BASE"...HEAD | grep -qE '^(Sources/|Tests/|Package\.swift)'; then
+            echo "swift=true"
+          else
+            echo "swift=false"
+          fi
+
   analyze-actions:
     name: Analyze (actions)
     runs-on: ubuntu-latest
@@ -54,6 +91,11 @@ jobs:
 
   analyze-swift:
     name: Analyze (swift)
+    needs: changes
+    # Skip (not fail) when a PR does not touch Swift sources: a
+    # conditionally-skipped job satisfies required status checks, but a
+    # paths-filtered workflow would leave "Analyze (swift)" pending forever.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.swift == 'true'
     runs-on: macos-15
     # A traced `swift build -c debug` costs ~16-19 min here even on a cache
     # hit with no source changes. 20 minutes left no room for init + analyze +
