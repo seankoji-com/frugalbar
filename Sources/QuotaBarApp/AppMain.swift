@@ -45,7 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(
             rootView: PopoverRootView(
                 store: store,
-                onOpenSettings: { [weak self] in self?.openSettings() }
+                onOpenSettings: { [weak self] in self?.openSettings() },
+                availableHeightProvider: { [weak statusItem] in
+                    statusItem?.button?.window?.screen?.visibleFrame.height
+                        ?? NSScreen.main?.visibleFrame.height
+                }
             )
         )
         hostingController.view.appearance = NSAppearance(named: .darkAqua)
