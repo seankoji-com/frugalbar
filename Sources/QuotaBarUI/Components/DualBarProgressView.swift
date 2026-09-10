@@ -15,9 +15,8 @@ public struct DualBarProgressView: View {
     static let caretSize: CGFloat = 6
     /// Gap between a caret and the track's edge.
     static let caretGap: CGFloat = 2
-    /// Full layout height: the 8pt track plus the current-usage caret hanging
-    /// above it and the period-time-expired caret risen below it, with ~2pt of
-    /// margin so neither clips.
+    /// Full layout height: the 8pt track plus both carets and a small shadow
+    /// margin so neither marker clips at a scroll-view edge.
     static let markerHeight: CGFloat = barHeight + caretSize * 2 + caretGap * 2 + 4
 
     public init(

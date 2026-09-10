@@ -18,6 +18,10 @@ public struct PopoverRootView: View {
 
     @State private var store: QuotaStore
     @State private var selectedSnapshot: QuotaSnapshot? = nil
+    @State private var contentHeight: CGFloat = 0
+    @State private var availableHeight: CGFloat
+    @State private var footerHeight: CGFloat = 44
+    private let availableHeightProvider: @MainActor () -> CGFloat?
     private let onOpenSettings: (@MainActor () -> Void)?
 
     /// Wide enough for the row budget in `MetricRowView` (324pt of content).
@@ -31,25 +35,31 @@ public struct PopoverRootView: View {
 
     public init(
         store: QuotaStore = QuotaStore(),
-        onOpenSettings: (@MainActor () -> Void)? = nil
+        onOpenSettings: (@MainActor () -> Void)? = nil,
+        availableHeightProvider: @escaping @MainActor () -> CGFloat? = {
+            NSScreen.main?.visibleFrame.height
+        }
     ) {
         _store = State(initialValue: store)
+        _availableHeight = State(initialValue: availableHeightProvider() ?? Self.maxContentHeight + 100)
+        self.availableHeightProvider = availableHeightProvider
         self.onOpenSettings = onOpenSettings
     }
 
     public var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                // `fixedSize` first so the scroll view adopts its content's
-                // height, then the frame clamps it: the popover is exactly as
-                // tall as it needs to be until it hits the ceiling, and scrolls
-                // from there instead of growing off the screen.
                 ScrollView(.vertical) {
                     sections
                         .frame(maxWidth: .infinity)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            contentHeight = $0
+                        }
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxHeight: Self.maxContentHeight)
+                // Measure the content, not the viewport. Fixing the scroll
+                // view at its intrinsic height clipped both ends when capped.
+                .frame(idealHeight: scrollHeight, maxHeight: scrollHeight, alignment: .top)
                 .scrollBounceBehavior(.basedOnSize)
 
                 FooterActionsView(
@@ -65,6 +75,9 @@ public struct PopoverRootView: View {
                     onQuit: { NSApp.terminate(nil) },
                     onRefresh: { Task { await store.forceRefresh() } }
                 )
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    footerHeight = $0
+                }
             }
             .frame(width: Self.popoverWidth)
             .background(Theme.surface)
@@ -86,10 +99,36 @@ public struct PopoverRootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: selectedSnapshot != nil)
+        .onAppear(perform: updateAvailableHeight)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            updateAvailableHeight()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { _ in
+            updateAvailableHeight()
+        }
         .task {
             // Background polling is subscribed once by the app delegate, which
             // owns the store. Registering here too ran every tick twice.
             await store.load()
+        }
+    }
+
+    private var scrollHeight: CGFloat {
+        // Leave room for the footer and popover chrome below the menu bar.
+        Self.scrollHeight(contentHeight: contentHeight, availableHeight: availableHeight, footerHeight: footerHeight)
+    }
+
+    static func scrollHeight(contentHeight: CGFloat, availableHeight: CGFloat, footerHeight: CGFloat) -> CGFloat {
+        let available = availableHeight - footerHeight - 12
+        // Never request more than the screen can hold; AppKit positions the
+        // footer with the remaining space below this viewport.
+        let measured = contentHeight > 0 ? contentHeight : Self.popoverHeight
+        return min(measured, Self.maxContentHeight, max(0, available))
+    }
+
+    private func updateAvailableHeight() {
+        if let height = availableHeightProvider() {
+            availableHeight = height
         }
     }
 
@@ -168,6 +207,3 @@ public struct PopoverRootView: View {
         .background(Theme.surface)
     }
 }
-
-
-

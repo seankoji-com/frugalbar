@@ -8,6 +8,15 @@
 # it still costs ~16-19 min on cache hits with unchanged Sources (measured on
 # main, Sep 2026). `timeout-minutes` on analyze-swift is sized for that full
 # rebuild, not for an incremental one.
+#
+# "Analyze (swift)" is a required status check (see the `required-checks`
+# ruleset), and rulesets treat a skipped required check as NOT passing (the
+# PR merge is blocked — verified Sep 2026), so the job cannot simply be
+# `if:`-gated off PRs that do not touch Swift. Instead the job always runs
+# and a `skipcheck` step diffs the PR merge-base against head: when nothing
+# under Sources/, Tests/ or Package.swift changed, every subsequent step is
+# skipped and the job completes green in ~2 min (runner spin-up + checkout)
+# instead of paying the ~17-minute traced build.
 
 name: CodeQL
 
@@ -67,11 +76,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Skip analysis when the PR leaves Swift untouched
+        id: skipcheck
+        # PRs: diff the merge-base against the PR head so only the PR's own
+        # changes count. All other events (push/schedule/dispatch) already
+        # pass the trigger's paths filter or are explicit — proceed.
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "proceed=true"
+            exit 0
+          fi
+          BASE="${{ github.event.pull_request.base.sha }}"
+          MERGE_BASE="$(git merge-base "$BASE" HEAD)"
+          if git diff --name-only "$MERGE_BASE"...HEAD | grep -qE '^(Sources/|Tests/|Package\.swift)'; then
+            echo "proceed=true"
+          else
+            echo "No Swift changes in this PR — skipping the traced build."
+          fi
 
       - name: Select Xcode 16
+        if: steps.skipcheck.outputs.proceed == 'true'
         run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Cache SwiftPM build
+        if: steps.skipcheck.outputs.proceed == 'true'
         uses: actions/cache@v6
         with:
           path: .build
@@ -80,13 +111,16 @@ jobs:
             spm-codeql-${{ runner.os }}-
 
       - uses: github/codeql-action/init@v4
+        if: steps.skipcheck.outputs.proceed == 'true'
         with:
           languages: swift
           build-mode: manual
 
       - name: Build (traced)
+        if: steps.skipcheck.outputs.proceed == 'true'
         run: swift build -c debug
 
       - uses: github/codeql-action/analyze@v4
+        if: steps.skipcheck.outputs.proceed == 'true'
         with:
           category: "/language:swift"

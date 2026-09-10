@@ -25,6 +25,8 @@ final class URLProtocolStub: URLProtocol {
     nonisolated(unsafe) private static var _handler: (@Sendable (URLRequest) -> Stubbed)?
     nonisolated(unsafe) private static var _requestCount = 0
     nonisolated(unsafe) private static var _capturedRequests: [URLRequest] = []
+    nonisolated(unsafe) private static var _failNextRequest = false
+    nonisolated(unsafe) private static var _nextFailureCode: URLError.Code?
 
     static var handler: (@Sendable (URLRequest) -> Stubbed)? {
         get { lock.lock(); defer { lock.unlock() }; return _handler }
@@ -44,6 +46,18 @@ final class URLProtocolStub: URLProtocol {
         _handler = nil
         _requestCount = 0
         _capturedRequests = []
+        _failNextRequest = false
+        _nextFailureCode = nil
+    }
+
+    static var failNextRequest: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _failNextRequest }
+        set { lock.lock(); defer { lock.unlock() }; _failNextRequest = newValue }
+    }
+
+    static var nextFailureCode: URLError.Code? {
+        get { lock.lock(); defer { lock.unlock() }; return _nextFailureCode }
+        set { lock.lock(); defer { lock.unlock() }; _nextFailureCode = newValue }
     }
 
     static func makeSession() -> URLSession {
@@ -57,11 +71,22 @@ final class URLProtocolStub: URLProtocol {
 
     override func startLoading() {
         let handler: (@Sendable (URLRequest) -> Stubbed)?
+        let shouldFail: Bool
+        let failureCode: URLError.Code?
         Self.lock.lock()
         Self._requestCount += 1
         Self._capturedRequests.append(request)
         handler = Self._handler
+        shouldFail = Self._failNextRequest
+        Self._failNextRequest = false
+        failureCode = Self._nextFailureCode
+        Self._nextFailureCode = nil
         Self.lock.unlock()
+
+        if shouldFail {
+            client?.urlProtocol(self, didFailWithError: URLError(failureCode ?? .cannotFindHost))
+            return
+        }
 
         guard let handler, let url = request.url else {
             client?.urlProtocol(self, didFailWithError: URLError(.unknown))
@@ -446,6 +471,94 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 0)
     }
 
+    @Test("Gemini uses the CLI backend rather than the unrelated full quota pool")
+    func geminiUsesCLIQuotaBackend() async throws {
+        let provider = GeminiQuotaProvider(
+            accessToken: "token",
+            apiBaseOverride: "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+        )
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+            }
+            // The daily backend is the measured agy pool for this account.
+            return canned(body: #"""
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.119401865},
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.9908481}]}]}
+            """#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(URLProtocolStub.capturedRequests.allSatisfy {
+            $0.url?.host == "daily-cloudcode-pa.googleapis.com"
+        })
+        #expect(snap.status == .measured(.warning))
+        #expect(snap.badgeText == "12% left")
+        #expect(snap.planName == "Google AI Pro")
+        let weekly = try #require(snap.bars.first { $0.label == "WK" }?.primaryFraction)
+        let fiveHour = try #require(snap.bars.first { $0.label == "5H" }?.primaryFraction)
+        #expect(abs(weekly - 0.880598135) < 0.000_000_1)
+        #expect(abs(fiveHour - 0.0091519) < 0.000_000_1)
+        #expect(!QuotaAdvice.evaluate(from: [snap]).message.contains("100% remaining"))
+    }
+
+    @Test("Gemini public init uses the production quota endpoint")
+    func geminiUsesProductionEndpointByDefault() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        _ = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true { return canned(body: "{}") }
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.5}]}]}"#)
+        }) { try await provider.fetchSnapshot() }
+        #expect(URLProtocolStub.capturedRequests.map(\.url?.absoluteString) == [
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        ])
+    }
+
+    @Test("Gemini reports a missing configured route")
+    func geminiReportsMissingRoute() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://daily-cloudcode-pa.googleapis.com/v1internal:")
+        let snap = try await withStubbedHTTP({ _ in
+            if URLProtocolStub.requestCount == 1 { return canned(status: 404, body: "") }
+            if URLProtocolStub.requestCount == 2 { return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.5}]}]}"#) }
+            return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(URLProtocolStub.capturedRequests.count == 1)
+        #expect(URLProtocolStub.capturedRequests[0].url?.host == "daily-cloudcode-pa.googleapis.com")
+    }
+
+    @Test("Gemini reports a transient configured backend failure")
+    func geminiReportsTransientFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://daily-cloudcode-pa.googleapis.com/v1internal:")
+        let snap = try await withStubbedHTTP({ _ in
+            if URLProtocolStub.requestCount == 1 { return canned(status: 503, body: "") }
+            if URLProtocolStub.requestCount == 2 { return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.5}]}]}"#) }
+            return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(URLProtocolStub.capturedRequests.count == 1)
+        #expect(URLProtocolStub.capturedRequests.first?.url?.host == "daily-cloudcode-pa.googleapis.com")
+    }
+
+    @Test("Gemini reports an initial configured DNS failure")
+    func geminiReportsInitialTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://daily-cloudcode-pa.googleapis.com/v1internal:")
+        await #expect(throws: URLError.self) {
+            try await withStubbedHTTP({ _ in
+                canned(body: "{}")
+            }) {
+                URLProtocolStub.failNextRequest = true
+                return try await provider.fetchSnapshot()
+            }
+        }
+        #expect(URLProtocolStub.capturedRequests.count == 1)
+        #expect(URLProtocolStub.capturedRequests[0].url?.host == "daily-cloudcode-pa.googleapis.com")
+    }
+
     /// Payload captured verbatim from a live authenticated request. The old
     /// source (`fetchAvailableModels`) exposed one `remainingFraction` per
     /// model, so the row showed a single bar and silently omitted the weekly
@@ -515,9 +628,47 @@ struct ProviderHTTPTests {
         #expect(GeminiQuotaProvider.label(for: nil) == "AG")
     }
 
-    /// The security test previously stubbed a 401 so only the first request
-    /// was ever issued — the second call's URL was never inspected. Both must
-    /// be token-free.
+    @Test("Gemini preserves timeout errors for the provider deadline")
+    func geminiTimeoutIsRethrown() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token")
+        await #expect(throws: URLError.self) {
+            try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+                URLProtocolStub.nextFailureCode = .timedOut
+                URLProtocolStub.failNextRequest = true
+                return try await provider.fetchSnapshot()
+            }
+        }
+    }
+
+    @Test("Gemini API base accepts documented URL forms and rejects other hosts")
+    func geminiAPIBaseValidation() {
+        for raw in [
+            "https://daily-cloudcode-pa.googleapis.com",
+            "https://daily-cloudcode-pa.googleapis.com/",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal/",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+        ] {
+            let result = GeminiQuotaProvider.apiBase(from: raw)
+            #expect(result.invalid == false)
+            #expect(result.value == "https://daily-cloudcode-pa.googleapis.com/v1internal:")
+        }
+        for raw in [
+            "http://daily-cloudcode-pa.googleapis.com",
+            "https://example.com",
+            "https://daily-cloudcode-pa.googleapis.com/other",
+            "https://daily-cloudcode-pa.googleapis.com:443"
+        ] {
+            let result = GeminiQuotaProvider.apiBase(from: raw)
+            #expect(result.value == nil)
+            #expect(result.invalid == true)
+        }
+        #expect(GeminiQuotaProvider.apiBase(from: nil).invalid == false)
+        #expect(GeminiQuotaProvider.apiBase(from: "").invalid == false)
+    }
+
+    /// Every quota and best-effort plan request must keep the token out of its
+    /// URL.
     @Test("Gemini keeps the token out of every request URL, not just the first")
     func geminiTokenNeverInAnyURL() async throws {
         let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
