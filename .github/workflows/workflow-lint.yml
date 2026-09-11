@@ -38,9 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Pinned to the same version used locally. The image bundles shellcheck
-      # and pyflakes, so run:/python blocks get linted too.
+      # Maintained fork, not rhysd/actionlint: upstream is inactive and its
+      # latest release rejects `concurrency.queue`, which the synced gatekeeper
+      # caller uses (rhysd/actionlint#661 was closed unmerged). The fork
+      # implements it and keeps the same CLI. The image bundles shellcheck and
+      # pyflakes, so run:/python blocks get linted too.
+      # See seankoji-com/.github#200.
       - name: Run actionlint
-        uses: docker://rhysd/actionlint:1.7.12
+        uses: docker://kjanat/actionlint:1.16.1
         with:
           args: -color
