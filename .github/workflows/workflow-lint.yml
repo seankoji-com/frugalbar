@@ -7,7 +7,7 @@
 # inputs, and shellcheck findings inside run: blocks.
 #
 # Kept separate from quotabar-ci.yml because it wants a Linux runner and a
-# docker:// step, not macOS.
+# Docker-based step, not macOS.
 
 name: Workflow Lint
 
@@ -40,7 +40,13 @@ jobs:
 
       # Pinned to the same version used locally. The image bundles shellcheck
       # and pyflakes, so run:/python blocks get linted too.
+      #
+      # Invoked with `docker run` rather than `uses: docker://...`: the runner
+      # splits a `uses` step's `args` input on whitespace, so a `-ignore`
+      # pattern containing a space gets torn apart. actionlint 1.7.12 does not
+      # recognise the valid `concurrency.queue` key, so that pattern is needed
+      # to silence the false positive (rhysd/actionlint#657).
       - name: Run actionlint
-        uses: docker://rhysd/actionlint:1.7.12
-        with:
-          args: -color -ignore 'unexpected key "queue"'
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo rhysd/actionlint:1.7.12 \
+            -color -ignore 'unexpected key "queue"'
