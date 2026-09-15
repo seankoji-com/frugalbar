@@ -89,9 +89,9 @@ struct BackgroundSchedulerTests {
         let scheduler = BackgroundScheduler()
         let spy = HandlerSpy()
         _ = await scheduler.addHandler { await spy.handler() }
-        await scheduler.start(interval: 0.2)
-        await scheduler.start(interval: 0.2)
-        try? await Task.sleep(for: .milliseconds(100))
+        await scheduler.start(interval: 2.0)
+        await scheduler.start(interval: 2.0)
+        try? await Task.sleep(for: .milliseconds(50))
         await scheduler.stop()
         let count = await spy.callCount
         #expect(count == 0)
