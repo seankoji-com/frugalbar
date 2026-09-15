@@ -667,9 +667,16 @@ extension CredentialStore {
                     continuation.resume(returning: .keychain)
                     return
                 }
-                guard isCLIDiscoveryEnabled,
-                      let found = discoverFromCLI(vendor: vendor), !found.isEmpty
-                else {
+                guard isCLIDiscoveryEnabled else {
+                    continuation.resume(returning: .absent)
+                    return
+                }
+                if (vendor == .claude || vendor == .openai), let config = CLIProxyClient.discoverConfig() {
+                    let host = config.url.host ?? "proxy"
+                    continuation.resume(returning: .discovered("CLI Proxy (\(host))"))
+                    return
+                }
+                guard let found = discoverFromCLI(vendor: vendor), !found.isEmpty else {
                     continuation.resume(returning: .absent)
                     return
                 }

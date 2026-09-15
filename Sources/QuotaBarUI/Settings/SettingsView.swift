@@ -19,10 +19,10 @@ public struct SettingsView: View {
     private static let slots: [KeySlot] = [
         .init(id: .claude, label: "Claude",
               placeholder: "Claude OAuth access token",
-              note: "Discovered from the Claude Code login when CLI discovery is on."),
+              note: "Discovered from CLI Proxy or Claude Code login when CLI discovery is on."),
         .init(id: .openai, label: "ChatGPT",
               placeholder: "Codex ChatGPT access token",
-              note: "Discovered from ~/.codex/auth.json when CLI discovery is on."),
+              note: "Discovered from CLI Proxy or ~/.codex/auth.json when CLI discovery is on."),
         .init(id: .githubRest, label: "GitHub",
               placeholder: "ghp_… or gho_…",
               note: "Used for REST, GraphQL and Copilot."),
@@ -332,6 +332,7 @@ public struct SettingsView: View {
                 Toggle("Read credentials from local CLI tools", isOn: $cliDiscovery)
                 Text("""
                      When on, FrugalBar may run `gh auth token`; read \
+                     CLI Proxy hubs (~/.t3/userdata/settings.json); read \
                      ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
                      ~/.claude/.credentials.json, or \
                      ~/.config/github-copilot/hosts.json; read the \
