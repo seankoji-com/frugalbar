@@ -79,7 +79,8 @@ swift run
    - **GitHub**: One PAT covers REST, GraphQL rate limits, and Copilot subscription status.
    - **OpenRouter**: Use a spend-capped API key to display live balance, budget, and spend telemetry.
    - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
-   - **Anthropic Claude**: Sign in with the Claude Code CLI; enable CLI discovery and FrugalBar reads that OAuth login.
+   - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
+   - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
    - **OpenCode**: Configure a token; usage appears once OpenCode has written its own telemetry.
    - **Grok**: Sign in with the Grok CLI (`grok login`); enable CLI discovery and FrugalBar reads `~/.grok/auth.json`.
    - **Kiro**: Sign in with the Kiro CLI or IDE; enable CLI discovery and FrugalBar reads the CLI's own state database.
@@ -98,20 +99,20 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **GitHub REST** | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge: requests/hour remaining with reset countdown |
 | **GitHub GraphQL** | `GET https://api.github.com/rate_limit` → `resources.graphql` | Live gauge: points/hour remaining with reset countdown |
 | **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key`, then `GET https://openrouter.ai/api/v1/credits` | Live account credit balance in USD when the key may read it; otherwise that key's USD spend cap |
-| **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports |
+| **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session or CLI Proxy hub | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports |
 | **GitHub Copilot** | `GET https://api.github.com/copilot_internal/user` with the GitHub OAuth token | Live gauge: premium-interaction and chat allowances, with reset date. Plans billed by token publish no window and say so |
 | **Google Gemini** | `POST cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (Google OAuth) | Live five-hour and weekly Antigravity windows, plus the paid subscription tier; failures remain unavailable rather than substituting another quota pool |
 | **OpenCode** | `GET https://opencode.ai/zen/go/v1/usage` with the `opencode-go` key | Live gauge: rolling, weekly and monthly Go windows, each with the reset time and whether it is currently blocking |
-| **Anthropic Claude** | `anthropic-ratelimit-unified-*` response headers | Live 5-hour and 7-day quota from the Claude Code OAuth login |
+| **Anthropic Claude** | CLI Proxy OAuth usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`) or `anthropic-ratelimit-unified-*` response headers | Live 5-hour and 7-day quota from the active CLI Proxy or Claude Code OAuth session |
 | **Grok** | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI's token | Live gauge: percentage of the plan's credit allowance used, plus the billing period xAI names (weekly or monthly) and its reset. On-demand spend appears as a second bar once enabled |
 | **Kiro** | `POST https://codewhisperer.us-east-1.amazonaws.com/` (`AmazonCodeWhispererService.GetUsageLimits`) with the Kiro CLI's token | Live gauge: plan credits used against the monthly allowance with reset date, plus separate bars for bonus credits (with expiry) and for overage once the account has it switched on |
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
 
 ### Caveats worth knowing
 
-Two of these readings carry a cost the table can't show:
+Two of these readings carry a cost or routing characteristic the table can't show:
 
-- **Claude spends a little of the quota it reports.** Anthropic publishes the unified 5h/7d figures only as response headers, so FrugalBar issues the smallest possible real request (one Haiku call capped at a single output token) on each refresh. It is a rounding error against a subscription, but it is not free, and it is why the poll interval is two minutes rather than two seconds.
+- **Claude quota querying**: When routed through CLI Proxy, FrugalBar queries Anthropic's OAuth usage endpoint directly via the proxy management API without consuming tokens. When falling back to a direct Claude Code OAuth token, Anthropic publishes the unified 5h/7d figures only as response headers, so FrugalBar issues the smallest possible real request (one Haiku call capped at a single output token) on each refresh. It is a rounding error against a subscription, but it is not free, and it is why the direct poll interval is two minutes rather than two seconds.
 - **Grok and Kiro tokens expire, and FrugalBar will not refresh them.** Both CLIs mint short-lived tokens (Grok's last about six hours) and refresh them on their own schedule. Writing a new token behind a CLI's back risks invalidating the session you are working in, so FrugalBar only ever reads. An expired token shows as "Credential rejected"; running `grok` or opening Kiro clears it.
 - **Gemini needs a first-party OAuth client, which FrugalBar does not ship.** The Antigravity quota API defaults to `cloudcode-pa.googleapis.com`; `FRUGALBAR_GEMINI_API_BASE` can select a controlled Google API ring such as `https://daily-cloudcode-pa.googleapis.com`. FrugalBar does not substitute another Google quota pool when the selected endpoint fails or reports no Gemini group, because a valid response from another ring can still describe a different allowance. The override must be an `https://*.googleapis.com` URL and is read once per process on the first refresh. If a refresh fails after a prior measured read, the UI may retain that last reading until a successful refresh. When CLI discovery is enabled, FrugalBar can also use an unexpired session from `antigravity-usage`; otherwise it reads the client configured in its own Keychain. The API is private and Google allowlists it to its own projects: a client you create cannot call it, `gcloud services enable` refuses the service even to a project Owner, and it is not listed among a project's available services at all. FrugalBar therefore asks you to supply a client that *is* allowlisted — in practice the pair the `antigravity-usage` CLI publishes in its `OAUTH_CONFIG`. Those values are deliberately not committed here: they are another product's credentials, and GitHub's push protection rejects them. Set them in Settings → Keys → Gemini, or via `FRUGALBAR_GEMINI_CLIENT_ID` and `FRUGALBAR_GEMINI_CLIENT_SECRET`; they are stored in the Keychain. Expect the consent screen to name whichever product owns the client, not FrugalBar. Without this, Gemini reports "Not configured" once no valid session remains.
 
@@ -131,7 +132,7 @@ Optionally record the cost per period and it appears alongside the countdown.
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, and `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only) — is **disabled by default** and can be enabled under **Preferences → General**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, and `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only) — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---
 

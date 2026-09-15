@@ -83,9 +83,9 @@ deleted a working Google client secret on its first run. Keychain tests use a
 randomised label; anything that needs the store/clear *decision* tests the pure
 function (`secretToStore`, `clientIDToStore`) instead of round-tripping through
 the labels the running app reads. For the same reason `GeminiQuotaProvider`
-skips ambient credential lookup under `TestHost.isActive` — otherwise whether
-"no key short-circuits" passes depends on whether the developer happens to be
-signed in.
+and `CLIProxyClient.discoverConfig()` skip ambient credential and proxy lookup
+under `TestHost.isActive` — otherwise tests depend on whether the developer
+happens to be signed in or running a local proxy hub.
 
 **Never assert on a duration derived from `Date()`.** Pass an explicit `now`.
 `Int(179.97 / 60)` is 2, which made one test fail ~25% of runs.

@@ -112,6 +112,21 @@ private func canned(status: Int = 200, body: String, headers: [String: String] =
     URLProtocolStub.Stubbed(status: status, headers: headers, body: Data(body.utf8))
 }
 
+private func extractBody(from request: URLRequest) -> Data {
+    if let data = request.httpBody { return data }
+    guard let stream = request.httpBodyStream else { return Data() }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: buffer.count)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data
+}
+
 /// Runs `operation` with `QuotaHTTP.session` substituted for a session backed
 /// by `URLProtocolStub`, and `handler` wired up to answer every request.
 ///
@@ -852,18 +867,7 @@ struct ProviderHTTPTests {
         let request = try #require(URLProtocolStub.capturedRequests.first)
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
-        let body = request.httpBody ?? request.httpBodyStream.map { stream in
-            stream.open()
-            defer { stream.close() }
-            var data = Data()
-            var buffer = [UInt8](repeating: 0, count: 4096)
-            while stream.hasBytesAvailable {
-                let read = stream.read(&buffer, maxLength: buffer.count)
-                if read <= 0 { break }
-                data.append(buffer, count: read)
-            }
-            return data
-        } ?? Data()
+        let body = extractBody(from: request)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(json["system"] as? String == "You are Claude Code, Anthropic's official CLI for Claude.")
     }
@@ -906,4 +910,195 @@ struct ProviderHTTPTests {
         #expect(snap.status == .warning)
     }
 
+    /// When Claude CLI is routed through LiteLLM/CLIProxyAPI, the session consuming
+    /// tokens lives in CLIProxyAPI on the LAN server. Probing local Keychain credentials
+    /// completely misses the active session. ClaudeQuotaProvider must query CLIProxyAPI's
+    /// management endpoints (/v0/management/auth-files and /v0/management/api-call)
+    /// to obtain live Claude OAuth quota.
+    @Test("Claude queries CLIProxyAPI management endpoints and parses live usage")
+    func claudeQueriesCLIProxyManagement() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-secret-key"
+        )
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                #expect(request.httpMethod == "GET")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
+                return canned(body: #"""
+                {
+                  "files": [
+                    {
+                      "id": "claude-test-user",
+                      "auth_index": "claude_idx_123",
+                      "provider": "claude",
+                      "email": "user@example.com",
+                      "disabled": false
+                    }
+                  ]
+                }
+                """#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                #expect(request.httpMethod == "POST")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
+                let bodyData = extractBody(from: request)
+                let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
+                #expect(json["auth_index"] as? String == "claude_idx_123")
+                #expect(json["url"] as? String == "https://api.anthropic.com/api/oauth/usage")
+                #expect(json["method"] as? String == "GET")
+
+                return canned(body: #"""
+                {
+                  "status_code": 200,
+                  "body": "{\"five_hour\":{\"utilization\":1.0,\"resets_at\":\"2026-09-15T06:59:59.000000+00:00\"},\"seven_day\":{\"utilization\":0.23,\"resets_at\":\"2026-09-19T00:00:00.000000+00:00\"}}"
+                }
+                """#)
+            }
+            return canned(status: 404, body: "not found")
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.cliSource == "CLI Proxy (hub.test)")
+        #expect(snap.badgeText == "0% left")
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 1.0)
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row2?.primaryFraction == 0.23)
+        #expect(snap.resetsAt != nil)
+    }
+
+    @Test("Claude CLI Proxy maps 401 credential rejection")
+    func claudeCLIProxy401() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "bad-key"
+        )
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "Unauthorized") }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    @Test("Claude CLI Proxy with no Claude account falls back to not configured")
+    func claudeCLIProxyNoAccount() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"{"files":[{"provider":"codex","auth_index":"idx1"}]}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.status == .unavailable(.notConfigured))
+    }
+
+    @Test("OpenAI queries CLIProxyAPI management endpoints and parses live usage")
+    func openaiQueriesCLIProxyManagement() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-secret-key"
+        )
+        let provider = OpenAIQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                #expect(request.httpMethod == "GET")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
+                return canned(body: #"""
+                {
+                  "files": [
+                    {
+                      "id": "codex-test-user",
+                      "auth_index": "codex_idx_123",
+                      "provider": "codex",
+                      "email": "user@example.com",
+                      "disabled": false,
+                      "id_token": {
+                        "chatgpt_account_id": "acc-1234",
+                        "chatgpt_plan_type": "pro"
+                      }
+                    }
+                  ]
+                }
+                """#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                #expect(request.httpMethod == "POST")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
+                let bodyData = extractBody(from: request) ?? Data()
+                let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
+                #expect(json["auth_index"] as? String == "codex_idx_123")
+                #expect(json["url"] as? String == "https://chatgpt.com/backend-api/wham/usage")
+                #expect(json["method"] as? String == "GET")
+                let headers = json["header"] as? [String: String] ?? [:]
+                #expect(headers["Chatgpt-Account-Id"] == "acc-1234")
+                #expect(headers["OpenAI-Beta"] == "codex-1")
+
+                return canned(body: #"""
+                {
+                  "status_code": 200,
+                  "body": "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":95.0,\"reset_at\":1789455599,\"limit_window_seconds\":18000},\"secondary_window\":{\"used_percent\":20.0,\"reset_at\":1789800000,\"limit_window_seconds\":604800}}}"
+                }
+                """#)
+            }
+            return canned(status: 404, body: "not found")
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.cliSource == "CLI Proxy (hub.test)")
+        #expect(snap.badgeText == "5% left")
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 0.95)
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.resetsAt != nil)
+    }
+
+    @Test("OpenAI CLI Proxy maps 401 credential rejection")
+    func openaiCLIProxy401() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "bad-key"
+        )
+        let provider = OpenAIQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "Unauthorized") }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    @Test("OpenAI CLI Proxy with no Codex account falls back to not configured")
+    func openaiCLIProxyNoAccount() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = OpenAIQuotaProvider(cliProxyConfig: config)
+
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"{"files":[{"provider":"claude","auth_index":"idx1"}]}"#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.status == .unavailable(.notConfigured))
+    }
 }
