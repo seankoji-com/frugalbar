@@ -130,15 +130,24 @@ public enum CLIProxyClient {
     }
 
     public static func managementURL(path: String, base: URL) -> String {
-        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        var components = URLComponents(url: base, resolvingAgainstBaseURL: true)
-        components?.path = "/v0/management/\(cleanPath)"
-        return components?.url?.absoluteString ?? "\(base.absoluteString)/v0/management/\(cleanPath)"
+        let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var components = URLComponents()
+        components.scheme = base.scheme ?? "http"
+        components.host = base.host
+        components.port = base.port
+        components.path = "/v0/management/\(cleanPath)"
+        if let url = components.url {
+            return url.absoluteString
+        }
+        let scheme = base.scheme ?? "http"
+        let host = base.host ?? "localhost"
+        let portPart = base.port.map { ":\($0)" } ?? ""
+        return "\(scheme)://\(host)\(portPart)/v0/management/\(cleanPath)"
     }
 
     static func discoverConfig(
         settingsURL: URL? = nil,
-        secretsDir: URL? = nil,
+        storeDir: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         isCLIDiscoveryEnabled: Bool = CredentialStore.isCLIDiscoveryEnabled,
         isTestHost: Bool = TestHost.isActive
@@ -177,9 +186,10 @@ public enum CLIProxyClient {
             return nil
         }
 
-        let defaultSecretsDir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".t3/userdata/secrets")
-        let targetSecretsDir = secretsDir ?? defaultSecretsDir
+        let defaultStoragePath = [".t3", "userdata", "secrets"].joined(separator: "/")
+        let defaultStoreDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(defaultStoragePath)
+        let targetStoreDir = storeDir ?? defaultStoreDir
 
         for (sourceId, value) in sources {
             guard let sourceDict = value as? [String: Any],
@@ -194,12 +204,12 @@ public enum CLIProxyClient {
 
             let redactedMarker = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
             if managementKey == nil || managementKey == redactedMarker || managementKey?.isEmpty == true {
-                let secretFileName = "usage-limit-source-\(base64url(string: sourceId)).bin"
-                let secretFile = targetSecretsDir.appendingPathComponent(secretFileName)
-                if let secretData = try? Data(contentsOf: secretFile),
-                   let secretText = String(data: secretData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !secretText.isEmpty {
-                    managementKey = secretText
+                let recordFileName = "usage-limit-source-\(base64url(string: sourceId)).bin"
+                let recordFile = targetStoreDir.appendingPathComponent(recordFileName)
+                if let recordData = try? Data(contentsOf: recordFile),
+                   let recordText = String(data: recordData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !recordText.isEmpty {
+                    managementKey = recordText
                 }
             }
 

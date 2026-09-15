@@ -81,7 +81,7 @@ struct CLIProxyClientTests {
         // When discovery is disabled, returns nil
         let disabled = CLIProxyClient.discoverConfig(
             settingsURL: settingsURL,
-            secretsDir: tempDir,
+            storeDir: tempDir,
             environment: [:],
             isCLIDiscoveryEnabled: false,
             isTestHost: false
@@ -91,7 +91,7 @@ struct CLIProxyClientTests {
         // When discovery is enabled, returns config
         let enabled = CLIProxyClient.discoverConfig(
             settingsURL: settingsURL,
-            secretsDir: tempDir,
+            storeDir: tempDir,
             environment: [:],
             isCLIDiscoveryEnabled: true,
             isTestHost: false
@@ -102,17 +102,17 @@ struct CLIProxyClientTests {
         #expect(enabled?.label == "Test Proxy")
     }
 
-    @Test("discoverConfig resolves redacted secret from secrets directory")
+    @Test("discoverConfig resolves redacted secret from storage directory")
     func discoverConfigResolvesRedactedSecret() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let secretsDir = tempDir.appendingPathComponent("secrets")
-        try FileManager.default.createDirectory(at: secretsDir, withIntermediateDirectories: true)
+        let storeDir = tempDir.appendingPathComponent("store")
+        try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let sourceId = "cliproxy-hub"
-        let secretFileName = "usage-limit-source-\(CLIProxyClient.base64url(string: sourceId)).bin"
-        let secretFileURL = secretsDir.appendingPathComponent(secretFileName)
-        try "secret-from-bin-file\n".write(to: secretFileURL, atomically: true, encoding: .utf8)
+        let recordFileName = "usage-limit-source-\(CLIProxyClient.base64url(string: sourceId)).bin"
+        let recordFileURL = storeDir.appendingPathComponent(recordFileName)
+        try "secret-from-bin-file\n".write(to: recordFileURL, atomically: true, encoding: .utf8)
 
         let settingsURL = tempDir.appendingPathComponent("settings.json")
         let settingsContent = """
@@ -132,7 +132,7 @@ struct CLIProxyClientTests {
 
         let config = CLIProxyClient.discoverConfig(
             settingsURL: settingsURL,
-            secretsDir: secretsDir,
+            storeDir: storeDir,
             environment: [:],
             isCLIDiscoveryEnabled: true,
             isTestHost: false
@@ -145,7 +145,7 @@ struct CLIProxyClientTests {
     func discoverConfigSkipsAmbientInTestHost() {
         let config = CLIProxyClient.discoverConfig(
             settingsURL: nil,
-            secretsDir: nil,
+            storeDir: nil,
             environment: [:],
             isCLIDiscoveryEnabled: true,
             isTestHost: true
