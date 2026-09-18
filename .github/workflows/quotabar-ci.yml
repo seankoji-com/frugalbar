@@ -67,7 +67,23 @@ jobs:
             --usage QuotaBar
 
       - name: Run tests
-        run: swift test -c debug --parallel
+        run: swift test -c debug --parallel --enable-code-coverage
+
+      # Keep the first run's report before the separate flake check rebuilds
+      # without instrumentation. Report publication starts advisory.
+      - name: Locate Swift coverage report
+        id: coverage
+        continue-on-error: true
+        run: echo "path=$(swift test -c debug --show-codecov-path)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve Swift coverage report
+        if: steps.coverage.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swift-coverage
+          path: ${{ steps.coverage.outputs.path }}
+          if-no-files-found: error
 
       # Tests must be hermetic. Re-running proves there is no ordering or clock
       # dependence — a formatter that truncated instead of rounding used to
