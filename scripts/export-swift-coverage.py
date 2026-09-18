@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def convert_verified(lcov, root):
+    root = root.resolve()
     expected = {}
     current = None
     for line in lcov.splitlines():
