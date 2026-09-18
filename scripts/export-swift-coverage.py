@@ -50,7 +50,9 @@ def convert_verified(lcov, root):
 
 def main():
     binary_dir = Path(subprocess.check_output(["swift", "build", "-c", "debug", "--show-bin-path"], cwd=ROOT, text=True).strip())
-    binaries = list(binary_dir.glob("*.xctest/Contents/MacOS/*"))
+    binaries = [bundle / "Contents" / "MacOS" / bundle.stem
+                for bundle in binary_dir.glob("*.xctest")
+                if (bundle / "Contents" / "MacOS" / bundle.stem).is_file()]
     if len(binaries) != 1:
         raise RuntimeError(f"Expected one Swift test executable, found {len(binaries)}")
     profile = binary_dir / "codecov" / "default.profdata"
