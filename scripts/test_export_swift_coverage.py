@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 spec = importlib.util.spec_from_file_location("export_swift_coverage", Path(__file__).with_name("export-swift-coverage.py"))
 exporter = importlib.util.module_from_spec(spec)
@@ -17,7 +18,8 @@ class ExportTests(unittest.TestCase):
             xml, lines, covered = exporter.convert_verified(lcov, root)
             self.assertEqual((lines, covered), (2, 1))
             self.assertIn('filename="Sources/Core.swift"', xml)
-            self.assertIn('number="5" hits="7"', xml)
+            line = ET.fromstring(xml).find(".//line[@number='5']")
+            self.assertEqual(line.attrib["hits"], "7")
             self.assertIn('<source>.</source>', xml)
 
     def test_rejects_test_sources(self):
