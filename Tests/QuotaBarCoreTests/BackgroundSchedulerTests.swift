@@ -15,6 +15,34 @@ private actor HandlerSpy {
     }
 }
 
+/// Suspends only the first call, so an overlapping cycle can be observed
+/// without also blocking the test that releases the first cycle.
+private actor RefreshGate {
+    private(set) var callCount = 0
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        callCount += 1
+        guard callCount == 1 else { return }
+        entered = true
+        for waiter in entryWaiters { waiter.resume() }
+        entryWaiters.removeAll()
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitForEntry() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
 @Suite("BackgroundScheduler")
 struct BackgroundSchedulerTests {
 
@@ -61,6 +89,54 @@ struct BackgroundSchedulerTests {
         let scheduler = BackgroundScheduler()
         // Should not crash or throw
         await scheduler.removeHandler(UUID())
+    }
+
+    // Drive the same cycle used by the timer, without wall-clock sleeps.
+    @Test("a refresh calls every registered handler and excludes removed handlers")
+    func refreshRespectsRegistrations() async {
+        let scheduler = BackgroundScheduler()
+        let first = HandlerSpy()
+        let second = HandlerSpy()
+        let removed = HandlerSpy()
+        // An empty cycle must also reset the in-progress flag.
+        await scheduler.fire()
+        await scheduler.addHandler { await first.record() }
+        await scheduler.addHandler { await second.record() }
+        let token = await scheduler.addHandler { await removed.record() }
+        await scheduler.removeHandler(token)
+        await scheduler.fire()
+        await scheduler.fire()
+        #expect(await first.callCount == 2)
+        #expect(await second.callCount == 2)
+        #expect(await removed.callCount == 0)
+    }
+
+    @Test("an overlapping refresh is skipped and the next cycle still runs", .timeLimit(.minutes(1)))
+    func refreshDoesNotOverlap() async {
+        let scheduler = BackgroundScheduler()
+        let gate = RefreshGate()
+        await scheduler.addHandler { await gate.run() }
+        let first = Task { await scheduler.fire() }
+        await gate.waitForEntry()
+        await scheduler.fire()
+        #expect(await gate.callCount == 1)
+        await gate.release()
+        await first.value
+        await scheduler.fire()
+        #expect(await gate.callCount == 2)
+    }
+
+    @Test("handlers registered during a refresh first run in the next cycle")
+    func refreshUsesRegistrationSnapshot() async {
+        let scheduler = BackgroundScheduler()
+        let later = HandlerSpy()
+        await scheduler.addHandler {
+            await scheduler.addHandler { await later.record() }
+        }
+        await scheduler.fire()
+        #expect(await later.callCount == 0)
+        await scheduler.fire()
+        #expect(await later.callCount == 1)
     }
 
     // MARK: - Lifecycle (start / stop)

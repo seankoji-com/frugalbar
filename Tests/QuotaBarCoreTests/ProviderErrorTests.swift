@@ -204,6 +204,51 @@ struct GeminiOAuthCallbackOutcomeTests {
         }
         #expect(code == "abc123")
     }
+    @Test("an error takes precedence even when code and state are valid")
+    func errorWithCodeIsRejected() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?code=synthetic-code&state=\(Self.expectedState)&error=access_denied"),
+            expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected the consent error to prevent code exchange")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    @Test("callback decodes escaped code and state without interpreting code as more parameters")
+    func escapedCallbackValuesRoundTrip() {
+        let outcome = GeminiOAuthLogin.callbackOutcome(
+            request: request(target: "/callback?code=synthetic%2Bcode%2Fwith%3Dpadding%26state%3Dother&state=state%2B%2F%3D"),
+            expectedState: "state+/=")
+        guard case .success(let code) = outcome else {
+            Issue.record("expected percent-encoded callback values to decode")
+            return
+        }
+        #expect(code == "synthetic+code/with=padding&state=other")
+    }
+
+    @Test("missing state and malformed request lines cannot exchange a code", arguments: [
+        "", "GET", "\r\n", "GET /callback?code=synthetic-code HTTP/1.1\r\n",
+        "GET /callback?code=synthetic-code&state HTTP/1.1\r\n"
+    ])
+    func malformedCallbackIsRejected(request: String) {
+        let outcome = GeminiOAuthLogin.callbackOutcome(request: request, expectedState: Self.expectedState)
+        guard case .failure(let error) = outcome else {
+            Issue.record("expected an incomplete callback to fail")
+            return
+        }
+        #expect(error.reason == .badResponse)
+    }
+
+    @Test("OAuth state encoding uses URL-safe alphabet and removes both padding lengths")
+    func stateEncodingIsURLSafe() {
+        #expect(Data([0xfb, 0xff, 0xff]).base64URLEncodedString() == "-___")
+        #expect(Data([0xff]).base64URLEncodedString() == "_w")
+        #expect(Data([0xff, 0xff]).base64URLEncodedString() == "__8")
+        #expect(Data().base64URLEncodedString() == "")
+    }
+
 }
 
 @Suite("Gemini OAuth token errors")
