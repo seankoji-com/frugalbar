@@ -12,3 +12,6 @@ DerivedData/
 .claude/worktrees/
 .claude/jobs/
 .claude/settings.local.json
+
+# Local code coverage and mutation-proof artifacts
+coverage/
