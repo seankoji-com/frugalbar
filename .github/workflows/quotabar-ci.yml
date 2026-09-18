@@ -15,6 +15,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      verify_mutations:
+        description: Prove scheduler and OAuth regressions reject independent mutations
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -83,6 +88,40 @@ jobs:
         with:
           name: swift-coverage
           path: ${{ steps.coverage.outputs.path }}
+          if-no-files-found: error
+
+      # LLVM owns line accounting; the converter must preserve every line/hit
+      # pair. Keep reporting advisory until native coverage is configured.
+      - name: Convert and verify Swift Cobertura
+        id: cobertura
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/swift-coverage-tools"
+          "$RUNNER_TEMP/swift-coverage-tools/bin/pip" install lcov-cobertura==2.1.1
+          "$RUNNER_TEMP/swift-coverage-tools/bin/python" scripts/test_export_swift_coverage.py
+          "$RUNNER_TEMP/swift-coverage-tools/bin/python" scripts/export-swift-coverage.py
+
+      - name: Preserve verified Cobertura
+        if: steps.cobertura.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swift-cobertura
+          path: |
+            coverage/coverage.xml
+            coverage/swift.lcov
+          if-no-files-found: error
+
+      - name: Prove regression mutations
+        if: github.event_name == 'workflow_dispatch' && inputs.verify_mutations
+        run: python3 scripts/verify-regression-mutations.py
+
+      - name: Preserve mutation proof logs
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_mutations
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regression-mutation-proof
+          path: coverage/mutations/
           if-no-files-found: error
 
       # Tests must be hermetic. Re-running proves there is no ordering or clock
