@@ -1,6 +1,9 @@
 import Testing
 import Foundation
 @testable import QuotaBarCore
+#if canImport(SQLite3)
+import SQLite3
+#endif
 
 @Suite("QuotaHistoryStore")
 struct QuotaHistoryStoreTests {
@@ -46,7 +49,57 @@ struct QuotaHistoryStoreTests {
         #expect(reading.barLabel == "5H")
         #expect(reading.fraction == nil)
         #expect(reading.isBlocked == true)
-        #expect(reading.fraction != 0.0)
+    }
+
+    @Test("a batch that fails part-way through leaves the database untouched")
+    func failedBatchRollsBack() async throws {
+        #if canImport(SQLite3)
+        let (store, dbURL) = makeIsolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func snapshot(_ id: String, label: String, fraction: Double) -> QuotaSnapshot {
+            var snapshot = QuotaSnapshot(
+                id: id,
+                vendorId: .claude,
+                displayName: "Claude",
+                category: .aiSubscriptions,
+                metric: .percentage(usedFraction: fraction, displayDetails: nil),
+                status: .healthy,
+                resetsAt: nil,
+                lastUpdated: now,
+                auxiliaryInfo: nil
+            )
+            snapshot.row1 = DualBarMetrics(primaryFraction: fraction, label: label)
+            return snapshot
+        }
+
+        // Seed so the schema exists before the trigger is installed.
+        try await store.record([snapshot("seed", label: "5H", fraction: 0.1)], now: now)
+
+        // Make exactly one row fail, part-way through a two-row batch.
+        var rawDB: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &rawDB) == SQLITE_OK)
+        let trigger = """
+        CREATE TRIGGER reject_boom BEFORE INSERT ON reading
+        WHEN NEW.bar_label = 'BOOM'
+        BEGIN SELECT RAISE(ABORT, 'test-induced failure'); END;
+        """
+        #expect(sqlite3_exec(rawDB, trigger, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(rawDB)
+
+        await #expect(throws: HistoryDatabaseError.self) {
+            try await store.record(
+                [snapshot("good", label: "GOOD", fraction: 0.42), snapshot("bad", label: "BOOM", fraction: 0.99)],
+                now: now.addingTimeInterval(60)
+            )
+        }
+
+        // The row written before the failure must not have been committed. The
+        // old `defer { try? commitTransaction() }` committed it.
+        let readings = try await store.fetchReadings(vendor: .claude)
+        #expect(!readings.contains { $0.barLabel == "GOOD" })
+        #expect(readings.map(\.barLabel) == ["5H"])
+        #endif
     }
 
     @Test("an unavailable poll persists as confidence == .unavailable and never as a healthy reading")

@@ -38,22 +38,29 @@ public enum SampleDataGenerator {
     /// the fixture depend on the calendar in use.
     public static let exhaustionDayIndex = 2   // the third of seven days
 
-    /// Serialises fixture generation.
+    /// Serialises fixture generation, per target store.
     ///
     /// `ensureSampleData` is a check-then-write with an `await` between the two,
     /// so concurrent callers each observed an empty store and each wrote a full
     /// fixture. The History window used to start three of these at once (one per
-    /// `.task(id:)`), which tripled the generated activity rows. Guarding here
-    /// rather than only at the call site keeps the invariant true for any caller.
+    /// `.task(id:)`), which tripled the generated activity rows.
+    ///
+    /// Keyed on the database path rather than applied globally, and callers that
+    /// arrive while a generation is running *wait* for it rather than returning:
+    /// a no-op would leave them observing an empty store.
     private actor Gate {
-        private var isGenerating = false
+        private var inFlight: [String: Task<Void, Error>] = [:]
 
-        /// Returns `nil` when another generation is already in flight.
-        func run<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T? {
-            guard !isGenerating else { return nil }
-            isGenerating = true
-            defer { isGenerating = false }
-            return try await body()
+        func run(for key: String, _ body: @escaping @Sendable () async throws -> Void) async throws {
+            if let existing = inFlight[key] {
+                try await existing.value
+                return
+            }
+
+            let task = Task.detached { try await body() }
+            inFlight[key] = task
+            defer { inFlight[key] = nil }
+            try await task.value
         }
     }
 
@@ -70,7 +77,7 @@ public enum SampleDataGenerator {
         force: Bool = false,
         now: Date = Date()
     ) async throws {
-        _ = try await gate.run {
+        try await gate.run(for: store.databaseURL.path) {
             try await generate(in: store, force: force, now: now)
         }
     }

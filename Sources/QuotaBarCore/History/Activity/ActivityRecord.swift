@@ -15,12 +15,14 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
     public let outputTokens: Int?
     public let cacheReadTokens: Int?
     public let cacheWriteTokens: Int?
-    /// Total observed tokens, or `nil` when the source did not report enough to
-    /// state one.
+    /// Total observed tokens, or `nil` when the source reported no token figures
+    /// at all.
     ///
-    /// Derived only from a *complete* breakdown: a partial sum presented as a
-    /// total would be a measured-looking figure the source never reported, and
-    /// these totals feed project token shares.
+    /// When the source did not publish a total, this is the sum of the
+    /// components it *did* report — a true statement about what was observed.
+    /// The components above stay `nil` when unreported, so an absent figure is
+    /// never mistaken for a measured zero; that coercion was the defect, not
+    /// the summing.
     public let totalTokens: Int?
 
     public init(
@@ -51,10 +53,9 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
 
         if let totalTokens {
             self.totalTokens = totalTokens
-        } else if let inputTokens, let outputTokens, let cacheReadTokens, let cacheWriteTokens {
-            self.totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
         } else {
-            self.totalTokens = nil
+            let reported = [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].compactMap { $0 }
+            self.totalTokens = reported.isEmpty ? nil : reported.reduce(0, +)
         }
     }
 }

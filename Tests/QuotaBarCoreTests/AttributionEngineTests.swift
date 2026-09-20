@@ -121,4 +121,133 @@ struct AttributionEngineTests {
 
         #expect(summary.consumedFractionDelta == nil)
     }
+
+    // MARK: - Bar-label scoping
+
+    private func reading(_ label: String, _ fraction: Double?, at offset: TimeInterval) -> QuotaHistoryStore.ReadingRecord {
+        QuotaHistoryStore.ReadingRecord(
+            vendor: "claude",
+            barLabel: label,
+            measuredAt: Date(timeIntervalSince1970: 1_800_000_000 + offset),
+            fraction: fraction,
+            isBlocked: false,
+            confidence: .measured,
+            urgency: .none,
+            resetsAt: nil,
+            windowLength: label == "5H" ? 5 * 3600 : 7 * 24 * 3600,
+            elapsedOnly: false
+        )
+    }
+
+    @Test("consumption endpoints never span two bar labels")
+    func endpointsAreScopedToOneBar() {
+        // The 5H window burns 0.20 -> 0.95; the weekly barely moves. Reading the
+        // endpoints off the unfiltered list used to subtract the weekly figure
+        // from the 5-hour one and report 0.00 consumed.
+        let readings = [
+            reading("5H", 0.20, at: 0),
+            reading("WK", 0.10, at: 0),
+            reading("5H", 0.95, at: 3600),
+            reading("WK", 0.15, at: 3600)
+        ]
+
+        let fiveHour = AttributionEngine.consumptionEndpoints(readings: readings, barLabel: "5H")
+        #expect(fiveHour.start == 0.20)
+        #expect(fiveHour.end == 0.95)
+
+        let week = AttributionEngine.consumptionEndpoints(readings: readings, barLabel: "WK")
+        #expect(week.start == 0.10)
+        #expect(week.end == 0.15)
+    }
+
+    @Test("a bar with no measured reading yields nil endpoints, never a borrowed or zeroed one")
+    func absentBarYieldsNilEndpoints() {
+        let readings = [reading("5H", 0.20, at: 0), reading("WK", nil, at: 0)]
+
+        let absent = AttributionEngine.consumptionEndpoints(readings: readings, barLabel: "WK")
+        #expect(absent.start == nil)
+        #expect(absent.end == nil)
+
+        let summary = AttributionEngine.computeAttribution(
+            windowStart: Date(timeIntervalSince1970: 1_800_000_000),
+            windowEnd: Date(timeIntervalSince1970: 1_800_000_000 + 3600),
+            barLabel: "WK",
+            startConsumptionFraction: absent.start,
+            endConsumptionFraction: absent.end,
+            activities: []
+        )
+        #expect(summary.consumedFractionDelta == nil)
+    }
+
+    @Test("the preferred bar is the longest window on the most recent reading")
+    func preferredBarIsTheLongestRecentWindow() {
+        let readings = [
+            reading("5H", 0.20, at: 0),
+            reading("WK", 0.10, at: 0),
+            reading("5H", 0.95, at: 3600),
+            reading("WK", 0.15, at: 3600)
+        ]
+        #expect(AttributionEngine.preferredBarLabel(readings: readings) == "WK")
+
+        // And nil when nothing has been measured at all.
+        #expect(AttributionEngine.preferredBarLabel(readings: [reading("5H", nil, at: 0)]) == nil)
+    }
+
+    // MARK: - Partial token breakdowns
+
+    @Test("a record with no total is excluded from shares and reported, not counted as zero")
+    func recordsWithoutTotalsAreReportedNotZeroed() {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let known = ActivityRecord(
+            source: "claude_code", recordId: "k1", sessionId: "s1",
+            projectPath: "/Users/dev/known",
+            observedAt: baseDate.addingTimeInterval(60),
+            totalTokens: 1_000
+        )
+        let unknown = ActivityRecord(
+            source: "claude_code", recordId: "u1", sessionId: "s2",
+            projectPath: "/Users/dev/unknown",
+            observedAt: baseDate.addingTimeInterval(120)
+        )
+
+        let summary = AttributionEngine.computeAttribution(
+            windowStart: baseDate,
+            windowEnd: baseDate.addingTimeInterval(3600),
+            startConsumptionFraction: 0.1,
+            endConsumptionFraction: 0.2,
+            activities: [known, unknown]
+        )
+
+        #expect(summary.totalObservedTokens == 1_000)
+        #expect(summary.recordsWithoutTokenTotals == 1)
+        #expect(summary.caveats.contains(.partialTokenBreakdowns))
+        // The unknown record still counts as a session; it just contributes no
+        // token mass, because zero is not what it reported.
+        #expect(summary.projectAttributions.map(\.projectPath).sorted() == ["/Users/dev/known"])
+    }
+
+    @Test("unrecorded external activity is always flagged")
+    func unrecordedActivityAlwaysFlagged() {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let summary = AttributionEngine.computeAttribution(
+            windowStart: baseDate,
+            windowEnd: baseDate.addingTimeInterval(3600),
+            startConsumptionFraction: 0.1,
+            endConsumptionFraction: 0.2,
+            activities: []
+        )
+        #expect(summary.caveats.contains(.unrecordedExternalActivityPossible))
+    }
+
+    @Test("only vendors with a local activity source are considered monitored")
+    func localSourceMappingIsExplicit() {
+        #expect(AttributionEngine.localSourceIdentifiers(for: .claude) == ["claude_code"])
+        #expect(AttributionEngine.localSourceIdentifiers(for: .openai) == ["codex"])
+        #expect(AttributionEngine.localSourceIdentifiers(for: .opencode) == ["opencode"])
+        // No adapter speaks for these, so an activity breakdown must not be
+        // presented as an explanation for their allowance.
+        #expect(AttributionEngine.localSourceIdentifiers(for: .grok).isEmpty)
+        #expect(AttributionEngine.localSourceIdentifiers(for: .kiro).isEmpty)
+        #expect(AttributionEngine.localSourceIdentifiers(for: .gemini).isEmpty)
+    }
 }
