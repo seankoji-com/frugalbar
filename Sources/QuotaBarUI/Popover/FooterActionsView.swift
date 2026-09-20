@@ -84,6 +84,13 @@ struct FooterActionsView: View {
                 .keyboardShortcut("r", modifiers: .command)
 
                 Button {
+                    HistoryWindow.show()
+                } label: {
+                    Label("History…", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                .keyboardShortcut("y", modifiers: .command)
+
+                Button {
                     // Not the standard panel: it reads Bundle.main, which is
                     // empty for the bare executable a release ships.
                     AboutWindow.show()

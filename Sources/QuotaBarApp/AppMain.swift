@@ -14,7 +14,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Single source of truth, shared by the popover and the status item, so
     /// neither has to rebuild the other to see new data.
-    private let store = QuotaStore()
+    private let historyStore: QuotaHistoryStore
+    private let activityEngine: ActivityIngestionEngine
+    private let store: QuotaStore
+
+    override init() {
+        let hStore = QuotaHistoryStore()
+        let aEngine = ActivityIngestionEngine(store: hStore)
+        self.historyStore = hStore
+        self.activityEngine = aEngine
+        self.store = QuotaStore(
+            manager: QuotaManager.shared,
+            historyRecorder: { snapshots in
+                try? await hStore.record(snapshots)
+                _ = try? await aEngine.ingestAll()
+            }
+        )
+        super.init()
+    }
     private var schedulerToken: UUID?
     private let notificationObserver = QuotaNotificationObserver()
 

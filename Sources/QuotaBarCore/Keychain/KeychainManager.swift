@@ -170,6 +170,10 @@ public enum CredentialStore {
     /// explicit opt-in.
     public static let notificationsEnabledDefaultsKey = "QuotaBarEnableNotifications"
 
+    /// Whether the History window is viewing synthetic sample fixture data
+    /// rather than the live historical database.
+    public static let sampleModeDefaultsKey = "QuotaBarHistorySampleMode"
+
     /// Where FrugalBar's preferences live.
     ///
     /// `UserDefaults.standard` in an *unbundled* executable keys off the
@@ -227,6 +231,11 @@ public enum CredentialStore {
 
     public static var isNotificationsEnabled: Bool {
         preferences.bool(forKey: notificationsEnabledDefaultsKey)
+    }
+
+    public static var isSampleModeEnabled: Bool {
+        get { preferences.bool(forKey: sampleModeDefaultsKey) }
+        set { preferences.set(newValue, forKey: sampleModeDefaultsKey) }
     }
 
     /// Returns the API key for a vendor: Keychain first, then — only when the
