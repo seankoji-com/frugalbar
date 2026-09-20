@@ -14,7 +14,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Single source of truth, shared by the popover and the status item, so
     /// neither has to rebuild the other to see new data.
-    private let store = QuotaStore()
+    private let historyStore: QuotaHistoryStore
+    private let activityEngine: ActivityIngestionEngine
+    private let store: QuotaStore
+
+    override init() {
+        let hStore = QuotaHistoryStore()
+        let aEngine = ActivityIngestionEngine(store: hStore)
+        self.historyStore = hStore
+        self.activityEngine = aEngine
+        self.store = QuotaStore(
+            manager: QuotaManager.shared,
+            historyRecorder: { snapshots in
+                // Recording is a small insert and stays on the refresh path, so a
+                // reading is never lost. Both errors used to be discarded with
+                // `try?`, which meant a history database that stopped accepting
+                // writes looked exactly like one with nothing to record.
+                do {
+                    try await hStore.record(snapshots)
+                } catch {
+                    NSLog("frugalbar: failed to record quota history: \(error)")
+                }
+
+                // Ingestion walks every CLI transcript and a multi-gigabyte
+                // database, so it runs separately. It used to run inline, where
+                // QuotaStore held `isRefreshing` for its whole duration and
+                // silently dropped any refresh the user asked for meanwhile.
+                Task.detached(priority: .utility) {
+                    do {
+                        _ = try await aEngine.ingestAll()
+                    } catch {
+                        NSLog("frugalbar: activity ingestion failed: \(error)")
+                    }
+                }
+            }
+        )
+        super.init()
+    }
     private var schedulerToken: UUID?
     private let notificationObserver = QuotaNotificationObserver()
 
