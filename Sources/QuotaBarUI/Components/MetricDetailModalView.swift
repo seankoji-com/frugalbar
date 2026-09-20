@@ -27,11 +27,13 @@ public struct MetricDetailModalView: View {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
     }
 
-    /// The two longest consumable windows, longest first — matches `bars`'
-    /// ordering but excludes elapsed-time-only cycle rows, which have no
-    /// burn rate or exhaustion projection to show here.
+    /// The two longest consumable windows, longest first — `snapshot.displayBars`
+    /// with elapsed-time-only cycle rows removed, which have no burn rate or
+    /// exhaustion projection to show here. Carries the exhausted-window
+    /// collapse with it, so the inspector never shows a healthy short window
+    /// beside a spent longer one that has already made it moot.
     private var displayBars: [DualBarMetrics] {
-        Array(snapshot.quotaBars.prefix(2))
+        Array(snapshot.displayBars.filter { !$0.measuresElapsedTimeOnly }.prefix(2))
     }
 
     public var body: some View {

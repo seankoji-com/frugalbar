@@ -14,6 +14,11 @@ struct MetricRowView: View {
 
     private var p: MetricRowPresentation { MetricRowPresentation(snapshot: snapshot) }
 
+    /// The windows actually drawn. The exhausted-window collapse lives on the
+    /// model (`QuotaSnapshot.displayBars`) so the popover and the inspector
+    /// agree on which windows a spent longer period makes redundant.
+    private var bars: [DualBarMetrics] { snapshot.displayBars }
+
     private var accentColor: Color {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
     }
@@ -166,7 +171,7 @@ struct MetricRowView: View {
     }
 
     private var row: some View {
-        HStack(alignment: snapshot.bars.count > 1 ? .top : .center, spacing: 9) {
+        HStack(alignment: bars.count > 1 ? .top : .center, spacing: 9) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
@@ -209,10 +214,10 @@ struct MetricRowView: View {
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
-            if !snapshot.bars.isEmpty {
+            if !bars.isEmpty {
                 // Multi-bar (5H / WK / MO) burndown charts
                 VStack(spacing: 2) {
-                    ForEach(Array(snapshot.bars.enumerated()), id: \.offset) { _, barMetrics in
+                    ForEach(Array(bars.enumerated()), id: \.offset) { _, barMetrics in
                         DualBarProgressView(
                             metrics: barMetrics,
                             accentColor: accentColor

@@ -512,6 +512,48 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         bars.filter { !$0.measuresElapsedTimeOnly }
     }
 
+    /// The bars to draw: `bars` with the shorter windows a spent window has
+    /// made redundant removed.
+    ///
+    /// Once a window is used up, nothing can be started until it resets,
+    /// whatever headroom the shorter windows nested inside it still report. A
+    /// healthy weekly bar drawn under an exhausted monthly one reads as
+    /// "plenty left" at exactly the moment there is nothing to start — the
+    /// monthly cap governs the account, so the weekly and five-hour figures
+    /// are noise. The spent window itself stays (it is the one carrying the
+    /// reset); every consumable window strictly shorter than it is dropped.
+    ///
+    /// Two kinds of bar are deliberately left alone:
+    /// - Windows with no length at all. A bonus-credit pool or an overage
+    ///   allowance has no period to be a *shorter period* against, and it can
+    ///   outlive the plan window beside it — Kiro's bonus credits expire after
+    ///   the monthly reset, not with it — so hiding one would hide real
+    ///   headroom.
+    /// - Elapsed-time-only cycle rows, which measure the billing cycle rather
+    ///   than consumption and are shown for their own reason.
+    ///
+    /// Only a *measured* window triggers the collapse. A window the vendor
+    /// declared blocked but never gave a percentage for is not "spent" here:
+    /// blocked already has its own hatched treatment, and a spent window is a
+    /// number we received, never one inferred from a declaration.
+    ///
+    /// `bars` stays the full set because it is data — `QuotaHistoryStore`
+    /// persists it and the advice engine ranks it. This property is only for
+    /// drawing.
+    public var displayBars: [DualBarMetrics] {
+        // `quotaBars` drops elapsed-time-only rows: a cycle 100% elapsed is
+        // not a window 100% spent, so it must never trigger the collapse.
+        let longestSpentWindow = quotaBars
+            .filter { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
+            .compactMap(\.windowLength)
+            .max()
+        guard let longestSpentWindow else { return bars }
+        return bars.filter { bar in
+            guard !bar.measuresElapsedTimeOnly, let length = bar.windowLength else { return true }
+            return length >= longestSpentWindow
+        }
+    }
+
     public init(
         id: String,
         vendorId: VendorIdentifier,
