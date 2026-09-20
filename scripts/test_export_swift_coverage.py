@@ -30,6 +30,10 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "executable"):
             exporter.convert_verified("", Path('/tmp'))
 
+    def test_rejects_da_before_sf(self):
+        with self.assertRaisesRegex(ValueError, "DA record before SF"):
+            exporter.convert_verified("DA:1,1\nend_of_record\n", Path('/tmp'))
+
 
 if __name__ == '__main__':
     unittest.main()

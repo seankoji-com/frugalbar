@@ -36,7 +36,7 @@ def run_test(name, phase, selector, display):
     )
     (LOGS / f"{name}-{phase}.log").write_text(proc.stdout)
     expected = "failed" if phase == "mutant" else "passed"
-    if not re.search(rf"Test run with 1 test {expected}", proc.stdout) or display not in proc.stdout:
+    if not re.search(rf"Test run with 1 test(?: in \d+ suites?)? {expected}", proc.stdout) or display not in proc.stdout:
         raise RuntimeError(f"{name}/{phase}: expected exactly one named test to {expected}; see log")
     if (proc.returncode != 0) != (phase == "mutant"):
         raise RuntimeError(f"{name}/{phase}: unexpected test exit status {proc.returncode}")

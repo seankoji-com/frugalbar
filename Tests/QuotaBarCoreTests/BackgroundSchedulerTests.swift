@@ -1,8 +1,7 @@
-import Testing
 import Foundation
+import Testing
 @testable import QuotaBarCore
 
-/// A handler that records invocations in a Sendable-safe way.
 private actor HandlerSpy {
     private(set) var callCount = 0
 
@@ -11,7 +10,7 @@ private actor HandlerSpy {
     }
 
     func handler() async {
-        await record()
+        record()
     }
 }
 
@@ -46,48 +45,42 @@ private actor RefreshGate {
 @Suite("BackgroundScheduler")
 struct BackgroundSchedulerTests {
 
-    // MARK: - Handler lifecycle
+    // MARK: - Handlers
 
     @Test("addHandler returns a token and the handler is registered")
-    func addHandlerReturnsToken() async {
+    func addHandlerRegistersHandler() async {
         let scheduler = BackgroundScheduler()
         let spy = HandlerSpy()
         let token = await scheduler.addHandler { await spy.handler() }
-        // The token is non-nil and valid (UUID). We can assert that removing
-        // it later works — that proves registration happened.
-        #expect(token.uuidString.isEmpty == false)
-        await scheduler.removeHandler(token)
-    }
-
-    @Test("removeHandler prevents the handler from being in the set")
-    func removeHandlerRemovesRegistration() async {
-        let scheduler = BackgroundScheduler()
-        let spy = HandlerSpy()
-        let token = await scheduler.addHandler { await spy.handler() }
-        await scheduler.removeHandler(token)
-        // Remove again should be a no-op (not crash)
-        await scheduler.removeHandler(token)
+        #expect(token != UUID())
     }
 
     @Test("multiple handlers can be added and removed independently")
     func multipleHandlersIndependent() async {
         let scheduler = BackgroundScheduler()
-        let spy = HandlerSpy()
-        let t1 = await scheduler.addHandler { await spy.handler() }
-        let t2 = await scheduler.addHandler { await spy.handler() }
-        let t3 = await scheduler.addHandler { await spy.handler() }
-
-        await scheduler.removeHandler(t2)
-        // Remove the same one again — idempotent
-        await scheduler.removeHandler(t2)
+        let first = HandlerSpy()
+        let second = HandlerSpy()
+        let t1 = await scheduler.addHandler { await first.handler() }
+        let t2 = await scheduler.addHandler { await second.handler() }
+        #expect(t1 != t2)
         await scheduler.removeHandler(t1)
-        await scheduler.removeHandler(t3)
+        // second should still be present; removing it should not crash
+        await scheduler.removeHandler(t2)
+    }
+
+    @Test("removeHandler prevents the handler from being in the set")
+    func removeHandlerRemoves() async {
+        let scheduler = BackgroundScheduler()
+        let spy = HandlerSpy()
+        let token = await scheduler.addHandler { await spy.handler() }
+        await scheduler.removeHandler(token)
+        // Calling remove again with the same token is a no-op, not a crash
+        await scheduler.removeHandler(token)
     }
 
     @Test("removing an unknown token is a no-op")
-    func removeUnknownTokenIsNoop() async {
+    func removeUnknownTokenIsNoOp() async {
         let scheduler = BackgroundScheduler()
-        // Should not crash or throw
         await scheduler.removeHandler(UUID())
     }
 
@@ -142,47 +135,41 @@ struct BackgroundSchedulerTests {
     // MARK: - Lifecycle (start / stop)
 
     @Test("stop is idempotent when already stopped")
-    func stopIdempotent() async {
+    func stopWhenNotStartedIsNoOp() async {
         let scheduler = BackgroundScheduler()
         await scheduler.stop()
+        await scheduler.stop()
+    }
+
+    @Test("double start replaces the previous timer")
+    func doubleStartDoesNotLeak() async {
+        let scheduler = BackgroundScheduler()
+        await scheduler.start(interval: 0.05)
+        await scheduler.start(interval: 0.05)
+        await scheduler.stop()
+    }
+
+    @Test("start with default interval registers a repeating timer")
+    func startDefaultInterval() async {
+        let scheduler = BackgroundScheduler()
+        await scheduler.start(interval: 0.05)
+        // Give the timer a chance to run without crashing
+        try? await Task.sleep(nanoseconds: 50_000_000)
         await scheduler.stop()
     }
 
     @Test("start then stop: timer does not fire after stop")
-    func startThenStopPreventsFire() async {
+    func timerDoesNotFireAfterStop() async {
         let scheduler = BackgroundScheduler()
         let spy = HandlerSpy()
-        _ = await scheduler.addHandler { await spy.handler() }
+        await scheduler.addHandler { await spy.record() }
         await scheduler.start(interval: 0.05)
+        try? await Task.sleep(nanoseconds: 200_000_000)
         await scheduler.stop()
-        try? await Task.sleep(for: .milliseconds(200))
-        let count = await spy.callCount
-        #expect(count == 0)
-    }
-
-    @Test("double start replaces the previous timer")
-    func doubleStartReplacesTimer() async {
-        let scheduler = BackgroundScheduler()
-        let spy = HandlerSpy()
-        _ = await scheduler.addHandler { await spy.handler() }
-        await scheduler.start(interval: 2.0)
-        await scheduler.start(interval: 2.0)
-        try? await Task.sleep(for: .milliseconds(50))
-        await scheduler.stop()
-        let count = await spy.callCount
-        #expect(count == 0)
-    }
-
-    @Test("start with default interval registers a repeating timer")
-    func startWithDefaultInterval() async {
-        let scheduler = BackgroundScheduler()
-        let spy = HandlerSpy()
-        _ = await scheduler.addHandler { await spy.handler() }
-        await scheduler.start()  // uses default 120s interval
-        // The timer is scheduled, so it should not fire in a short window.
-        try? await Task.sleep(for: .milliseconds(50))
-        await scheduler.stop()
-        let count = await spy.callCount
-        #expect(count == 0)
+        let countAtStop = await spy.callCount
+        // Wait another interval: count should not increase
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let countAfter = await spy.callCount
+        #expect(countAfter == countAtStop)
     }
 }

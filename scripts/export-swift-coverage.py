@@ -25,6 +25,8 @@ def convert_verified(lcov, root):
                 raise ValueError(f"Non-application source in coverage: {current}")
             expected.setdefault(current, {})
         elif line.startswith("DA:"):
+            if current is None:
+                raise ValueError("DA record before SF record in LCOV")
             number, hits, *_ = line[3:].split(",")
             expected[current][int(number)] = int(hits)
     if not expected or not any(expected.values()):
@@ -44,23 +46,28 @@ def convert_verified(lcov, root):
     if int(document.attrib["lines-valid"]) != lines or int(document.attrib["lines-covered"]) != covered:
         raise ValueError("Cobertura totals differ from LLVM line records")
     # Checkout-relative source resolution works on machines other than this runner.
-    document.find("sources/source").text = "."
+    source_elem = document.find("sources/source")
+    if source_elem is not None:
+        source_elem.text = "."
     return ET.tostring(document, encoding="unicode"), lines, covered
 
 
 def main():
     binary_dir = Path(subprocess.check_output(["swift", "build", "-c", "debug", "--show-bin-path"], cwd=ROOT, text=True).strip())
     binaries = [bundle / "Contents" / "MacOS" / bundle.stem
-                for bundle in binary_dir.glob("*.xctest")
+                for bundle in sorted(binary_dir.glob("*.xctest"))
                 if (bundle / "Contents" / "MacOS" / bundle.stem).is_file()]
-    if len(binaries) != 1:
-        raise RuntimeError(f"Expected one Swift test executable, found {len(binaries)}")
+    if not binaries:
+        raise RuntimeError("Expected at least one Swift test executable, found 0")
     profile = binary_dir / "codecov" / "default.profdata"
+    if not profile.is_file():
+        raise RuntimeError(f"Coverage profile not found at {profile}. Run tests with --enable-code-coverage first.")
     sources = sorted(str(p) for p in (ROOT / "Sources").rglob("*.swift"))
-    lcov = subprocess.check_output([
-        "xcrun", "llvm-cov", "export", str(binaries[0]),
-        "-format=lcov", f"-instr-profile={profile}", *sources,
-    ], cwd=ROOT, text=True)
+    cmd = ["xcrun", "llvm-cov", "export", str(binaries[0])]
+    for binary in binaries[1:]:
+        cmd.append(f"-object={binary}")
+    cmd.extend(["-format=lcov", f"-instr-profile={profile}", *sources])
+    lcov = subprocess.check_output(cmd, cwd=ROOT, text=True)
     xml, lines, covered = convert_verified(lcov, ROOT)
     output = ROOT / "coverage"
     output.mkdir(exist_ok=True)
