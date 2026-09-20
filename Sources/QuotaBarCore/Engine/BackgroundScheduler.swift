@@ -69,7 +69,8 @@ public actor BackgroundScheduler {
         timer = nil
     }
 
-    private func fire() async {
+    // Internal so tests can drive a cycle without timers or random jitter.
+    func fire() async {
         // Skip rather than pile up if the previous cycle is still running.
         guard !isRefreshing else { return }
         isRefreshing = true
