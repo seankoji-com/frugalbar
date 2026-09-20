@@ -15,7 +15,13 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
     public let outputTokens: Int?
     public let cacheReadTokens: Int?
     public let cacheWriteTokens: Int?
-    public let totalTokens: Int
+    /// Total observed tokens, or `nil` when the source did not report enough to
+    /// state one.
+    ///
+    /// Derived only from a *complete* breakdown: a partial sum presented as a
+    /// total would be a measured-looking figure the source never reported, and
+    /// these totals feed project token shares.
+    public let totalTokens: Int?
 
     public init(
         source: String,
@@ -42,14 +48,13 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
         self.outputTokens = outputTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheWriteTokens = cacheWriteTokens
+
         if let totalTokens {
             self.totalTokens = totalTokens
+        } else if let inputTokens, let outputTokens, let cacheReadTokens, let cacheWriteTokens {
+            self.totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
         } else {
-            let inp = inputTokens ?? 0
-            let out = outputTokens ?? 0
-            let cr = cacheReadTokens ?? 0
-            let cw = cacheWriteTokens ?? 0
-            self.totalTokens = inp + out + cr + cw
+            self.totalTokens = nil
         }
     }
 }

@@ -22,29 +22,50 @@ public actor ActivityIngestionEngine {
     }
 
     /// Ingests new records from all configured adapters.
-    /// Returns the total number of newly recorded records.
+    /// Returns the total number of records submitted for storage.
+    ///
+    /// One adapter failing does not abandon the others, but it does propagate:
+    /// the caller is told the pass was incomplete rather than being handed a
+    /// success that silently omitted a whole source. Sources that succeeded
+    /// before the failure keep their records and their watermarks.
     @discardableResult
     public func ingestAll() async throws -> Int {
         var totalRecorded = 0
+        var firstError: Error?
 
         for adapter in adapters {
-            let watermarkMtime = try await store.maxWatermarkMtime(for: adapter.sourceIdentifier)
-            let (records, maxMtime) = try await adapter.collectActivities(since: watermarkMtime)
-
-            if !records.isEmpty {
-                try await store.recordActivities(records)
-                totalRecorded += records.count
-            }
-
-            if let maxMtime, maxMtime > (watermarkMtime ?? 0) {
-                try await store.setWatermark(
-                    source: adapter.sourceIdentifier,
-                    filePath: "*",
-                    modifiedAt: maxMtime
-                )
+            do {
+                totalRecorded += try await ingest(adapter)
+            } catch {
+                if firstError == nil { firstError = error }
             }
         }
 
+        if let firstError { throw firstError }
         return totalRecorded
+    }
+
+    private func ingest(_ adapter: ActivityAdapter) async throws -> Int {
+        let existing = try await store.watermarks(for: adapter.sourceIdentifier)
+        let result = try await adapter.collectActivities(watermarks: existing)
+
+        // Records before watermarks, deliberately: the store de-duplicates on
+        // `(source, record_id)`, so re-reading a region is harmless, whereas
+        // advancing the cursor past records that were never written loses them.
+        if !result.records.isEmpty {
+            try await store.recordActivities(result.records)
+        }
+
+        for watermark in result.watermarks {
+            try await store.setWatermark(
+                source: adapter.sourceIdentifier,
+                filePath: watermark.filePath,
+                fileSize: watermark.fileSize,
+                modifiedAt: watermark.modifiedAt,
+                byteOffset: watermark.cursor
+            )
+        }
+
+        return result.records.count
     }
 }

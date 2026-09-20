@@ -105,12 +105,14 @@ public actor QuotaHistoryStore {
 
     private var isOpened = false
 
-    private func ensureOpen() throws {
+    /// Opens the database on its own serial queue rather than from the actor's
+    /// executor, so every touch of the SQLite handle happens on the one thread
+    /// the connection is confined to.
+    private func ensureOpen() async throws {
+        guard !isOpened else { return }
         #if canImport(SQLite3)
-        if !isOpened {
-            try database.open()
-            isOpened = true
-        }
+        try await database.perform { db in try db.open() }
+        isOpened = true
         #else
         throw HistoryDatabaseError.unsupportedPlatform
         #endif
@@ -118,7 +120,7 @@ public actor QuotaHistoryStore {
 
     /// Records a snapshot batch and prunes readings older than `retentionInterval`.
     public func record(_ snapshots: [QuotaSnapshot], now: Date = Date()) async throws {
-        try ensureOpen()
+        try await ensureOpen()
 
         let timestamp = Int64(now.timeIntervalSince1970)
         let cutoff = Int64(now.timeIntervalSince1970 - retentionInterval)
@@ -174,8 +176,13 @@ public actor QuotaHistoryStore {
         try await database.perform { db in
             #if canImport(SQLite3)
             try db.beginTransaction()
+            var didCommit = false
             defer {
-                try? db.commitTransaction()
+                // Commit only on the success path. `defer { try? commit() }` also
+                // ran after a throw, so a batch that failed part-way through
+                // persisted the rows it had already written — a partial poll
+                // stored as if it were complete.
+                if !didCommit { try? db.rollbackTransaction() }
             }
 
             let sql = """
@@ -196,8 +203,8 @@ public actor QuotaHistoryStore {
                 try db.bindInt64(stmt, 3, row.measuredAt)
                 try db.bindDouble(stmt, 4, row.fraction)
                 try db.bindInt64(stmt, 5, row.isBlocked ? 1 : 0)
-                try db.bindInt64(stmt, 6, Int64(row.confidence.rawValue))
-                try db.bindInt64(stmt, 7, Int64(row.urgency.rawValue))
+                try db.bindText(stmt, 6, row.confidence.historyName)
+                try db.bindText(stmt, 7, row.urgency.historyName)
                 try db.bindInt64(stmt, 8, row.resetsAt)
                 try db.bindInt64(stmt, 9, row.windowLength)
                 try db.bindInt64(stmt, 10, row.elapsedOnly ? 1 : 0)
@@ -217,6 +224,9 @@ public actor QuotaHistoryStore {
             guard pruneStatus == SQLITE_DONE else {
                 throw HistoryDatabaseError.stepFailed(code: pruneStatus, message: db.lastErrorMessage)
             }
+
+            try db.commitTransaction()
+            didCommit = true
             #endif
         }
     }
@@ -228,7 +238,7 @@ public actor QuotaHistoryStore {
         since: Date? = nil,
         until: Date? = nil
     ) async throws -> [ReadingRecord] {
-        try ensureOpen()
+        try await ensureOpen()
 
         let vendorString = vendor?.rawValue
         let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
@@ -291,11 +301,15 @@ public actor QuotaHistoryStore {
                 }
 
                 let isBlocked = sqlite3_column_int64(stmt, 4) != 0
-                let confidenceRaw = Int(sqlite3_column_int64(stmt, 5))
-                let confidence = Confidence(rawValue: confidenceRaw) ?? .unavailable
 
-                let urgencyRaw = Int(sqlite3_column_int64(stmt, 6))
-                let urgency = Urgency(rawValue: urgencyRaw) ?? .none
+                // Read by name. An unrecognised name means this row was written
+                // by a build with a case we do not have; it is treated as
+                // unreadable rather than as a calm reading.
+                let confidenceName = sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? ""
+                let confidence = Confidence(historyName: confidenceName) ?? .unavailable
+
+                let urgencyName = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+                let urgency = Urgency(historyName: urgencyName) ?? .none
 
                 let resetsAt: Date?
                 if sqlite3_column_type(stmt, 7) == SQLITE_NULL {
@@ -337,7 +351,7 @@ public actor QuotaHistoryStore {
 
     /// Records activity slices into the store.
     public func recordActivities(_ records: [ActivityRecord]) async throws {
-        try ensureOpen()
+        try await ensureOpen()
         guard !records.isEmpty else { return }
 
         let rows = records
@@ -345,8 +359,9 @@ public actor QuotaHistoryStore {
         try await database.perform { db in
             #if canImport(SQLite3)
             try db.beginTransaction()
+            var didCommit = false
             defer {
-                try? db.commitTransaction()
+                if !didCommit { try? db.rollbackTransaction() }
             }
 
             let sql = """
@@ -374,13 +389,18 @@ public actor QuotaHistoryStore {
                 try db.bindInt64(stmt, 9, row.outputTokens.map(Int64.init))
                 try db.bindInt64(stmt, 10, row.cacheReadTokens.map(Int64.init))
                 try db.bindInt64(stmt, 11, row.cacheWriteTokens.map(Int64.init))
-                try db.bindInt64(stmt, 12, Int64(row.totalTokens))
+                // NULL when the source reported no total. Not 0 — an unknown
+                // total must not be counted as a measured one.
+                try db.bindInt64(stmt, 12, row.totalTokens.map(Int64.init))
 
                 let stepStatus = sqlite3_step(stmt)
                 guard stepStatus == SQLITE_DONE else {
                     throw HistoryDatabaseError.stepFailed(code: stepStatus, message: db.lastErrorMessage)
                 }
             }
+
+            try db.commitTransaction()
+            didCommit = true
             #endif
         }
     }
@@ -392,7 +412,7 @@ public actor QuotaHistoryStore {
         since: Date? = nil,
         until: Date? = nil
     ) async throws -> [ActivityRecord] {
-        try ensureOpen()
+        try await ensureOpen()
 
         let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
         let untilEpoch = until.map { Int64($0.timeIntervalSince1970) }
@@ -457,7 +477,7 @@ public actor QuotaHistoryStore {
                 let outputTokens: Int? = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 8))
                 let cacheReadTokens: Int? = sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 9))
                 let cacheWriteTokens: Int? = sqlite3_column_type(stmt, 10) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 10))
-                let totalTokens = Int(sqlite3_column_int64(stmt, 11))
+                let totalTokens: Int? = sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 11))
 
                 results.append(ActivityRecord(
                     source: sourceStr,
@@ -483,45 +503,38 @@ public actor QuotaHistoryStore {
 
     // MARK: - Ingestion Watermarks
 
-    public func watermark(source: String, filePath: String) async throws -> (modifiedAt: Int64, byteOffset: Int64)? {
-        try ensureOpen()
-        return try await database.perform { db -> (modifiedAt: Int64, byteOffset: Int64)? in
+    /// Every per-file watermark recorded for a source, keyed by file path.
+    ///
+    /// Per file, not per source: a single maximum mtime per source meant any
+    /// append to a file that was not the most recently touched one fell below
+    /// the high-water mark and was never read.
+    public func watermarks(for source: String) async throws -> [String: ActivityWatermark] {
+        try await ensureOpen()
+        return try await database.perform { db -> [String: ActivityWatermark] in
             #if canImport(SQLite3)
-            let sql = "SELECT modified_at, byte_offset FROM ingest_watermark WHERE source = ? AND file_path = ? LIMIT 1;"
+            let sql = """
+            SELECT file_path, file_size, modified_at, byte_offset
+            FROM ingest_watermark WHERE source = ?;
+            """
             let stmt = try db.prepare(sql: sql)
             defer { db.finalize(stmt) }
 
             try db.bindText(stmt, 1, source)
-            try db.bindText(stmt, 2, filePath)
-            if sqlite3_step(stmt) == SQLITE_ROW {
-                let modifiedAt = sqlite3_column_int64(stmt, 0)
-                let byteOffset = sqlite3_column_int64(stmt, 1)
-                return (modifiedAt, byteOffset)
-            }
-            return nil
-            #else
-            return nil
-            #endif
-        }
-    }
 
-    public func maxWatermarkMtime(for source: String) async throws -> Int64? {
-        try ensureOpen()
-        return try await database.perform { db -> Int64? in
-            #if canImport(SQLite3)
-            let sql = "SELECT MAX(modified_at) FROM ingest_watermark WHERE source = ?;"
-            let stmt = try db.prepare(sql: sql)
-            defer { db.finalize(stmt) }
-
-            try db.bindText(stmt, 1, source)
-            if sqlite3_step(stmt) == SQLITE_ROW {
-                if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
-                    return sqlite3_column_int64(stmt, 0)
-                }
+            var result: [String: ActivityWatermark] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let pathText = sqlite3_column_text(stmt, 0) else { continue }
+                let filePath = String(cString: pathText)
+                result[filePath] = ActivityWatermark(
+                    filePath: filePath,
+                    fileSize: sqlite3_column_int64(stmt, 1),
+                    modifiedAt: sqlite3_column_int64(stmt, 2),
+                    cursor: sqlite3_column_int64(stmt, 3)
+                )
             }
-            return nil
+            return result
             #else
-            return nil
+            return [:]
             #endif
         }
     }
@@ -533,7 +546,7 @@ public actor QuotaHistoryStore {
         modifiedAt: Int64,
         byteOffset: Int64 = 0
     ) async throws {
-        try ensureOpen()
+        try await ensureOpen()
         try await database.perform { db in
             #if canImport(SQLite3)
             let sql = """
@@ -552,6 +565,21 @@ public actor QuotaHistoryStore {
             let step = sqlite3_step(stmt)
             guard step == SQLITE_DONE else {
                 throw HistoryDatabaseError.stepFailed(code: step, message: db.lastErrorMessage)
+            }
+            #endif
+        }
+    }
+
+    /// Removes every row, including watermarks.
+    ///
+    /// Exists for the sample-data store only, so regenerating the fixture cannot
+    /// accumulate rows; it must never be pointed at the live history database.
+    public func removeAll() async throws {
+        try await ensureOpen()
+        try await database.perform { db in
+            #if canImport(SQLite3)
+            for table in [HistorySchema.readingTable, HistorySchema.activityTable, HistorySchema.ingestWatermarkTable] {
+                try db.execute(sql: "DELETE FROM \(table);")
             }
             #endif
         }

@@ -17,19 +17,18 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         }
     }
 
-    public func collectActivities(since watermarkMtime: Int64?) async throws -> (records: [ActivityRecord], maxMtime: Int64?) {
+    public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {
         guard let baseURL, FileManager.default.fileExists(atPath: baseURL.path) else {
-            return ([], nil)
+            return .empty
         }
 
-        var results: [ActivityRecord] = []
-        var seenRecordIds = Set<String>()
-        var highestMtime: Int64? = watermarkMtime
+        var records: [ActivityRecord] = []
+        var updates: [ActivityWatermark] = []
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
             at: baseURL,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         )
 
@@ -45,33 +44,55 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.pathExtension == "jsonl" else { continue }
 
-            let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+            let resourceValues = try? fileURL.resourceValues(
+                forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+            )
             guard resourceValues?.isRegularFile == true else { continue }
 
-            if let modDate = resourceValues?.contentModificationDate {
-                let mtime = Int64(modDate.timeIntervalSince1970)
-                if let watermark = watermarkMtime, mtime <= watermark {
+            let size = Int64(resourceValues?.fileSize ?? 0)
+            let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
+            let path = fileURL.path
+
+            // Where to resume. Appends resume at the last recorded line boundary;
+            // anything else (truncation, in-place rewrite, a shrink) restarts at
+            // zero, which is safe because records de-duplicate on `record_id`.
+            var readFrom: Int64 = 0
+            if let prior = watermarks[path] {
+                if prior.isUnchanged(fileSize: size, modifiedAt: mtime) {
                     continue
                 }
-                if highestMtime == nil || mtime > highestMtime! {
-                    highestMtime = mtime
+                if size > prior.fileSize, prior.cursor <= size {
+                    readFrom = prior.cursor
                 }
             }
 
-            guard let data = try? Data(contentsOf: fileURL),
-                  let content = String(data: data, encoding: .utf8) else {
-                continue
+            let chunk = (try? AppendOnlyLog.readIncrementally(at: fileURL, from: readFrom))
+                ?? AppendOnlyLog.Chunk(lines: [], newCursor: readFrom, tail: "")
+
+            // An unterminated final line is either a half-written record or a
+            // complete one the writer never newline-terminated. Parse it if it
+            // parses; a half-written line will fail here and be re-read later.
+            var lines = chunk.lines
+            var cursor = chunk.newCursor
+            if !chunk.tail.isEmpty,
+               let tailData = chunk.tail.data(using: .utf8),
+               (try? JSONSerialization.jsonObject(with: tailData)) is [String: Any] {
+                lines.append(chunk.tail)
+                cursor = size
             }
 
-            for line in content.split(separator: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty,
-                      let lineData = trimmed.data(using: .utf8),
+            // Re-reads after a rewrite re-emit lines already stored; the DB's
+            // `(source, record_id)` primary key absorbs those. This set only
+            // stops the same line twice inside one chunk, which the on-disk
+            // format does produce.
+            var seenRecordIds = Set<String>()
+
+            for line in lines {
+                guard let lineData = line.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
                     continue
                 }
 
-                // Check for message and usage
                 guard let message = json["message"] as? [String: Any],
                       let usage = message["usage"] as? [String: Any] else {
                     continue
@@ -98,12 +119,10 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                     recordDate = d
                 }
 
-                let inputTokens = (usage["input_tokens"] as? Int) ?? 0
-                let outputTokens = (usage["output_tokens"] as? Int) ?? 0
-                let cacheReadTokens = (usage["cache_read_input_tokens"] as? Int) ?? 0
-                let cacheWriteTokens = (usage["cache_creation_input_tokens"] as? Int) ?? 0
-
-                results.append(ActivityRecord(
+                // Absent means absent: a missing field stays `nil` so it is never
+                // counted as a measured zero. `ActivityRecord` derives the total
+                // from whatever was actually reported.
+                records.append(ActivityRecord(
                     source: sourceIdentifier,
                     recordId: recordId,
                     sessionId: sessionId,
@@ -111,14 +130,21 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                     gitBranch: gitBranch,
                     model: model,
                     observedAt: recordDate,
-                    inputTokens: inputTokens,
-                    outputTokens: outputTokens,
-                    cacheReadTokens: cacheReadTokens,
-                    cacheWriteTokens: cacheWriteTokens
+                    inputTokens: usage["input_tokens"] as? Int,
+                    outputTokens: usage["output_tokens"] as? Int,
+                    cacheReadTokens: usage["cache_read_input_tokens"] as? Int,
+                    cacheWriteTokens: usage["cache_creation_input_tokens"] as? Int
                 ))
             }
+
+            updates.append(ActivityWatermark(
+                filePath: path,
+                fileSize: size,
+                modifiedAt: mtime,
+                cursor: cursor
+            ))
         }
 
-        return (results, highestMtime)
+        return ActivityIngestResult(records: records, watermarks: updates)
     }
 }

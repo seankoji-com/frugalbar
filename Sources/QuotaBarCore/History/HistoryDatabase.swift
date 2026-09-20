@@ -44,6 +44,7 @@ public enum HistoryDatabaseError: Error, LocalizedError, Sendable {
 public final class HistoryDatabase: @unchecked Sendable {
     public let fileURL: URL
     private let queue: DispatchQueue
+    private static let queueKey = DispatchSpecificKey<UInt8>()
     #if canImport(SQLite3)
     private var db: OpaquePointer?
     #endif
@@ -54,12 +55,26 @@ public final class HistoryDatabase: @unchecked Sendable {
             label: "com.quotabar.history-sqlite.\(fileURL.lastPathComponent)",
             qos: .utility
         )
+        queue.setSpecific(key: Self.queueKey, value: 1)
+    }
+
+    /// True when the calling thread is already executing on this connection's
+    /// serial queue. Closing the connection with a synchronous hop in that case
+    /// would deadlock on itself.
+    private var isOnQueue: Bool {
+        DispatchQueue.getSpecific(key: Self.queueKey) != nil
     }
 
     deinit {
         #if canImport(SQLite3)
-        if let db {
-            sqlite3_close(db)
+        guard let connection = db else { return }
+        // Closed on the same serial queue the connection was used from, so it
+        // cannot race a queued statement. Skipped when we are already on that
+        // queue — which happens when a queued block held the last reference.
+        if isOnQueue {
+            _ = sqlite3_close(connection)
+        } else {
+            queue.sync { _ = sqlite3_close(connection) }
         }
         #endif
     }
@@ -100,7 +115,29 @@ public final class HistoryDatabase: @unchecked Sendable {
         // Use WAL mode for concurrent reader/writer safety and durability.
         try execute(sql: "PRAGMA journal_mode=WAL;")
         try execute(sql: "PRAGMA synchronous=NORMAL;")
+
+        // `CREATE TABLE IF NOT EXISTS` cannot alter an existing table, and the
+        // stored shape has changed (enum ordinals became names, `total_tokens`
+        // became nullable). Reset rather than migrate — see
+        // `HistorySchema.version` for why that is safe here and when it stops
+        // being safe.
+        let existingVersion = try userVersion()
+        if existingVersion != HistorySchema.version {
+            try execute(sql: HistorySchema.dropTablesSQL)
+        }
         try execute(sql: HistorySchema.createTablesSQL)
+        try execute(sql: "PRAGMA user_version = \(HistorySchema.version);")
+
+        if existingVersion != 0 && existingVersion != HistorySchema.version {
+            NSLog("frugalbar: history database schema \(existingVersion) replaced by \(HistorySchema.version)")
+        }
+    }
+
+    public func userVersion() throws -> Int32 {
+        let stmt = try prepare(sql: "PRAGMA user_version;")
+        defer { finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int(stmt, 0)
     }
 
     public func execute(sql: String) throws {

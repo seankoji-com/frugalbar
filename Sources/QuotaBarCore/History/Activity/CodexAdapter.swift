@@ -5,6 +5,13 @@ import Foundation
 /// CRITICAL INVARIANT:
 /// Codex reports cumulative session totals on every turn in `payload.info.total_token_usage`.
 /// We must take the LAST recorded token usage per session, NEVER sum them across turns.
+///
+/// This adapter deliberately re-reads a rollout file from the start whenever it
+/// changes, rather than resuming at a byte offset: the cumulative total and the
+/// session metadata (`cwd`, `git_branch`, model) are established by the first
+/// lines of the file, and only the total is superseded by later lines. A
+/// file is skipped entirely when `(size, mtime)` are unchanged, which is the
+/// common case for every rollout except the one currently being written.
 public struct CodexAdapter: ActivityAdapter, Sendable {
     public let sourceIdentifier: String = "codex"
     public let baseURL: URL?
@@ -20,16 +27,18 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         }
     }
 
-    public func collectActivities(since watermarkMtime: Int64?) async throws -> (records: [ActivityRecord], maxMtime: Int64?) {
+    public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {
         guard let baseURL, FileManager.default.fileExists(atPath: baseURL.path) else {
-            return ([], nil)
+            return .empty
         }
 
-        var highestMtime: Int64? = watermarkMtime
+        var records: [ActivityRecord] = []
+        var updates: [ActivityWatermark] = []
+
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
             at: baseURL,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         )
 
@@ -42,22 +51,20 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             isoWithFraction.date(from: str) ?? isoStandard.date(from: str)
         }
 
-        var results: [ActivityRecord] = []
-
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.pathExtension == "jsonl" else { continue }
 
-            let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+            let resourceValues = try? fileURL.resourceValues(
+                forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+            )
             guard resourceValues?.isRegularFile == true else { continue }
 
-            if let modDate = resourceValues?.contentModificationDate {
-                let mtime = Int64(modDate.timeIntervalSince1970)
-                if let watermark = watermarkMtime, mtime <= watermark {
-                    continue
-                }
-                if highestMtime == nil || mtime > highestMtime! {
-                    highestMtime = mtime
-                }
+            let size = Int64(resourceValues?.fileSize ?? 0)
+            let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
+            let path = fileURL.path
+
+            if let prior = watermarks[path], prior.isUnchanged(fileSize: size, modifiedAt: mtime) {
+                continue
             }
 
             guard let data = try? Data(contentsOf: fileURL),
@@ -73,11 +80,11 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             var lastEndedAt: Date?
 
             struct TokenUsage {
-                var inputTokens: Int = 0
-                var outputTokens: Int = 0
-                var cacheReadTokens: Int = 0
-                var cacheWriteTokens: Int = 0
-                var totalTokens: Int = 0
+                var inputTokens: Int?
+                var outputTokens: Int?
+                var cacheReadTokens: Int?
+                var cacheWriteTokens: Int?
+                var totalTokens: Int?
             }
             var lastTokenUsage: TokenUsage?
 
@@ -109,11 +116,22 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                     if let pType = payload["type"] as? String, pType == "token_count",
                        let info = payload["info"] as? [String: Any],
                        let totalUsage = info["total_token_usage"] as? [String: Any] {
-                        let input = (totalUsage["input_tokens"] as? Int) ?? 0
-                        let output = (totalUsage["output_tokens"] as? Int) ?? 0
-                        let cacheRead = (totalUsage["cached_input_tokens"] as? Int) ?? 0
-                        let cacheWrite = (totalUsage["cache_write_input_tokens"] as? Int) ?? 0
-                        let total = (totalUsage["total_tokens"] as? Int) ?? (input + output + cacheRead + cacheWrite)
+                        // Absent is absent. Codex reports these together, so a
+                        // missing one means an unexpected shape rather than a
+                        // real zero, and the total is then unknown.
+                        let input = totalUsage["input_tokens"] as? Int
+                        let output = totalUsage["output_tokens"] as? Int
+                        let cacheRead = totalUsage["cached_input_tokens"] as? Int
+                        let cacheWrite = totalUsage["cache_write_input_tokens"] as? Int
+
+                        let total: Int?
+                        if let reported = totalUsage["total_tokens"] as? Int {
+                            total = reported
+                        } else if let input, let output, let cacheRead, let cacheWrite {
+                            total = input + output + cacheRead + cacheWrite
+                        } else {
+                            total = nil
+                        }
 
                         lastTokenUsage = TokenUsage(
                             inputTokens: input,
@@ -136,7 +154,7 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                 let effectiveSessionId = sessionId ?? fileURL.deletingPathExtension().lastPathComponent
                 let observed = lastEndedAt ?? sessionStartedAt ?? Date()
 
-                results.append(ActivityRecord(
+                records.append(ActivityRecord(
                     source: sourceIdentifier,
                     recordId: "codex_\(effectiveSessionId)",
                     sessionId: effectiveSessionId,
@@ -151,8 +169,15 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                     totalTokens: lastUsage.totalTokens
                 ))
             }
+
+            updates.append(ActivityWatermark(
+                filePath: path,
+                fileSize: size,
+                modifiedAt: mtime,
+                cursor: size
+            ))
         }
 
-        return (results, highestMtime)
+        return ActivityIngestResult(records: records, watermarks: updates)
     }
 }
