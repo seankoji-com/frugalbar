@@ -27,9 +27,14 @@ public final class QuotaStore {
     public var onSummaryChange: (@MainActor (SystemHealthSummary) -> Void)?
 
     private let manager: QuotaManager
+    private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
 
-    public init(manager: QuotaManager = .shared) {
+    public init(
+        manager: QuotaManager = .shared,
+        historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil
+    ) {
         self.manager = manager
+        self.historyRecorder = historyRecorder
     }
 
     /// Loads from cache when fresh, otherwise fetches.
@@ -56,8 +61,9 @@ public final class QuotaStore {
         self.summary = SystemHealthSummary.compute(from: snaps)
         self.advice = QuotaAdvice.evaluate(from: snaps)
         onSummaryChange?(self.summary)
+        if let historyRecorder {
+            await historyRecorder(snaps)
+        }
     }
 
 }
-
-
