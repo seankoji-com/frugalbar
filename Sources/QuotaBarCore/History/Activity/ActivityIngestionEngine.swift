@@ -4,6 +4,7 @@ import Foundation
 public actor ActivityIngestionEngine {
     private let store: QuotaHistoryStore
     private let adapters: [ActivityAdapter]
+    private var isIngesting = false
 
     public init(
         store: QuotaHistoryStore,
@@ -28,8 +29,16 @@ public actor ActivityIngestionEngine {
     /// the caller is told the pass was incomplete rather than being handed a
     /// success that silently omitted a whole source. Sources that succeeded
     /// before the failure keep their records and their watermarks.
+    ///
+    /// A pass already in flight makes this a no-op. Ingestion runs off its own
+    /// task now, and without this two overlapping passes would interleave at the
+    /// store's `await`s and duplicate the scanning work.
     @discardableResult
     public func ingestAll() async throws -> Int {
+        guard !isIngesting else { return 0 }
+        isIngesting = true
+        defer { isIngesting = false }
+
         var totalRecorded = 0
         var firstError: Error?
 

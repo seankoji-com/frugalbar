@@ -35,7 +35,12 @@ public enum HistoryPresentation {
     }
 
     public struct TimelinePoint: Identifiable, Sendable, Equatable {
-        public let id: UUID
+        /// Derived from the reading's own timestamp rather than freshly minted,
+        /// so a recomputed segment does not look like a different point to
+        /// SwiftUI. Regenerating identity on every reload made the chart tear
+        /// down and rebuild instead of animating.
+        public var id: String { "\(timestamp.timeIntervalSince1970)" }
+
         public let timestamp: Date
         public let fraction: Double
         public let isBlocked: Bool
@@ -43,14 +48,12 @@ public enum HistoryPresentation {
         public let urgency: Urgency
 
         public init(
-            id: UUID = UUID(),
             timestamp: Date,
             fraction: Double,
             isBlocked: Bool,
             confidence: Confidence,
             urgency: Urgency
         ) {
-            self.id = id
             self.timestamp = timestamp
             self.fraction = fraction
             self.isBlocked = isBlocked
@@ -60,20 +63,23 @@ public enum HistoryPresentation {
     }
 
     public struct TimelineSegment: Identifiable, Sendable, Equatable {
-        public let id: UUID
+        /// Stable for the same window, so the chart's series identity survives a
+        /// recompute.
+        public var id: String {
+            "\(vendor)|\(barLabel)|\(points.first?.timestamp.timeIntervalSince1970 ?? 0)"
+        }
+
         public let vendor: String
         public let barLabel: String
         public let resetsAt: Date?
         public let points: [TimelinePoint]
 
         public init(
-            id: UUID = UUID(),
             vendor: String,
             barLabel: String,
             resetsAt: Date?,
             points: [TimelinePoint]
         ) {
-            self.id = id
             self.vendor = vendor
             self.barLabel = barLabel
             self.resetsAt = resetsAt
@@ -118,6 +124,11 @@ public enum HistoryPresentation {
     /// Segments a stream of readings for a specific vendor and bar label into contiguous
     /// periods. Breaks on window reset, gap timeout, or sudden reset drop to avoid
     /// drawing artificial lines across quota discontinuities.
+    ///
+    /// `maxGap` is two hours on purpose rather than the "30m" an earlier draft of
+    /// the description claimed: polling runs far more often than that, so a
+    /// two-hour hole is a genuine ingestion outage. Anything shorter would break
+    /// the line on an idle afternoon and imply a reset that never happened.
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
         maxGap: TimeInterval = 7200
@@ -187,14 +198,30 @@ public enum HistoryPresentation {
         return result
     }
 
+    /// Readings that measure consumption rather than elapsed time.
+    ///
+    /// A billing-cycle row is drawn in the popover because a bar is the right
+    /// picture of "how far through the period are we" — but 90% elapsed is not
+    /// 90% of quota used, and on a "Used %" axis it would read as consumption.
+    /// `DualBarMetrics` draws that distinction for exactly this reason.
+    public static func consumptionReadings(
+        _ readings: [QuotaHistoryStore.ReadingRecord]
+    ) -> [QuotaHistoryStore.ReadingRecord] {
+        readings.filter { !$0.elapsedOnly }
+    }
+
     /// Evaluates burn pace for an active sliding or fixed window.
     ///
     /// Compares fraction of quota consumed against fraction of window elapsed.
+    /// Returns `nil` for a window that only measures elapsed time: its fraction
+    /// *is* the elapsed fraction, so the comparison would be a quantity against
+    /// itself — permanently "on pace", under a label that says "consumed".
     public static func computePace(
         reading: QuotaHistoryStore.ReadingRecord,
         now: Date = Date()
     ) -> PaceComparison? {
-        guard let windowLength = reading.windowLength,
+        guard !reading.elapsedOnly,
+              let windowLength = reading.windowLength,
               let resetsAt = reading.resetsAt,
               let fraction = reading.fraction,
               windowLength > 0 else {

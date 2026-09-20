@@ -6,12 +6,17 @@ import QuotaBarCore
 public struct HistoryRootView: View {
     @State private var timeRange: HistoryPresentation.TimeRange = .last24Hours
     @State private var selectedVendor: VendorIdentifier = .claude
-    @State private var readings: [QuotaHistoryStore.ReadingRecord] = []
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
     @State private var isSampleMode: Bool = CredentialStore.isSampleModeEnabled
     @State private var isLoading: Bool = false
+    /// Non-nil when the history could not be read at all. Distinct from an empty
+    /// history, which is a fact about the user's data rather than about us.
+    @State private var loadError: String?
+    /// Readings existed but none of them measure consumption (a billing-cycle
+    /// row, say), so there is nothing legitimate to plot on a "Used %" axis.
+    @State private var hasOnlyElapsedReadings: Bool = false
 
     private let liveStore: QuotaHistoryStore
     private let sampleStore: QuotaHistoryStore
@@ -28,6 +33,21 @@ public struct HistoryRootView: View {
         isSampleMode ? sampleStore : liveStore
     }
 
+    /// One identity for everything a reload depends on.
+    ///
+    /// Three separate `.task(id:)` modifiers used to each fire `reloadData()` on
+    /// first render — three concurrent reads, three concurrent fixture
+    /// generations, and `isLoading` flapping between them.
+    private struct ReloadKey: Hashable {
+        let range: HistoryPresentation.TimeRange
+        let vendor: VendorIdentifier
+        let sampleMode: Bool
+    }
+
+    private var reloadKey: ReloadKey {
+        ReloadKey(range: timeRange, vendor: selectedVendor, sampleMode: isSampleMode)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             headerBar
@@ -38,6 +58,10 @@ public struct HistoryRootView: View {
 
             ScrollView {
                 VStack(spacing: 14) {
+                    if let loadError {
+                        failureCard(loadError)
+                    }
+
                     if let pace {
                         paceCard(pace)
                     }
@@ -53,13 +77,7 @@ public struct HistoryRootView: View {
         }
         .frame(minWidth: 640, minHeight: 460)
         .background(Theme.surface)
-        .task(id: timeRange) {
-            await reloadData()
-        }
-        .task(id: selectedVendor) {
-            await reloadData()
-        }
-        .task(id: isSampleMode) {
+        .task(id: reloadKey) {
             await reloadData()
         }
     }
@@ -261,6 +279,18 @@ public struct HistoryRootView: View {
 
             QuotaTimelineChart(segments: segments, timeRange: timeRange)
                 .frame(height: 240)
+
+            if hasOnlyElapsedReadings {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                    Text("This vendor's readings for the window measure elapsed time, not consumption, so there is nothing to plot as used percentage.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .padding(14)
         .background(Theme.card)
@@ -275,14 +305,16 @@ public struct HistoryRootView: View {
 
     @ViewBuilder
     private var attributionCard: some View {
-        if let attribution, !attribution.projectAttributions.isEmpty {
+        if AttributionEngine.localSourceIdentifiers(for: selectedVendor).isEmpty {
+            noLocalTelemetryCard
+        } else if let attribution, !attribution.projectAttributions.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Project Activity Breakdown")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.onSurface)
-                        Text("Share of locally observed tokens in this time window")
+                        Text(attributionSubtitle(attribution))
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                     }
@@ -327,22 +359,12 @@ public struct HistoryRootView: View {
                             }
                             .frame(height: 5)
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(project.displayName), \(formatTokenCount(project.tokenCount)) tokens, \(Int(round(project.tokenShare * 100))) percent of observed tokens, \(project.sessionCount) sessions")
                     }
                 }
 
-                if attribution.hasConcurrentSessions {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "clock.arrow.2.circlepath")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.tertiary)
-                        Text("Multiple CLI sessions ran simultaneously in this window; individual session share cannot be fully separated.")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-                    }
-                    .padding(8)
-                    .background(Theme.tertiary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
+                caveatList(attribution.caveats)
             }
             .padding(14)
             .background(Theme.card)
@@ -351,6 +373,67 @@ public struct HistoryRootView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
             )
+        }
+    }
+
+    /// Shown for a vendor with no local activity adapter. Rendering another
+    /// tool's tokens here would imply they explain this vendor's allowance.
+    private var noLocalTelemetryCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Project Activity Breakdown")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.onSurface)
+
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                Text("FrugalBar has no local activity adapter for \(selectedVendor.displayName), so no project breakdown can be attributed to its allowance.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private func attributionSubtitle(_ attribution: AttributionSummary) -> String {
+        if let label = attribution.barLabel {
+            return "Share of locally observed tokens in this window · \(label) window"
+        }
+        return "Share of locally observed tokens in this window"
+    }
+
+    @ViewBuilder
+    private func caveatList(_ caveats: [AttributionCaveat]) -> some View {
+        if !caveats.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(caveats, id: \.rawValue) { caveat in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: caveat == .concurrentSessionsDetected
+                              ? "clock.arrow.2.circlepath"
+                              : "exclamationmark.triangle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.tertiary)
+                        Text(caveat.explanation)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(8)
+            .background(Theme.tertiary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -371,14 +454,19 @@ public struct HistoryRootView: View {
                 .background(Theme.outlineVariant.opacity(0.25))
                 .padding(.vertical, 2)
 
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.tertiary.opacity(0.9))
 
-                Text("Unmonitored sources: Grok, Kiro, Gemini (these tools do not record local session tokens on disk).")
+                // Derived from the engine's own set rather than restated here, so
+                // the copy cannot drift from the caveat logic. States what
+                // FrugalBar knows — that it has no adapter — rather than making a
+                // claim about what those tools write to disk.
+                Text("No local activity adapter: \(unmonitoredVendorNames). FrugalBar cannot read session token counts for these tools, so their usage is not represented above.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -388,6 +476,15 @@ public struct HistoryRootView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Sorted so the copy is stable between launches.
+    private var unmonitoredVendorNames: String {
+        AttributionEngine.unmonitoredVendorIdentifiers
+            .map(\.displayName)
+            .sorted()
+            .joined(separator: ", ")
     }
 
     // MARK: - Data Reload
@@ -396,47 +493,112 @@ public struct HistoryRootView: View {
         isLoading = true
         defer { isLoading = false }
 
+        loadError = nil
+        hasOnlyElapsedReadings = false
+
         if isSampleMode {
-            try? await SampleDataGenerator.ensureSampleData(in: sampleStore)
+            do {
+                try await SampleDataGenerator.ensureSampleData(in: sampleStore)
+            } catch {
+                loadError = "Could not prepare the sample fixture: \(error.localizedDescription)"
+                segments = []
+                pace = nil
+                attribution = nil
+                return
+            }
         }
 
         let since = timeRange.startDate()
+        let now = Date()
+
         do {
-            let fetched = try await activeStore.fetchReadings(
+            let allReadings = try await activeStore.fetchReadings(
                 vendor: selectedVendor,
                 since: since
             )
-            self.readings = fetched
-            self.segments = HistoryPresentation.segments(from: fetched)
 
-            // Compute pace from latest measured reading
-            if let latest = fetched.last(where: { $0.fraction != nil && $0.resetsAt != nil }) {
-                self.pace = HistoryPresentation.computePace(reading: latest)
+            // Only consumption belongs on a "Used %" axis. A window that measures
+            // elapsed time would otherwise be drawn — and paced — as quota spent.
+            let readings = HistoryPresentation.consumptionReadings(allReadings)
+            hasOnlyElapsedReadings = readings.isEmpty && !allReadings.isEmpty
+
+            // Everything below is scoped to ONE bar label. `fetchReadings` returns
+            // every label for the vendor, interleaved by time, so taking the
+            // endpoints across the unfiltered list subtracted one window's
+            // fraction from another's.
+            let barLabel = AttributionEngine.preferredBarLabel(readings: readings)
+            self.segments = HistoryPresentation.segments(from: readings)
+
+            let scoped = barLabel.map { label in readings.filter { $0.barLabel == label } } ?? []
+
+            if let latest = scoped.last(where: { $0.fraction != nil && $0.resetsAt != nil }) {
+                self.pace = HistoryPresentation.computePace(reading: latest, now: now)
             } else {
                 self.pace = nil
             }
 
-            // Fetch activities and compute attribution
-            let activities = try await activeStore.fetchActivities(
-                since: since,
-                until: Date()
-            )
-            let startFrac = fetched.first(where: { $0.fraction != nil })?.fraction
-            let endFrac = fetched.last(where: { $0.fraction != nil })?.fraction
+            // Activity is restricted to the sources that can actually speak for
+            // the selected vendor. Showing Codex and OpenCode tokens beneath a
+            // "Claude" heading asserted an attribution nothing measured.
+            let sources = AttributionEngine.localSourceIdentifiers(for: selectedVendor)
+            let allActivities = try await activeStore.fetchActivities(since: since, until: now)
+            let activities = allActivities.filter { sources.contains($0.source) }
+
+            let endpoints: (start: Double?, end: Double?)
+            if let barLabel {
+                endpoints = AttributionEngine.consumptionEndpoints(readings: readings, barLabel: barLabel)
+            } else {
+                endpoints = (nil, nil)
+            }
+
             self.attribution = AttributionEngine.computeAttribution(
-                windowStart: since ?? (fetched.first?.measuredAt ?? Date()),
-                windowEnd: Date(),
-                startConsumptionFraction: startFrac,
-                endConsumptionFraction: endFrac,
+                windowStart: since ?? (readings.first?.measuredAt ?? now),
+                windowEnd: now,
+                barLabel: barLabel,
+                startConsumptionFraction: endpoints.start,
+                endConsumptionFraction: endpoints.end,
                 activities: activities,
                 configuredVendors: [selectedVendor]
             )
         } catch {
-            self.readings = []
-            self.segments = []
-            self.pace = nil
-            self.attribution = nil
+            // A failed read must never render as "you have no history".
+            loadError = error.localizedDescription
+            segments = []
+            pace = nil
+            attribution = nil
         }
+    }
+
+    private func failureCard(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.error)
+                Text("Could not read quota history")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.onSurface)
+            }
+
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("This is a failure to read, not an absence of data.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Theme.error.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.error.opacity(0.35), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Could not read quota history. \(message)")
     }
 
     private func formatTokenCount(_ count: Int) -> String {

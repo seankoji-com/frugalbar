@@ -8,10 +8,15 @@ public enum HistoryWindow {
 
     private static var window: NSWindow?
 
-    public static func show(
-        liveStore: QuotaHistoryStore? = nil,
-        sampleStore: QuotaHistoryStore? = nil
-    ) {
+    /// Shows the History window.
+    ///
+    /// The window builds its own `QuotaHistoryStore` for the same database the
+    /// recorder writes to. That is a second SQLite connection rather than a
+    /// shared one — safe under WAL, and it keeps the window independent of app
+    /// lifecycle — but it does mean injected stores are not plumbed through
+    /// here, so the parameters that used to exist and were never passed have
+    /// been removed rather than left as a dead seam.
+    public static func show() {
         NSApp.activate(ignoringOtherApps: true)
 
         if let window {
@@ -19,7 +24,7 @@ public enum HistoryWindow {
             return
         }
 
-        let rootView = HistoryRootView(liveStore: liveStore, sampleStore: sampleStore)
+        let rootView = HistoryRootView()
         let hosting = NSHostingController(rootView: rootView)
         let created = NSWindow(contentViewController: hosting)
         created.title = "Quota History & Attribution"

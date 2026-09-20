@@ -6,6 +6,12 @@ import QuotaBarCore
 ///
 /// Discontinuous reset periods and long gaps break the line rather than falling
 /// abruptly to 0%, accurately reflecting provider quota windows.
+///
+/// There are deliberately no "80% warning" / "95% critical" guide lines. This
+/// app already has a vocabulary for those states — `Urgency` (warning above 70%,
+/// critical above 90%) and `DualBarMetrics.exhaustionThreshold` (0.999) — and
+/// drawing a third, chart-local pair asserted a policy nobody had measured. The
+/// chart now renders the urgency the app actually computed, per point.
 public struct QuotaTimelineChart: View {
     public let segments: [HistoryPresentation.TimelineSegment]
     public let timeRange: HistoryPresentation.TimeRange
@@ -26,36 +32,46 @@ public struct QuotaTimelineChart: View {
         }
     }
 
+    /// Shape is the non-colour channel: colour alone fails WCAG 1.4.1, and
+    /// "glance to know" is the entire product.
+    private func symbol(for point: HistoryPresentation.TimelinePoint) -> BasicChartSymbolShape {
+        if point.isBlocked { return .square }
+        if point.urgency == .critical { return .triangle }
+        if point.urgency == .warning { return .diamond }
+        return .circle
+    }
+
+    private func colorForPoint(_ point: HistoryPresentation.TimelinePoint) -> Color {
+        if point.isBlocked || point.urgency == .critical { return Theme.error }
+        if point.urgency == .warning { return Theme.tertiary }
+        return Theme.healthy
+    }
+
+    private func accessibilityDescription(for segment: HistoryPresentation.TimelineSegment) -> String {
+        let worst = segment.points.max { $0.fraction < $1.fraction }
+        guard let worst else { return "\(segment.barLabel) window, no readings" }
+        let percent = Int((worst.fraction * 100).rounded())
+        let state: String
+        if worst.isBlocked {
+            state = "blocked"
+        } else if worst.urgency == .critical {
+            state = "critical"
+        } else if worst.urgency == .warning {
+            state = "warning"
+        } else {
+            state = "healthy"
+        }
+        return "\(segment.barLabel) window, peak \(percent) percent used, \(state), \(segment.points.count) readings"
+    }
+
     private var chart: some View {
         Chart {
-            // 80% Warning threshold guide
-            RuleMark(y: .value("Warning", 80))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                .foregroundStyle(Theme.tertiary.opacity(0.6))
-                .annotation(position: .top, alignment: .trailing) {
-                    Text("80% Warning")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Theme.tertiary.opacity(0.8))
-                        .padding(.trailing, 4)
-                }
-
-            // 95% Critical threshold guide
-            RuleMark(y: .value("Critical", 95))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .foregroundStyle(Theme.error.opacity(0.7))
-                .annotation(position: .top, alignment: .trailing) {
-                    Text("95% Critical")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Theme.error.opacity(0.9))
-                        .padding(.trailing, 4)
-                }
-
             ForEach(segments) { segment in
                 ForEach(segment.points) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Used %", point.fraction * 100),
-                        series: .value("Segment", segment.id.uuidString)
+                        series: .value("Segment", segment.id)
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(colorForPoint(point))
@@ -66,7 +82,8 @@ public struct QuotaTimelineChart: View {
                         y: .value("Used %", point.fraction * 100)
                     )
                     .foregroundStyle(colorForPoint(point))
-                    .symbolSize(point.isBlocked ? 24 : 14)
+                    .symbol(symbol(for: point))
+                    .symbolSize(point.isBlocked ? 28 : 18)
                 }
             }
         }
@@ -103,6 +120,9 @@ public struct QuotaTimelineChart: View {
                 }
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Quota timeline, \(timeRange.title)")
+        .accessibilityValue(segments.map(accessibilityDescription(for:)).joined(separator: ". "))
     }
 
     private var emptyState: some View {
@@ -121,16 +141,7 @@ public struct QuotaTimelineChart: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
-    }
-
-    private func colorForPoint(_ point: HistoryPresentation.TimelinePoint) -> Color {
-        if point.isBlocked || point.urgency == .critical || point.fraction >= 0.95 {
-            return Theme.error
-        }
-        if point.urgency == .warning || point.fraction >= 0.80 {
-            return Theme.tertiary
-        }
-        return Theme.healthy
+        .accessibilityElement(children: .combine)
     }
 
     private func formatAxisDate(_ date: Date) -> String {

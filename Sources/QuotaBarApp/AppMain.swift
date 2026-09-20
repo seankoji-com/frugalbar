@@ -26,8 +26,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = QuotaStore(
             manager: QuotaManager.shared,
             historyRecorder: { snapshots in
-                try? await hStore.record(snapshots)
-                _ = try? await aEngine.ingestAll()
+                // Recording is a small insert and stays on the refresh path, so a
+                // reading is never lost. Both errors used to be discarded with
+                // `try?`, which meant a history database that stopped accepting
+                // writes looked exactly like one with nothing to record.
+                do {
+                    try await hStore.record(snapshots)
+                } catch {
+                    NSLog("frugalbar: failed to record quota history: \(error)")
+                }
+
+                // Ingestion walks every CLI transcript and a multi-gigabyte
+                // database, so it runs separately. It used to run inline, where
+                // QuotaStore held `isRefreshing` for its whole duration and
+                // silently dropped any refresh the user asked for meanwhile.
+                Task.detached(priority: .utility) {
+                    do {
+                        _ = try await aEngine.ingestAll()
+                    } catch {
+                        NSLog("frugalbar: activity ingestion failed: \(error)")
+                    }
+                }
             }
         )
         super.init()
