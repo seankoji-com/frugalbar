@@ -1,4 +1,6 @@
-# Required Swift checks always run real analysis, including dependency and workflow changes.
+# Required checks and scanning rules need real Swift analysis for each PR head.
+# Missing SARIF can block the scanning rule; a fabricated empty result would
+# hide findings. Documentation-only PRs therefore pay the traced-build cost too.
 name: CodeQL
 
 on:
