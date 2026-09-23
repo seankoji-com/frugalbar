@@ -20,6 +20,7 @@ on:
     branches: [main]
     paths:
       - ".github/**"
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -36,7 +37,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Maintained fork, not rhysd/actionlint: upstream is inactive and its
       # latest release rejects `concurrency.queue`, which the synced gatekeeper
