@@ -12,8 +12,7 @@ what has actually gone wrong before.
 swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
 ```
 
-CI enables coverage for the first test run, then re-runs the same test binary
-with `--skip-build` to catch flakes without recompiling it.
+CI runs exactly this, then re-runs the tests once more to catch flakes.
 
 ## Invariants
 

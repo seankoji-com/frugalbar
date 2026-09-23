@@ -20,7 +20,6 @@ on:
     branches: [main]
     paths:
       - ".github/**"
-  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -46,6 +45,6 @@ jobs:
       # pyflakes, so run:/python blocks get linted too.
       # See seankoji-com/.github#200.
       - name: Run actionlint
-        uses: docker://kjanat/actionlint:1.16.1
+        uses: docker://kjanat/actionlint@sha256:6808f2904057790c7c60715005dc014e447fe206e348803fb14e82c9b0816b06 # 1.16.1
         with:
           args: -color
