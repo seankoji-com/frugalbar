@@ -488,10 +488,7 @@ struct ProviderHTTPTests {
 
     @Test("Gemini uses the CLI backend rather than the unrelated full quota pool")
     func geminiUsesCLIQuotaBackend() async throws {
-        let provider = GeminiQuotaProvider(
-            accessToken: "token",
-            apiBaseOverride: "https://daily-cloudcode-pa.googleapis.com/v1internal:"
-        )
+        let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/v1internal:loadCodeAssist" {
                 return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
@@ -526,8 +523,8 @@ struct ProviderHTTPTests {
             return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.5}]}]}"#)
         }) { try await provider.fetchSnapshot() }
         #expect(URLProtocolStub.capturedRequests.map(\.url?.absoluteString) == [
-            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
         ])
     }
 

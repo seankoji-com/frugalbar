@@ -16,7 +16,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     private let apiBaseOverride: String?
     private let configuredAPIBase: (value: String?, invalid: Bool)
 
-    private static let productionAPIBase = "https://cloudcode-pa.googleapis.com/v1internal:"
+    private static let productionAPIBase = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 
     static func apiBase(from rawValue: String?) -> (value: String?, invalid: Bool) {
         guard let value = rawValue, !value.isEmpty else { return (nil, false) }
