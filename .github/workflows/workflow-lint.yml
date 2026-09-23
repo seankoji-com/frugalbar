@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Maintained fork, not rhysd/actionlint: upstream is inactive and its
       # latest release rejects `concurrency.queue`, which the synced gatekeeper
@@ -45,6 +45,6 @@ jobs:
       # pyflakes, so run:/python blocks get linted too.
       # See seankoji-com/.github#200.
       - name: Run actionlint
-        uses: docker://kjanat/actionlint:1.16.1
+        uses: docker://kjanat/actionlint@sha256:6808f2904057790c7c60715005dc014e447fe206e348803fb14e82c9b0816b06 # 1.16.1
         with:
           args: -color

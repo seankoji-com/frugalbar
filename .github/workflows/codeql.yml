@@ -1,30 +1,6 @@
-# CodeQL analysis, replacing GitHub's Default Setup.
-#
-# Default Setup ran Swift analysis via `autobuild` on a fresh macos-latest VM
-# every time, with no cache — a full `swift build` under CodeQL's trace was
-# taking ~18 of the job's ~19 minutes on every single run. This workflow
-# builds manually (`swift build -c debug`) and caches `.build`, but in
-# practice the traced build recompiles essentially everything on every run:
-# it still costs ~16-19 min on cache hits with unchanged Sources (measured on
-# main, Sep 2026). `timeout-minutes` on analyze-swift is sized for that full
-# rebuild, not for an incremental one.
-#
-# "Analyze (swift)" is a required status check (see the `required-checks`
-# ruleset), and rulesets treat a skipped required check as NOT passing (the
-# PR merge is blocked — verified Sep 2026), so the job cannot simply be
-# `if:`-gated off PRs that do not touch Swift. Instead the job always runs
-# and a `skipcheck` step diffs the PR merge-base against head: when nothing
-# under Sources/, Tests/ or Package.swift changed, every subsequent step is
-# skipped and the job completes green in ~2 min (runner spin-up + checkout)
-# instead of paying the ~17-minute traced build.
-#
-# Skipping the analysis steps leaves no SARIF for the swift category, and the
-# `CodeQL on public repos` ruleset's code-scanning rule reads that as "still
-# expecting 1 result from CodeQL" and blocks the merge — a skipped *status
-# check* is handled by the job running green, but that is a different rule. The
-# skip path therefore uploads an empty swift SARIF so CodeQL records a 0-alert
-# result for the SHA and the code-scanning rule is satisfied.
-
+# Required checks and scanning rules need real Swift analysis for each PR head.
+# Missing SARIF can block the scanning rule; a fabricated empty result would
+# hide findings. Documentation-only PRs therefore pay the traced-build cost too.
 name: CodeQL
 
 on:
@@ -34,6 +10,7 @@ on:
       - "Sources/**"
       - "Tests/**"
       - "Package.swift"
+      - "Package.resolved"
       - ".github/workflows/codeql.yml"
       - ".github/workflows/*.yml"
   pull_request:
@@ -58,13 +35,13 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           languages: actions
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           category: "/language:actions"
 
@@ -82,68 +59,27 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Skip analysis when the PR leaves Swift untouched
-        id: skipcheck
-        # PRs: diff the merge-base against the PR head so only the PR's own
-        # changes count. All other events (push/schedule/dispatch) already
-        # pass the trigger's paths filter or are explicit — proceed.
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          BASE="${{ github.event.pull_request.base.sha }}"
-          MERGE_BASE="$(git merge-base "$BASE" HEAD)"
-          if git diff --name-only "$MERGE_BASE"...HEAD | grep -qE '^(Sources/|Tests/|Package\.swift)'; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No Swift changes in this PR — skipping the traced build."
-          fi
-
-      # Keep the code-scanning rule satisfied on the skip path: an empty SARIF
-      # for the swift category records a 0-alert CodeQL result for the head SHA,
-      # so the "CodeQL on public repos" rule does not block with "still
-      # expecting 1 result from CodeQL".
-      - name: Record an empty Swift result when the analysis is skipped
-        if: steps.skipcheck.outputs.proceed != 'true'
-        run: |
-          printf '%s' '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"CodeQL","version":"0.0.0"}},"results":[]}]}' > "$RUNNER_TEMP/empty-swift.sarif"
-
-      - name: Upload empty Swift SARIF
-        if: steps.skipcheck.outputs.proceed != 'true'
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: ${{ runner.temp }}/empty-swift.sarif
-          category: "/language:swift"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select Xcode 16
-        if: steps.skipcheck.outputs.proceed == 'true'
         run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Cache SwiftPM build
-        if: steps.skipcheck.outputs.proceed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .build
           key: spm-codeql-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**/*.swift') }}
           restore-keys: |
             spm-codeql-${{ runner.os }}-
 
-      - uses: github/codeql-action/init@v4
-        if: steps.skipcheck.outputs.proceed == 'true'
+      - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           languages: swift
           build-mode: manual
 
       - name: Build (traced)
-        if: steps.skipcheck.outputs.proceed == 'true'
         run: swift build -c debug
 
-      - uses: github/codeql-action/analyze@v4
-        if: steps.skipcheck.outputs.proceed == 'true'
+      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           category: "/language:swift"
