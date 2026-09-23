@@ -57,7 +57,7 @@ public actor BackgroundScheduler {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             Task { [self] in
-                await self.fire()
+                await self.timerFired()
             }
         }
         timer.resume()
@@ -67,6 +67,11 @@ public actor BackgroundScheduler {
     public func stop() {
         timer?.cancel()
         timer = nil
+    }
+
+    private func timerFired() async {
+        guard timer != nil else { return }
+        await fire()
     }
 
     // Internal so tests can drive a cycle without timers or random jitter.
