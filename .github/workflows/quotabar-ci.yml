@@ -129,3 +129,30 @@ jobs:
       # fail roughly one run in four.
       - name: Re-run tests (flake check)
         run: swift test -c debug --parallel
+
+  # Early warning for the next toolchain. Swift 6.4 turned an implicit strong
+  # capture and a redundant Sendable conformance into errors under
+  # -warnings-as-errors while the pinned Xcode 16 job stayed green. This job
+  # uses the newest Xcode on the newest hosted image and is allowed to fail,
+  # so it reports breakage without blocking merges.
+  build-and-test-latest-xcode:
+    name: Build & Test (latest Xcode, allowed to fail)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select newest installed Xcode
+        run: |
+          latest="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
+          sudo xcode-select -s "$latest/Contents/Developer"
+          xcode-select -p
+          swift --version
+
+      - name: Build (warnings are errors)
+        run: swift build -c debug --build-tests -Xswiftc -warnings-as-errors
+
+      - name: Run tests
+        run: swift test -c debug --parallel
