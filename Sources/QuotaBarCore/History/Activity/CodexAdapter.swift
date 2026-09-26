@@ -1,6 +1,6 @@
 import Foundation
 
-/// Ingests CLI activity from OpenAI Codex (`~/.codex/sessions/`).
+/// Ingests CLI activity from OpenAI Codex (`$CODEX_HOME/sessions/`, default `~/.codex/sessions/`).
 ///
 /// CRITICAL INVARIANT:
 /// Codex reports cumulative session totals on every turn in `payload.info.total_token_usage`.
@@ -22,9 +22,22 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         } else if TestHost.isActive {
             self.baseURL = nil
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.baseURL = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+            self.baseURL = Self.defaultSessionsDirectory(
+                environment: ProcessInfo.processInfo.environment,
+                home: FileManager.default.homeDirectoryForCurrentUser
+            )
         }
+    }
+
+    /// `$CODEX_HOME/sessions` when `CODEX_HOME` is set, else `~/.codex/sessions`.
+    /// Only applies when started from a shell; see `ClaudeCodeAdapter`.
+    static func defaultSessionsDirectory(environment: [String: String], home: URL) -> URL {
+        if let configured = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespaces),
+           !configured.isEmpty {
+            let root = URL(fileURLWithPath: (configured as NSString).expandingTildeInPath, isDirectory: true)
+            return root.appendingPathComponent("sessions", isDirectory: true)
+        }
+        return home.appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {

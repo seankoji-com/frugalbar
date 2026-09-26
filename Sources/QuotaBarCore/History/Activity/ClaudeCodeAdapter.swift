@@ -1,6 +1,7 @@
 import Foundation
 
-/// Ingests CLI activity from Claude Code (`~/.claude/projects/`).
+/// Ingests CLI activity from Claude Code's `projects/` directory, located by
+/// `defaultProjectsDirectory(environment:home:fileExists:)`.
 /// Deduplicates records by `message.id` (or `requestId`) to avoid double-counting.
 public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
     public let sourceIdentifier: String = "claude_code"
@@ -12,9 +13,33 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         } else if TestHost.isActive {
             self.baseURL = nil
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.baseURL = home.appendingPathComponent(".claude/projects", isDirectory: true)
+            self.baseURL = Self.defaultProjectsDirectory(
+                environment: ProcessInfo.processInfo.environment,
+                home: FileManager.default.homeDirectoryForCurrentUser,
+                fileExists: { FileManager.default.fileExists(atPath: $0.path) }
+            )
         }
+    }
+
+    /// Where Claude Code keeps session transcripts: `$CLAUDE_CONFIG_DIR` when
+    /// set, else `~/.config/claude` if it has a `projects` directory (newer
+    /// installs), else the legacy `~/.claude`.
+    ///
+    /// An app launched from Finder or at login does not inherit shell
+    /// variables, so the environment only applies when started from a shell.
+    static func defaultProjectsDirectory(
+        environment: [String: String],
+        home: URL,
+        fileExists: (URL) -> Bool
+    ) -> URL {
+        if let configured = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespaces),
+           !configured.isEmpty {
+            let root = URL(fileURLWithPath: (configured as NSString).expandingTildeInPath, isDirectory: true)
+            return root.appendingPathComponent("projects", isDirectory: true)
+        }
+        let xdg = home.appendingPathComponent(".config/claude/projects", isDirectory: true)
+        if fileExists(xdg) { return xdg }
+        return home.appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {
