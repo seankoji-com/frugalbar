@@ -7,7 +7,7 @@ struct CLIProxyClientTests {
 
     @Test("base64url replaces + and / and strips =")
     func base64urlEncoding() {
-        #expect(CLIProxyClient.base64url(string: "cliproxy-nas.careynas.net-8317") == "Y2xpcHJveHktbmFzLmNhcmV5bmFzLm5ldC04MzE3")
+        #expect(CLIProxyClient.base64url(string: "cliproxy-nas.example.internal-8317") == "Y2xpcHJveHktbmFzLmV4YW1wbGUuaW50ZXJuYWwtODMxNw")
         // Check padding stripping and URL-safe characters (_ for /, - for +)
         #expect(CLIProxyClient.base64url(string: "hello?world>>") == "aGVsbG8_d29ybGQ-Pg")
         #expect(!CLIProxyClient.base64url(string: "any test string ===").contains("="))
@@ -32,15 +32,15 @@ struct CLIProxyClientTests {
 
     @Test("managementURL builds clean /v0/management paths from various base URLs")
     func managementURLBuilding() throws {
-        let base1 = try #require(URL(string: "http://nas.careynas.net:8317"))
-        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base1) == "http://nas.careynas.net:8317/v0/management/auth-files")
-        #expect(CLIProxyClient.managementURL(path: "/api-call", base: base1) == "http://nas.careynas.net:8317/v0/management/api-call")
+        let base1 = try #require(URL(string: "http://nas.example.internal:8317"))
+        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base1) == "http://nas.example.internal:8317/v0/management/auth-files")
+        #expect(CLIProxyClient.managementURL(path: "/api-call", base: base1) == "http://nas.example.internal:8317/v0/management/api-call")
 
-        let base2 = try #require(URL(string: "http://nas.careynas.net:8317/"))
-        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base2) == "http://nas.careynas.net:8317/v0/management/auth-files")
+        let base2 = try #require(URL(string: "http://nas.example.internal:8317/"))
+        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base2) == "http://nas.example.internal:8317/v0/management/auth-files")
 
-        let base3 = try #require(URL(string: "http://nas.careynas.net:8317/v1"))
-        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base3) == "http://nas.careynas.net:8317/v0/management/auth-files")
+        let base3 = try #require(URL(string: "http://nas.example.internal:8317/v1"))
+        #expect(CLIProxyClient.managementURL(path: "auth-files", base: base3) == "http://nas.example.internal:8317/v0/management/auth-files")
     }
 
     @Test("discoverConfig reads from environment variables when present")

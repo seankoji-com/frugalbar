@@ -852,59 +852,95 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
-    /// The OAuth beta rejects /v1/messages unless the request identifies
-    /// itself as Claude Code. Losing that system block silently turns every
-    /// valid token into "Rejected — check the key".
-    @Test("Claude identifies itself as Claude Code so the OAuth token is accepted")
-    func claudeSendsClaudeCodeSystemPrompt() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.10", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.20", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        _ = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+    /// The direct path used to send a one-token Haiku request every poll and
+    /// read the rate-limit headers, spending the quota it reported. It must
+    /// read the free usage endpoint instead, and never POST to /v1/messages.
+    @Test("Claude reads the OAuth usage endpoint directly without a model request")
+    func claudeDirectReadsUsageEndpoint() async throws {
+        let body = #"{"five_hour":{"utilization":10,"resets_at":"2026-09-15T06:59:59.000000+00:00"},"seven_day":{"utilization":20,"resets_at":"2026-09-19T00:00:00+00:00"}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
+        #expect(URLProtocolStub.requestCount == 1)
         let request = try #require(URLProtocolStub.capturedRequests.first)
-        #expect(request.httpMethod == "POST")
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://api.anthropic.com/api/oauth/usage")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer oauth-token")
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
-        let body = extractBody(from: request)
-        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(json["system"] as? String == "You are Claude Code, Anthropic's official CLI for Claude.")
+        #expect(snap.cliSource == "Claude OAuth usage endpoint")
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.row2?.primaryFraction == 0.20)
     }
 
-    /// The header has been observed as a fraction and as a percentage. Reading
-    /// a percentage as a fraction would report 42% usage as 4200% and get
-    /// discarded, so the provider must normalise rather than reject.
-    @Test("Claude accepts a percentage-scaled utilization header")
+    /// Utilization has been observed as a fraction and as a percentage.
+    /// Reading a percentage as a fraction would report 42% usage as 4200% and
+    /// get discarded, so the provider must normalise rather than reject.
+    @Test("Claude accepts percentage-scaled and fraction-scaled utilization")
     func claudeAcceptsPercentScale() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+        let body = #"{"five_hour":{"utilization":42,"resets_at":null},"seven_day":{"utilization":0.88,"resets_at":null}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
         #expect(snap.row1?.primaryFraction == 0.42)
         #expect(snap.row2?.primaryFraction == 0.88)
+        #expect(snap.status == .warning)
     }
 
     /// Badge and menu-bar urgency must be driven by the same window, or the
     /// icon goes red while the row still claims plenty of headroom.
     @Test("Claude badge reflects the fuller window, not just the weekly one")
     func claudeBadgeTracksWorstWindow() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.05", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+        let body = #"{"five_hour":{"utilization":99},"seven_day":{"utilization":5}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
         #expect(snap.status == .measured(.critical))
         #expect(snap.badgeText == "1% left")
     }
 
-    @Test("Claude parses real usage headers")
-    func claudeLiveTelemetryParsing() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+    /// A 200 whose body is not the usage shape must not render as health.
+    @Test("Claude direct path treats an undecodable body as a bad response")
+    func claudeDirectBadBody() async throws {
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(snap.consumptionFraction == nil)
+    }
 
-        #expect(snap.vendorId == .claude)
-        #expect(snap.row1?.primaryFraction == 0.42)
-        #expect(snap.row2?.primaryFraction == 0.88)
-        #expect(snap.status == .warning)
+    @Test("Claude direct path maps 401 to credential rejected")
+    func claudeDirect401() async throws {
+        let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
+            try await ClaudeQuotaProvider(apiKey: "expired").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    /// The model-scoped weekly window is shown as its own row but describes
+    /// one model, so it must not drive the plan-wide badge or urgency.
+    @Test("Claude shows the fuller model weekly window without letting it drive urgency")
+    func claudeModelWeeklyWindow() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"seven_day_opus":{"utilization":95,"resets_at":"2026-09-19T00:00:00+00:00"},"seven_day_sonnet":{"utilization":30}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row3?.label == "OP")
+        #expect(snap.row3?.primaryFraction == 0.95)
+        #expect(snap.status == .measured(.none))
+        #expect(snap.badgeText == "80% left")
+    }
+
+    /// The model windows are supplementary: a null or reshaped one must not
+    /// throw away the 5-hour and weekly readings.
+    @Test("Claude ignores a null or malformed model window")
+    func claudeMalformedModelWindow() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"seven_day_opus":null,"seven_day_sonnet":{"utilization":"n/a"}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.row3 == nil)
     }
 
     /// When Claude CLI is routed through LiteLLM/CLIProxyAPI, the session consuming
@@ -1035,7 +1071,7 @@ struct ProviderHTTPTests {
             if request.url?.path == "/v0/management/api-call" {
                 #expect(request.httpMethod == "POST")
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
-                let bodyData = extractBody(from: request) ?? Data()
+                let bodyData = extractBody(from: request)
                 let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
                 #expect(json["auth_index"] as? String == "codex_idx_123")
                 #expect(json["url"] as? String == "https://chatgpt.com/backend-api/wham/usage")

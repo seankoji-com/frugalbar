@@ -384,7 +384,7 @@ private enum SpendStub {
         config.protocolClasses = [Proto.self]
         return URLSession(configuration: config)
     }
-    final class Proto: URLProtocol, @unchecked Sendable {
+    final class Proto: URLProtocol {
         nonisolated(unsafe) static var body = ""
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
