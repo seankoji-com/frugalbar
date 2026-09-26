@@ -182,6 +182,7 @@ public struct PopoverRootView: View {
                     MetricSectionView(
                         category: category,
                         snapshots: items,
+                        forecasts: store.forecasts,
                         onSelect: { snap in
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                                 selectedSnapshot = snap

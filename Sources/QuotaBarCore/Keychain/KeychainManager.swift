@@ -170,6 +170,11 @@ public enum CredentialStore {
     /// explicit opt-in.
     public static let notificationsEnabledDefaultsKey = "QuotaBarEnableNotifications"
 
+    /// Providers whose window resets the user asked to be told about, stored
+    /// as vendor raw values. Empty by default: opt-in per provider, delivered
+    /// through the same `osascript` path as recovery notifications.
+    public static let resetAlertVendorsDefaultsKey = "QuotaBarResetAlertVendors"
+
     /// Whether the History window is viewing synthetic sample fixture data
     /// rather than the live historical database.
     public static let sampleModeDefaultsKey = "QuotaBarHistorySampleMode"
@@ -231,6 +236,17 @@ public enum CredentialStore {
 
     public static var isNotificationsEnabled: Bool {
         preferences.bool(forKey: notificationsEnabledDefaultsKey)
+    }
+
+    public static var resetAlertVendors: Set<VendorIdentifier> {
+        get { resetAlertVendors(fromStored: preferences.stringArray(forKey: resetAlertVendorsDefaultsKey)) }
+        set { preferences.set(newValue.map(\.rawValue).sorted(), forKey: resetAlertVendorsDefaultsKey) }
+    }
+
+    /// Decodes the stored list. Unknown raw values (a provider removed in a
+    /// later release) are dropped rather than failing the whole set.
+    static func resetAlertVendors(fromStored raw: [String]?) -> Set<VendorIdentifier> {
+        Set((raw ?? []).compactMap(VendorIdentifier.init(rawValue:)))
     }
 
     public static var isSampleModeEnabled: Bool {

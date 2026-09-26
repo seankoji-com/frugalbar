@@ -7,12 +7,13 @@ struct MetricSectionView: View {
 
     let category: MetricCategory
     let snapshots: [QuotaSnapshot]
+    var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(snapshots.enumerated()), id: \.element.id) { index, snap in
-                MetricRowView(snapshot: snap, onSelect: onSelect)
+                MetricRowView(snapshot: snap, onSelect: onSelect, forecast: forecasts[snap.vendorId])
 
                 if index < snapshots.count - 1 {
                     Rectangle()

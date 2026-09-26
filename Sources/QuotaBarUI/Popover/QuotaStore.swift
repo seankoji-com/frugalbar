@@ -17,6 +17,9 @@ public final class QuotaStore {
     public private(set) var summary: SystemHealthSummary = .compute(from: [])
     public private(set) var advice: QuotaAdvice = QuotaAdvice.evaluate(from: [])
     public private(set) var isRefreshing = false
+    /// Recent-pace forecast per provider, from recorded history. Empty when no
+    /// `readingsLoader` was given or history is too thin to fit a trend.
+    public private(set) var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
 
     /// Called on the main actor whenever `summary` changes.
     ///
@@ -28,13 +31,16 @@ public final class QuotaStore {
 
     private let manager: QuotaManager
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
+    private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
 
     public init(
         manager: QuotaManager = .shared,
-        historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil
+        historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
+        readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil
     ) {
         self.manager = manager
         self.historyRecorder = historyRecorder
+        self.readingsLoader = readingsLoader
     }
 
     /// Loads from cache when fresh, otherwise fetches.
@@ -63,6 +69,16 @@ public final class QuotaStore {
         onSummaryChange?(self.summary)
         if let historyRecorder {
             await historyRecorder(snaps)
+        }
+        // After recording, so this poll's reading is part of the trend.
+        if let readingsLoader {
+            let now = Date()
+            let readings = await readingsLoader(now.addingTimeInterval(-BurnRateForecast.defaultLookback))
+            var next: [VendorIdentifier: BurnRateForecast] = [:]
+            for snapshot in snaps {
+                next[snapshot.vendorId] = BurnRateForecast.binding(for: snapshot, readings: readings, now: now)
+            }
+            self.forecasts = next
         }
     }
 
