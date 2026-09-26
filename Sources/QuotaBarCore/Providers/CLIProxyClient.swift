@@ -85,20 +85,47 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
 
     public let fiveHour: Window?
     public let sevenDay: Window?
+    /// Model-scoped weekly windows. Only some plans report them, and they
+    /// arrive as `null` otherwise.
+    public let sevenDayOpus: Window?
+    public let sevenDaySonnet: Window?
 
-    public init(fiveHour: Window? = nil, sevenDay: Window? = nil) {
+    public init(
+        fiveHour: Window? = nil,
+        sevenDay: Window? = nil,
+        sevenDayOpus: Window? = nil,
+        sevenDaySonnet: Window? = nil
+    ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
+        self.sevenDayOpus = sevenDayOpus
+        self.sevenDaySonnet = sevenDaySonnet
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fiveHour = try container.decodeIfPresent(Window.self, forKey: .fiveHour)
+        sevenDay = try container.decodeIfPresent(Window.self, forKey: .sevenDay)
+        // The model-scoped windows are supplementary. A shape change there
+        // must not discard the 5-hour and weekly readings the row depends on.
+        sevenDayOpus = try? container.decodeIfPresent(Window.self, forKey: .sevenDayOpus)
+        sevenDaySonnet = try? container.decodeIfPresent(Window.self, forKey: .sevenDaySonnet)
     }
 
     enum CodingKeys: String, CodingKey {
         case fiveHour = "five_hour"
         case sevenDay = "seven_day"
+        case sevenDayOpus = "seven_day_opus"
+        case sevenDaySonnet = "seven_day_sonnet"
     }
 }
 
 /// Client for discovering CLIProxyAPI hubs and querying account usage via its management API.
 public enum CLIProxyClient {
+
+    /// Anthropic's OAuth usage endpoint. Reading it is free, unlike a
+    /// messages request, which spends the quota it reports on.
+    public static let claudeOAuthUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
     public static func base64url(string: String) -> String {
         Data(string.utf8).base64EncodedString()
@@ -277,7 +304,7 @@ public enum CLIProxyClient {
         let payload: [String: Any] = [
             "auth_index": claudeAccount.authIndex,
             "method": "GET",
-            "url": "https://api.anthropic.com/api/oauth/usage",
+            "url": claudeOAuthUsageURL,
             "header": [
                 "Authorization": "Bearer $TOKEN$",
                 "anthropic-beta": "oauth-2025-04-20"

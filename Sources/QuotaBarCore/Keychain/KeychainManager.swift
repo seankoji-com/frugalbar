@@ -697,7 +697,7 @@ extension CredentialStore {
     /// The subscription tier the Claude Code credential blob reports, e.g.
     /// "Max (5x)" or "Pro".
     ///
-    /// Anthropic's rate-limit headers carry usage but not the plan, so this is
+    /// Anthropic's usage endpoint carries usage but not the plan, so this is
     /// the only place the tier is actually published. Returns nil rather than a
     /// guess: an earlier revision hardcoded a per-vendor tier table and labelled
     /// every Claude user "Max x20", Pro subscribers included.
