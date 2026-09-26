@@ -1035,7 +1035,7 @@ struct ProviderHTTPTests {
             if request.url?.path == "/v0/management/api-call" {
                 #expect(request.httpMethod == "POST")
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
-                let bodyData = extractBody(from: request) ?? Data()
+                let bodyData = extractBody(from: request)
                 let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
                 #expect(json["auth_index"] as? String == "codex_idx_123")
                 #expect(json["url"] as? String == "https://chatgpt.com/backend-api/wham/usage")
