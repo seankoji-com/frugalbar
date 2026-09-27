@@ -852,59 +852,120 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
-    /// The OAuth beta rejects /v1/messages unless the request identifies
-    /// itself as Claude Code. Losing that system block silently turns every
-    /// valid token into "Rejected — check the key".
-    @Test("Claude identifies itself as Claude Code so the OAuth token is accepted")
-    func claudeSendsClaudeCodeSystemPrompt() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.10", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.20", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        _ = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+    /// The direct path used to send a one-token Haiku request every poll and
+    /// read the rate-limit headers, spending the quota it reported. It must
+    /// read the free usage endpoint instead, and never POST to /v1/messages.
+    @Test("Claude reads the OAuth usage endpoint directly without a model request")
+    func claudeDirectReadsUsageEndpoint() async throws {
+        let body = #"{"five_hour":{"utilization":10,"resets_at":"2026-09-15T06:59:59.000000+00:00"},"seven_day":{"utilization":20,"resets_at":"2026-09-19T00:00:00+00:00"}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
+        #expect(URLProtocolStub.requestCount == 1)
         let request = try #require(URLProtocolStub.capturedRequests.first)
-        #expect(request.httpMethod == "POST")
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://api.anthropic.com/api/oauth/usage")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer oauth-token")
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
-        let body = extractBody(from: request)
-        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(json["system"] as? String == "You are Claude Code, Anthropic's official CLI for Claude.")
+        #expect(snap.cliSource == "Claude OAuth usage endpoint")
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.row2?.primaryFraction == 0.20)
     }
 
-    /// The header has been observed as a fraction and as a percentage. Reading
-    /// a percentage as a fraction would report 42% usage as 4200% and get
-    /// discarded, so the provider must normalise rather than reject.
-    @Test("Claude accepts a percentage-scaled utilization header")
+    /// Utilization has been observed as a fraction and as a percentage.
+    /// Reading a percentage as a fraction would report 42% usage as 4200% and
+    /// get discarded, so the provider must normalise rather than reject.
+    @Test("Claude accepts percentage-scaled and fraction-scaled utilization")
     func claudeAcceptsPercentScale() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+        let body = #"{"five_hour":{"utilization":42,"resets_at":null},"seven_day":{"utilization":0.88,"resets_at":null}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
         #expect(snap.row1?.primaryFraction == 0.42)
         #expect(snap.row2?.primaryFraction == 0.88)
+        #expect(snap.status == .warning)
     }
 
     /// Badge and menu-bar urgency must be driven by the same window, or the
     /// icon goes red while the row still claims plenty of headroom.
     @Test("Claude badge reflects the fuller window, not just the weekly one")
     func claudeBadgeTracksWorstWindow() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.99", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.05", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+        let body = #"{"five_hour":{"utilization":99},"seven_day":{"utilization":5}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
         #expect(snap.status == .measured(.critical))
         #expect(snap.badgeText == "1% left")
     }
 
-    @Test("Claude parses real usage headers")
-    func claudeLiveTelemetryParsing() async throws {
-        let headers = ["anthropic-ratelimit-unified-5h-utilization": "0.42", "anthropic-ratelimit-unified-5h-reset": "1787400000", "anthropic-ratelimit-unified-7d-utilization": "0.88", "anthropic-ratelimit-unified-7d-reset": "1787800000"]
-        let snap = try await withStubbedHTTP({ _ in canned(body: "{}", headers: headers) }) {
+    /// A 200 whose body is not the usage shape must not render as health.
+    @Test("Claude direct path treats an undecodable body as a bad response")
+    func claudeDirectBadBody() async throws {
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(snap.consumptionFraction == nil)
+    }
 
-        #expect(snap.vendorId == .claude)
-        #expect(snap.row1?.primaryFraction == 0.42)
-        #expect(snap.row2?.primaryFraction == 0.88)
-        #expect(snap.status == .warning)
+    @Test("Claude direct path maps 401 to credential rejected")
+    func claudeDirect401() async throws {
+        let snap = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
+            try await ClaudeQuotaProvider(apiKey: "expired").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    /// A model-scoped weekly window caps one model, not the plan. Every bar in
+    /// a snapshot is read as plan-wide (exhaustion sorting, advice's worst
+    /// bar, the `displayBars` collapse), so a spent Opus window must not
+    /// become a bar: it would mark the row exhausted and hide the 5-hour
+    /// bucket while the badge still reads "80% left".
+    @Test("Claude keeps a spent Opus weekly window out of the plan-wide bars")
+    func claudeModelWeeklyWindowIsNotPlanWide() async throws {
+        let body = #"{"five_hour":{"utilization":5},"seven_day":{"utilization":20},"seven_day_opus":{"utilization":100}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row3 == nil)
+        #expect(snap.isQuotaExhausted == false)
+        #expect(snap.displayBars.map(\.label).contains("5H"))
+        let worst = snap.quotaBars.compactMap(\.primaryFraction).max()
+        #expect(worst == 0.20)
+        #expect(snap.status == .measured(.none))
+        #expect(snap.badgeText == "80% left")
+    }
+
+    /// One reshaped primary window must not discard the other, healthy one.
+    @Test("Claude keeps the weekly reading when the 5-hour window is malformed")
+    func claudeMalformedPrimaryWindow() async throws {
+        let body = #"{"five_hour":{"utilization":null},"seven_day":{"utilization":20}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row1 == nil)
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.status == .measured(.none))
+
+        let flipped = #"{"five_hour":{"utilization":10},"seven_day":"reshaped"}"#
+        let other = try await withStubbedHTTP({ _ in canned(body: flipped) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(other.row1?.primaryFraction == 0.10)
+        #expect(other.row2 == nil)
+    }
+
+    /// The model windows are supplementary: a null or reshaped one must not
+    /// throw away the 5-hour and weekly readings.
+    @Test("Claude ignores a null or malformed model window")
+    func claudeMalformedModelWindow() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"seven_day_opus":null,"seven_day_sonnet":{"utilization":"n/a"}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.row3 == nil)
     }
 
     /// When Claude CLI is routed through LiteLLM/CLIProxyAPI, the session consuming
@@ -1035,7 +1096,7 @@ struct ProviderHTTPTests {
             if request.url?.path == "/v0/management/api-call" {
                 #expect(request.httpMethod == "POST")
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer mgmt-secret-key")
-                let bodyData = extractBody(from: request) ?? Data()
+                let bodyData = extractBody(from: request)
                 let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
                 #expect(json["auth_index"] as? String == "codex_idx_123")
                 #expect(json["url"] as? String == "https://chatgpt.com/backend-api/wham/usage")

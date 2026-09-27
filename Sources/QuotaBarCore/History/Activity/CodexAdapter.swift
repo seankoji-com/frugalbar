@@ -1,6 +1,6 @@
 import Foundation
 
-/// Ingests CLI activity from OpenAI Codex (`~/.codex/sessions/`).
+/// Ingests CLI activity from OpenAI Codex (`$CODEX_HOME/sessions/`, default `~/.codex/sessions/`).
 ///
 /// CRITICAL INVARIANT:
 /// Codex reports cumulative session totals on every turn in `payload.info.total_token_usage`.
@@ -22,9 +22,24 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         } else if TestHost.isActive {
             self.baseURL = nil
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.baseURL = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+            self.baseURL = Self.defaultSessionsDirectory(
+                environment: ProcessInfo.processInfo.environment,
+                home: FileManager.default.homeDirectoryForCurrentUser,
+                fileExists: { FileManager.default.fileExists(atPath: $0.path) }
+            )
         }
+    }
+
+    /// `$CODEX_HOME/sessions` when that directory exists, else
+    /// `~/.codex/sessions` (see `CLIConfigLocations.codexRoot`).
+    static func defaultSessionsDirectory(
+        environment: [String: String],
+        home: URL,
+        fileExists: (URL) -> Bool
+    ) -> URL {
+        CLIConfigLocations.codexRoot(
+            containing: "sessions", environment: environment, home: home, fileExists: fileExists
+        ).appendingPathComponent("sessions", isDirectory: true)
     }
 
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {

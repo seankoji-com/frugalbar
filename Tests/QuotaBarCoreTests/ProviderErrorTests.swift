@@ -326,7 +326,7 @@ private enum GeminiStub {
         return URLSession(configuration: config)
     }
 
-    final class StubProtocol: URLProtocol, @unchecked Sendable {
+    final class StubProtocol: URLProtocol {
         nonisolated(unsafe) static var assist = ""
         nonisolated(unsafe) static var summary = ""
 

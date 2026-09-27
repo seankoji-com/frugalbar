@@ -103,15 +103,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         applyStatusItemPresentation()
 
-        Task {
+        // Capture `store` rather than `self`: an implicit strong `self` here
+        // makes the handler's `[weak self]` meaningless (and is an error under
+        // Swift 6.4 with warnings-as-errors).
+        Task { [weak self, store] in
             await store.load()
             await BackgroundScheduler.shared.start(interval: 120)
             // One handler for both jobs: adding a second would make the
             // recovery check race the refresh it depends on for no reason.
-            schedulerToken = await BackgroundScheduler.shared.addHandler { [weak self] in
+            let token = await BackgroundScheduler.shared.addHandler { [weak self] in
                 await self?.store.load()
                 await self?.checkForQuotaRecovery()
             }
+            self?.schedulerToken = token
         }
     }
 

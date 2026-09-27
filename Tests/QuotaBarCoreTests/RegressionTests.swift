@@ -356,7 +356,7 @@ private enum GeminiHarness {
         }
     }
 
-    final class Proto: URLProtocol, @unchecked Sendable {
+    final class Proto: URLProtocol {
         nonisolated(unsafe) static var summary = ""
         nonisolated(unsafe) static var assist = ""
         nonisolated(unsafe) static var assistStatus = 200

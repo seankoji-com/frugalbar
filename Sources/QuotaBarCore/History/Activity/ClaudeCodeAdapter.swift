@@ -1,6 +1,7 @@
 import Foundation
 
-/// Ingests CLI activity from Claude Code (`~/.claude/projects/`).
+/// Ingests CLI activity from Claude Code's `projects/` directory, located by
+/// `defaultProjectsDirectory(environment:home:fileExists:)`.
 /// Deduplicates records by `message.id` (or `requestId`) to avoid double-counting.
 public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
     public let sourceIdentifier: String = "claude_code"
@@ -12,9 +13,25 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         } else if TestHost.isActive {
             self.baseURL = nil
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.baseURL = home.appendingPathComponent(".claude/projects", isDirectory: true)
+            self.baseURL = Self.defaultProjectsDirectory(
+                environment: ProcessInfo.processInfo.environment,
+                home: FileManager.default.homeDirectoryForCurrentUser,
+                fileExists: { FileManager.default.fileExists(atPath: $0.path) }
+            )
         }
+    }
+
+    /// Where Claude Code keeps session transcripts: the `projects` directory
+    /// under the first of `$CLAUDE_CONFIG_DIR`, `~/.config/claude` and
+    /// `~/.claude` that has one (see `CLIConfigLocations.claudeRoot`).
+    static func defaultProjectsDirectory(
+        environment: [String: String],
+        home: URL,
+        fileExists: (URL) -> Bool
+    ) -> URL {
+        CLIConfigLocations.claudeRoot(
+            containing: "projects", environment: environment, home: home, fileExists: fileExists
+        ).appendingPathComponent("projects", isDirectory: true)
     }
 
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {

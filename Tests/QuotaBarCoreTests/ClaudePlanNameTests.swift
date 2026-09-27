@@ -3,7 +3,7 @@ import Foundation
 @testable import QuotaBarCore
 
 /// The plan tier is published in the Claude Code credential blob and nowhere
-/// else — Anthropic's rate-limit headers carry usage but not the subscription.
+/// else — Anthropic's usage endpoint carries usage but not the subscription.
 @Suite("Claude plan name")
 struct ClaudePlanNameTests {
 
