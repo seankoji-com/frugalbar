@@ -21,25 +21,17 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         }
     }
 
-    /// Where Claude Code keeps session transcripts: `$CLAUDE_CONFIG_DIR` when
-    /// set, else `~/.config/claude` if it has a `projects` directory (newer
-    /// installs), else the legacy `~/.claude`.
-    ///
-    /// An app launched from Finder or at login does not inherit shell
-    /// variables, so the environment only applies when started from a shell.
+    /// Where Claude Code keeps session transcripts: the `projects` directory
+    /// under the first of `$CLAUDE_CONFIG_DIR`, `~/.config/claude` and
+    /// `~/.claude` that has one (see `CLIConfigLocations.claudeRoot`).
     static func defaultProjectsDirectory(
         environment: [String: String],
         home: URL,
         fileExists: (URL) -> Bool
     ) -> URL {
-        if let configured = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespaces),
-           !configured.isEmpty {
-            let root = URL(fileURLWithPath: (configured as NSString).expandingTildeInPath, isDirectory: true)
-            return root.appendingPathComponent("projects", isDirectory: true)
-        }
-        let xdg = home.appendingPathComponent(".config/claude/projects", isDirectory: true)
-        if fileExists(xdg) { return xdg }
-        return home.appendingPathComponent(".claude/projects", isDirectory: true)
+        CLIConfigLocations.claudeRoot(
+            containing: "projects", environment: environment, home: home, fileExists: fileExists
+        ).appendingPathComponent("projects", isDirectory: true)
     }
 
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {

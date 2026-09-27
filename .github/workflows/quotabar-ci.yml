@@ -144,11 +144,31 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Ranked by each bundle's own version, not its directory name: the
+      # image default is often plain Xcode.app, which a name sort of
+      # Xcode_*.app never sees. An empty result fails here with the cause
+      # rather than as a confusing xcode-select error that reads like a
+      # toolchain regression.
       - name: Select newest installed Xcode
         run: |
-          latest="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
+          shopt -s nullglob
+          latest="$(
+            for app in /Applications/Xcode.app /Applications/Xcode_*.app; do
+              # PlistBuddy prints "Doesn't Exist" to stdout for a missing file.
+              [ -f "$app/Contents/Info.plist" ] || continue
+              version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+              if [ -n "$version" ]; then printf '%s %s\n' "$version" "$app"; fi
+            done | sort -V | tail -1 | cut -d' ' -f2-
+          )"
+          if [ -z "$latest" ]; then
+            echo "::error::No Xcode.app or Xcode_*.app with a readable version under /Applications"
+            ls -d /Applications/Xcode* || true
+            exit 1
+          fi
           sudo xcode-select -s "$latest/Contents/Developer"
+          echo "Selected $latest"
           xcode-select -p
+          xcodebuild -version
           swift --version
 
       - name: Build (warnings are errors)

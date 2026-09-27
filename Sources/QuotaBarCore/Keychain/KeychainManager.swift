@@ -449,8 +449,8 @@ public enum CredentialStore {
     }
 
     private static func discoverClaudeBlob() -> Data? {
-        let fileURL = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".claude/.credentials.json")
+        let fileURL = CLIConfigLocations.liveClaudeRoot(containing: ".credentials.json")
+            .appendingPathComponent(".credentials.json")
         if let fileData = try? Data(contentsOf: fileURL), !fileData.isEmpty {
             return fileData
         }
@@ -513,8 +513,8 @@ public enum CredentialStore {
             return nil
 
         case .openai:
-            let url = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".codex/auth.json")
+            let url = CLIConfigLocations.liveCodexRoot(containing: "auth.json")
+                .appendingPathComponent("auth.json")
             guard let data = try? Data(contentsOf: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tokens = json["tokens"] as? [String: Any],
@@ -528,7 +528,8 @@ public enum CredentialStore {
             // not a credential and must never render a made-up usage value.
             //
             // On macOS the CLI keeps this blob in the login Keychain, not on
-            // disk; ~/.claude/.credentials.json is the Linux (and older
+            // disk; .credentials.json under the Claude config root (see
+            // CLIConfigLocations) is the Linux (and older
             // install) location. Reading another app's Keychain item directly via
             // SecItemCopyMatching prompts the user every time from an unbundled
             // process; using /usr/bin/security and caching the blob in memory
@@ -837,8 +838,8 @@ extension CredentialStore {
         guard isCLIDiscoveryEnabled else { return nil }
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                let url = URL(fileURLWithPath: NSHomeDirectory())
-                    .appendingPathComponent(".codex/auth.json")
+                let url = CLIConfigLocations.liveCodexRoot(containing: "auth.json")
+                    .appendingPathComponent("auth.json")
                 let accountID = (try? Data(contentsOf: url))
                     .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                     .flatMap { $0["tokens"] as? [String: Any] }

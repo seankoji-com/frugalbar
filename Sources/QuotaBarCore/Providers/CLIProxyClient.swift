@@ -104,10 +104,11 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        fiveHour = try container.decodeIfPresent(Window.self, forKey: .fiveHour)
-        sevenDay = try container.decodeIfPresent(Window.self, forKey: .sevenDay)
-        // The model-scoped windows are supplementary. A shape change there
-        // must not discard the 5-hour and weekly readings the row depends on.
+        // Each window decodes independently: one reshaped window must not
+        // discard the others. `makeSnapshot` reports a bad response only when
+        // neither primary window is usable.
+        fiveHour = try? container.decodeIfPresent(Window.self, forKey: .fiveHour)
+        sevenDay = try? container.decodeIfPresent(Window.self, forKey: .sevenDay)
         sevenDayOpus = try? container.decodeIfPresent(Window.self, forKey: .sevenDayOpus)
         sevenDaySonnet = try? container.decodeIfPresent(Window.self, forKey: .sevenDaySonnet)
     }

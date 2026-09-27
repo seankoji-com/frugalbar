@@ -916,18 +916,43 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
-    /// The model-scoped weekly window is shown as its own row but describes
-    /// one model, so it must not drive the plan-wide badge or urgency.
-    @Test("Claude shows the fuller model weekly window without letting it drive urgency")
-    func claudeModelWeeklyWindow() async throws {
-        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"seven_day_opus":{"utilization":95,"resets_at":"2026-09-19T00:00:00+00:00"},"seven_day_sonnet":{"utilization":30}}"#
+    /// A model-scoped weekly window caps one model, not the plan. Every bar in
+    /// a snapshot is read as plan-wide (exhaustion sorting, advice's worst
+    /// bar, the `displayBars` collapse), so a spent Opus window must not
+    /// become a bar: it would mark the row exhausted and hide the 5-hour
+    /// bucket while the badge still reads "80% left".
+    @Test("Claude keeps a spent Opus weekly window out of the plan-wide bars")
+    func claudeModelWeeklyWindowIsNotPlanWide() async throws {
+        let body = #"{"five_hour":{"utilization":5},"seven_day":{"utilization":20},"seven_day_opus":{"utilization":100}}"#
         let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
-        #expect(snap.row3?.label == "OP")
-        #expect(snap.row3?.primaryFraction == 0.95)
+        #expect(snap.row3 == nil)
+        #expect(snap.isQuotaExhausted == false)
+        #expect(snap.displayBars.map(\.label).contains("5H"))
+        let worst = snap.quotaBars.compactMap(\.primaryFraction).max()
+        #expect(worst == 0.20)
         #expect(snap.status == .measured(.none))
         #expect(snap.badgeText == "80% left")
+    }
+
+    /// One reshaped primary window must not discard the other, healthy one.
+    @Test("Claude keeps the weekly reading when the 5-hour window is malformed")
+    func claudeMalformedPrimaryWindow() async throws {
+        let body = #"{"five_hour":{"utilization":null},"seven_day":{"utilization":20}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.row1 == nil)
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.status == .measured(.none))
+
+        let flipped = #"{"five_hour":{"utilization":10},"seven_day":"reshaped"}"#
+        let other = try await withStubbedHTTP({ _ in canned(body: flipped) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(other.row1?.primaryFraction == 0.10)
+        #expect(other.row2 == nil)
     }
 
     /// The model windows are supplementary: a null or reshaped one must not

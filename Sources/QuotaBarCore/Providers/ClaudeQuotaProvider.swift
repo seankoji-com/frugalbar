@@ -68,8 +68,13 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
             auth: .bearer(token)
         )
-        if let reason = QuotaHTTP.failureReason(for: response.statusCode) { return unavailable(reason) }
+        if let reason = QuotaHTTP.failureReason(for: response.statusCode) {
+            NSLog("frugalbar: Claude OAuth usage request returned %ld (%@)",
+                  response.statusCode, String(describing: reason))
+            return unavailable(reason)
+        }
         guard let usage = try? JSONDecoder().decode(ClaudeOAuthUsageResponse.self, from: data) else {
+            NSLog("frugalbar: Claude OAuth usage body failed to decode (%ld bytes)", data.count)
             return unavailable(.badResponse)
         }
         // The plan is published in the credential blob, not in this payload.
@@ -102,9 +107,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
 
         let row1 = fiveHourReading.map { row($0, label: "5H", window: QuotaWindow.fiveHours, now: now) }
         let row2 = weeklyReading.map { row($0, label: "WK", window: QuotaWindow.week, now: now) }
-        // A model-scoped weekly cap only blocks that model, so it is shown but
-        // does not drive the badge or urgency, which describe the whole plan.
-        let row3 = modelWeeklyRow(usage, now: now)
+        // The Opus/Sonnet weekly windows are decoded but deliberately not
+        // surfaced. A model-scoped cap only blocks that model, yet every bar
+        // in a snapshot is read as plan-wide: exhaustion sorting, advice's
+        // worst bar and `displayBars`' collapse would all treat a spent Opus
+        // window as the whole plan being spent. Showing them needs a
+        // per-model scope on `DualBarMetrics` that those consumers skip.
 
         let remainingPercent = max(0, Int(((1 - worst) * 100).rounded()))
         let badgeText = "\(remainingPercent)% left"
@@ -117,7 +125,6 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             auxiliaryInfo: "Live Claude subscription quota",
             row1: row1,
             row2: row2,
-            row3: row3,
             badgeText: badgeText,
             planName: planName, cliSource: cliSource
         )
@@ -131,16 +138,6 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         let used = window.utilization > 1 ? window.utilization / 100 : window.utilization
         guard (0...1).contains(used) else { return nil }
         return Reading(used: used, reset: CLIProxyClient.parseResetDate(window.resetsAt))
-    }
-
-    /// The fuller of the Opus and Sonnet weekly windows, when either is reported.
-    private func modelWeeklyRow(_ usage: ClaudeOAuthUsageResponse, now: Date) -> DualBarMetrics? {
-        let candidates = [
-            usage.sevenDayOpus.flatMap(Self.reading).map { ($0, "OP") },
-            usage.sevenDaySonnet.flatMap(Self.reading).map { ($0, "SN") },
-        ].compactMap { $0 }
-        guard let (reading, label) = candidates.max(by: { $0.0.used < $1.0.used }) else { return nil }
-        return row(reading, label: label, window: QuotaWindow.week, now: now)
     }
 
     /// `window` is the length Anthropic meters this reading over. It turns the
