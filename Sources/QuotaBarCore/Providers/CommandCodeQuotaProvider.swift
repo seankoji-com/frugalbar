@@ -94,11 +94,13 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         let fiveHour = row(windows?.fiveHour, label: "5H", length: QuotaWindow.fiveHours, now: now)
         let weekly = row(windows?.weekly, label: "WK", length: QuotaWindow.week, now: now)
         let credits = creditRow(response.credits)
+        let limited = windows?.limited?.value == true
 
         // Neither a window nor a credit bucket is nothing we can report. A
         // structurally valid response carrying no figure must not render as a
-        // healthy, fully-available provider.
-        guard fiveHour != nil || weekly != nil || credits != nil else {
+        // healthy, fully-available provider. The vendor's explicit blocked
+        // signal is itself a measured state, even without a gauge row.
+        guard fiveHour != nil || weekly != nil || credits != nil || limited else {
             return provider.unavailable(.badResponse)
         }
 
@@ -107,8 +109,6 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         // `limited` is the vendor saying a request would be declined by a
         // window cap right now — that is quota pressure, not an availability
         // problem, so it is a real critical reading.
-        let limited = windows?.limited?.value == true
-
         let urgency: Urgency
         if limited { urgency = .critical }
         else if let worst, worst >= 0.95 { urgency = .critical }

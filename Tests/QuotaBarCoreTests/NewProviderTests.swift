@@ -924,6 +924,15 @@ struct CommandCodeQuotaProviderTests {
         #expect(try snapshot(Self.body(limited: "true")).badgeText == "Blocked")
     }
 
+    @Test("a blocked signal is preserved without any usage or credit rows")
+    func limitedWithoutRows() throws {
+        let snap = try snapshot(#"{"windowLimits":{"limited":true}}"#)
+
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "Blocked")
+        #expect(snap.row1 == nil && snap.row2 == nil && snap.row3 == nil)
+    }
+
     @Test("a window with no positive cap draws no bar")
     func zeroCap() throws {
         let snap = try snapshot(Self.body(fiveHourCap: "0"))
