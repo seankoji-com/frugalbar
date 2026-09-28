@@ -1033,7 +1033,9 @@ struct CommandCodeQuotaProviderTests {
         #expect(CommandCodeQuotaProvider.planDisplayName(nil) == nil)
         #expect(CommandCodeQuotaProvider.planDisplayName("  ") == nil)
         #expect(try snapshot(Self.body(planId: "mystery-tier")).planName == nil)
+        #expect(try snapshot(Self.body(planId: "mystery-tier")).metric == .subscription(tierName: nil, renewalDate: nil))
         #expect(try snapshot(Self.body(planId: "individual-go")).planName == "Go")
+        #expect(try snapshot(Self.body(planId: "individual-go")).metric == .subscription(tierName: "Go", renewalDate: nil))
     }
 
     // MARK: HTTP plumbing

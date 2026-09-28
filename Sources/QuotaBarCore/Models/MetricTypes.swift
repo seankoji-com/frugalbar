@@ -78,7 +78,7 @@ public enum MetricType: Sendable, Equatable {
     case percentage(usedFraction: Double, displayDetails: String?)
     case count(remaining: Int, limit: Int, unitName: String)
     case currency(balance: Decimal, limit: Decimal?, spent: Decimal?, currencyCode: String)
-    case subscription(tierName: String, renewalDate: Date?)
+    case subscription(tierName: String?, renewalDate: Date?)
 }
 
 // MARK: - Provider health
@@ -696,4 +696,3 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         }
     }
 }
-

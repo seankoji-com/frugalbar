@@ -128,7 +128,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,
-            metric: .subscription(tierName: planName ?? provider.displayName, renewalDate: nil),
+            metric: .subscription(tierName: planName, renewalDate: nil),
             status: .measured(urgency),
             resetsAt: weekly?.resetsAt ?? fiveHour?.resetsAt,
             lastUpdated: now,
@@ -303,13 +303,15 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         /// them — in which case there is no balance to report, rather than a
         /// zero to infer.
         var remainingCredits: Double? {
-            guard monthlyCredits?.value != nil
-                || purchasedCredits?.value != nil
-                || freeCredits?.value != nil
+            let monthly = monthlyCredits?.value
+            let purchased = purchasedCredits?.value
+            let free = freeCredits?.value
+            guard monthly != nil || purchased != nil || free != nil
             else { return nil }
-            return max(monthlyCredits?.value ?? 0, 0)
-                + max(purchasedCredits?.value ?? 0, 0)
-                + max(freeCredits?.value ?? 0, 0)
+            let monthlyBalance: Double = max(monthly ?? 0, 0)
+            let purchasedBalance: Double = max(purchased ?? 0, 0)
+            let freeBalance: Double = max(free ?? 0, 0)
+            return monthlyBalance + purchasedBalance + freeBalance
         }
     }
 

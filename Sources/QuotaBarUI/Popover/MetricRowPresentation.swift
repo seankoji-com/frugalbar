@@ -64,7 +64,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.valueLabel = Self.value(for: snapshot.metric)
         self.resetLabel = ResetCountdownBadge.format(snapshot.resetsAt, now: now)
 
-        var parts = [snapshot.displayName, Self.spoken(for: snapshot.metric)]
+        var parts = [snapshot.displayName, Self.spoken(for: snapshot.metric)].filter { !$0.isEmpty }
         if snapshot.isFullyBlockedWithoutReading {
             // The bars' own language. A screen reader must hear "blocked", not
             // "critically low" — the vendor cut the account off; it is not
@@ -115,7 +115,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
                 currency(balance, code)
             }
         case .subscription(let tierName, _):
-            tierName
+            tierName ?? ""
         }
     }
 
@@ -134,7 +134,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
                 "\(currency(balance, code)) balance"
             }
         case .subscription(let tier, _):
-            tier
+            tier ?? ""
         }
     }
 
