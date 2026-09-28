@@ -7,6 +7,8 @@ struct MetricRowView: View {
 
     let snapshot: QuotaSnapshot
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
+    /// Recent-pace forecast from history, when there is enough of it.
+    var forecast: BurnRateForecast? = nil
 
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -73,6 +75,9 @@ struct MetricRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             row
+            if let forecastText {
+                forecastRow(forecastText)
+            }
             if hasOpenRouterBadges {
                 openRouterBadgesRow
             } else if showOpenRouterCatalogPlaceholder {
@@ -105,6 +110,9 @@ struct MetricRowView: View {
     /// styling alone is not an accessible status channel).
     private var combinedAccessibilityLabel: String {
         var parts = [p.accessibilityLabel]
+        if let forecastText {
+            parts.append(forecastText)
+        }
         if let free = snapshot.freeTierModelBadge {
             parts.append("Free tier model: \(free)")
         }
@@ -117,6 +125,34 @@ struct MetricRowView: View {
             parts.append(catalogUnavailableText)
         }
         return parts.joined(separator: ". ")
+    }
+
+    /// Only for a provider we are currently reading: a forecast under an
+    /// unavailable row would describe usage we can no longer see.
+    private var forecastText: String? {
+        guard snapshot.status.confidence == .measured else { return nil }
+        return forecast?.summary(now: Date())
+    }
+
+    /// The pace forecast gets its own full-width line; the 324pt row has no
+    /// room beside the bars. The hourglass is the non-colour channel.
+    private func forecastRow(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: forecastIsUrgent ? "hourglass.bottomhalf.filled" : "hourglass")
+                .font(Theme.Typography.subtitle)
+            Text(text)
+                .font(Theme.Typography.subtitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(forecastIsUrgent ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.75))
+    }
+
+    /// Limit projected inside the reset window at the recent pace.
+    private var forecastIsUrgent: Bool {
+        if case .limitAt = forecast?.outcome { return true }
+        return false
     }
 
     /// One badge per line, each free to use the full card width.

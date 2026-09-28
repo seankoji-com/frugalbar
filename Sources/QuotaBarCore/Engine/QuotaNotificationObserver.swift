@@ -1,7 +1,18 @@
 import Foundation
 
+/// Everything that changed between two polls and might merit a notification.
+public struct QuotaTransitions: Sendable, Equatable {
+    public let recoveries: [QuotaRecoveryEvent]
+    public let resets: [QuotaResetEvent]
+
+    public init(recoveries: [QuotaRecoveryEvent], resets: [QuotaResetEvent]) {
+        self.recoveries = recoveries
+        self.resets = resets
+    }
+}
+
 /// Tracks the last-seen snapshot per vendor across polls and surfaces
-/// critical→recovered transitions as they happen.
+/// critical→recovered transitions and window resets as they happen.
 ///
 /// Pure state-keeping over `[QuotaSnapshot]` — no `UserNotifications` or
 /// AppKit import. The actual `osascript` delivery call lives in
@@ -20,12 +31,21 @@ public actor QuotaNotificationObserver {
     /// so the stored "previous" state stays current even while the feature is
     /// off — only delivery is gated by the caller's toggle check.
     public func observe(current: [QuotaSnapshot]) -> [QuotaRecoveryEvent] {
+        observeTransitions(current: current, now: Date()).recoveries
+    }
+
+    /// Same bookkeeping as `observe(current:)`, returning resets as well.
+    /// `now` decides whether a previously reported reset time has passed.
+    public func observeTransitions(current: [QuotaSnapshot], now: Date) -> QuotaTransitions {
         var currentByVendor: [VendorIdentifier: QuotaSnapshot] = [:]
         for snapshot in current {
             currentByVendor[snapshot.vendorId] = snapshot
         }
-        let events = QuotaTransitionDetector.detect(previous: previous, current: currentByVendor)
+        let transitions = QuotaTransitions(
+            recoveries: QuotaTransitionDetector.detect(previous: previous, current: currentByVendor),
+            resets: QuotaResetDetector.detect(previous: previous, current: currentByVendor, now: now)
+        )
         previous = currentByVendor
-        return events
+        return transitions
     }
 }

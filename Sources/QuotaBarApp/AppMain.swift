@@ -47,6 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         NSLog("frugalbar: activity ingestion failed: \(error)")
                     }
                 }
+            },
+            readingsLoader: { since in
+                do {
+                    return try await hStore.fetchReadings(since: since)
+                } catch {
+                    NSLog("frugalbar: failed to read quota history for forecast: \(error)")
+                    return []
+                }
             }
         )
         super.init()
@@ -113,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // recovery check race the refresh it depends on for no reason.
             let token = await BackgroundScheduler.shared.addHandler { [weak self] in
                 await self?.store.load()
-                await self?.checkForQuotaRecovery()
+                await self?.checkForQuotaTransitions()
             }
             self?.schedulerToken = token
         }
@@ -121,28 +129,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Diffs the latest snapshots against the previous poll and delivers a
     /// notification for any critical→recovered transitions, when the user
-    /// has opted in.
+    /// has opted in, and for window resets on providers the user opted in.
     ///
-    /// `observe` runs on every poll regardless of the toggle, so the
-    /// observer's "previous" state stays current even while notifications are
-    /// off — only delivery is gated below.
-    private func checkForQuotaRecovery() async {
-        let events = await notificationObserver.observe(current: store.snapshots)
-        guard CredentialStore.isNotificationsEnabled, !events.isEmpty else { return }
-        deliverRecoveryNotification(for: events)
+    /// `observeTransitions` runs on every poll regardless of the toggles, so
+    /// the observer's "previous" state stays current even while notifications
+    /// are off — only delivery is gated below.
+    private func checkForQuotaTransitions() async {
+        let transitions = await notificationObserver.observeTransitions(current: store.snapshots, now: Date())
+        if CredentialStore.isNotificationsEnabled, !transitions.recoveries.isEmpty {
+            deliverRecoveryNotification(for: transitions.recoveries)
+        }
+        let optedIn = CredentialStore.resetAlertVendors
+        let resets = transitions.resets.filter { optedIn.contains($0.vendorId) }
+        if !resets.isEmpty {
+            deliverResetNotification(for: resets)
+        }
     }
 
-    /// Posts one `display notification` via `osascript` for the whole batch.
-    ///
-    /// A poll can surface more than one vendor recovering at once; one
-    /// `Process` per event would fire a burst of separate system banners for
-    /// what is, from the user's point of view, a single poll result, so
-    /// multiple events are consolidated into one notification.
-    ///
-    /// `UNUserNotificationCenter` is not an option: this app ships as a bare
-    /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
-    /// nil and `UNUserNotificationCenter.current()` crashes the process. This
-    /// mechanism needs no bundle identity and no authorization request.
     private func deliverRecoveryNotification(for events: [QuotaRecoveryEvent]) {
         let title: String
         let body: String
@@ -154,6 +157,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let names = events.map(\.displayName).joined(separator: ", ")
             body = "\(names) have headroom again."
         }
+        deliverNotification(title: title, body: body)
+    }
+
+    /// One banner per poll, however many windows reset in it.
+    private func deliverResetNotification(for events: [QuotaResetEvent]) {
+        let title: String
+        let body: String
+        if events.count == 1, let event = events.first {
+            title = "\(event.displayName) \(event.barLabel) window reset"
+            body = "\(event.displayName)'s \(event.barLabel) allowance has started a new window."
+        } else {
+            title = "Quota windows reset"
+            let names = events.map { "\($0.displayName) \($0.barLabel)" }.joined(separator: ", ")
+            body = "New windows started: \(names)."
+        }
+        deliverNotification(title: title, body: body)
+    }
+
+    /// Posts one `display notification` via `osascript`.
+    ///
+    /// A poll can surface more than one vendor recovering at once; one
+    /// `Process` per event would fire a burst of separate system banners for
+    /// what is, from the user's point of view, a single poll result, so
+    /// callers consolidate multiple events into one notification.
+    ///
+    /// `UNUserNotificationCenter` is not an option: this app ships as a bare
+    /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
+    /// nil and `UNUserNotificationCenter.current()` crashes the process. This
+    /// mechanism needs no bundle identity and no authorization request.
+    private func deliverNotification(title: String, body: String) {
         let script = "display notification \"\(Self.escapeForAppleScript(body))\" with title \"\(Self.escapeForAppleScript(title))\""
 
         let task = Process()
@@ -179,12 +212,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let stderrText = String(data: stderrData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            NSLog("frugalbar: osascript exited with status \(process.terminationStatus) delivering quota-recovery notification: \(stderrText)")
+            NSLog("frugalbar: osascript exited with status \(process.terminationStatus) delivering notification: \(stderrText)")
         }
         do {
             try task.run()
         } catch {
-            NSLog("frugalbar: failed to launch osascript for quota-recovery notification: \(error)")
+            NSLog("frugalbar: failed to launch osascript for notification: \(error)")
         }
     }
 

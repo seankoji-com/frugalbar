@@ -67,8 +67,23 @@ public struct SettingsView: View {
     // preference file whatever the executable happens to be named.
     @AppStorage(CredentialStore.notificationsEnabledDefaultsKey, store: CredentialStore.preferences)
     private var notificationsEnabled = false
+    /// Read once from the shared suite; each toggle writes straight back.
+    @State private var resetAlertVendors: Set<VendorIdentifier> = CredentialStore.resetAlertVendors
 
     public init() {}
+
+    /// OpenRouter meters money, not a window, so it never resets.
+    private static let resetAlertCandidates = VendorIdentifier.allCases.filter { $0 != .openrouter }
+
+    private func resetAlertBinding(for vendor: VendorIdentifier) -> Binding<Bool> {
+        Binding(
+            get: { resetAlertVendors.contains(vendor) },
+            set: { isOn in
+                if isOn { resetAlertVendors.insert(vendor) } else { resetAlertVendors.remove(vendor) }
+                CredentialStore.resetAlertVendors = resetAlertVendors
+            }
+        )
+    }
 
     public var body: some View {
         TabView(selection: $selectedTab) {
@@ -366,6 +381,21 @@ public struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Quota-recovery notifications")
+            }
+
+            Section {
+                ForEach(Self.resetAlertCandidates, id: \.self) { vendor in
+                    Toggle(vendor.displayName, isOn: resetAlertBinding(for: vendor))
+                }
+                Text("""
+                     Posts a notification when a provider's quota window \
+                     rolls over, judged from the reset time the provider \
+                     itself reports. Off for every provider by default.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Reset alerts")
             }
         }
         .formStyle(.grouped)
