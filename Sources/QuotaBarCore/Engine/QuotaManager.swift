@@ -60,6 +60,7 @@ public actor QuotaManager {
             GrokQuotaProvider(),
             KiroQuotaProvider(),
             DevPassQuotaProvider(),
+            CommandCodeQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ]
@@ -78,6 +79,7 @@ public actor QuotaManager {
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode,
         .openrouter, .grok, .kiro, .devpass,
+        .commandcode,
         .githubRest, .githubGraphql,
     ]
 

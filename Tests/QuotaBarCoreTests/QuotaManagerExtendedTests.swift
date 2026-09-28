@@ -248,8 +248,9 @@ struct QuotaManagerExtendedTests {
         #expect(sorted[6].vendorId == .grok)
         #expect(sorted[7].vendorId == .kiro)
         #expect(sorted[8].vendorId == .devpass)
-        #expect(sorted[9].vendorId == .githubRest)
-        #expect(sorted[10].vendorId == .githubGraphql)
+        #expect(sorted[9].vendorId == .commandcode)
+        #expect(sorted[10].vendorId == .githubRest)
+        #expect(sorted[11].vendorId == .githubGraphql)
 
     }
 
