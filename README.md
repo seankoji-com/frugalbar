@@ -108,7 +108,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **Grok** | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI's token | Live gauge: percentage of the plan's credit allowance used, plus the billing period xAI names (weekly or monthly) and its reset. On-demand spend appears as a second bar once enabled |
 | **Kiro** | `POST https://codewhisperer.us-east-1.amazonaws.com/` (`AmazonCodeWhispererService.GetUsageLimits`) with the Kiro CLI's token | Live gauge: plan credits used against the monthly allowance with reset date, plus separate bars for bonus credits (with expiry) and for overage once the account has it switched on |
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
-| **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the remaining credit balance. Command Code publishes no monthly allowance, so the balance is shown as text and no monthly percentage is drawn |
+| **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan |
 
 ### Caveats worth knowing
 

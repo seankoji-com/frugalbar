@@ -761,12 +761,14 @@ struct CommandCodeQuotaProviderTests {
     private static let now = Date(timeIntervalSince1970: 1_767_225_600)
 
     /// The credits body as `cmd`'s `/usage` reads it. Every field is a
-    /// parameter so a test can move one thing at a time.
+    /// parameter so a test can move one thing at a time. The default balance is
+    /// 60 of Pro's documented $80, i.e. 25% used — the same as either window,
+    /// so no test has to reason about two different numbers at once.
     private static func body(
         fiveHourUsed: String = "1.25", fiveHourCap: String = "5",
         weeklyUsed: String = "5", weeklyCap: String = "20",
         limited: String = "false", planId: String = "individual-pro",
-        monthly: String = "12.5", purchased: String = "4", free: String = "0.5",
+        monthly: String = "60", purchased: String = "0", free: String = "0",
         fiveHourReset: String = "1767243600000", weeklyReset: String = "1767830400000"
     ) -> String {
         """
@@ -838,21 +840,70 @@ struct CommandCodeQuotaProviderTests {
         #expect(snap.resetsAt == Date(timeIntervalSince1970: 1_767_830_400))
     }
 
-    /// The whole reason this provider refuses a plan→allowance table. The API
-    /// publishes the remaining balance but not the allowance, so the balance is
-    /// text and no fraction is invented. If someone later "improves" this by
-    /// hardcoding a denominator, this test is what must stop them.
-    @Test("the credit balance is shown as text, never as an invented percentage")
-    func creditRowHasNoFabricatedDenominator() throws {
+    /// The credit gauge's denominator is the allowance Command Code publishes,
+    /// not one we chose. Its numerator is the plan pool actually drawn down.
+    @Test("the credit gauge uses the plan allowance Command Code publishes")
+    func creditGaugeUsesPublishedAllowance() throws {
         let credits = try #require(try snapshot(Self.body()).row3)
 
         #expect(credits.label == "CR")
+        // 60 left of Pro's documented $80 → 20 used.
+        #expect(abs(try #require(credits.primaryFraction) - 0.25) < 0.0001)
+        #expect(credits.usedText?.contains("20.00") == true)
+        #expect(credits.usedText?.contains("80.00") == true)
+    }
+
+    @Test("documented plan allowances")
+    func planAllowances() {
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-go") == 10)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-goat") == 70)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-pro") == 80)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-pro-v1") == 80)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-max") == 150)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-ultra") == 300)
+        #expect(CommandCodeQuotaProvider.planAllowance("Teams_Pro") == 40)
+        #expect(CommandCodeQuotaProvider.planAllowance("mystery-tier") == nil)
+        #expect(CommandCodeQuotaProvider.planAllowance(nil) == nil)
+    }
+
+    @Test("a half-spent GOAT plan reads 50% from its $70 allowance")
+    func goatAllowance() throws {
+        let credits = try #require(
+            try snapshot(Self.body(planId: "individual-goat", monthly: "35")).row3)
+        #expect(abs(try #require(credits.primaryFraction) - 0.5) < 0.0001)
+    }
+
+    /// The rule this provider must never break: an id we cannot price gets the
+    /// balance and nothing else. If someone later widens the table carelessly,
+    /// this is the test that has to stay honest.
+    @Test("an unknown plan gets no gauge, only the balance — never a guessed denominator")
+    func unknownPlanHasNoGauge() throws {
+        let credits = try #require(
+            try snapshot(Self.body(planId: "mystery-tier", monthly: "12.5")).row3)
+
         #expect(credits.primaryFraction == nil)
-        // 12.5 + 4 + 0.5. Asserted on the digits, not the currency symbol,
-        // which is the reader's locale's business.
-        #expect(credits.usedText?.contains("17.00") == true)
-        // A text-only row has no denominator, so it must not count as spent.
-        #expect(credits.primaryFractionOrUnmeasured == 0)
+        #expect(credits.usedText?.contains("12.50") == true)
+        // A text-only row must not count as spent.
+        #expect(credits.primaryFractionForWorstBarRanking == -1)
+    }
+
+    @Test("a plan with no monthly credits is not given one")
+    func providerPlanHasNoAllowance() throws {
+        // Provider is pay-as-you-go — a real answer, not an unreadable id.
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-provider") == nil)
+        let credits = try #require(try snapshot(Self.body(planId: "individual-provider")).row3)
+        #expect(credits.primaryFraction == nil)
+    }
+
+    @Test("purchased and free credits widen the denominator")
+    func extrasWidenTheGauge() throws {
+        // The plan pool is spent (monthly 0) but $50 of top-up credits remain
+        // and are spendable: the gauge must not read as exhausted.
+        let snap = try snapshot(Self.body(monthly: "0", purchased: "50"))
+        let credits = try #require(snap.row3)
+
+        #expect(abs(try #require(credits.primaryFraction) - 80.0 / 130.0) < 0.0001)
+        #expect(snap.status == .measured(.none))
     }
 
     @Test("a window over its cap reads as fully spent, not as a negative or a crash")
@@ -932,7 +983,10 @@ struct CommandCodeQuotaProviderTests {
                       monthly: "\"12.5\"", purchased: "\"4\"", free: "\"0.5\""))
 
         #expect(abs(try #require(snap.row1?.primaryFraction) - 0.25) < 0.0001)
-        #expect(snap.row3?.usedText?.contains("17.00") == true)
+        // 67.5 used of 84.5 (Pro's $80 plus $4 purchased and $0.50 free).
+        #expect(abs(try #require(snap.row3?.primaryFraction) - 67.5 / 84.5) < 0.0001)
+        #expect(snap.row3?.usedText?.contains("67.50") == true)
+        #expect(snap.row3?.usedText?.contains("84.50") == true)
     }
 
     @Test("a data envelope is unwrapped")

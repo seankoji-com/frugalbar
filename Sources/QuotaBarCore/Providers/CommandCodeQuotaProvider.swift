@@ -15,14 +15,14 @@ import Foundation
 /// what the CLI reads, corroborated by two independent open-source
 /// implementations and their captured responses.
 ///
-/// One deliberate omission. The API publishes the *remaining* monthly credits
-/// (`monthlyCredits`, plus the purchased and free buckets) but never the
-/// allowance they are drawn from. A percentage needs a denominator, so the
-/// balance is shown as text and no bar is drawn for it. Deriving the allowance
-/// from a hard-coded plan table would put a guessed number beneath a
-/// real-looking gauge — the one thing this app refuses to do (see AGENTS.md).
-/// The two window caps, by contrast, are published outright, so those bars are
-/// real.
+/// The API publishes the two window caps and the *remaining* monthly credits
+/// (`monthlyCredits`, plus the purchased and free buckets), but not the
+/// allowance those credits draw down. The allowance is Command Code's own
+/// published figure for each plan (commandcode.ai/docs/resources/pricing-limits),
+/// keyed by the `planId` the API returns, so the credit gauge is a real
+/// measurement. An unrecognised plan id yields no gauge rather than a guessed
+/// denominator, and the figures have to be revisited when Command Code changes
+/// its plans.
 public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .commandcode
@@ -102,7 +102,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
             return provider.unavailable(.badResponse)
         }
 
-        let measured = [fiveHour, weekly].compactMap(\.?.primaryFraction)
+        let measured = [fiveHour, weekly, credits].compactMap(\.?.primaryFraction)
         let worst = measured.max()
         // `limited` is the vendor saying a request would be declined by a
         // window cap right now — that is quota pressure, not an availability
@@ -175,48 +175,89 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         )
     }
 
-    /// The credit balance as a text-only row.
+    /// The plan's monthly credits as a real gauge.
     ///
-    /// `primaryFraction` is deliberately nil: the API publishes the remaining
-    /// balance but not the allowance, so there is no denominator to draw
-    /// against. A nil fraction renders as a neutral label over an empty track
-    /// (the same "no reading" case DevPass's limit-less key uses), never as a
-    /// fabricated percentage.
+    /// The denominator is the allowance Command Code publishes for the plan;
+    /// the balance (`monthlyCredits`) is what is left of it. Purchased and free
+    /// credits are uncapped headroom that outlives the plan pool, so they widen
+    /// the denominator too: the gauge then answers "how much can I still
+    /// spend", where a plan-only denominator would read as exhausted while
+    /// on-demand credits were still paying for work.
+    ///
+    /// When the plan id is unrecognised there is no published allowance, so the
+    /// row degrades to the balance as text with no bar — never a guessed
+    /// denominator.
     static func creditRow(_ credits: Credits?) -> DualBarMetrics? {
         guard let credits, let remaining = credits.remainingCredits else { return nil }
+
+        guard let allowance = planAllowance(credits.planId), allowance > 0 else {
+            return DualBarMetrics(
+                primaryFraction: nil,
+                label: "CR",
+                usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left"
+            )
+        }
+
+        let monthly = max(credits.monthlyCredits?.value ?? 0, 0)
+        // `max(allowance, monthly)` guards a balance reported above the known
+        // allowance — a plan change mid-cycle, say — so `used` cannot go
+        // negative.
+        let total = max(allowance, monthly)
+            + max(credits.purchasedCredits?.value ?? 0, 0)
+            + max(credits.freeCredits?.value ?? 0, 0)
+        guard total > 0 else { return nil }
+
+        let used = min(max(total - remaining, 0), total)
         return DualBarMetrics(
-            primaryFraction: nil,
+            primaryFraction: used / total,
             label: "CR",
-            usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left"
+            usedText: "\(money(used))/\(money(total)) credits used"
         )
+    }
+
+    /// The plans Command Code sells, with the monthly credit allowance it
+    /// publishes for each (`commandcode.ai/docs/resources/pricing-limits`).
+    ///
+    /// The *ids* are not documented — they are the strings observed in the
+    /// `planId` field — so this mapping is inferred and is the one part of this
+    /// provider that has to be revisited when Command Code changes its plans.
+    /// A nil allowance means the plan has no monthly credits at all (Provider
+    /// is pay-as-you-go), which is an answer, not a gap.
+    static let plans: [(prefix: String, name: String, allowance: Double?)] = [
+        ("individual-provider", "Provider", nil),
+        ("individual-pro-v1", "Pro", 80),
+        ("individual-ultra", "Max", 300),
+        ("individual-goat", "GOAT", 70),
+        ("individual-pro", "Pro", 80),
+        ("individual-max", "Max", 150),
+        ("individual-go", "Go", 10),
+        ("teams-pro", "Team Pro", 40),
+    ]
+
+    /// The plan row whose id is the longest matching prefix, so
+    /// `individual-pro-v1` never falls through to `individual-pro`.
+    private static func plan(_ raw: String?) -> (name: String, allowance: Double?)? {
+        let normalized = (raw?.trimmed ?? "").lowercased()
+            .replacingOccurrences(of: "_", with: "-")
+        guard !normalized.isEmpty else { return nil }
+        return plans
+            .sorted { $0.prefix.count > $1.prefix.count }
+            .first { normalized.hasPrefix($0.prefix) }
+            .map { ($0.name, $0.allowance) }
     }
 
     /// The plan id mapped to the name Command Code markets it under.
     ///
-    /// A *label* only — never a denominator. The vendor documents its plan
-    /// names but not these ids, so an unrecognised id returns nil rather than a
-    /// guess (see `shortPlanName`'s note on the old hardcoded tier table).
+    /// A label only. An unrecognised id returns nil rather than a guess (see
+    /// `shortPlanName`'s note on the old hardcoded tier table).
     static func planDisplayName(_ raw: String?) -> String? {
-        let normalized = (raw?.trimmed ?? "").lowercased()
-            .replacingOccurrences(of: "_", with: "-")
-        guard !normalized.isEmpty else { return nil }
+        plan(raw)?.name
+    }
 
-        let table: [(prefix: String, name: String)] = [
-            ("individual-provider", "Provider"),
-            ("individual-pro-v1", "Pro"),
-            ("individual-ultra", "Max"),
-            ("individual-goat", "GOAT"),
-            ("individual-pro", "Pro"),
-            ("individual-max", "Max"),
-            ("individual-go", "Go"),
-            ("teams-pro", "Team Pro"),
-        ]
-        // Longest prefix first, so `individual-provider` never matches
-        // `individual-pro`.
-        return table
-            .sorted { $0.prefix.count > $1.prefix.count }
-            .first { normalized.hasPrefix($0.prefix) }?
-            .name
+    /// The monthly credit allowance Command Code publishes for the plan, or nil
+    /// when the id is unrecognised or the plan has no monthly credits.
+    static func planAllowance(_ raw: String?) -> Double? {
+        plan(raw)?.allowance
     }
 
     static func money(_ amount: Double) -> String {
