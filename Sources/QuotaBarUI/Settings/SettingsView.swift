@@ -39,6 +39,10 @@ public struct SettingsView: View {
         .init(id: .devpass, label: "DevPass",
               placeholder: "llmgtwy_…",
               note: "LLM Gateway API key. Monthly plan-credit allowance."),
+        .init(id: .commandcode, label: "Command Code",
+              placeholder: "user_…",
+              note: "Discovered from ~/.commandcode/auth.json when CLI discovery is on. "
+                  + "Run `cmd login` to sign in."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -349,8 +353,9 @@ public struct SettingsView: View {
                      When on, FrugalBar may run `gh auth token`; read \
                      CLI Proxy hubs (~/.t3/userdata/settings.json); read \
                      ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
-                     ~/.claude/.credentials.json, or \
-                     ~/.config/github-copilot/hosts.json; read the \
+                     ~/.claude/.credentials.json, \
+                     ~/.config/github-copilot/hosts.json, or \
+                     ~/.commandcode/auth.json; read the \
                      OPENROUTER_API_KEY environment variable; or read the \
                      Claude Code login Keychain item — if the Keychain has no \
                      entry for a provider. Off by default: this reads \
@@ -551,6 +556,7 @@ public struct SettingsView: View {
         // from the CLI state database — but the switch must stay exhaustive.
         case .kiro:        provider = KiroQuotaProvider()
         case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
+        case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 

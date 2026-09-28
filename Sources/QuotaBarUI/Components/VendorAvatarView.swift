@@ -112,6 +112,18 @@ public enum VendorSVGLogo {
               <path fill="#00b8a9" d="M4 8.5A1.5 1.5 0 015.5 7h13A1.5 1.5 0 0120 8.5v2a1.75 1.75 0 000 3.5v2A1.5 1.5 0 0118.5 17h-13A1.5 1.5 0 014 15.5v-2a1.75 1.75 0 000-3.5v-2zm5.6 1.1v4.8h1.5v-1.6h.9a1.6 1.6 0 100-3.2H9.6zm1.5 1.2h.7a.4.4 0 010 .8h-.7v-.8z"/>
             </svg>
             """
+        case .commandcode:
+            // Command Code's "Burple" background (#2E1B9C) with a terminal
+            // prompt glyph rather than a lifted wordmark. Drawn from fills
+            // only — NSImage's offscreen SVG support renders stroke styling
+            // unevenly, which is why every other badge here is fill-based too.
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#2E1B9C"/>
+              <path fill="#FFFFFF" d="M9.4 7.6a1.1 1.1 0 011.56 1.55L8.31 11.8l2.65 2.65a1.1 1.1 0 01-1.56 1.55l-3.42-3.42a1.1 1.1 0 010-1.56L9.4 7.6z"/>
+              <rect x="12.4" y="14.2" width="5.2" height="2" rx="1" fill="#FFFFFF"/>
+            </svg>
+            """
         case .githubRest, .githubGraphql:
             return """
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">

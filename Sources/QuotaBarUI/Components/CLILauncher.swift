@@ -31,6 +31,7 @@ public enum CLILauncher {
         // own, so it opens whichever tool the key is pointed at — OpenCode
         // being the one FrugalBar can name with confidence.
         case .devpass:                      "opencode"
+        case .commandcode:                  "command-code"
         case .githubRest, .githubGraphql:   nil
         }
     }

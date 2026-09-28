@@ -598,6 +598,25 @@ public enum CredentialStore {
             // API key the user creates on the dashboard and pastes into
             // Settings, so there is no local file to discover it from.
             return nil
+
+        case .commandcode:
+            // The Command Code CLI writes a flat {"apiKey":"user_..."} to
+            // ~/.commandcode/auth.json on `cmd login`. It is long-lived — there
+            // is no token to refresh — and the same key authenticates both the
+            // CLI and the API. The env var is honoured first, matching the
+            // CLI's own precedence.
+            for name in ["COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"] {
+                if let value = ProcessInfo.processInfo.environment[name]?.trimmed, !value.isEmpty {
+                    return value
+                }
+            }
+            let authURL = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".commandcode/auth.json")
+            guard let data = try? Data(contentsOf: authURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let key = (json["apiKey"] as? String)?.trimmed, !key.isEmpty
+            else { return nil }
+            return key
         }
     }
 }
@@ -678,6 +697,7 @@ extension CredentialStore {
         case .grok:          "grok CLI auth.json"
         case .kiro:          "kiro-cli state database"
         case .devpass:       "DevPass dashboard key"
+        case .commandcode:   "~/.commandcode/auth.json"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }
