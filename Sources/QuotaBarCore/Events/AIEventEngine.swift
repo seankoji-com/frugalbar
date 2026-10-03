@@ -63,6 +63,11 @@ public actor AIEventEngine {
     /// With tracking off nothing is fetched and the cadence clock does not
     /// advance, so switching tracking on polls on the very next call.
     public func pollExternalSources(now: Date) async -> [AIEvent] {
+        // Retention is independent of tracking: poll-derived events (resets,
+        // restores, credits) are recorded whether or not the catalog and
+        // feeds are polled, so they must age out either way.
+        await pruneIfDue(now: now)
+
         guard isTrackingEnabled() else { return [] }
         if let lastExternalPoll, now.timeIntervalSince(lastExternalPoll) < Self.externalPollInterval {
             return []
@@ -71,14 +76,21 @@ public actor AIEventEngine {
 
         let candidates = await catalogWatcher.poll(store: store, now: now)
             + feedWatcher.poll(store: store, now: now)
-        let fresh = await record(candidates)
+        return await record(candidates)
+    }
 
+    private var lastPrune: Date?
+
+    /// Prunes events past `eventRetentionInterval` on the external-poll
+    /// cadence, whatever the tracking toggle says.
+    private func pruneIfDue(now: Date) async {
+        if let lastPrune, now.timeIntervalSince(lastPrune) < Self.externalPollInterval { return }
+        lastPrune = now
         do {
             try await store.pruneEvents(before: now.addingTimeInterval(-Self.eventRetentionInterval))
         } catch {
             NSLog("frugalbar: failed to prune AI events: \(error)")
         }
-        return fresh
     }
 
     private func record(_ candidates: [AIEvent]) async -> [AIEvent] {
@@ -127,7 +139,9 @@ public actor AIEventEngine {
             kind: .usageRestored,
             vendorId: restore.vendorId,
             title: "\(restore.displayName) \(restore.barLabel) usage restored",
-            detail: "Used fell from \(before)% to \(after)% with \(remaining(until: restore.resetsAt, now: now)) left before the published reset",
+            detail: restore.windowRestarted
+                ? "Used fell from \(before)% to \(after)% and the window restarted early; the new reset is \(remaining(until: restore.resetsAt, now: now)) away"
+                : "Used fell from \(before)% to \(after)% with \(remaining(until: restore.resetsAt, now: now)) left before the published reset",
             occurredAt: now,
             observedAt: now,
             source: .quotaPoll
@@ -145,11 +159,21 @@ public actor AIEventEngine {
             kind: .resetCreditGranted,
             vendorId: grant.vendorId,
             title: "\(grant.displayName) granted a usage reset credit",
-            detail: "\(count) banked reset\(count == 1 ? "" : "s") available — redeem in Codex to refill both windows",
+            detail: "\(count) banked reset\(count == 1 ? "" : "s") available — \(redeemHint(for: grant.vendorId))",
             occurredAt: now,
             observedAt: now,
             source: .quotaPoll
         )
+    }
+
+    /// Where the vendor lets the user spend a banked reset. Only vendors
+    /// known to publish one get a specific hint; anything else gets none.
+    static func redeemHint(for vendor: VendorIdentifier) -> String {
+        switch vendor {
+        case .openai: "redeem in Codex to refill both windows"
+        case .claude: "redeem on claude.ai under Settings → Usage"
+        default:      "redeem with the vendor"
+        }
     }
 
     private static func percent(_ fraction: Double) -> Int {

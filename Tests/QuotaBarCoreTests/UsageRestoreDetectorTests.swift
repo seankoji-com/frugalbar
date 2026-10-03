@@ -56,15 +56,31 @@ struct UsageRestoreDetectorTests {
             snapshot(.claude, bars: [bar("5H", fraction: 0.31, resetsAt: reset)])).isEmpty)
     }
 
-    /// Regression guard: a scheduled rollover also drops the fraction. If the
-    /// reset time advanced, that is QuotaResetDetector's event, not a gift.
-    @Test("a drop where the reset time advanced into a new window never fires")
-    func scheduledRolloverIsNotARestore() {
+    /// A vendor-wide reset can move the clock as well as the counter. The old
+    /// reset had not passed, so this is a restore that restarted the window —
+    /// and `QuotaResetDetector` stays silent, because it needs the old reset
+    /// time to have passed. Neither announcing it twice nor not at all.
+    @Test("a drop with an advanced reset while the old reset was still ahead fires as a restarted window")
+    func restoreThatRestartedTheWindow() {
         let oldReset = now.addingTimeInterval(60)
         let newReset = oldReset.addingTimeInterval(QuotaWindow.fiveHours)
-        #expect(detect(
-            snapshot(.claude, bars: [bar("5H", fraction: 0.9, resetsAt: oldReset)]),
-            snapshot(.claude, bars: [bar("5H", fraction: 0.0, resetsAt: newReset)])).isEmpty)
+        let before = snapshot(.claude, bars: [bar("5H", fraction: 0.9, resetsAt: oldReset)])
+        let after = snapshot(.claude, bars: [bar("5H", fraction: 0.0, resetsAt: newReset)])
+        let events = detect(before, after)
+        #expect(events.count == 1)
+        #expect(events.first?.windowRestarted == true)
+        #expect(events.first?.resetsAt == newReset)
+        #expect(QuotaResetDetector.detect(
+            previous: [.claude: before], current: [.claude: after], now: now).isEmpty)
+    }
+
+    @Test("a drop with an unchanged reset is a restore that kept its window")
+    func restoreKeptTheWindow() {
+        let reset = now.addingTimeInterval(3600)
+        let events = detect(
+            snapshot(.claude, bars: [bar("5H", fraction: 0.9, resetsAt: reset)]),
+            snapshot(.claude, bars: [bar("5H", fraction: 0.1, resetsAt: reset)]))
+        #expect(events.first?.windowRestarted == false)
     }
 
     @Test("drift within the reset detector's tolerance still counts as the same window")

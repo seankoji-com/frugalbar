@@ -45,6 +45,37 @@ struct AIEventEngineTests {
         )
     }
 
+    /// Retention must not depend on the catalog/feed toggle: resets, restores
+    /// and credits are recorded whether or not external sources are polled.
+    @Test("events are pruned on the poll cadence even with tracking off")
+    func pruneRunsWithTrackingOff() async throws {
+        let store = makeIsolatedEventStore()
+        let log = FetchLog()
+        let engine = engine(store: store, log: log, tracking: { false })
+        let ancient = AIEvent(
+            id: "old", kind: .usageReset, vendorId: .claude, title: "old", detail: nil,
+            occurredAt: now.addingTimeInterval(-AIEventEngine.eventRetentionInterval - 86_400),
+            observedAt: now, source: .quotaPoll)
+        try await store.recordEvents([ancient])
+
+        let fresh = await engine.pollExternalSources(now: now)
+        #expect(fresh.isEmpty)
+        #expect(log.count("catalog") == 0)
+        let remaining = try await store.fetchEvents()
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("a restore that restarted the window says so in its detail")
+    func restartedWindowDetail() async throws {
+        let store = makeIsolatedEventStore()
+        let engine = engine(store: store, log: FetchLog())
+        let restore = UsageRestoredEvent(vendorId: .openai, displayName: "OpenAI", barLabel: "5H",
+                                         previousFraction: 0.9, currentFraction: 0.0,
+                                         resetsAt: now.addingTimeInterval(5 * 3600), windowRestarted: true)
+        let events = await engine.recordPollEvents(resets: [], restores: [restore], creditGrants: [], now: now)
+        #expect(events.first?.detail == "Used fell from 90% to 0% and the window restarted early; the new reset is 5 hours away")
+    }
+
     @Test("poll-derived events are recorded once across repeated polls")
     func pollEventsDedupe() async throws {
         let store = makeIsolatedEventStore()

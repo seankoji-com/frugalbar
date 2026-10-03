@@ -8,13 +8,13 @@ public enum HistorySchema {
     public static let catalogModelTable = "catalog_model"
     public static let feedItemTable = "feed_item"
 
-    /// Bumped whenever `createTablesSQL` changes shape.
+    /// The on-disk schema generation. A mismatch on open drops every table.
     ///
-    /// The store has never shipped in a release, so a version bump resets rather
-    /// than migrates: the only databases in existence are development ones, and
-    /// dropping them is safer than a bespoke migration path that will not be
-    /// exercised again once the feature is released. Once this ships, migrations
-    /// must become additive instead.
+    /// Version 1 has shipped, so this must not be bumped any more: a bump
+    /// deletes the user's readings. New tables are added to `createTablesSQL`
+    /// as `CREATE TABLE IF NOT EXISTS` (the `event`, `catalog_model` and
+    /// `feed_item` tables arrived that way, additively, under the same
+    /// version). Changing an existing table's shape needs a real migration.
     public static let version: Int32 = 1
 
     public static let createTablesSQL = """

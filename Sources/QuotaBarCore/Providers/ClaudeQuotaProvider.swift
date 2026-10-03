@@ -64,7 +64,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // to send a one-token Haiku request and read the rate-limit headers,
         // which spent the quota being reported on every poll.
         let (data, response) = try await QuotaHTTP.get(
-            url: CLIProxyClient.claudeOAuthUsageURL,
+            url: CLIProxyClient.claudeOAuthUsageWithGrantsURL,
             headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
             auth: .bearer(token)
         )
@@ -118,16 +118,34 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         let badgeText = "\(remainingPercent)% left"
         let primaryReset = row1?.resetsAt ?? row2?.resetsAt
 
-        return QuotaSnapshot(
+        var snapshot = QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: planName ?? "Claude", renewalDate: nil),
             status: .measured(urgency), resetsAt: primaryReset, lastUpdated: now,
-            auxiliaryInfo: "Live Claude subscription quota",
+            auxiliaryInfo: Self.auxiliaryInfo(grants: usage.resetGrants),
             row1: row1,
             row2: row2,
             badgeText: badgeText,
             planName: planName, cliSource: cliSource
         )
+        // nil whenever the surface served no grants, so a CLI login (which
+        // Anthropic currently answers with `ineligible_reason: "surface"`)
+        // shows no reset-credit row rather than "0 banked".
+        snapshot.resetCreditsAvailable = usage.resetGrants?.resetsAvailable
+        snapshot.resetCreditsApplicable = usage.resetGrants?.resetsUsableNow
+        return snapshot
+    }
+
+    /// The row caption, with the banked-reset count appended when Anthropic
+    /// published one. Mirrors the OpenAI row so the two read the same way.
+    static func auxiliaryInfo(grants: ClaudeOAuthUsageResponse.ResetGrants?) -> String {
+        var info = "Live Claude subscription quota"
+        guard let banked = grants?.resetsAvailable, banked > 0 else { return info }
+        info += " · \(banked) reset credit\(banked == 1 ? "" : "s") banked"
+        if let usable = grants?.resetsUsableNow, usable > 0 {
+            info += " · \(usable) redeemable now"
+        }
+        return info
     }
 
     struct Reading { let used: Double; let reset: Date? }

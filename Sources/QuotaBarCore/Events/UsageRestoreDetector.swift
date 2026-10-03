@@ -14,8 +14,13 @@ public struct UsageRestoredEvent: Sendable, Equatable {
     public let previousFraction: Double
     public let currentFraction: Double
     /// The vendor's published reset time for the window, as of the current
-    /// poll. Still in the future, by construction.
+    /// poll.
     public let resetsAt: Date
+    /// True when the vendor also moved the reset time forward into a new
+    /// window while the old one still had time left — how a vendor-wide
+    /// "we've reset everyone's limits" looks when it restarts the clock as
+    /// well as the counter. False when only the counter fell.
+    public let windowRestarted: Bool
 
     public init(
         vendorId: VendorIdentifier,
@@ -23,7 +28,8 @@ public struct UsageRestoredEvent: Sendable, Equatable {
         barLabel: String,
         previousFraction: Double,
         currentFraction: Double,
-        resetsAt: Date
+        resetsAt: Date,
+        windowRestarted: Bool = false
     ) {
         self.vendorId = vendorId
         self.displayName = displayName
@@ -31,6 +37,7 @@ public struct UsageRestoredEvent: Sendable, Equatable {
         self.previousFraction = previousFraction
         self.currentFraction = currentFraction
         self.resetsAt = resetsAt
+        self.windowRestarted = windowRestarted
     }
 }
 
@@ -40,10 +47,13 @@ public struct UsageRestoredEvent: Sendable, Equatable {
 /// A scheduled rollover also drops the consumed fraction, so a drop alone
 /// proves nothing; what tells the two apart is the vendor's own reset time. A
 /// restore is a drop while the previous poll's reset time is still in the
-/// future *and* the current poll's reset time has not moved forward into a new
-/// window. If the reset time advanced, the vendor started a new window and
-/// that is `QuotaResetDetector`'s event — reporting it here too would announce
-/// one rollover twice, once as a gift.
+/// future. `QuotaResetDetector` fires only once that reset time has *passed*,
+/// so the two can never describe the same poll: a drop after the clock ran
+/// out is a rollover, a drop before it is a restore. Whether the vendor also
+/// moved the reset time forward is recorded (`windowRestarted`) rather than
+/// used to stay silent — a vendor-wide "we've reset everyone's limits" can
+/// restart the clock too, and that is still an allowance nobody's window had
+/// earned yet.
 ///
 /// Both polls must be `.measured` and both fractions present. A reading lost
 /// to a 401 or a timeout is not a drop to zero: treating `nil` as 0 would turn
@@ -87,10 +97,9 @@ public enum UsageRestoreDetector {
                       previousFraction - currentFraction >= minimumDrop - tolerance,
                       let previousReset = oldBar.resetsAt,
                       previousReset > now,
-                      // Without a current reset time there is no evidence the
-                      // window did *not* roll over; stay silent.
-                      let currentReset = bar.resetsAt,
-                      currentReset.timeIntervalSince(previousReset) <= QuotaResetDetector.minimumAdvance
+                      // Without a current reset time there is no window to
+                      // describe the restore against; stay silent.
+                      let currentReset = bar.resetsAt
                 else { continue }
 
                 events.append(UsageRestoredEvent(
@@ -99,7 +108,8 @@ public enum UsageRestoreDetector {
                     barLabel: bar.label,
                     previousFraction: previousFraction,
                     currentFraction: currentFraction,
-                    resetsAt: currentReset
+                    resetsAt: currentReset,
+                    windowRestarted: currentReset.timeIntervalSince(previousReset) > QuotaResetDetector.minimumAdvance
                 ))
             }
         }
