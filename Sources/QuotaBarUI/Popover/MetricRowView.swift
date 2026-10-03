@@ -131,8 +131,11 @@ struct MetricRowView: View {
     /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
     /// styling alone is not an accessible status channel).
     private var combinedAccessibilityLabel: String {
-        var parts = [p.accessibilityLabel]
-        if let windows = grid.spokenSummary() {
+        let windows = grid.spokenSummary()
+        // With the grid speaking each window, the headline percentage would
+        // be the same figure twice.
+        var parts = [windows == nil ? p.accessibilityLabel : p.accessibilityLabelOmittingPercentage]
+        if let windows {
             parts.append(windows)
         }
         if let forecastText {
@@ -331,7 +334,7 @@ struct MetricRowView: View {
     /// on-demand budget — on its own line under the grid, with its own token.
     private func extraRow(_ bar: DualBarMetrics) -> some View {
         HStack(spacing: Theme.rowSpacing) {
-            Color.clear.frame(width: Theme.rowAvatarSize + Theme.rowSpacing + Theme.nameColumnWidth, height: 1)
+            Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
             DualBarProgressView(metrics: bar, accentColor: accentColor)
         }
     }

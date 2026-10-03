@@ -105,8 +105,11 @@ public enum HistorySchema {
     ///   old rows keeps that history one continuous series. The vendor never
     ///   wrote an "MO" row before, so the primary key cannot collide; `OR
     ///   IGNORE` makes that certain rather than assumed.
+    /// - Grok's fallback for a period with no type and no length was "CR"
+    ///   too; it is now "PLAN", and its readings follow.
     public static let dataMigrationsSQL = """
     UPDATE OR IGNORE reading SET bar_label = 'MO' WHERE vendor = 'commandcode' AND bar_label = 'CR';
+    UPDATE OR IGNORE reading SET bar_label = 'PLAN' WHERE vendor = 'grok' AND bar_label = 'CR';
     """
 
     /// Drops every table. Used only to reset a development database whose schema

@@ -65,6 +65,10 @@ public enum Theme {
     public static let rowSpacing: CGFloat = 8
     /// Gap between the grid's 5H / WK / MO columns.
     public static let gridColumnSpacing: CGFloat = 8
+    /// Where the grid starts, measured from the row's leading edge. The column
+    /// header and the lines for non-window pools indent by exactly this, so
+    /// both stay aligned with the cells if any of the three widths changes.
+    public static let gridLeadingInset: CGFloat = rowAvatarSize + rowSpacing + nameColumnWidth
 
     /// Shared by the bar labels and the spend-window labels, so every token in
     /// the popover sits in one right-aligned column. 40pt fits the two-letter

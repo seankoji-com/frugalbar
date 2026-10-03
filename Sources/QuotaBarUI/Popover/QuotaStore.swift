@@ -71,9 +71,14 @@ public final class QuotaStore {
 
     /// Recorded events, newest first, optionally scoped to one vendor.
     /// Empty when no loader was injected.
-    public func events(for vendor: VendorIdentifier?, since: Date?, limit: Int?) async -> [AIEvent] {
+    public func events(
+        for vendor: VendorIdentifier?,
+        kinds: Set<AIEventKind>? = nil,
+        since: Date?,
+        limit: Int?
+    ) async -> [AIEvent] {
         guard let eventsLoader else { return [] }
-        return await eventsLoader(vendor, nil, since, limit)
+        return await eventsLoader(vendor, kinds, since, limit)
     }
 
     /// The kinds the popover's card shows: resets, outages and newly

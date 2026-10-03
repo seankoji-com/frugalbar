@@ -34,6 +34,8 @@ struct WindowGridPresentationTests {
         let grid = WindowGridPresentation(snapshot: snap([bar("MO", 0.3), bar("BN", 0.5), bar("OV", 0.0)]))
         #expect(grid.bars.keys.sorted { $0.rawValue < $1.rawValue } == [.monthly])
         #expect(grid.extras.map(\.label) == ["BN", "OV"])
+        // Pools that are not windows are spoken too, by their token.
+        #expect(grid.spokenSummary() == "monthly 30% used, BN 50% used, OV 0% used")
     }
 
     @Test("a missing window leaves its column empty rather than drawing 0%")
@@ -81,6 +83,29 @@ struct WindowGridPresentationTests {
         #expect(grid.spend[.weekly] != nil)
         #expect(grid.spend[.weekly]?.amount == nil)
         #expect(grid.spend[.fiveHour] == nil)
+        // VoiceOver hears the same figures the cells show.
+        let spoken = grid.spokenSummary() ?? ""
+        #expect(spoken.hasPrefix("weekly spend not reported, monthly spend "))
+        #expect(spoken.contains("12.40"))
+    }
+
+    /// The headline "42 percent used" and the grid's "5-hour 42% used" are
+    /// the same figure; with a grid the headline is dropped, a plan name is not.
+    @Test("a row with a grid speaks each percentage once")
+    func percentageNotSpokenTwice() {
+        let pct = QuotaSnapshot(
+            id: "c", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.42, displayDetails: nil), status: .measured(.none),
+            resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil,
+            row1: bar("5H", 0.42))
+        let p = MetricRowPresentation(snapshot: pct)
+        #expect(p.accessibilityLabel.contains("42 percent used"))
+        #expect(!p.accessibilityLabelOmittingPercentage.contains("42 percent used"))
+        #expect(p.accessibilityLabelOmittingPercentage.hasPrefix("Claude"))
+
+        let plan = snap([bar("MO", 0.3)])
+        let q = MetricRowPresentation(snapshot: plan)
+        #expect(q.accessibilityLabelOmittingPercentage == q.accessibilityLabel)
     }
 
     @Test("a row with no bars and no spend keeps the chip layout")

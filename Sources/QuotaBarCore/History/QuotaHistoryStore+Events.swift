@@ -83,9 +83,15 @@ extension QuotaHistoryStore {
 
     /// Events newest first, optionally narrowed by vendor, kind, and time.
     ///
-    /// `since` applies to `occurredAt`, so a feed item published last week but
-    /// fetched today is found by the week it belongs to, not by the day
-    /// FrugalBar first read the feed.
+    /// `since` applies to `occurredAt`, so an event recorded late (a status
+    /// page incident from last week, read today) is found by the week it
+    /// belongs to.
+    ///
+    /// Rows from the retired catalog and news-feed watchers (`price_change`,
+    /// and `new_model` from any source but the account's own list) are never
+    /// returned. They stay on disk until retention prunes them, but filtering
+    /// them here, before `limit`, is what stops a backlog of them from taking
+    /// every slot of a limited query (see `AIEvent.isSurfaced`).
     public func fetchEvents(
         vendor: VendorIdentifier? = nil,
         kinds: Set<AIEventKind>? = nil,
@@ -100,7 +106,7 @@ extension QuotaHistoryStore {
 
         return try await database.perform { db -> [AIEvent] in
             #if canImport(SQLite3)
-            var conditions: [String] = []
+            var conditions: [String] = [Self.retiredRowsExcluded]
             if vendorString != nil { conditions.append("vendor = ?") }
             if let kindStrings {
                 // An empty kind set is a real filter that matches nothing,
@@ -186,6 +192,12 @@ extension QuotaHistoryStore {
             #endif
         }
     }
+
+    /// The SQL form of the retired-row half of `AIEvent.isSurfaced`.
+    static let retiredRowsExcluded = """
+    NOT (kind = '\(AIEventKind.priceChange.rawValue)' OR \
+    (kind = '\(AIEventKind.newModel.rawValue)' AND source <> '\(AIEventSource.accountModels.rawValue)'))
+    """
 
     /// Deletes events that occurred before `cutoff`. Events are small and
     /// useful for a long time, so callers prune on a far longer horizon than

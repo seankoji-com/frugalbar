@@ -1,7 +1,7 @@
 import SwiftUI
 import QuotaBarCore
 
-/// The popover's "Recent events" card: the newest recorded event and a way
+/// The popover's "Latest event" card: the newest recorded event and a way
 /// into the full list in the History window.
 ///
 /// One compact row (about 30pt) so it never pushes the quota rows — the

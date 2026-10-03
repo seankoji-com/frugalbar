@@ -13,7 +13,7 @@ public struct MetricDetailModalView: View {
 
     let snapshot: QuotaSnapshot
     let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]
-    let eventsLoader: (VendorIdentifier, Date?, Int?) async -> [AIEvent]
+    let eventsLoader: (VendorIdentifier, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]
     let onClose: () -> Void
 
     @State private var copied = false
@@ -45,15 +45,15 @@ public struct MetricDetailModalView: View {
 
     /// - Parameters:
     ///   - readingsLoader: one vendor's recorded readings since a date.
-    ///   - eventsLoader: one vendor's recorded events since a date, newest
-    ///     first, at most `limit`.
+    ///   - eventsLoader: one vendor's recorded events of the given kinds
+    ///     (nil: every kind) since a date, newest first, at most `limit`.
     ///
     /// Both run once per vendor when the modal appears, never on the refresh
     /// path.
     public init(
         snapshot: QuotaSnapshot,
         readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord],
-        eventsLoader: @escaping (VendorIdentifier, Date?, Int?) async -> [AIEvent],
+        eventsLoader: @escaping (VendorIdentifier, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent],
         onClose: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -122,10 +122,10 @@ public struct MetricDetailModalView: View {
             }
         }
         let r = await readingsLoader(vendor, since)
-        // Over-fetch, then keep the surfaced ones: scheduled rollovers and
-        // retired catalog/news rows would otherwise fill all five slots.
-        let e = Array(EventsPresentation.popoverEvents(await eventsLoader(vendor, nil, 40)).prefix(5))
-        let m = await eventsLoader(vendor, loadTime.addingTimeInterval(-Self.historyLookback), nil)
+        // Filtered by kind in the query, so the five slots are never spent
+        // on scheduled rollovers (the store already drops retired rows).
+        let e = await eventsLoader(vendor, QuotaStore.recentEventKinds, nil, 5)
+        let m = await eventsLoader(vendor, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
         readings = r
         recentEvents = e

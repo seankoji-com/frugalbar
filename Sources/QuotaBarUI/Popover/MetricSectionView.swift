@@ -51,7 +51,7 @@ struct MetricSectionView: View {
     private var columnHeader: some View {
         HStack(spacing: Theme.rowSpacing) {
             Color.clear
-                .frame(width: Theme.rowAvatarSize + Theme.rowSpacing + Theme.nameColumnWidth, height: 1)
+                .frame(width: Theme.gridLeadingInset, height: 1)
             HStack(spacing: Theme.gridColumnSpacing) {
                 ForEach(WindowColumn.allCases) { column in
                     Text(column.label)

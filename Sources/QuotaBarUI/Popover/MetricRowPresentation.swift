@@ -17,6 +17,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let isMeasured: Bool
     public let urgency: Urgency
     public let accessibilityLabel: String
+    /// `accessibilityLabel` without the headline percentage, for a row whose
+    /// window grid already speaks each window's share: "42 percent used"
+    /// followed by "5-hour 42% used" says the same figure twice. Only a
+    /// percentage is dropped; a plan name or a balance is not in the grid.
+    public let accessibilityLabelOmittingPercentage: String
     /// A window the vendor reports as fully spent. Deliberately narrower than
     /// `.critical` urgency, which also covers "nearly gone" — the struck-through
     /// logo is reserved for nothing-left-at-all.
@@ -58,13 +63,15 @@ public struct MetricRowPresentation: Equatable, Sendable {
             self.resetLabel = "—"
             self.accessibilityLabel =
                 "\(snapshot.displayName), \(reason.headline), \(reason.remedy)"
+            self.accessibilityLabelOmittingPercentage = accessibilityLabel
             return
         }
 
         self.valueLabel = Self.value(for: snapshot.metric)
         self.resetLabel = ResetCountdownBadge.format(snapshot.resetsAt, now: now)
 
-        var parts = [snapshot.displayName, Self.spoken(for: snapshot.metric)].filter { !$0.isEmpty }
+        let spokenMetric = Self.spoken(for: snapshot.metric)
+        var parts = [snapshot.displayName, spokenMetric].filter { !$0.isEmpty }
         if snapshot.isFullyBlockedWithoutReading {
             // The bars' own language. A screen reader must hear "blocked", not
             // "critically low" — the vendor cut the account off; it is not
@@ -93,6 +100,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
             parts.append(ResetCountdownBadge.description(snapshot.resetsAt, now: now))
         }
         self.accessibilityLabel = parts.joined(separator: ", ")
+        if case .percentage = snapshot.metric, !spokenMetric.isEmpty, parts.count > 1, parts[1] == spokenMetric {
+            parts.remove(at: 1)
+        }
+        self.accessibilityLabelOmittingPercentage = parts.joined(separator: ", ")
     }
 
     // MARK: - Formatting

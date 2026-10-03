@@ -115,16 +115,18 @@ public actor AIEventEngine {
                 nextPoll[source] = now.addingTimeInterval(min(source.interval, Self.failedPollRetryInterval))
                 continue
             }
-            nextPoll[source] = now.addingTimeInterval(source.interval)
-
             // Events first, checkpoint second. A checkpoint written before its
             // events were stored loses them for good — see `PendingPoll`.
             do {
                 fresh += try await store.recordEvents(pending.events)
             } catch {
+                // Not recorded: retry soon, like a source that answered nothing,
+                // rather than waiting out a full interval.
                 NSLog("frugalbar: failed to record \(source.rawValue) events; they will be re-derived next poll: \(error)")
+                nextPoll[source] = now.addingTimeInterval(min(source.interval, Self.failedPollRetryInterval))
                 continue
             }
+            nextPoll[source] = now.addingTimeInterval(source.interval)
             do {
                 try await pending.commit()
             } catch {

@@ -13,6 +13,7 @@ FrugalBar keeps a log of three things on the platforms you use: **resets**, **ou
 | **Outage resolved** | The status page marked that incident resolved. | The incident's `resolved_at`; the detail gives the duration. | From status.claude.com |
 | **New model** | A model appeared on the list your own account can select. | The account-scoped model list your tool's CLI reads, fetched with the same credential as the quota. See [Account model lists](#account-model-lists). | From your account's model list |
 | **Usage reset** (log only) | A quota window rolled over at its scheduled reset. | The previous poll's `resetsAt` has passed and the new poll reports a reset time more than 60 s later. | From the vendor's usage endpoint |
+| **Price change** (retired) | A catalog or news-feed price change, recorded by earlier versions. Nothing records it now; the `price_change` case stays so old rows decode, and those rows are never shown. | — | From the OpenRouter model catalog |
 
 Usage reset is routine (every five hours for some vendors), so it never takes the popover's row or a banner here; it stays in the log, in **History → Events** and on the timeline, and has its own per-vendor opt-in under **Reset alerts**.
 
@@ -85,6 +86,8 @@ Every candidate goes through one call, `QuotaHistoryStore.recordEvents`, which i
 | Vendor reset | the announcing post's id |
 | Outage / Outage resolved | status page name, the vendor's incident id |
 | New model | `account`, the model id |
+| New model (retired rows) | OpenRouter model id, or the news-feed item's guid |
+| Price change (retired) | model id, new prompt price, new completion price |
 
 ## Notifications
 
@@ -129,6 +132,6 @@ The retired `catalog_model` and `feed_item` tables are no longer created; databa
 
 **Add an account model list.** Add the vendor to `AccountModelLister.supportedVendors` and a case to `AccountModelLister.live` that reads the endpoint the vendor's own CLI uses for its model picker, with the provider's existing credential. Return nil for anything other than a clean, account-scoped answer.
 
-**Add a poll detector.** Write a pure `enum` that takes `previous` and `current` snapshot dictionaries and an explicit `now`, requires both polls `.measured`, and treats a missing figure as no event. Add the `AIEventKind` case (`title`, `symbolName`, `pluralTitle`, `notificationCaption`, `surfaced`), build the event in `AIEventEngine` with `AIEvent.makeID`, route it through `QuotaNotificationObserver.observeTransitions` and `AIEventEngine.recordPollEvents`, and show the test fails when the guard is removed (see `UsageRestoreDetectorTests`).
+**Add a poll detector.** Write a pure `enum` that takes `previous` and `current` snapshot dictionaries and an explicit `now`, requires both polls `.measured`, and treats a missing figure as no event. Add the `AIEventKind` case (`title`, `symbolName`, `pluralTitle`, `notificationCaption`), append it to the static `AIEventKind.surfaced` list if it should reach the popover and notifications, build the event in `AIEventEngine` with `AIEvent.makeID`, route it through `QuotaNotificationObserver.observeTransitions` and `AIEventEngine.recordPollEvents`, and show the test fails when the guard is removed (see `UsageRestoreDetectorTests`).
 
 Tests: `ResetTrackerWatcherTests`, `StatusIncidentWatcherTests`, `AccountModelWatcherTests`, `AIEventEngineTests`, `AIEventStoreTests`, `PendingPollTests`, `UsageRestoreDetectorTests`, `EventsPresentationTests`.

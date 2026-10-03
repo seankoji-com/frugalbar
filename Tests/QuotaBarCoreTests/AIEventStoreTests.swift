@@ -100,6 +100,7 @@ struct AIEventStoreTests {
         kind: AIEventKind = .usageReset,
         vendor: VendorIdentifier = .openai,
         occurredAt: TimeInterval = 1_700_000_000,
+        source: AIEventSource = .quotaPoll,
         url: URL? = nil
     ) -> AIEvent {
         AIEvent(
@@ -107,7 +108,7 @@ struct AIEventStoreTests {
             title: "title \(id)", detail: "detail \(id)",
             occurredAt: Date(timeIntervalSince1970: occurredAt),
             observedAt: Date(timeIntervalSince1970: occurredAt + 5),
-            source: .quotaPoll, url: url
+            source: source, url: url
         )
     }
 
@@ -152,11 +153,11 @@ struct AIEventStoreTests {
     func fieldsRoundTrip() async throws {
         let store = makeIsolatedStore()
         let withURL = AIEvent(
-            id: "new_model|claude|x", kind: .newModel, vendorId: .claude,
-            title: "x listed", detail: nil,
+            id: "vendor_reset|claude|x", kind: .vendorReset, vendorId: .claude,
+            title: "Claude reset", detail: nil,
             occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
             observedAt: Date(timeIntervalSince1970: 1_700_000_050),
-            source: .vendorFeed(name: "anthropic-news"),
+            source: .resetTracker(name: "claude-resets"),
             url: URL(string: "https://example.com/x")
         )
         try await store.recordEvents([withURL])
@@ -170,8 +171,8 @@ struct AIEventStoreTests {
         try await store.recordEvents([
             event("r1", kind: .usageReset, vendor: .openai, occurredAt: 100),
             event("r2", kind: .usageReset, vendor: .claude, occurredAt: 200),
-            event("m1", kind: .newModel, vendor: .claude, occurredAt: 300),
-            event("p1", kind: .priceChange, vendor: .gemini, occurredAt: 400),
+            event("m1", kind: .newModel, vendor: .claude, occurredAt: 300, source: .accountModels),
+            event("p1", kind: .outageStarted, vendor: .gemini, occurredAt: 400, source: .statusPage(name: "x")),
         ])
 
         let all = try await store.fetchEvents()
@@ -192,6 +193,27 @@ struct AIEventStoreTests {
         // An empty kind set is a filter that matches nothing, not "no filter".
         let none = try await store.fetchEvents(kinds: [])
         #expect(none.isEmpty)
+    }
+
+    /// Regression guard: a backlog of retired catalog and news-feed rows must
+    /// not take the slots of a limited query (the popover asks for 20, the
+    /// inspector for 5) and hide real resets and outages behind them.
+    @Test("retired catalog and news-feed rows are never returned, so they cannot fill a limit")
+    func retiredRowsExcluded() async throws {
+        let store = makeIsolatedStore()
+        var rows = (0..<5).map { event("feed\($0)", kind: .newModel, occurredAt: 1_000 + Double($0),
+                                         source: .vendorFeed(name: "openai-news")) }
+        rows += (0..<5).map { event("cat\($0)", kind: .newModel, occurredAt: 2_000 + Double($0),
+                                    source: .openRouterCatalog) }
+        rows.append(event("price", kind: .priceChange, occurredAt: 3_000, source: .openRouterCatalog))
+        rows.append(event("outage", kind: .outageStarted, occurredAt: 10, source: .statusPage(name: "claude")))
+        rows.append(event("model", kind: .newModel, occurredAt: 20, source: .accountModels))
+        try await store.recordEvents(rows)
+
+        let limited = try await store.fetchEvents(limit: 2)
+        #expect(limited.map(\.id) == ["model", "outage"])
+        let models = try await store.fetchEvents(kinds: [.newModel, .priceChange])
+        #expect(models.map(\.id) == ["model"])
     }
 
     @Test("pruneEvents removes only events older than the cutoff")

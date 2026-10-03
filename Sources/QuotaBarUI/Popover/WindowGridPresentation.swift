@@ -101,13 +101,24 @@ public struct WindowGridPresentation: Equatable, Sendable {
         bar.isBlocked ? "Blocked" : "—"
     }
 
-    /// "5-hour 42% used, weekly 80% used, monthly blocked" for the row label.
+    /// Everything the grid draws, in words, for the row label: "5-hour 42%
+    /// used, weekly 80% used, monthly blocked", then spend cells ("weekly
+    /// spend $3.10") and the non-window pools by token ("BN 50% used"). A
+    /// figure a sighted user can read must reach VoiceOver too.
     public func spokenSummary() -> String? {
-        let parts = WindowColumn.allCases.compactMap { column -> String? in
-            guard let bar = bars[column] else { return nil }
-            if let text = Self.percentText(for: bar) { return "\(column.spokenName) \(text) used" }
-            return "\(column.spokenName) \(bar.isBlocked ? "blocked" : "no reading")"
+        func spoken(_ bar: DualBarMetrics, name: String) -> String {
+            if let text = Self.percentText(for: bar) { return "\(name) \(text) used" }
+            return "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
         }
+        var parts = WindowColumn.allCases.compactMap { column -> String? in
+            if let bar = bars[column] { return spoken(bar, name: column.spokenName) }
+            if let cell = spend[column] {
+                let amount = cell.amount.map { MetricRowPresentation.currency($0, cell.currencyCode) } ?? "not reported"
+                return "\(column.spokenName) spend \(amount)"
+            }
+            return nil
+        }
+        parts += extras.map { spoken($0, name: $0.label) }
         return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 }
