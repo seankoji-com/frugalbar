@@ -7,45 +7,39 @@ struct AIEventEngineTests {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private static let catalogV1 = #"""
-    {"data":[
-      {"id":"anthropic/claude-opus-5-5","name":"Claude Opus 5.5","created":1799000000,
-       "pricing":{"prompt":"0.000005","completion":"0.000025"}}
-    ]}
-    """#
-
-    private static let catalogV2 = #"""
-    {"data":[
-      {"id":"anthropic/claude-opus-5-5","name":"Claude Opus 5.5","created":1799000000,
-       "pricing":{"prompt":"0.000004","completion":"0.000025"}},
-      {"id":"anthropic/claude-sonnet-5-5","name":"Claude Sonnet 5.5","created":1800021000,
-       "pricing":{"prompt":"0.000003","completion":"0.000015"}}
-    ]}
-    """#
-
     private func engine(
         store: QuotaHistoryStore,
         log: FetchLog,
-        catalog: @escaping @Sendable () -> String? = { nil },
+        tracker: @escaping @Sendable () -> String? = { nil },
+        status: @escaping @Sendable () -> String? = { nil },
         tracking: @escaping @Sendable () -> Bool = { true }
     ) -> AIEventEngine {
         AIEventEngine(
             store: store,
-            catalogFetcher: {
-                log.hit("catalog")
-                return catalog().map { Data($0.utf8) }
+            trackerFetcher: { t in
+                log.hit("tracker:\(t.name)")
+                return tracker().map { Data($0.utf8) }
             },
-            feedFetcher: { feed in
-                log.hit(feed.name)
-                return []
+            statusFetcher: { page in
+                log.hit("status:\(page.name)")
+                return status().map { Data($0.utf8) }
             },
-            feeds: [VendorFeed(name: "test-feed", url: URL(string: "https://example.invalid/f")!,
-                               vendorId: .openai, isOfficial: true)],
+            modelLister: { vendor in
+                log.hit("models:\(vendor.rawValue)")
+                return nil
+            },
+            trackers: [ResetTracker(name: "claude-resets", url: URL(string: "https://example.invalid/r")!,
+                                    host: "example.invalid", vendors: [.claude, .openai], format: .claudeResets)],
+            statusPages: [StatusPage(name: "claude", vendorId: .claude,
+                                     incidentsURL: URL(string: "https://example.invalid/s")!,
+                                     pageURL: URL(string: "https://example.invalid")!,
+                                     relevance: .components(["Claude Code"], includeUnscoped: true))],
+            modelVendors: [.claude],
             isTrackingEnabled: tracking
         )
     }
 
-    /// Retention must not depend on the catalog/feed toggle: resets, restores
+    /// Retention must not depend on the tracking toggle: resets, restores
     /// and credits are recorded whether or not external sources are polled.
     @Test("events are pruned on the poll cadence even with tracking off")
     func pruneRunsWithTrackingOff() async throws {
@@ -58,9 +52,9 @@ struct AIEventEngineTests {
             observedAt: now, source: .quotaPoll)
         try await store.recordEvents([ancient])
 
-        let fresh = await engine.pollExternalSources(now: now)
+        let fresh = await engine.pollExternalSources(now: now, vendors: [.claude])
         #expect(fresh.isEmpty)
-        #expect(log.count("catalog") == 0)
+        #expect(log.total == 0)
         let remaining = try await store.fetchEvents()
         #expect(remaining.isEmpty)
     }
@@ -110,34 +104,49 @@ struct AIEventEngineTests {
         #expect(fresh.isEmpty)
     }
 
-    @Test("external sources poll immediately, then not again until the interval passes")
+    @Test("each source polls at once, then on its own cadence")
     func externalCadence() async throws {
         let store = makeIsolatedEventStore()
         let log = FetchLog()
-        let version = Box("v1")
-        let engine = engine(store: store, log: log, catalog: {
-            version.value == "v1" ? Self.catalogV1 : Self.catalogV2
-        })
+        let engine = engine(store: store, log: log,
+                            tracker: { ResetTrackerWatcherTests.claudeResets },
+                            status: { StatusIncidentWatcherTests.incidents })
 
-        // First ever poll seeds the catalog and announces nothing.
-        #expect(await engine.pollExternalSources(now: now).isEmpty)
-        #expect(log.count("catalog") == 1)
-        #expect(log.count("test-feed") == 1)
+        let first = await engine.pollExternalSources(now: now, vendors: [.claude])
+        #expect(log.count("tracker:claude-resets") == 1)
+        #expect(log.count("status:claude") == 1)
+        #expect(log.count("models:claude") == 1)
+        // History is backfilled into the log on the first poll.
+        #expect(first.contains { $0.kind == .vendorReset })
+        #expect(first.contains { $0.kind == .outageStarted })
 
-        version.value = "v2"
-        #expect(await engine.pollExternalSources(now: now.addingTimeInterval(3600)).isEmpty)
-        #expect(log.count("catalog") == 1)
+        // Ten minutes on: only the status page is due again, and it records
+        // nothing it already has.
+        let later = now.addingTimeInterval(AIEventEngine.statusPollInterval)
+        #expect(await engine.pollExternalSources(now: later, vendors: [.claude]).isEmpty)
+        #expect(log.count("status:claude") == 2)
+        #expect(log.count("tracker:claude-resets") == 1)
 
-        let later = now.addingTimeInterval(AIEventEngine.externalPollInterval)
-        let fresh = await engine.pollExternalSources(now: later)
-        #expect(log.count("catalog") == 2)
-        #expect(Set(fresh.map(\.kind)) == [.newModel, .priceChange])
-        #expect(fresh.first { $0.kind == .newModel }?.title == "Claude Sonnet 5.5 listed")
+        // An hour on: the tracker is due, and re-reading it is harmless.
+        let hour = now.addingTimeInterval(AIEventEngine.trackerPollInterval)
+        #expect(await engine.pollExternalSources(now: hour, vendors: [.claude]).isEmpty)
+        #expect(log.count("tracker:claude-resets") == 2)
+    }
 
-        // The same catalog again, after another interval: nothing new.
-        let again = await engine.pollExternalSources(now: later.addingTimeInterval(AIEventEngine.externalPollInterval))
-        #expect(again.isEmpty)
-        #expect(log.count("catalog") == 3)
+    @Test("an incident resolved after it was first seen records its recovery then")
+    func recoveryRecordedLater() async throws {
+        let store = makeIsolatedEventStore()
+        let page = Box(StatusIncidentWatcherTests.openIncident)
+        let engine = engine(store: store, log: FetchLog(), status: { page.value })
+
+        let opened = await engine.pollExternalSources(now: now, vendors: [.claude])
+        #expect(opened.map(\.kind) == [.outageStarted])
+
+        page.value = StatusIncidentWatcherTests.resolvedIncident
+        let resolved = await engine.pollExternalSources(
+            now: now.addingTimeInterval(AIEventEngine.statusPollInterval), vendors: [.claude])
+        #expect(resolved.map(\.kind) == [.outageResolved])
+        #expect(resolved.first?.detail == "Resolved after 1h 30m")
     }
 
     /// Regression guard for the privacy toggle: off must mean no request.
@@ -145,48 +154,38 @@ struct AIEventEngineTests {
     func trackingOffNoFetch() async {
         let log = FetchLog()
         let enabled = Box(false)
-        let engine = engine(store: makeIsolatedEventStore(), log: log, catalog: { Self.catalogV1 },
+        let engine = engine(store: makeIsolatedEventStore(), log: log,
+                            tracker: { ResetTrackerWatcherTests.claudeResets },
                             tracking: { enabled.value })
-        #expect(await engine.pollExternalSources(now: now).isEmpty)
+        #expect(await engine.pollExternalSources(now: now, vendors: [.claude]).isEmpty)
         #expect(log.total == 0)
 
         enabled.value = true
-        _ = await engine.pollExternalSources(now: now.addingTimeInterval(60))
-        #expect(log.count("catalog") == 1)
+        _ = await engine.pollExternalSources(now: now.addingTimeInterval(60), vendors: [.claude])
+        #expect(log.count("tracker:claude-resets") == 1)
+    }
+
+    @Test("with no configured vendor nothing is fetched")
+    func noVendorsNoFetch() async {
+        let log = FetchLog()
+        let engine = engine(store: makeIsolatedEventStore(), log: log)
+        #expect(await engine.pollExternalSources(now: now, vendors: []).isEmpty)
+        #expect(log.total == 0)
     }
 
     @Test("old events are pruned on an external poll")
     func prunesOldEvents() async throws {
         let store = makeIsolatedEventStore()
-        let old = AIEvent(id: "old", kind: .newModel, vendorId: .claude, title: "old", detail: nil,
+        let old = AIEvent(id: "old", kind: .vendorReset, vendorId: .claude, title: "old", detail: nil,
                           occurredAt: now.addingTimeInterval(-AIEventEngine.eventRetentionInterval - 86_400),
-                          observedAt: now, source: .openRouterCatalog)
-        let recent = AIEvent(id: "recent", kind: .newModel, vendorId: .claude, title: "recent", detail: nil,
-                             occurredAt: now.addingTimeInterval(-86_400), observedAt: now, source: .openRouterCatalog)
+                          observedAt: now, source: .resetTracker(name: "claude-resets"))
+        let recent = AIEvent(id: "recent", kind: .vendorReset, vendorId: .claude, title: "recent", detail: nil,
+                             occurredAt: now.addingTimeInterval(-86_400), observedAt: now,
+                             source: .resetTracker(name: "claude-resets"))
         try await store.recordEvents([old, recent])
         let engine = engine(store: store, log: FetchLog())
-        _ = await engine.pollExternalSources(now: now)
+        _ = await engine.pollExternalSources(now: now, vendors: [.claude])
         #expect(try await store.fetchEvents().map(\.id) == ["recent"])
-    }
-
-    @Test("the live catalog fetch is stubbed and treats an error status as no catalog")
-    func liveCatalogFetch() async throws {
-        let log = FetchLog()
-        let data = try await withEventStub({ request in
-            log.hit(request.url?.absoluteString ?? "")
-            return (200, Data(Self.catalogV1.utf8))
-        }) {
-            await OpenRouterCatalogWatcher.liveFetch()
-        }
-        #expect(data.flatMap(OpenRouterCatalogWatcher.parse)?.count == 1)
-        let failed = try await withEventStub({ request in
-            log.hit(request.url?.absoluteString ?? "")
-            return (503, Data(Self.catalogV1.utf8))
-        }) {
-            await OpenRouterCatalogWatcher.liveFetch()
-        }
-        #expect(failed == nil)
-        #expect(log.count(OpenRouterCatalogWatcher.catalogURL) == 2)
     }
 
     @Test("remaining time is whole units from an explicit now")
@@ -215,43 +214,60 @@ struct AIEventNotificationTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func event(_ id: String, _ kind: AIEventKind, title: String, detail: String? = "detail",
-                       hoursAgo: Double = 1) -> AIEvent {
-        AIEvent(id: id, kind: kind, vendorId: .claude, title: title, detail: detail,
+                       hoursAgo: Double = 1, source: AIEventSource = .resetTracker(name: "claude-resets"),
+                       vendor: VendorIdentifier = .claude) -> AIEvent {
+        AIEvent(id: id, kind: kind, vendorId: vendor, title: title, detail: detail,
                 occurredAt: now.addingTimeInterval(-hoursAgo * 3600), observedAt: now,
-                source: .openRouterCatalog)
+                source: source)
     }
 
     @Test("one banner per kind, consolidated when several")
     func consolidates() {
         let banners = AIEventNotification.banners(
-            for: [event("a", .newModel, title: "Claude Sonnet 5.5 listed"),
-                  event("b", .newModel, title: "GPT-6 listed"),
-                  event("c", .priceChange, title: "GPT-6 price changed", detail: "Prompt $2.50 → $2.00 per M tokens")],
+            for: [event("a", .newModel, title: "GPT-6.2 now available in Codex", source: .accountModels),
+                  event("b", .newModel, title: "Claude Opus 5.5 now available in Claude", source: .accountModels),
+                  event("c", .vendorReset, title: "Claude reset for everyone", detail: "Shipped Opus 5.5.")],
             enabledKinds: CredentialStore.defaultEventNotificationKinds, now: now)
         #expect(banners == [
-            AIEventBanner(title: "2 new models", body: "Claude Sonnet 5.5 listed; GPT-6 listed"),
-            AIEventBanner(title: "Price change: GPT-6 price changed", body: "Prompt $2.50 → $2.00 per M tokens"),
+            AIEventBanner(title: "2 new models",
+                          body: "GPT-6.2 now available in Codex; Claude Opus 5.5 now available in Claude"),
+            AIEventBanner(title: "Claude reset for everyone", body: "Shipped Opus 5.5."),
         ])
     }
 
-    /// Regression guard: a first feed poll keeps a week of items; none of
-    /// them may arrive as a banner.
-    @Test("events older than 48 hours, disabled kinds and usage resets never notify")
+    @Test("an outage banner names the vendor the incident title may not")
+    func outageNamesVendor() {
+        let banners = AIEventNotification.banners(
+            for: [event("o", .outageStarted, title: "Outage: Elevated errors across all models",
+                        detail: "Major impact", source: .statusPage(name: "claude"))],
+            enabledKinds: [.outageStarted], now: now)
+        #expect(banners == [AIEventBanner(title: "Claude · Outage: Elevated errors across all models",
+                                          body: "Major impact")])
+    }
+
+    /// Regression guard: a first poll backfills months of resets and
+    /// outages; none of them may arrive as a banner.
+    @Test("old events, disabled kinds, usage resets and retired rows never notify")
     func filters() {
         let banners = AIEventNotification.banners(
-            for: [event("old", .newModel, title: "old", hoursAgo: 49),
-                  event("off", .priceChange, title: "off"),
-                  event("reset", .usageReset, title: "reset")],
-            enabledKinds: [.newModel, .usageReset], now: now)
+            for: [event("old", .vendorReset, title: "old", hoursAgo: 49),
+                  event("off", .outageResolved, title: "off", source: .statusPage(name: "claude")),
+                  event("reset", .usageReset, title: "reset", source: .quotaPoll),
+                  event("catalog", .newModel, title: "listed", source: .openRouterCatalog),
+                  event("feed", .newModel, title: "news", source: .vendorFeed(name: "openai-news")),
+                  event("price", .priceChange, title: "price", source: .openRouterCatalog)],
+            enabledKinds: [.vendorReset, .usageReset, .newModel, .priceChange], now: now)
         #expect(banners.isEmpty)
     }
 
     @Test("a single event without detail falls back to its source caption")
     func fallbackBody() {
         let banners = AIEventNotification.banners(
-            for: [event("a", .newModel, title: "Grok 5 listed", detail: nil)],
+            for: [event("a", .newModel, title: "Grok 5 now available in Grok", detail: nil,
+                        source: .accountModels, vendor: .grok)],
             enabledKinds: [.newModel], now: now)
-        #expect(banners == [AIEventBanner(title: "New model: Grok 5 listed", body: "From the OpenRouter model catalog")])
+        #expect(banners == [AIEventBanner(title: "Grok 5 now available in Grok",
+                                          body: "From your account's model list")])
     }
 }
 
@@ -273,27 +289,47 @@ struct AIEventPreferenceTests {
         #expect(CredentialStore.isEventTrackingEnabled)
     }
 
-    @Test("notification kinds default when absent, store sorted raw values, and keep an empty choice")
+    @Test("notification kinds default to every surfaced kind and store the opt-outs")
     func kindsRoundTrip() {
-        let key = CredentialStore.eventNotificationKindsDefaultsKey
+        let key = CredentialStore.eventNotificationDisabledKindsDefaultsKey
+        let legacyKey = CredentialStore.eventNotificationKindsDefaultsKey
         let saved = CredentialStore.preferences.object(forKey: key)
-        defer { CredentialStore.preferences.set(saved, forKey: key) }
+        let savedLegacy = CredentialStore.preferences.object(forKey: legacyKey)
+        defer {
+            CredentialStore.preferences.set(saved, forKey: key)
+            CredentialStore.preferences.set(savedLegacy, forKey: legacyKey)
+        }
 
         CredentialStore.preferences.removeObject(forKey: key)
-        #expect(CredentialStore.eventNotificationKinds
-                == [.usageRestored, .resetCreditGranted, .newModel, .priceChange])
+        CredentialStore.preferences.removeObject(forKey: legacyKey)
+        #expect(CredentialStore.eventNotificationKinds == Set(AIEventKind.surfaced))
 
-        CredentialStore.eventNotificationKinds = [.priceChange, .newModel]
-        #expect(CredentialStore.preferences.stringArray(forKey: key) == ["new_model", "price_change"])
-        #expect(CredentialStore.eventNotificationKinds == [.newModel, .priceChange])
+        CredentialStore.eventNotificationKinds = Set(AIEventKind.surfaced).subtracting([.outageStarted, .newModel])
+        #expect(CredentialStore.preferences.stringArray(forKey: key) == ["new_model", "outage_started"])
+        #expect(!CredentialStore.eventNotificationKinds.contains(.outageStarted))
+        #expect(CredentialStore.eventNotificationKinds.contains(.vendorReset))
 
         CredentialStore.eventNotificationKinds = []
         #expect(CredentialStore.eventNotificationKinds.isEmpty)
     }
 
-    @Test("stored kinds decode, dropping unknown values")
-    func kindsDecode() {
-        #expect(CredentialStore.eventNotificationKinds(fromStored: nil) == CredentialStore.defaultEventNotificationKinds)
-        #expect(CredentialStore.eventNotificationKinds(fromStored: ["new_model", "retired"]) == [.newModel])
+    /// The bug the opt-out list exists to prevent: someone who once unticked
+    /// a box under the old opt-in list must still get the kinds added since.
+    @Test("an older opt-in choice is honoured for its kinds, and newer kinds are on")
+    func legacyMigration() {
+        let kinds = CredentialStore.eventNotificationKinds(
+            disabled: nil, legacyEnabled: ["usage_restored", "price_change", "retired"])
+        #expect(kinds.contains(.usageRestored))
+        #expect(!kinds.contains(.resetCreditGranted))
+        #expect(!kinds.contains(.newModel))
+        #expect(kinds.contains(.vendorReset))
+        #expect(kinds.contains(.outageStarted))
+        #expect(kinds.contains(.outageResolved))
+
+        #expect(CredentialStore.eventNotificationKinds(disabled: nil, legacyEnabled: nil)
+                == CredentialStore.defaultEventNotificationKinds)
+        // The opt-out list wins over a stale opt-in list.
+        #expect(CredentialStore.eventNotificationKinds(disabled: ["vendor_reset", "retired"], legacyEnabled: [])
+                == CredentialStore.defaultEventNotificationKinds.subtracting([.vendorReset]))
     }
 }

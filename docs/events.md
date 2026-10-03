@@ -1,109 +1,137 @@
 # AI events
 
-FrugalBar keeps a log of things that happened on the platforms you use: a quota window rolled over, a vendor restored your usage early, a model was listed, a price changed. The log is a record of **observations**. Nothing in it is inferred from silence, and no event is created to fill a gap. That is the same rule as "never synthesise a quota", applied to history: an event claiming something happened when nothing was measured is the same defect as an invented percentage.
+FrugalBar keeps a log of three things on the platforms you use: **resets**, **outages**, and **models that became selectable on your subscription**. The log is a record of **observations** of things that already happened. Nothing in it is inferred from silence, nothing is created to fill a gap, and no forecast or "reset expected" guess is ever read. That is the same rule as "never synthesise a quota", applied to history.
 
 ## Event kinds
 
-| Kind | Meaning | Evidence | Source label shown |
+| Kind | Meaning | Evidence | Caption |
 |---|---|---|---|
-| **Usage reset** | A quota window rolled over at the reset time the vendor published. | Two consecutive polls: the previous poll's `resetsAt` has passed and the new poll reports a reset time more than 60 s later. A drop in the used fraction alone never counts. | From the vendor's usage endpoint |
-| **Usage restored** | Used fell by 15 points or more *before* the published reset. This is how an unscheduled restore looks from outside. If the vendor also moved the reset time forward (a vendor-wide "we've reset everyone's limits" that restarts the clock), the event says the window restarted early. | Two measured polls of the same window: both fractions, a previous reset time still in the future, and a current reset time. The event states those figures and never says why. | From the vendor's usage endpoint |
-| **Reset credit** | The vendor granted a banked reset credit you can redeem. | OpenAI: `rate_limit_reset_credits.available_count` in the Codex usage payload rose between two polls that both carried it. Anthropic: the summed `resets_left` of the `cedar_ember` grants rose (see the note below on why this is empty today). | From the vendor's usage endpoint |
-| **New model** | A model appeared in a source FrugalBar fetched. | A model id first seen in the OpenRouter catalog, or a vendor feed item whose title announces a model. | From the OpenRouter model catalog, or From the `<feed>` feed |
-| **Price change** | A model's API price differs from the one stored last poll. | OpenRouter catalog prices on both sides of the change, or a vendor feed item whose title announces pricing. | As above |
+| **Vendor reset** | A vendor reset usage for everyone (or a plan tier), or granted a banked reset to apply later. | A community tracker's curated record of the announcement, after it landed, with a link to the post. See [Reset trackers](#reset-trackers). | Via claude-resets.com (community tracker) |
+| **Usage restored** | Used fell by 15 points or more *before* the published reset: how a vendor reset looks from your own account. If the vendor also moved the reset time forward, the event says the window restarted early. | Two measured polls of the same window: both fractions, a previous reset time still in the future, and a current reset time. | From the vendor's usage endpoint |
+| **Reset credit** | The vendor granted your account a banked reset credit. | OpenAI: `rate_limit_reset_credits.available_count` in the Codex usage payload rose between two polls that both carried it. Anthropic: the summed `resets_left` of the `cedar_ember` grants rose (empty today, see below). | From the vendor's usage endpoint |
+| **Outage** | The vendor's official status page opened a **major** or **critical** incident on a product you use. | The status page's incident, its impact, its affected components and its own start time. | From status.claude.com |
+| **Outage resolved** | The status page marked that incident resolved. | The incident's `resolved_at`; the detail gives the duration. | From status.claude.com |
+| **New model** | A model appeared on the list your own account can select. | The account-scoped model list your tool's CLI reads, fetched with the same credential as the quota. See [Account model lists](#account-model-lists). | From your account's model list |
+| **Usage reset** (log only) | A quota window rolled over at its scheduled reset. | The previous poll's `resetsAt` has passed and the new poll reports a reset time more than 60 s later. | From the vendor's usage endpoint |
+| **Price change** (retired) | A catalog or news-feed price change, recorded by earlier versions. Nothing records it now; the `price_change` case stays so old rows decode, and those rows are never shown. | — | From the OpenRouter model catalog |
+
+Usage reset is routine (every five hours for some vendors), so it never takes the popover's row or a banner here; it stays in the log, in **History → Events** and on the timeline, and has its own per-vendor opt-in under **Reset alerts**.
+
+`new_model` and `price_change` rows recorded by earlier versions from the OpenRouter catalog and vendor news feeds stay on disk but are never shown or announced: a launch post or a catalog listing is not a model you can pick yet.
 
 ### What is deliberately not inferred
 
 - **A lost reading is not a drop to zero.** Reset, restore and credit detection all need both polls to be `.measured`. A 401 or a timeout never produces a "usage restored" banner.
-- **A restore is not a reset.** The two detectors split on one fact, the vendor's reset time: once it has passed, a drop is a Usage reset; while it is still ahead, a drop is a Usage restored. A restore whose reset time also jumped forward is recorded as a restore that restarted the window, and the reset detector stays silent, so no poll is announced twice.
-- **Credits count the banked total only, and only when both polls published it.** `applicable_available_count` (redeemable right now) changes as you consume usage, so it is shown but never triggers an event. A count that drops out of one poll and comes back is not a grant. `credits.balance` is not displayed anywhere: its unit is unverified.
-- **No first-launch backlog.** Reset credits, restores and resets are edge-triggered (they need a previous poll). The catalog's first poll seeds silently. A feed's first poll keeps only items from the last 7 days, and undated items are treated as history.
-- **Price needs two figures.** A price appearing where there was none, or vanishing, is stored but not announced.
-- **Variants are ignored.** OpenRouter ids containing `:` (`:free`, `:thinking`, `:extended`) never produce events.
-- **Anthropic reset grants are parsed but currently empty.** FrugalBar asks the OAuth usage endpoint for them (`?cedar_ember=1`, a feature flag the claude.ai web UI uses). As of 3 Oct 2026 Anthropic answers a CLI login with `eligible: false, ineligible_reason: "surface"` and no grants, even for an account that holds a full reset on claude.ai, so the Claude row shows no reset-credit figure. Nothing is substituted for the missing figure. If Anthropic opens the surface, the row and the Reset credit event start working without a code change.
-- **Feed matching is conservative.** A false "New model" banner costs more trust than a missed one, and the catalog catches most releases anyway. A new-model item needs an announcement phrase *and* a versioned model name in the title ("Claude Sonnet 5.5", "GPT-6", "Gemini 4"); "Introducing Gemini in Chrome" or "Meet the new Gemini app" name a family, not a release, and never qualify. A price item needs a pricing phrase in the title plus a model, plan or API context; rate-limit or usage-limit increases are allowance news, not price news, and are never recorded as a price change. Summaries alone never qualify.
+- **A restore is not a reset.** Once the vendor's reset time has passed, a drop is a Usage reset; while it is still ahead, a drop is a Usage restored.
+- **A vendor reset is the vendor's word, not your account's figure.** It records that the vendor announced a reset for a scope ("everyone", "Max", "Pro, Max + Team") and links the post. Whether your own window moved is what Usage restored measures.
+- **Only the past.** The trackers also publish next-reset forecasts and probabilities. They are never read: a guess about tomorrow is not an observation.
+- **Minor incidents are not outages.** Statuspage's `minor` covers a slow console or one model's latency and is filed several times a week; only `major` and `critical` are recorded.
+- **A model is new once.** Each account's first list seeds silently, and a model that drops out of the list and returns is not announced again.
+- **Anthropic reset grants are parsed but currently empty.** The OAuth usage endpoint answers a CLI login with `eligible: false, ineligible_reason: "surface"`, so the Claude row shows no reset-credit figure. Claude's banked resets still appear as Vendor reset events from the tracker.
 
 ## Where the evidence comes from
 
-| Source | Request | Credential | Vendors | Notes |
-|---|---|---|---|---|
-| Quota polls | The vendor usage endpoint you already configured | Yours, as for the quota row | All with a measured window | No extra request |
-| OpenRouter catalog | `GET https://openrouter.ai/api/v1/models` | **None** (public) | Anthropic, OpenAI, Google, xAI, by id prefix (`anthropic/`, `openai/`, `google/`, `x-ai/`) | The only source for Grok model and price news. Polled every 6 hours; if nothing is reachable (launch before Wi-Fi), the retry comes 10 minutes later. Events are recorded *before* the new baseline is stored, so a crash in between re-derives them rather than losing them |
-| OpenAI news | `https://openai.com/news/rss.xml` | None | OpenAI | Official |
-| Google AI blog | `https://blog.google/technology/ai/rss/` | None | Gemini | Official |
-| Google DeepMind | `https://deepmind.google/blog/rss.xml` | None | Gemini | Official |
-| Anthropic news | Community scrape, `Olshansk/rss-feeds` on GitHub | None | Claude | **Unofficial.** The caption reads "(unofficial scrape)" so it never looks like Anthropic speaking |
+All outbound sources are switched by one toggle, **Preferences → General → AI events → Track resets, outages and new models** (on by default), and are read only for vendors you have configured.
 
-xAI publishes no feed, so Grok model news comes from the catalog only. Other vendors' models in the catalog (Meta, Mistral, DeepSeek) are ignored.
+### Status pages
 
-External sources are polled at most **every 6 hours**, independently of the 2-minute quota poll. A failed fetch (network, non-2xx, unparseable body, unreadable stored state) yields no events and leaves stored state untouched, so a bad poll cannot reseed the catalog or re-announce a feed backlog.
+Official Statuspage incident history (`/api/v2/incidents.json`, the newest 50 incidents), polled every **10 minutes**. No credential.
+
+| Page | Vendor row | Incidents that count |
+|---|---|---|
+| `status.claude.com` | Claude | Components Claude Code, Claude API, claude.ai, or none listed (Anthropic files platform-wide failures with no component) |
+| `status.openai.com` | OpenAI | The page lists no components: the incident name mentions Codex, or the impact is critical |
+| `www.githubstatus.com` | GitHub Copilot | Components Copilot or Copilot AI Model Providers |
+
+OpenRouter and xAI answer the incident API with 403. Google (Gemini), Kiro, OpenCode, Cline, Command Code and LLM Gateway publish no machine-readable status history.
+
+### Reset trackers
+
+No vendor publishes bonus resets anywhere a program can read; they are announced on X. Two community trackers keep a curated, dated record with links to the posts. Polled every **hour**. No credential.
+
+| Tracker | Vendors | Read | Not read |
+|---|---|---|---|
+| `claude-resets.com/api/resets` | Claude (from @ClaudeDevs and Anthropic staff), Codex (from @thsottiaux) | `kind: "reset"` entries; `resetType: "banked"` and `usableUntil` for banked resets | `kind: "policy"` entries (limit changes), ids in `meta.provisionalEventIds` (not yet verified) |
+| `whenreset.dev/api/resets` | Grok | `type: "reset"` and `type: "card"` (banked) with a `landedAt` | The `watch` block (scheduled and expected resets), forecasts, every other vendor |
+
+Each vendor comes from exactly one tracker, so a reset is never recorded twice from two posts. codex-reset.com was evaluated and left out: its timeline classifies posts automatically and files non-resets under `type: "reset"`, and its `/api/forecast` is a self-described experimental model.
+
+### Account model lists
+
+Each subscription's own model list, fetched with the credential its quota already uses, polled every **hour**.
+
+| Subscription | Request | Selectable means | Checked live |
+|---|---|---|---|
+| Codex | `GET chatgpt.com/backend-api/codex/models?client_version=<latest>` | `visibility == "list"`. The list is gated on `client_version`, so FrugalBar sends the latest Codex CLI release (from npm, falling back to `~/.codex/models_cache.json`): a model that appears is one the current release can select, not one revealed because a version number moved | Yes |
+| Claude | `GET api.anthropic.com/api/claude_cli/bootstrap` (Claude Code's own bootstrap) | `model_access[].entitled == true` | No: read from the Claude Code binary; the token is in the Keychain |
+| Gemini | `POST cloudcode-pa…/v1internal:fetchAvailableModels` for the `loadCodeAssist` project | Every model id except internal helpers (`chat_`, `tab_`, `rev_`, image, mquery, lite) | No: local tokens had expired |
+| GitHub Copilot | `GET api.githubcopilot.com/models` | `model_picker_enabled`, `capabilities.type == "chat"`, `policy.state` not `disabled` | Yes |
+| OpenCode Go | `GET opencode.ai/zen/go/v1/models` (always authenticated: the list is filtered to the workspace) | Every id | Yes |
+| Kiro | `POST` `AmazonCodeWhispererService.ListAvailableModels` with `origin: KIRO_CLI` | Every `modelId` | Yes |
+| Grok | `GET cli-chat-proxy.grok.com/v1/models` | Every id | Yes |
+| DevPass | `GET api.llmgateway.io/v1/models` (scoped to the key) | Every id without `deactivated_at` | Yes |
+| ClinePass | `GET api.cline.bot/api/v1/ai/cline/recommended-models`, a plan catalogue | `clinePass[]`, and only when `/users/me/plan` reports `cline_pass.enabled` | Yes |
+
+Command Code has no model list (its CLI decides access from a table compiled into the client), and OpenRouter is pay-as-you-go with ~460 models from every lab, so neither is read. A list that cannot be read, or comes back empty, changes nothing.
 
 ## Deduplication
 
-Every candidate goes through one call, `QuotaHistoryStore.recordEvents`, which inserts each `id` once and returns only the newly inserted events. Notifications are driven by that return value and nothing else, so a restart, a repeated poll or a feed that re-serves an item cannot post twice.
+Every candidate goes through one call, `QuotaHistoryStore.recordEvents`, which inserts each `id` once and returns only the newly inserted events. Notifications are driven by that return value and nothing else, so a restart, a repeated poll or a source that re-serves history cannot post twice. That is also why the status pages and trackers need no checkpoint: re-reading their whole history every poll is harmless.
 
-Ids are built from the facts that define the event, never from a UUID or from prose (`AIEvent.makeID`: kind, vendor, then components):
-
-| Kind | Id components |
+| Kind | Id components (`AIEvent.makeID`: kind, vendor, then these) |
 |---|---|
 | Usage reset | window label, new reset time (epoch s) |
 | Usage restored | window label, published reset time, before %, after % |
-| Reset credit | previous count, new count, poll time (edge-triggered, so the poll time separates a second grant from a re-derivation) |
-| New model | OpenRouter model id, or the feed item's own guid |
-| Price change | model id, new prompt price, new completion price (a later second change is a new event) |
-
-Rewording a title cannot create a second copy of an event. Renaming a feed (`VendorFeed.name`) does: it re-announces that feed's backlog, so don't.
+| Reset credit | previous count, new count, poll time |
+| Vendor reset | the announcing post's id |
+| Outage / Outage resolved | status page name, the vendor's incident id |
+| New model | `account`, the model id |
+| New model (retired rows) | OpenRouter model id, or the news-feed item's guid |
+| Price change (retired) | model id, new prompt price, new completion price |
 
 ## Notifications
 
-Banners are posted with `osascript` `display notification`. FrugalBar ships as a bare executable with no bundle id, so macOS attributes the banner to the process that runs it rather than to "FrugalBar".
+Banners are posted with `osascript` `display notification`. FrugalBar ships as a bare executable with no bundle id, so macOS attributes the banner to the process that runs it.
 
 | Rule | Behaviour |
 |---|---|
-| Per-kind toggles | **Preferences → General → AI events → Notify about.** On by default for Usage restored, Reset credit, New model, Price change. |
-| Usage reset | Not in that list. It stays per vendor under **Preferences → General → Reset alerts**, off for every vendor by default. The log records resets for all vendors whether or not you opted in: the log is a record, the banner is the opt-in. |
-| Age cutoff | An event whose `occurredAt` is older than **48 hours** is recorded but never announced. This stops a feed's first week of items, or a model listed long after its `created` date, from arriving as stale news. |
-| Consolidation | One banner per kind per poll. Several events become "3 new models" with the titles in the body. |
-| Tracking switch | **Track model releases and pricing** gates only the outbound polling (catalog and feeds). On by default because the requests carry no credential and read public data. Quota-derived events are recorded regardless. |
-| Quota-recovery toggle | The separate "Quota-recovery notifications" setting is unrelated and off by default. |
+| Per-kind toggles | **Preferences → General → AI events → Notify about.** Every kind above except Usage reset, all on by default. The preference stores the kinds you switched *off*, so a kind added later notifies by default; a choice saved by an older version is honoured for the kinds it offered. |
+| Usage reset | Per vendor under **Preferences → General → Reset alerts**, off by default. |
+| Age cutoff | An event whose `occurredAt` is older than **48 hours** is recorded but never announced. This is what keeps the first poll's backfill of months of resets and outages silent. |
+| Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"); outage banners lead with the vendor, since incident names often don't say it. Several events of one kind in one poll become "3 new models" with the titles in the body. |
 
 ## Where events appear
 
 | Place | What you see |
 |---|---|
-| Popover | A "Recent events" card with the newest 3 events and a "See all" link. Hidden when there are no events. The store holds the newest 20. |
-| History → Events tab | Every recorded event grouped by day. Filters: vendor, time range (24 Hours / 7 Days / 30 Days / All Time, default 7 Days), and kind chips (all on by default). Each row shows kind symbol, vendor, title, relative time, source caption, a detail line and a link to the vendor page when there is one (http/https only). Sample mode shows a note: the fixture records no events. A read failure shows an error card, never an empty list. |
-| History → timeline | Dashed vertical markers for Usage reset, Usage restored and Reset credit on the vendor you are viewing. Catalog and feed events say nothing about the allowance the chart plots, so they are never markers. |
-| Inspector | "Recent events" for that vendor. See [inspector.md](inspector.md). |
+| Popover | A "Latest event" card with the newest surfaced event and a "See all" link. Hidden when there are none. The row shows the vendor's logo, the title, its age and source. |
+| History → Events tab | Every listed event grouped by day. Filters: vendor, time range (24 Hours / 7 Days / 30 Days / All Time, default 7 Days), and kind chips for the kinds above (all on). Each row has a detail line and a link to the post, incident or vendor page (http/https only). Sample mode shows a note: the fixture records no events. A read failure shows an error card, never an empty list. |
+| History → timeline | Dashed vertical markers for Usage reset, Usage restored, Reset credit and Vendor reset on the vendor you are viewing. Outages and models say nothing about the allowance the chart plots, so they are never markers. |
+| Inspector | "Recent events" for that vendor (the newest five surfaced). See [inspector.md](inspector.md). |
 
-Every kind has its own SF Symbol, so colour is never the only channel. Rows carry a spoken label of the form "New model, Claude: Claude Sonnet 5.5 listed, 3 hours ago, from the OpenRouter model catalog".
+Rows carry no kind symbol: every title says what happened in words ("Outage: …", "Resolved: …", "Claude banked reset for Pro, Max + Team"). The spoken label also names the kind: "Vendor reset, Claude: Claude reset for everyone, 3 hours ago, via claude-resets.com (community tracker)".
 
 ## Data and retention
 
-Three tables, all additive (`CREATE TABLE IF NOT EXISTS` on every open) in the same SQLite file as quota history:
+Two tables, both additive (`CREATE TABLE IF NOT EXISTS` on every open) in the same SQLite file as quota history:
 
 | Table | Holds | Retention |
 |---|---|---|
-| `event` | The log. Primary key `id`. | **365 days.** Pruned on the external-poll cadence (every 6 hours), whether or not catalog and feed tracking is on. |
-| `catalog_model` | Last seen catalog entry per model, with prices as decimal text (so a binary float can't invent a price change), `first_seen`, `last_seen`. | Not pruned |
-| `feed_item` | `(feed, item_id)` pairs already judged, so each item is classified exactly once. | Not pruned |
+| `event` | The log. Primary key `id`. | **365 days**, pruned every 6 hours whether or not tracking is on. |
+| `account_model` | Every model each account's list has carried: `(vendor, model_id)`, display name, `first_seen`, `last_seen`. | Not pruned, so a returning model is never new |
 
-Quota readings keep their own 90-day retention. The schema version was **not** bumped for these tables: a bump drops user data. See `AGENTS.md`.
+The retired `catalog_model` and `feed_item` tables are no longer created; databases that already have them keep them untouched. The schema version was **not** bumped: a bump drops user data. See `AGENTS.md`.
 
 ## For maintainers
 
-All code is in `Sources/QuotaBarCore/Events/`. `AIEventKind` and `AIEventSource` rawValues are persisted, so never rename a case; add one.
+`AIEventKind` and `AIEventSource` raw values are persisted, so never rename a case; add one. `AIEventKind.surfaced` is the list the popover, notifications and History use; `AIEvent.isSurfaced` additionally requires a new model to come from `.accountModels`.
 
-**Add a feed.** Append a `VendorFeed(name:url:vendorId:isOfficial:)` to `VendorFeed.all` in `VendorFeedWatcher.swift`. Pick a `name` you will never change (it is persisted in `feed_item` and in the source as `feed:<name>`). Set `isOfficial: false` for any third-party scrape. Add parsing cases to `FeedParserTests` only if the format is new; classification is shared. Tune wording in `FeedItemClassifier` conservatively and extend `FeedItemClassifierTests` with a title that must *not* match.
+**Add a status page.** Append a `StatusPage` to `StatusPage.all` in `StatusIncidentWatcher.swift` with a `Relevance` that names the components (or, for a page without components, the product words). Keep the `name` stable: it is in every event id and source.
 
-**Add a catalog vendor.** Add a prefix to `CatalogDiff.vendor(forModelId:)` in `OpenRouterCatalogWatcher.swift`.
+**Add a reset tracker.** Append a `ResetTracker` with the vendors it is trusted for (one tracker per vendor) and a parser that reads only landed resets. Fixtures go in `ResetTrackerWatcherTests`, including an entry that must be dropped.
 
-**Add a poll detector.** Write a pure `enum` in `Sources/QuotaBarCore/Events/` that takes `previous` and `current` snapshot dictionaries (and an explicit `now`), requires both polls `.measured`, treats a missing figure as no event, and returns a small event struct. Then:
+**Add an account model list.** Add the vendor to `AccountModelLister.supportedVendors` and a case to `AccountModelLister.live` that reads the endpoint the vendor's own CLI uses for its model picker, with the provider's existing credential. Return nil for anything other than a clean, account-scoped answer.
 
-1. Add the `AIEventKind` case (`title`, `symbolName`, `pluralTitle`, `notificationCaption`) and decide whether `EventsPresentation.markerKinds` includes it.
-2. Build the `AIEvent` in `AIEventEngine` with an id made from facts via `AIEvent.makeID`.
-3. Return it from `QuotaNotificationObserver.observeTransitions` and pass it through `AIEventEngine.recordPollEvents` in `AppMain.recordAIEvents`.
-4. Add a toggle in `SettingsView` and, if it should default on, to `CredentialStore.defaultEventNotificationKinds`.
-5. Test with an explicit `now`, and show the test fails when the guard is removed (see `UsageRestoreDetectorTests`).
+**Add a poll detector.** Write a pure `enum` that takes `previous` and `current` snapshot dictionaries and an explicit `now`, requires both polls `.measured`, and treats a missing figure as no event. Add the `AIEventKind` case (`title`, `symbolName`, `pluralTitle`, `notificationCaption`), append it to the static `AIEventKind.surfaced` list if it should reach the popover and notifications, build the event in `AIEventEngine` with `AIEvent.makeID`, route it through `QuotaNotificationObserver.observeTransitions` and `AIEventEngine.recordPollEvents`, and show the test fails when the guard is removed (see `UsageRestoreDetectorTests`).
 
-Tests live in `Tests/`: `UsageRestoreDetectorTests`, `CatalogDiffTests`, `FeedItemClassifierTests`, `VendorFeedWatcherTests`, `AIEventEngineTests`, `AIEventStoreTests`.
+Tests: `ResetTrackerWatcherTests`, `StatusIncidentWatcherTests`, `AccountModelWatcherTests`, `AIEventEngineTests`, `AIEventStoreTests`, `PendingPollTests`, `UsageRestoreDetectorTests`, `EventsPresentationTests`.

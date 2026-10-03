@@ -188,6 +188,8 @@ public enum CredentialStore {
     /// Which AI-event kinds post a notification, stored as sorted raw values.
     /// `.usageReset` is listed here for completeness but its banners stay
     /// governed per vendor by `resetAlertVendors`.
+    /// Retired opt-in list, read once for migration (see
+    /// `eventNotificationDisabledKindsDefaultsKey`).
     public static let eventNotificationKindsDefaultsKey = "QuotaBarEventNotificationKinds"
 
     /// Whether the History window is viewing synthetic sample fixture data
@@ -270,21 +272,48 @@ public enum CredentialStore {
         set { preferences.set(newValue, forKey: eventTrackingEnabledDefaultsKey) }
     }
 
-    /// The kinds that notify when the user has never chosen.
-    public static let defaultEventNotificationKinds: Set<AIEventKind> = [
+    /// The kinds that notify when the user has never chosen: every kind
+    /// FrugalBar surfaces.
+    public static let defaultEventNotificationKinds: Set<AIEventKind> = Set(AIEventKind.surfaced)
+
+    /// The kinds the user switched *off*. Storing the opt-outs rather than the
+    /// opt-ins is what lets a kind added in a later version notify by default:
+    /// a stored opt-in list from an older version could not name it, so it
+    /// would have stayed silent for anyone who had ever touched a toggle.
+    public static let eventNotificationDisabledKindsDefaultsKey = "QuotaBarEventNotificationDisabledKinds"
+
+    public static var eventNotificationKinds: Set<AIEventKind> {
+        get {
+            eventNotificationKinds(
+                disabled: preferences.stringArray(forKey: eventNotificationDisabledKindsDefaultsKey),
+                legacyEnabled: preferences.stringArray(forKey: eventNotificationKindsDefaultsKey))
+        }
+        set {
+            let disabled = defaultEventNotificationKinds.subtracting(newValue)
+            preferences.set(disabled.map(\.rawValue).sorted(), forKey: eventNotificationDisabledKindsDefaultsKey)
+        }
+    }
+
+    /// The kinds the older opt-in list let the user choose between. A kind
+    /// missing from a stored opt-in list was only a deliberate "off" if it
+    /// was on this list.
+    static let legacyChoosableEventKinds: Set<AIEventKind> = [
         .usageRestored, .resetCreditGranted, .newModel, .priceChange,
     ]
 
-    public static var eventNotificationKinds: Set<AIEventKind> {
-        get { eventNotificationKinds(fromStored: preferences.stringArray(forKey: eventNotificationKindsDefaultsKey)) }
-        set { preferences.set(newValue.map(\.rawValue).sorted(), forKey: eventNotificationKindsDefaultsKey) }
-    }
-
-    /// An absent key is the default set; a stored empty list is a deliberate
-    /// "notify about nothing" and stays empty. Unknown raw values are dropped.
-    static func eventNotificationKinds(fromStored raw: [String]?) -> Set<AIEventKind> {
-        guard let raw else { return defaultEventNotificationKinds }
-        return Set(raw.compactMap(AIEventKind.init(rawValue:)))
+    /// - The opt-out list wins when present; unknown raw values are dropped.
+    /// - Otherwise an opt-in list from an older version is honoured for the
+    ///   kinds it could have named, and every newer kind is on.
+    /// - With neither, every surfaced kind is on.
+    static func eventNotificationKinds(disabled: [String]?, legacyEnabled: [String]?) -> Set<AIEventKind> {
+        if let disabled {
+            return defaultEventNotificationKinds.subtracting(disabled.compactMap(AIEventKind.init(rawValue:)))
+        }
+        if let legacyEnabled {
+            let enabled = Set(legacyEnabled.compactMap(AIEventKind.init(rawValue:)))
+            return defaultEventNotificationKinds.subtracting(legacyChoosableEventKinds.subtracting(enabled))
+        }
+        return defaultEventNotificationKinds
     }
 
     public static var isSampleModeEnabled: Bool {

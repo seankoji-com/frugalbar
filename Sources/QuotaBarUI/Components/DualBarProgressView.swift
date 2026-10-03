@@ -8,6 +8,9 @@ public struct DualBarProgressView: View {
 
     let metrics: DualBarMetrics
     let accentColor: Color
+    /// Draw the window token beside the track. Off in the popover grid, where
+    /// the column header names the window and the cell prints the figure.
+    let showsLabel: Bool
 
     /// Track and fill thickness.
     static let barHeight: CGFloat = 8
@@ -21,10 +24,12 @@ public struct DualBarProgressView: View {
 
     public init(
         metrics: DualBarMetrics,
-        accentColor: Color
+        accentColor: Color,
+        showsLabel: Bool = true
     ) {
         self.metrics = metrics
         self.accentColor = accentColor
+        self.showsLabel = showsLabel
     }
 
     /// nil when the vendor declared this window blocked/critical but reported
@@ -92,22 +97,33 @@ public struct DualBarProgressView: View {
         metrics.isBlocked && hasNoReading
     }
 
-    private var labelColor: Color {
+    private var labelColor: Color { Self.stateColor(for: metrics) }
+
+    /// The colour that carries a window's state: green at or under pace,
+    /// amber ahead of it, red once it is spent or blocked, neutral with no
+    /// reading. Shared with the popover grid's percentage text so a figure
+    /// and the bar above it never disagree.
+    static func stateColor(for metrics: DualBarMetrics) -> Color {
+        let consumed = metrics.primaryFraction.map { max(0, min(1, $0)) }
+        let pace = metrics.expectedPaceFraction.map { max(0, min(1, $0)) }
+        let vendorStatusColor = metrics.isBlocked
+            ? metrics.blockedColor.flatMap(Color.init(hexString:))
+            : nil
         if let vendorStatusColor {
             return vendorStatusColor
-        } else if isBlockedWithoutReading {
-            // Matches the hatched placeholder bar's own fallback below
+        } else if metrics.isBlocked && consumed == nil {
+            // Matches the hatched placeholder bar's own fallback
             // (`vendorStatusColor ?? Theme.errorBold`) — a blocked window
             // with no vendor colour and no reading must not show a label in
             // one colour beside a bar drawn in another.
             return Theme.errorBold
-        } else if hasNoReading {
+        } else if consumed == nil {
             // No reading and not vendor-flagged blocked: neutral, not a
             // fabricated "healthy" green.
             return Theme.outline
-        } else if isExhausted {
+        } else if let consumed, consumed >= 0.999 {
             return Theme.errorBold
-        } else if let pace = targetPacePct, let consumedPct, consumedPct > pace {
+        } else if let pace, let consumed, consumed > pace {
             return Color(red: 0.96, green: 0.72, blue: 0.15) // Bright warning yellow
         } else {
             return Theme.healthy // Vibrant green
@@ -291,22 +307,24 @@ public struct DualBarProgressView: View {
             // and below it instead of overflowing the 8pt layout box.
             .frame(height: Self.markerHeight)
 
-            // The window token, always. Colour carries the state: green at or
-            // under pace, amber ahead of it, red once it is spent.
-            Text(metrics.label)
-                .font(Theme.Typography.token)
-                .tracking(Theme.Tracking.token)
-                .foregroundStyle(labelColor)
-                .lineLimit(1)
-                // Most window codes are two characters and need no scaling —
-                // that's what kept the column from looking ragged when every
-                // label shrank together regardless of length. But not every
-                // label is two characters: GitHub's REST/GraphQL rows, an
-                // absent-limit OpenAI "PLAN", and the hand-entered "CYCLE"
-                // row all run longer, and were truncating silently without a
-                // fallback. Only those get scaled.
-                .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
-                .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
+            // The window token. Colour carries the state: green at or under
+            // pace, amber ahead of it, red once it is spent.
+            if showsLabel {
+                Text(metrics.label)
+                    .font(Theme.Typography.token)
+                    .tracking(Theme.Tracking.token)
+                    .foregroundStyle(labelColor)
+                    .lineLimit(1)
+                    // Most window codes are two characters and need no scaling —
+                    // that's what kept the column from looking ragged when every
+                    // label shrank together regardless of length. But not every
+                    // label is two characters: GitHub's REST/GraphQL rows, an
+                    // absent-limit OpenAI "PLAN", and the hand-entered "CYCLE"
+                    // row all run longer, and were truncating silently without a
+                    // fallback. Only those get scaled.
+                    .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
+                    .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
+            }
         }
         .help(helpText)
         .accessibilityHidden(true)

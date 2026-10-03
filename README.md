@@ -7,7 +7,7 @@
 
 A native macOS menu bar app that shows how much headroom you have left across AI subscriptions, API spend caps, and developer rate limits.
 
-Click a provider row to open its inspector: a Burndown | History chart, the vendor's recent events and any banked reset credits. An ideal-pace line appears only when the vendor publishes a window length and reset, and a projection only from a measured recent pace. See [docs/inspector.md](docs/inspector.md).
+Each subscription's windows line up in **5H / WK / MO** columns, with the share used under each bar; hover a row for its recent-pace forecast. Click a provider row to open its inspector: a Burndown | History chart, the vendor's recent events and any banked reset credits. An ideal-pace line appears only when the vendor publishes a window length and reset, and a projection only from a measured recent pace. See [docs/inspector.md](docs/inspector.md).
 
 ---
 
@@ -136,9 +136,9 @@ Optionally record the cost per period and it appears alongside the countdown.
 
 ## Events & notifications
 
-FrugalBar keeps a log of what happened on the platforms you use: a window rolled over, usage was restored before its published reset, OpenAI granted a reset credit, a model was listed, a price changed. Every event is an observation with its evidence attached; none is inferred, and a lost reading is never treated as a drop to zero. Anthropic reset grants are requested too, but Anthropic currently serves them only to the claude.ai web session, not to a CLI login, so the Claude row shows none until that changes.
+FrugalBar keeps a log of three things on the platforms you use, all of them things that already happened: **resets** (a vendor reset everyone's usage or granted a banked reset, your own window was restored early, or OpenAI granted your account a reset credit), **outages** (a major or critical incident on the vendor's official status page, and its recovery), and **new models** that became selectable on your own subscription. Forecasts, launch posts and catalog listings are never read.
 
-Model and price events come from OpenRouter's public catalog (no key) for Anthropic, OpenAI, Google and xAI, and from the OpenAI and Google/DeepMind feeds. Anthropic's feed is a community scrape and is labelled unofficial. xAI has no feed. External sources poll every 6 hours and can be switched off under **Preferences → General → AI events**, where each kind also has its own notification toggle. Events appear in the popover, in **History → Events**, as timeline markers and in the inspector, and are kept for 365 days. Details: [docs/events.md](docs/events.md).
+Outages come from the official status pages for Claude, OpenAI (Codex) and GitHub Copilot, polled every 10 minutes. Vendor resets come from the community trackers claude-resets.com (Claude, Codex) and whenreset.dev (Grok), hourly, and are captioned as community-sourced. New models come from each subscription's own model list, read hourly with the credential its quota already uses. Everything can be switched off under **Preferences → General → AI events**, where each kind also has its own notification toggle. The newest event shows in the popover; all of them are in **History → Events**, as timeline markers and in the inspector, and are kept for 365 days. Details: [docs/events.md](docs/events.md).
 
 ---
 
@@ -152,7 +152,7 @@ Model and price events come from OpenRouter's public catalog (no key) for Anthro
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Credential-free event sources**: the two outbound sources added for events, OpenRouter's public model catalog (`GET https://openrouter.ai/api/v1/models`) and the vendor news feeds, send no credential and read only public data. Switch them off under **Preferences → General → AI events**.
+- **Event sources**: the status pages (`status.claude.com`, `status.openai.com`, `www.githubstatus.com`) and reset trackers (`claude-resets.com`, `whenreset.dev`) are public and get no credential. Account model lists go to each vendor's own API with the credential that vendor's quota already uses, and nowhere else; the Codex list also reads the latest Codex CLI version from `registry.npmjs.org`, without a credential. Switch all of them off under **Preferences → General → AI events**.
 - **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---

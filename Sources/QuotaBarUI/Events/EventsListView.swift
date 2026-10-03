@@ -12,7 +12,7 @@ struct EventsListView: View {
     let store: QuotaHistoryStore
     let isSampleMode: Bool
 
-    @State private var kinds: Set<AIEventKind> = Set(AIEventKind.allCases)
+    @State private var kinds: Set<AIEventKind> = Set(EventsPresentation.listKinds)
     @State private var vendor: VendorIdentifier? = nil
     @State private var timeRange: HistoryPresentation.TimeRange = .last7Days
     @State private var events: [AIEvent] = []
@@ -106,7 +106,7 @@ struct EventsListView: View {
 
     @ViewBuilder
     private var kindChips: some View {
-        ForEach(AIEventKind.allCases) { kind in
+        ForEach(EventsPresentation.listKinds) { kind in
             kindChip(kind)
         }
     }

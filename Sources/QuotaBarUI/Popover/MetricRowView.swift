@@ -1,14 +1,20 @@
 import SwiftUI
 import QuotaBarCore
 
-/// A single provider row: vendor mark, name and plan, and the burndown bars for
-/// every window that vendor publishes.
+/// A single provider row: vendor mark, name and plan, then one cell per
+/// window column (5H / WK / MO, see `WindowColumn`) so the same window lines
+/// up down the card. Pools that are not a window (bonus credits, overage,
+/// on-demand) get their own line under the row.
 struct MetricRowView: View {
 
     let snapshot: QuotaSnapshot
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
-    /// Recent-pace forecast from history, when there is enough of it.
+    /// Recent-pace forecast from history, when there is enough of it. Shown
+    /// only while the row is hovered.
     var forecast: BurnRateForecast? = nil
+    /// The last row in its card shows the hover forecast above itself, so the
+    /// card's bottom edge and the scroll view never clip it.
+    var forecastAbove: Bool = false
 
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -16,10 +22,12 @@ struct MetricRowView: View {
 
     private var p: MetricRowPresentation { MetricRowPresentation(snapshot: snapshot) }
 
-    /// The windows actually drawn. The exhausted-window collapse lives on the
-    /// model (`QuotaSnapshot.displayBars`) so the popover and the inspector
-    /// agree on which windows a spent longer period makes redundant.
-    private var bars: [DualBarMetrics] { snapshot.displayBars }
+    /// The windows actually drawn, placed in their columns. The
+    /// exhausted-window collapse lives on the model
+    /// (`QuotaSnapshot.displayBars`) so the popover and the inspector agree on
+    /// which windows a spent longer period makes redundant; a collapsed window
+    /// leaves its cell empty.
+    private var grid: WindowGridPresentation { WindowGridPresentation(snapshot: snapshot) }
 
     private var accentColor: Color {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
@@ -73,10 +81,11 @@ struct MetricRowView: View {
     }
 
     var body: some View {
+        let grid = grid
         VStack(alignment: .leading, spacing: 4) {
-            row
-            if let forecastText {
-                forecastRow(forecastText)
+            row(grid)
+            ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
+                extraRow(bar)
             }
             if hasOpenRouterBadges {
                 openRouterBadgesRow
@@ -84,7 +93,7 @@ struct MetricRowView: View {
                 openRouterCatalogPlaceholderRow
             }
         }
-        .padding(.vertical, 9)
+        .padding(.vertical, 8)
         .frame(minHeight: Theme.rowMinHeight)
         .background(
             RoundedRectangle(cornerRadius: 10)
@@ -93,6 +102,19 @@ struct MetricRowView: View {
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
+        // The recent-pace forecast floats over the neighbouring row instead
+        // of taking a line of its own: shown on hover only, and without
+        // moving anything, so the popover never resizes under the pointer.
+        .overlay(alignment: forecastAbove ? .top : .bottom) {
+            if isHovered, let forecastText {
+                forecastBubble(forecastText)
+                    .offset(y: forecastAbove ? -Self.bubbleOffset : Self.bubbleOffset)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .zIndex(isHovered ? 1 : 0)
         .onTapGesture {
             onSelect?(snapshot)
         }
@@ -109,7 +131,13 @@ struct MetricRowView: View {
     /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
     /// styling alone is not an accessible status channel).
     private var combinedAccessibilityLabel: String {
-        var parts = [p.accessibilityLabel]
+        let windows = grid.spokenSummary()
+        // With the grid speaking each window, the headline percentage would
+        // be the same figure twice.
+        var parts = [windows == nil ? p.accessibilityLabel : p.accessibilityLabelOmittingPercentage]
+        if let windows {
+            parts.append(windows)
+        }
         if let forecastText {
             parts.append(forecastText)
         }
@@ -134,19 +162,12 @@ struct MetricRowView: View {
         return forecast?.summary(now: Date())
     }
 
-    /// The pace forecast gets its own full-width line; the 324pt row has no
-    /// room beside the bars. The hourglass is the non-colour channel.
-    private func forecastRow(_ text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: forecastIsUrgent ? "hourglass.bottomhalf.filled" : "hourglass")
-                .font(Theme.Typography.subtitle)
-            Text(text)
-                .font(Theme.Typography.subtitle)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(forecastIsUrgent ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.75))
+    /// How far the hover bubble sits past the row edge: it overlaps the row
+    /// by a few points so it reads as belonging to it.
+    private static let bubbleOffset: CGFloat = 16
+
+    private func forecastBubble(_ text: String) -> some View {
+        PaceForecastBubble(text: text, isUrgent: forecastIsUrgent)
     }
 
     /// Limit projected inside the reset window at the recent pace.
@@ -206,13 +227,13 @@ struct MetricRowView: View {
         "Model info unavailable — will retry"
     }
 
-    private var row: some View {
-        HStack(alignment: bars.count > 1 ? .top : .center, spacing: 9) {
+    private func row(_ grid: WindowGridPresentation) -> some View {
+        HStack(alignment: .center, spacing: Theme.rowSpacing) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
                 isExhausted: p.isExhausted,
-                size: 30
+                size: Theme.rowAvatarSize
             )
 
             // Two lines: vendor, then the plan the provider actually reported.
@@ -229,7 +250,8 @@ struct MetricRowView: View {
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(subtitleColor)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.9)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.tail)
                 }
                 // A money provider has no plan, but it does have the one figure
                 // that matters at a glance: what is left. It takes the subtitle
@@ -250,38 +272,11 @@ struct MetricRowView: View {
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
-            if !bars.isEmpty {
-                // Multi-bar (5H / WK / MO) burndown charts
-                VStack(spacing: 2) {
-                    ForEach(Array(bars.enumerated()), id: \.offset) { _, barMetrics in
-                        DualBarProgressView(
-                            metrics: barMetrics,
-                            accentColor: accentColor
-                        )
-                    }
-                }
-            } else if !snapshot.spendWindows.isEmpty {
-                // Spend per window. Deliberately not a bar: spend has no cap to
-                // measure against, so drawing one would invent a denominator.
-                VStack(alignment: .trailing, spacing: 5) {
-                    ForEach(Array(snapshot.spendWindows.enumerated()), id: \.offset) { _, window in
-                        // Same spacing and token column as a bar row, so the
-                        // money card's right edge lines up with the quota
-                        // cards' instead of sitting 16pt short of it.
-                        HStack(spacing: 8) {
-                            Spacer(minLength: 0)
-                            Text(window.amount.map { formatCurrency($0, code: window.currencyCode) } ?? "—")
-                                .font(Theme.Typography.numeric)
-                                .tracking(Theme.Tracking.numeric)
-                                .foregroundStyle(Theme.onSurface)
-                            Text(window.label)
-                                .font(Theme.Typography.token)
-                                .tracking(Theme.Tracking.token)
-                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                                .lineLimit(1)
-                                // Same fixed two-character column as a bar row.
-                                .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
-                        }
+            if grid.usesGrid {
+                HStack(alignment: .center, spacing: Theme.gridColumnSpacing) {
+                    ForEach(WindowColumn.allCases) { column in
+                        gridCell(column, grid: grid)
+                            .frame(maxWidth: .infinity)
                     }
                 }
             } else {
@@ -306,6 +301,44 @@ struct MetricRowView: View {
         }
     }
 
+    /// One window's cell: the bar with its pace carets, and the share used
+    /// beneath it in the bar's state colour. A column the vendor does not
+    /// publish stays empty — never a 0% bar.
+    @ViewBuilder
+    private func gridCell(_ column: WindowColumn, grid: WindowGridPresentation) -> some View {
+        if let bar = grid.bars[column] {
+            VStack(spacing: -2) {
+                DualBarProgressView(metrics: bar, accentColor: accentColor, showsLabel: false)
+                Text(WindowGridPresentation.percentText(for: bar)
+                     ?? WindowGridPresentation.unmeasuredText(for: bar))
+                    .font(Theme.Typography.token)
+                    .tracking(Theme.Tracking.token)
+                    .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        } else if let spend = grid.spend[column] {
+            // Spend per window. Deliberately not a bar: spend has no cap to
+            // measure against, so drawing one would invent a denominator.
+            Text(spend.amount.map { formatCurrency($0, code: spend.currencyCode) } ?? "—")
+                .font(Theme.Typography.chip)
+                .foregroundStyle(Theme.onSurface)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        } else {
+            Color.clear.frame(height: 1)
+        }
+    }
+
+    /// A pool that is not a window — Kiro's bonus or overage credits, Grok's
+    /// on-demand budget — on its own line under the grid, with its own token.
+    private func extraRow(_ bar: DualBarMetrics) -> some View {
+        HStack(spacing: Theme.rowSpacing) {
+            Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
+            DualBarProgressView(metrics: bar, accentColor: accentColor)
+        }
+    }
+
     private func formatCurrency(_ value: Decimal, code: String) -> String {
         let d = NSDecimalNumber(decimal: value).doubleValue
         if code == "AUD" {
@@ -315,5 +348,32 @@ struct MetricRowView: View {
         } else {
             return String(format: "%.2f %@", d, code)
         }
+    }
+}
+
+/// The recent-pace forecast as a floating chip, shown while a row is
+/// hovered. The hourglass is the non-colour channel; the row's accessibility
+/// label carries the same text whether or not the row is hovered.
+struct PaceForecastBubble: View {
+    let text: String
+    let isUrgent: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: isUrgent ? "hourglass.bottomhalf.filled" : "hourglass")
+            Text(text)
+                .lineLimit(1)
+        }
+        .font(Theme.Typography.subtitle)
+        .foregroundStyle(isUrgent ? Theme.tertiary : Theme.onSurface)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(Theme.surfaceContainerHighest)
+                .shadow(color: .black.opacity(0.45), radius: 6, y: 2)
+        )
+        .overlay(Capsule().stroke(Theme.outlineVariant.opacity(0.6), lineWidth: 0.5))
+        .fixedSize()
     }
 }

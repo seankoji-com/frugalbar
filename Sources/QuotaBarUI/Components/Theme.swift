@@ -52,12 +52,23 @@ public enum Theme {
     /// up to three stacked window bars, both land near this.
     public static let rowMinHeight: CGFloat = 56
 
-    /// Width of the vendor name column. Sized so the longest string that can
-    /// land there — "Resets on 1st of month", 134pt at `subtitle` — fits
-    /// without `minimumScaleFactor` engaging. Auto-shrink is itself an
-    /// inconsistency: it renders one row's subtitle a point smaller than its
-    /// neighbours', which is exactly what made the rows look mismatched.
-    public static let nameColumnWidth: CGFloat = 132
+    /// Width of the vendor name column. Narrowed from 132 when the bars moved
+    /// into the three-column window grid: the card's 332pt of content is
+    /// avatar 28 + 8 + name 112 + 8 + grid 176 (three 53pt columns, 8pt
+    /// apart). The longest subtitle, "Resets on 1st of month", now scales a
+    /// little and truncates past that; the row's tooltip carries it whole.
+    public static let nameColumnWidth: CGFloat = 112
+
+    /// Vendor mark in a popover row.
+    public static let rowAvatarSize: CGFloat = 28
+    /// Gap between a row's avatar, name column and window grid.
+    public static let rowSpacing: CGFloat = 8
+    /// Gap between the grid's 5H / WK / MO columns.
+    public static let gridColumnSpacing: CGFloat = 8
+    /// Where the grid starts, measured from the row's leading edge. The column
+    /// header and the lines for non-window pools indent by exactly this, so
+    /// both stay aligned with the cells if any of the three widths changes.
+    public static let gridLeadingInset: CGFloat = rowAvatarSize + rowSpacing + nameColumnWidth
 
     /// Shared by the bar labels and the spend-window labels, so every token in
     /// the popover sits in one right-aligned column. 40pt fits the two-letter

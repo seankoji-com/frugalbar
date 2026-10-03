@@ -71,16 +71,29 @@ public final class QuotaStore {
 
     /// Recorded events, newest first, optionally scoped to one vendor.
     /// Empty when no loader was injected.
-    public func events(for vendor: VendorIdentifier?, since: Date?, limit: Int?) async -> [AIEvent] {
+    public func events(
+        for vendor: VendorIdentifier?,
+        kinds: Set<AIEventKind>? = nil,
+        since: Date?,
+        limit: Int?
+    ) async -> [AIEvent] {
         guard let eventsLoader else { return [] }
-        return await eventsLoader(vendor, nil, since, limit)
+        return await eventsLoader(vendor, kinds, since, limit)
     }
 
-    /// The kinds the popover's card shows: everything but scheduled
-    /// rollovers, which are logged for every vendor and would otherwise take
-    /// every one of the `recentEventsLimit` slots before the card filters them.
-    public static let recentEventKinds: Set<AIEventKind> =
-        Set(AIEventKind.allCases).subtracting([.usageReset])
+    /// The kinds the popover's card shows: resets, outages and newly
+    /// selectable models. Scheduled rollovers are logged for every vendor
+    /// and would otherwise take every one of the `recentEventsLimit` slots
+    /// before the card filters them.
+    public static let recentEventKinds: Set<AIEventKind> = Set(AIEventKind.surfaced)
+
+    /// The vendors with a credential FrugalBar could use, whatever their last
+    /// reading was. External sources (status pages, reset trackers, model
+    /// lists) are only read for these: an outage on a product the user does
+    /// not have is not their event.
+    public var configuredVendors: Set<VendorIdentifier> {
+        Set(snapshots.filter { $0.status.unavailableReason != .notConfigured }.map(\.vendorId))
+    }
 
     /// Re-reads `recentEvents`. Called after every reload and by whoever
     /// records new events, so the popover section is never a poll behind.

@@ -6,17 +6,28 @@ import QuotaBarCore
 /// markers. No view state and no clock reads — every function takes `now`.
 public enum EventsPresentation {
 
-    /// The events worth the popover's three rows. Scheduled rollovers are
-    /// logged for every vendor and would fill the card with "5H window
-    /// reset" lines on top of the quota rows the popover exists for; they
-    /// stay in the History window's Events tab and on the timeline.
+    /// The events worth the popover's row: resets, outages and newly
+    /// selectable models (`AIEvent.isSurfaced`). Scheduled rollovers are
+    /// logged for every vendor and would bury the rest; they stay in the
+    /// History window's Events tab and on the timeline.
     public static func popoverEvents(_ events: [AIEvent]) -> [AIEvent] {
-        events.filter { $0.kind != .usageReset }
+        events.filter(\.isSurfaced)
+    }
+
+    /// The kinds the History window's Events tab offers as filters: every
+    /// surfaced kind, plus scheduled rollovers, which are routine but are
+    /// still part of the record.
+    public static let listKinds: [AIEventKind] = AIEventKind.surfaced + [.usageReset]
+
+    /// Whether the Events tab lists an event at all. Retired catalog and
+    /// news-feed rows stay on disk but are not shown.
+    static func isListed(_ event: AIEvent) -> Bool {
+        event.isSurfaced || event.kind == .usageReset
     }
 
     /// Kinds drawn on the quota timeline. Only these say something about the
-    /// allowance the chart plots; a new model or price change does not.
-    public static let markerKinds: Set<AIEventKind> = [.usageReset, .usageRestored, .resetCreditGranted]
+    /// allowance the chart plots; a model or an outage does not.
+    public static let markerKinds: Set<AIEventKind> = [.usageReset, .usageRestored, .resetCreditGranted, .vendorReset]
 
     // MARK: - Relative time
 
@@ -116,7 +127,7 @@ public enum EventsPresentation {
         let start = range.startDate(from: now)
         return events
             .filter { event in
-                guard kinds.contains(event.kind) else { return false }
+                guard isListed(event), kinds.contains(event.kind) else { return false }
                 if let vendor, event.vendorId != vendor { return false }
                 if let start, event.occurredAt < start { return false }
                 return true
@@ -125,7 +136,7 @@ public enum EventsPresentation {
     }
 
     /// One vendor's reset-type events inside the range, oldest first (chart
-    /// order). Catalog and feed events say nothing about the allowance the
+    /// order). Outages and models say nothing about the allowance the
     /// timeline plots, so they are never markers.
     public static func markerEvents(
         _ events: [AIEvent],
@@ -148,8 +159,8 @@ public enum EventsPresentation {
     // MARK: - Accessibility
 
     /// Full spoken description of one event row, e.g.
-    /// "New model, Claude: Claude Sonnet 5.5 listed, 3 hours ago, from the
-    /// OpenRouter model catalog". The detail line, when present, follows.
+    /// "Vendor reset, Claude: Claude reset for everyone, 3 hours ago, via
+    /// claude-resets.com (community tracker)". The detail line follows.
     public static func accessibilityLabel(
         for event: AIEvent,
         now: Date,
@@ -165,7 +176,7 @@ public enum EventsPresentation {
         return label
     }
 
-    /// Caption under a row title: "3h ago · From the OpenRouter model catalog".
+    /// Caption under a row title: "3h ago · From status.claude.com".
     public static func caption(
         for event: AIEvent,
         now: Date,

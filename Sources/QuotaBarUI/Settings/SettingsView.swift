@@ -98,9 +98,7 @@ public struct SettingsView: View {
     }
 
     /// `.usageReset` is absent: the per-vendor "Reset alerts" govern it.
-    private static let eventNotificationCandidates: [AIEventKind] = [
-        .usageRestored, .resetCreditGranted, .newModel, .priceChange,
-    ]
+    private static let eventNotificationCandidates: [AIEventKind] = AIEventKind.surfaced
 
     private func eventNotificationBinding(for kind: AIEventKind) -> Binding<Bool> {
         Binding(
@@ -428,8 +426,18 @@ public struct SettingsView: View {
             }
 
             Section {
-                Toggle("Track model releases and pricing (polls OpenRouter's catalog and vendor news feeds every 6 hours)",
+                Toggle("Track resets, outages and new models",
                        isOn: $eventTracking)
+                Text("""
+                     Reads the official status pages for Claude, OpenAI and \
+                     GitHub every 10 minutes, the community reset trackers \
+                     claude-resets.com and whenreset.dev hourly, and each \
+                     subscription's own model list hourly with the credential \
+                     it already uses. Only past events are recorded, never \
+                     forecasts.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Text("Notify about")
                     .font(.caption)
                     .foregroundStyle(.secondary)

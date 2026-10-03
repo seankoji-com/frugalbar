@@ -445,7 +445,7 @@ struct GrokQuotaProviderTests {
     func periodLabelFallback() {
         #expect(GrokQuotaProvider.periodLabel("SOMETHING_NEW", windowLength: 7 * 86_400) == "WK")
         #expect(GrokQuotaProvider.periodLabel(nil, windowLength: 30 * 86_400) == "MO")
-        #expect(GrokQuotaProvider.periodLabel(nil, windowLength: nil) == "CR")
+        #expect(GrokQuotaProvider.periodLabel(nil, windowLength: nil) == "PLAN")
     }
 
     @Test("tier tokens map to the labels xAI markets", arguments: [
@@ -852,7 +852,7 @@ struct CommandCodeQuotaProviderTests {
     func creditGaugeUsesPublishedAllowance() throws {
         let credits = try #require(try snapshot(Self.body()).row3)
 
-        #expect(credits.label == "CR")
+        #expect(credits.label == "MO")
         // 60 left of Pro's documented $80 → 20 used.
         #expect(abs(try #require(credits.primaryFraction) - 0.25) < 0.0001)
         #expect(credits.usedText?.contains("20.00") == true)

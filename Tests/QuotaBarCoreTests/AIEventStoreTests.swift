@@ -17,11 +17,19 @@ struct AIEventModelTests {
 
     @Test("every source round-trips through its raw value")
     func sourceRoundTrips() {
-        let sources: [AIEventSource] = [.quotaPoll, .openRouterCatalog, .vendorFeed(name: "openai-news")]
+        let sources: [AIEventSource] = [
+            .quotaPoll, .openRouterCatalog, .vendorFeed(name: "openai-news"),
+            .resetTracker(name: "claude-resets"), .statusPage(name: "claude"), .accountModels,
+        ]
         for source in sources {
             #expect(AIEventSource(rawValue: source.rawValue) == source)
         }
+        #expect(AIEventSource.resetTracker(name: "whenreset").rawValue == "tracker:whenreset")
+        #expect(AIEventSource.statusPage(name: "openai").rawValue == "status:openai")
+        #expect(AIEventSource.accountModels.rawValue == "account-models")
         #expect(AIEventSource(rawValue: "feed:") == nil)
+        #expect(AIEventSource(rawValue: "tracker:") == nil)
+        #expect(AIEventSource(rawValue: "status:") == nil)
         #expect(AIEventSource(rawValue: "something-else") == nil)
     }
 
@@ -50,6 +58,30 @@ struct AIEventModelTests {
         #expect(AIEventKind.resetCreditGranted.rawValue == "reset_credit_granted")
         #expect(AIEventKind.newModel.rawValue == "new_model")
         #expect(AIEventKind.priceChange.rawValue == "price_change")
+        #expect(AIEventKind.vendorReset.rawValue == "vendor_reset")
+        #expect(AIEventKind.outageStarted.rawValue == "outage_started")
+        #expect(AIEventKind.outageResolved.rawValue == "outage_resolved")
+    }
+
+    /// Rows written by the retired catalog and news-feed watchers stay on
+    /// disk; only a model from the account's own list is surfaced.
+    @Test("only account-scoped new models and surfaced kinds are surfaced")
+    func surfacedFilter() {
+        func event(_ kind: AIEventKind, _ source: AIEventSource) -> AIEvent {
+            AIEvent(id: "x", kind: kind, vendorId: .openai, title: "t", detail: nil,
+                    occurredAt: Date(timeIntervalSince1970: 0), observedAt: Date(timeIntervalSince1970: 0),
+                    source: source)
+        }
+        #expect(event(.newModel, .accountModels).isSurfaced)
+        #expect(!event(.newModel, .openRouterCatalog).isSurfaced)
+        #expect(!event(.newModel, .vendorFeed(name: "openai-news")).isSurfaced)
+        #expect(!event(.priceChange, .openRouterCatalog).isSurfaced)
+        #expect(!event(.usageReset, .quotaPoll).isSurfaced)
+        #expect(event(.vendorReset, .resetTracker(name: "claude-resets")).isSurfaced)
+        #expect(event(.outageStarted, .statusPage(name: "claude")).isSurfaced)
+        #expect(event(.outageResolved, .statusPage(name: "claude")).isSurfaced)
+        #expect(event(.usageRestored, .quotaPoll).isSurfaced)
+        #expect(event(.resetCreditGranted, .quotaPoll).isSurfaced)
     }
 }
 
@@ -68,6 +100,7 @@ struct AIEventStoreTests {
         kind: AIEventKind = .usageReset,
         vendor: VendorIdentifier = .openai,
         occurredAt: TimeInterval = 1_700_000_000,
+        source: AIEventSource = .quotaPoll,
         url: URL? = nil
     ) -> AIEvent {
         AIEvent(
@@ -75,7 +108,7 @@ struct AIEventStoreTests {
             title: "title \(id)", detail: "detail \(id)",
             occurredAt: Date(timeIntervalSince1970: occurredAt),
             observedAt: Date(timeIntervalSince1970: occurredAt + 5),
-            source: .quotaPoll, url: url
+            source: source, url: url
         )
     }
 
@@ -120,11 +153,11 @@ struct AIEventStoreTests {
     func fieldsRoundTrip() async throws {
         let store = makeIsolatedStore()
         let withURL = AIEvent(
-            id: "new_model|claude|x", kind: .newModel, vendorId: .claude,
-            title: "x listed", detail: nil,
+            id: "vendor_reset|claude|x", kind: .vendorReset, vendorId: .claude,
+            title: "Claude reset", detail: nil,
             occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
             observedAt: Date(timeIntervalSince1970: 1_700_000_050),
-            source: .vendorFeed(name: "anthropic-news"),
+            source: .resetTracker(name: "claude-resets"),
             url: URL(string: "https://example.com/x")
         )
         try await store.recordEvents([withURL])
@@ -138,8 +171,8 @@ struct AIEventStoreTests {
         try await store.recordEvents([
             event("r1", kind: .usageReset, vendor: .openai, occurredAt: 100),
             event("r2", kind: .usageReset, vendor: .claude, occurredAt: 200),
-            event("m1", kind: .newModel, vendor: .claude, occurredAt: 300),
-            event("p1", kind: .priceChange, vendor: .gemini, occurredAt: 400),
+            event("m1", kind: .newModel, vendor: .claude, occurredAt: 300, source: .accountModels),
+            event("p1", kind: .outageStarted, vendor: .gemini, occurredAt: 400, source: .statusPage(name: "x")),
         ])
 
         let all = try await store.fetchEvents()
@@ -162,6 +195,27 @@ struct AIEventStoreTests {
         #expect(none.isEmpty)
     }
 
+    /// Regression guard: a backlog of retired catalog and news-feed rows must
+    /// not take the slots of a limited query (the popover asks for 20, the
+    /// inspector for 5) and hide real resets and outages behind them.
+    @Test("retired catalog and news-feed rows are never returned, so they cannot fill a limit")
+    func retiredRowsExcluded() async throws {
+        let store = makeIsolatedStore()
+        var rows = (0..<5).map { event("feed\($0)", kind: .newModel, occurredAt: 1_000 + Double($0),
+                                         source: .vendorFeed(name: "openai-news")) }
+        rows += (0..<5).map { event("cat\($0)", kind: .newModel, occurredAt: 2_000 + Double($0),
+                                    source: .openRouterCatalog) }
+        rows.append(event("price", kind: .priceChange, occurredAt: 3_000, source: .openRouterCatalog))
+        rows.append(event("outage", kind: .outageStarted, occurredAt: 10, source: .statusPage(name: "claude")))
+        rows.append(event("model", kind: .newModel, occurredAt: 20, source: .accountModels))
+        try await store.recordEvents(rows)
+
+        let limited = try await store.fetchEvents(limit: 2)
+        #expect(limited.map(\.id) == ["model", "outage"])
+        let models = try await store.fetchEvents(kinds: [.newModel, .priceChange])
+        #expect(models.map(\.id) == ["model"])
+    }
+
     @Test("pruneEvents removes only events older than the cutoff")
     func pruneRemovesOldEvents() async throws {
         let store = makeIsolatedStore()
@@ -174,61 +228,39 @@ struct AIEventStoreTests {
         #expect(remaining.map(\.id) == ["new"])
     }
 
-    @Test("catalog models upsert and round-trip exact decimal prices")
-    func catalogModelsRoundTrip() async throws {
+    @Test("account models upsert per vendor and keep firstSeen")
+    func accountModelsRoundTrip() async throws {
         let store = makeIsolatedStore()
-        let first = CatalogModelRecord(
-            modelId: "anthropic/claude-opus-5-5", vendorId: .claude, name: "Claude Opus 5.5",
-            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-            promptPrice: Decimal(string: "0.000003"), completionPrice: Decimal(string: "0.000015"),
-            firstSeen: Date(timeIntervalSince1970: 1_700_000_100),
-            lastSeen: Date(timeIntervalSince1970: 1_700_000_100)
-        )
-        try await store.upsertCatalogModels([first])
-        var stored = try await store.catalogModels()
-        #expect(stored[first.modelId] == first)
-        // Exact decimal text, not a binary float that would read as a change.
-        #expect(stored[first.modelId]?.promptPrice == Decimal(string: "0.000003"))
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t1 = Date(timeIntervalSince1970: 1_700_003_600)
+        let first = AccountModelRecord(vendorId: .openai, modelId: "gpt-6.1-sol", name: "GPT-6.1 Sol",
+                                       firstSeen: t0, lastSeen: t0)
+        // The same id on another vendor is a different row.
+        let other = AccountModelRecord(vendorId: .copilot, modelId: "gpt-6.1-sol", name: nil,
+                                       firstSeen: t0, lastSeen: t0)
+        try await store.upsertAccountModels([first, other])
+        #expect(try await store.accountModels(vendor: .openai) == ["gpt-6.1-sol": first])
+        #expect(try await store.accountModels(vendor: .copilot)["gpt-6.1-sol"]?.name == nil)
 
-        // Replace with a new last_seen and a nil price (vendor stopped publishing).
-        let updated = CatalogModelRecord(
-            modelId: first.modelId, vendorId: .claude, name: first.name,
-            createdAt: nil, promptPrice: nil, completionPrice: first.completionPrice,
-            firstSeen: first.firstSeen, lastSeen: Date(timeIntervalSince1970: 1_700_003_600)
-        )
-        try await store.upsertCatalogModels([updated])
-        stored = try await store.catalogModels()
+        let updated = AccountModelRecord(vendorId: .openai, modelId: "gpt-6.1-sol", name: "GPT-6.1 Sol",
+                                         firstSeen: t0, lastSeen: t1)
+        try await store.upsertAccountModels([updated])
+        let stored = try await store.accountModels(vendor: .openai)
         #expect(stored.count == 1)
-        #expect(stored[first.modelId] == updated)
-        #expect(stored[first.modelId]?.promptPrice == nil)
-        #expect(stored[first.modelId]?.createdAt == nil)
-    }
-
-    @Test("feed items are remembered once seen and never re-reported")
-    func feedItemsRemembered() async throws {
-        let store = makeIsolatedStore()
-        let seenAt = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.markFeedItemsSeen(feed: "openai-news", ids: ["a", "b"], at: seenAt)
-        try await store.markFeedItemsSeen(feed: "openai-news", ids: ["b", "c"], at: seenAt)
-        try await store.markFeedItemsSeen(feed: "google-ai", ids: ["a"], at: seenAt)
-
-        let openai = try await store.seenFeedItemIDs(feed: "openai-news")
-        #expect(openai == ["a", "b", "c"])
-        let google = try await store.seenFeedItemIDs(feed: "google-ai")
-        #expect(google == ["a"])
-        let unknown = try await store.seenFeedItemIDs(feed: "nothing")
-        #expect(unknown.isEmpty)
+        #expect(stored["gpt-6.1-sol"] == updated)
+        #expect(try await store.accountModels(vendor: .claude).isEmpty)
     }
 
     @Test("removeAll clears the event tables too")
     func removeAllClearsEvents() async throws {
         let store = makeIsolatedStore()
         try await store.recordEvents([event("a")])
-        try await store.markFeedItemsSeen(feed: "f", ids: ["x"], at: Date(timeIntervalSince1970: 1))
+        try await store.upsertAccountModels([AccountModelRecord(
+            vendorId: .claude, modelId: "m", name: nil,
+            firstSeen: Date(timeIntervalSince1970: 1), lastSeen: Date(timeIntervalSince1970: 1))])
         try await store.removeAll()
         let events = try await store.fetchEvents()
         #expect(events.isEmpty)
-        let seen = try await store.seenFeedItemIDs(feed: "f")
-        #expect(seen.isEmpty)
+        #expect(try await store.accountModels(vendor: .claude).isEmpty)
     }
 }
