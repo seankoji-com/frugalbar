@@ -88,6 +88,8 @@ public struct PopoverRootView: View {
             if let snap = selectedSnapshot {
                 MetricDetailModalView(
                     snapshot: snap,
+                    readingsLoader: store.readings(for:since:),
+                    eventsLoader: { v, s, l in await store.events(for: v, since: s, limit: l) },
                     onClose: {
                         withAnimation(.easeOut(duration: 0.2)) {
                             selectedSnapshot = nil
