@@ -13,14 +13,31 @@ on:
           - minor
           - major
 
+# Tag numbers come from `git describe` and the tag lands on whatever commit the
+# run checked out, so two overlapping dispatches would compute the same next
+# version and race to push it. Serialize them; never cancel a run mid-release,
+# which could strand a pushed tag with no release behind it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Token scopes are granted per job below; the workflow default grants nothing
+# beyond read.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tag-and-release:
     name: Tag & Build Release
+    # workflow_dispatch can target any branch in the UI/API, and the job tags
+    # HEAD of the selected ref. Only the default branch may ship.
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
+    permissions:
+      contents: write      # push the tag, create the release
+      id-token: write      # OIDC identity for the provenance attestation
+      attestations: write  # store the attestation
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,8 +67,17 @@ jobs:
           echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
           echo "Calculated new version: ${NEW_TAG}"
 
+      # Newest installed Xcode 16.x (see scripts/select-xcode.sh). Pinned to the
+      # 16 line, not "newest", so a new default image can't change the shipped
+      # toolchain unreviewed; the latest-Xcode CI job covers the next one.
       - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+        run: scripts/select-xcode.sh 16
+
+      # Runs on the unstamped tree: the version stamp below rewrites AppInfo.swift
+      # and the tests assume the development label. Same invocation as CI, so a
+      # dispatch can no longer ship a commit that never passed the suite.
+      - name: Run tests
+        run: swift test -c debug --parallel
 
       - name: Build Release (ARM64)
         run: |
@@ -89,6 +115,16 @@ jobs:
             --binary bin/frugalbar \
             --version-text "FrugalBar ${VER}" \
             --usage frugalbar
+
+      # Provenance for the unsigned bare executable: a Sigstore-signed SLSA
+      # attestation binding the tarball's digest to this repo, workflow and
+      # commit (`gh attestation verify <file> --repo seankoji-com/frugalbar`).
+      # Not Developer ID signing or notarization. Runs before the tag push so a
+      # failure here aborts without leaving an orphaned tag.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: frugalbar-${{ steps.semver.outputs.tag }}-arm64.tar.gz
 
       # After the build and the binary smoke check, but *before* the release:
       # action-gh-release creates the tag itself when `tag_name` does not yet
