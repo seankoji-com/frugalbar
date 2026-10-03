@@ -13,6 +13,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case kiro
     case devpass
     case commandcode
+    case clinepass
     case githubRest   = "github_rest"
     case githubGraphql = "github_graphql"
 
@@ -28,6 +29,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .kiro:          "Kiro"
         case .devpass:       "DevPass"
         case .commandcode:   "Command Code"
+        case .clinepass:     "ClinePass"
         case .githubRest:    "GitHub REST"
         case .githubGraphql: "GitHub GraphQL"
         }
@@ -47,6 +49,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         // Command Code's brand "Burple" foreground; its badge background is
         // #2E1B9C, used for the avatar rather than this accent.
         case .commandcode:   "#546bf3"
+        // Indigo chosen to read as Cline's brand blue; not taken from a
+        // published brand sheet.
+        case .clinepass:     "#5b5bd6"
         case .githubRest:    "#ffb4ab"
         case .githubGraphql: "#ffb4ab"
         }
@@ -64,6 +69,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .kiro:          "bolt"
         case .devpass:       "ticket"
         case .commandcode:   "command"
+        case .clinepass:     "ticket.fill"
         case .githubRest:    "network"
         case .githubGraphql: "point.3.connected.trianglepath.dotted"
         }
@@ -654,6 +660,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .kiro:          return "Kiro"
         case .devpass:       return "DevPass"
         case .commandcode:   return "Command Code"
+        case .clinepass:     return "ClinePass"
         case .githubRest, .githubGraphql: return "GitHub"
         }
     }

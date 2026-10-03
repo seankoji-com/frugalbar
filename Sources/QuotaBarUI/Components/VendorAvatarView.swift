@@ -124,6 +124,15 @@ public enum VendorSVGLogo {
               <rect x="12.4" y="14.2" width="5.2" height="2" rx="1" fill="#FFFFFF"/>
             </svg>
             """
+        case .clinepass:
+            // A brand-indigo badge with a white ticket — the pass, not a
+            // lifted Cline wordmark. Fill-based, like every other badge here.
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#5B5BD6"/>
+              <path fill="#FFFFFF" fill-rule="evenodd" d="M5 8.5A1.5 1.5 0 016.5 7h11A1.5 1.5 0 0119 8.5v2a1.5 1.5 0 000 3v2a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 015 15.5v-2a1.5 1.5 0 000-3v-2zm8.2 1h1.2v1.2h-1.2V9.5zm0 2.2h1.2v1.2h-1.2v-1.2zm0 2.2h1.2v1.2h-1.2v-1.2z"/>
+            </svg>
+            """
         case .githubRest, .githubGraphql:
             return """
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">

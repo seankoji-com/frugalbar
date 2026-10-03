@@ -102,7 +102,8 @@ public enum AttributionEngine {
     public static let unmonitoredVendorIdentifiers: Set<VendorIdentifier> = [
         .grok,
         .kiro,
-        .gemini
+        .gemini,
+        .clinepass
     ]
 
     /// Which local activity sources (if any) can speak for a vendor.
