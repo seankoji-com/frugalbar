@@ -125,7 +125,11 @@ public final class ClinePassQuotaProvider: QuotaProvider, Sendable {
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,
-            metric: .subscription(tierName: "ClinePass", renewalDate: nil),
+            // A 200 here proves a ClinePass subscription exists, but the
+            // payload names no tier, and the row already says "ClinePass" —
+            // a plan subtitle repeating the vendor name is the placeholder
+            // the Claude provider removed for saying nothing.
+            metric: .subscription(tierName: nil, renewalDate: nil),
             status: .measured(urgency),
             // The longest window's reset: the one the popover sorts by.
             resetsAt: monthly?.resetsAt ?? weekly?.resetsAt ?? fiveHour?.resetsAt,
@@ -135,7 +139,7 @@ public final class ClinePassQuotaProvider: QuotaProvider, Sendable {
             row2: weekly,
             row3: monthly,
             badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
-            planName: "ClinePass",
+            planName: nil,
             cliSource: nil
         )
     }

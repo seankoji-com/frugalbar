@@ -139,8 +139,9 @@ struct ClinePassProviderTests {
         // The longest window decides the snapshot's reset.
         #expect(snapshot.resetsAt == monthReset)
         #expect(snapshot.badgeText == "43% left")
-        #expect(snapshot.planName == "ClinePass")
-        #expect(snapshot.metric == .subscription(tierName: "ClinePass", renewalDate: nil))
+        // The payload publishes no tier; none is asserted.
+        #expect(snapshot.planName == nil)
+        #expect(snapshot.metric == .subscription(tierName: nil, renewalDate: nil))
         #expect(snapshot.auxiliaryInfo == "Live ClinePass usage")
     }
 

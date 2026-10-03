@@ -66,9 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return []
                 }
             },
-            eventsLoader: { vendor, since, limit in
+            eventsLoader: { vendor, kinds, since, limit in
                 do {
-                    return try await hStore.fetchEvents(vendor: vendor, since: since, limit: limit)
+                    return try await hStore.fetchEvents(vendor: vendor, kinds: kinds, since: since, limit: limit)
                 } catch {
                     NSLog("frugalbar: failed to read AI events: \(error)")
                     return []

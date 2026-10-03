@@ -43,8 +43,9 @@ struct FeedItemClassifierTests {
         Case(title: "Lower pricing for GPT-6 mini", summary: "", expected: .priceChange),
         Case(title: "Claude Opus 5.5 is now 50% off in batch", summary: "", expected: .priceChange),
         Case(title: "Batch API: 50% off every request", summary: "", expected: .priceChange),
-        Case(title: "Higher rate limits for Pro subscribers", summary: "", expected: .priceChange),
-        Case(title: "Rate limits increased for the API", summary: "", expected: .priceChange),
+        // Allowance news is not price news; it is not a different fact dressed as one.
+        Case(title: "Higher rate limits for Pro subscribers", summary: "", expected: nil),
+        Case(title: "Rate limits increased for the API", summary: "", expected: nil),
         Case(title: "New pricing", summary: "Updated prices for the Gemini API", expected: .priceChange),
         Case(title: "The price of progress in robotics research", summary: "an essay", expected: nil),
     ]

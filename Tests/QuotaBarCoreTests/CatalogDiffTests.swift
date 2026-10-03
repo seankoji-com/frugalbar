@@ -84,10 +84,21 @@ struct CatalogDiffTests {
         #expect(event.title == "OpenAI: GPT-6 price changed")
         #expect(event.detail == "Prompt $2.50 → $2.00 per M tokens")
         #expect(event.id == AIEvent.makeID(kind: .priceChange, vendorId: .openai,
-                                           components: ["openai/gpt-6", "0.000002", "0.00001"]))
+                                           components: ["openai/gpt-6", "\(Int(earlier.timeIntervalSince1970))",
+                                                        "0.0000025", "0.00001", "0.000002", "0.00001"]))
         #expect(records.first?.promptPrice == price("0.000002"))
         #expect(records.first?.firstSeen == earlier)
         #expect(records.first?.lastSeen == now)
+
+        // A reversion to the earlier price is a distinct event, not a replay
+        // of the first one — its id must differ so dedup keeps both.
+        let (reverted, _) = CatalogDiff.compute(
+            previous: ["openai/gpt-6": record("openai/gpt-6", vendor: .openai,
+                                              prompt: "0.000002", completion: "0.00001")],
+            current: [entry("openai/gpt-6", name: "OpenAI: GPT-6", prompt: "0.0000025", completion: "0.00001")],
+            now: now.addingTimeInterval(3600))
+        #expect(reverted.count == 1)
+        #expect(reverted.first?.id != event.id)
     }
 
     /// The same decimal string must never read as a change. Through Double,

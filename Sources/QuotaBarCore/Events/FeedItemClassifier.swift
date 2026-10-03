@@ -63,13 +63,13 @@ public enum FeedItemClassifier {
     ]
 
     /// Pricing-adjacent phrases that do not fit a single word boundary.
+    ///
+    /// Rate-limit and usage-limit increases are deliberately not here. They
+    /// are allowance news, not price news, and recording one as a "Price
+    /// change" would be a different fact from the one the vendor announced.
     static let pricingRegexes = [
         // "50% off"
         #"\d+\s*%\s*off\b"#,
-        // "higher rate limits", "increased usage limits", "doubling rate limits"
-        #"\b(?:higher|increas\w*|rais\w*|doubl\w*)\s+(?:the\s+)?(?:rate|usage)[ -]limits?\b"#,
-        // "rate limits increased", "usage limits are doubling"
-        #"\b(?:rate|usage)[ -]limits?\s+(?:\w+\s+)?(?:increas\w*|doubl\w*|rais\w*)\b"#,
     ]
 
     /// What makes a pricing phrase about a model, plan or the API rather

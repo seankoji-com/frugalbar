@@ -133,12 +133,21 @@ public enum CatalogDiff {
         }
         guard !changes.isEmpty else { return nil }
 
-        // Keyed on the new prices, so the same change seen again (a restart,
-        // a re-poll) is one event, while a later second change is another.
-        let components = [
-            entry.id,
-            entry.promptPrice.map { "\($0)" } ?? "nil",
-            entry.completionPrice.map { "\($0)" } ?? "nil",
+        // Keyed on both sides of the change plus the stored baseline's
+        // `lastSeen`: the same change re-derived before its checkpoint lands
+        // (a retry, a restart) is one event, while a later reversion to a
+        // price seen before — A→B then B→A — is a second one. Keying on the
+        // new prices alone made that reversion collide with an earlier
+        // event and vanish in dedup.
+        func text(_ price: Decimal?) -> String {
+            guard let price else { return "nil" }
+            return "\(price)"
+        }
+        let baseline = "\(Int(old.lastSeen.timeIntervalSince1970))"
+        let components: [String] = [
+            entry.id, baseline,
+            text(old.promptPrice), text(old.completionPrice),
+            text(entry.promptPrice), text(entry.completionPrice),
         ]
         return AIEvent(
             id: AIEvent.makeID(kind: .priceChange, vendorId: vendorId, components: components),

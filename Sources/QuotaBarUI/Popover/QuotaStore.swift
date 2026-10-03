@@ -38,7 +38,7 @@ public final class QuotaStore {
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
     private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
-    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
+    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
 
     /// - Parameters:
     ///   - readingsLoader: every vendor's readings since a date, for the
@@ -53,7 +53,7 @@ public final class QuotaStore {
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
         readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
         vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
-        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil
+        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil
     ) {
         self.manager = manager
         self.historyRecorder = historyRecorder
@@ -73,14 +73,20 @@ public final class QuotaStore {
     /// Empty when no loader was injected.
     public func events(for vendor: VendorIdentifier?, since: Date?, limit: Int?) async -> [AIEvent] {
         guard let eventsLoader else { return [] }
-        return await eventsLoader(vendor, since, limit)
+        return await eventsLoader(vendor, nil, since, limit)
     }
+
+    /// The kinds the popover's card shows: everything but scheduled
+    /// rollovers, which are logged for every vendor and would otherwise take
+    /// every one of the `recentEventsLimit` slots before the card filters them.
+    public static let recentEventKinds: Set<AIEventKind> =
+        Set(AIEventKind.allCases).subtracting([.usageReset])
 
     /// Re-reads `recentEvents`. Called after every reload and by whoever
     /// records new events, so the popover section is never a poll behind.
     public func reloadRecentEvents() async {
         guard let eventsLoader else { return }
-        recentEvents = await eventsLoader(nil, nil, Self.recentEventsLimit)
+        recentEvents = await eventsLoader(nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
     }
 
     /// Loads from cache when fresh, otherwise fetches.

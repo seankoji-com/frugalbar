@@ -331,17 +331,20 @@ public enum AggregateBurndownPresentation {
         var result: [AveragePoint] = []
         var segment = 0
         var previous: TimeInterval?
-        var previousCount: Int?
+        var previousContributors: Set<String>?
         for key in buckets.keys.sorted() {
+            let contributors = Set(buckets[key]!.keys)
             let perSeries = buckets[key]!.values.map { $0.reduce(0, +) / Double($0.count) }
             // A new line segment when there is a gap, and also when the set
             // of contributing windows changes: a mean of A and B followed by
-            // a mean of A alone is a different quantity, and drawing one
-            // line through both read as a headroom crash during B's outage.
+            // a mean of A alone — or of A and C — is a different quantity,
+            // and drawing one line through both read as a headroom crash
+            // during B's outage. The set, not its size: A+B → A+C keeps the
+            // count and still changes what is being averaged.
             if let previous, key - previous > maxGap { segment += 1 }
-            else if let previousCount, previousCount != perSeries.count { segment += 1 }
+            else if let previousContributors, previousContributors != contributors { segment += 1 }
             previous = key
-            previousCount = perSeries.count
+            previousContributors = contributors
             result.append(AveragePoint(
                 timestamp: Date(timeIntervalSince1970: key),
                 value: perSeries.reduce(0, +) / Double(perSeries.count),

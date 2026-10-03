@@ -223,6 +223,18 @@ struct AggregateBurndownPresentationTests {
         #expect(abs(avg[0].value - 0.6) < 1e-12)   // mean(0.3, 0.9)
     }
 
+    /// A+B followed by A+C keeps the count at two and still averages a
+    /// different pair of windows; the line must break there too.
+    @Test("a change in which windows contribute starts a new segment, even at the same count")
+    func contributorSetChangeBreaksSegment() {
+        let a = series(.claude, [(minutesAgo: 14, value: 0.2), (minutesAgo: 4, value: 0.2)])
+        let b = series(.openai, [(minutesAgo: 14, value: 0.6)])
+        let c = series(.gemini, [(minutesAgo: 4, value: 0.8)])
+        let avg = P.average(of: [a, b, c], bucket: 300, now: now)
+        #expect(avg.map(\.sampleCount) == [2, 2])
+        #expect(avg.map(\.segment) == [0, 1])
+    }
+
     @Test("gaps are not filled, and a long gap starts a new segment")
     func averageGapsNotFilled() {
         let a = series(.claude, [(minutesAgo: 300, value: 0.2), (minutesAgo: 1, value: 0.4)])
