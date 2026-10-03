@@ -28,6 +28,12 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
     /// reset that had not yet passed); it never claims to know *why*.
     case usageRestored = "usage_restored"
 
+    /// The vendor granted a banked usage-reset credit the user can redeem —
+    /// OpenAI's `rate_limit_reset_credits` for Codex/ChatGPT. Recorded when
+    /// the available count rises between two polls; the count itself is a
+    /// vendor-published figure, never inferred.
+    case resetCreditGranted = "reset_credit_granted"
+
     /// A model first seen in a catalog FrugalBar polls, or announced in a
     /// vendor's own feed.
     case newModel = "new_model"
@@ -43,6 +49,7 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
         switch self {
         case .usageReset:    "Usage reset"
         case .usageRestored: "Usage restored"
+        case .resetCreditGranted: "Reset credit"
         case .newModel:      "New model"
         case .priceChange:   "Price change"
         }
@@ -53,6 +60,7 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
         switch self {
         case .usageReset:    "arrow.counterclockwise.circle"
         case .usageRestored: "gift.circle"
+        case .resetCreditGranted: "ticket.circle"
         case .newModel:      "sparkles.rectangle.stack"
         case .priceChange:   "dollarsign.circle"
         }

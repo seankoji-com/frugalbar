@@ -47,6 +47,7 @@ struct AIEventModelTests {
     func kindRawValues() {
         #expect(AIEventKind.usageReset.rawValue == "usage_reset")
         #expect(AIEventKind.usageRestored.rawValue == "usage_restored")
+        #expect(AIEventKind.resetCreditGranted.rawValue == "reset_credit_granted")
         #expect(AIEventKind.newModel.rawValue == "new_model")
         #expect(AIEventKind.priceChange.rawValue == "price_change")
     }

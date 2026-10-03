@@ -367,6 +367,7 @@ public actor QuotaManager {
             // attach pass or it silently disappears until the next poll, even
             // though the failure is still real.
             rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+            rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             updated = rebuilt
         }
         return updated
@@ -433,6 +434,7 @@ public actor QuotaManager {
         // retention pass or it silently disappears until the next poll, even
         // though the failure is still real.
         rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+        rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         return rebuilt
     }
 

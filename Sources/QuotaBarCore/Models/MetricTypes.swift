@@ -436,6 +436,12 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// nothing. Defaulted here (not as an init parameter) so neither existing
     /// initializer, nor any other provider's call site, has to change.
     public var openRouterCatalogUnavailable: Bool = false
+    /// Banked usage-reset credits the vendor says the user can redeem right
+    /// now (OpenAI's `rate_limit_reset_credits.available_count`). `nil` when
+    /// the vendor published no such figure — never 0 as a stand-in, since
+    /// "none available" and "the vendor has no such thing" are different
+    /// facts. Defaulted here so no initializer or call site has to change.
+    public var resetCreditsAvailable: Int? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
