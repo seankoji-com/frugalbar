@@ -76,6 +76,7 @@ public struct SettingsView: View {
     @AppStorage(CredentialStore.eventTrackingEnabledDefaultsKey, store: CredentialStore.preferences)
     private var eventTracking = true
     @State private var eventNotificationKinds: Set<AIEventKind> = CredentialStore.eventNotificationKinds
+    @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
 
     public init() {}
 
@@ -437,6 +438,29 @@ public struct SettingsView: View {
                 }
             } header: {
                 Text("AI events")
+            }
+
+            Section {
+                Picker("Position", selection: $desktopWidgetMode) {
+                    Text("Pinned to desktop").tag(DesktopWidgetMode.desktop)
+                    Text("Floats above windows").tag(DesktopWidgetMode.floating)
+                }
+                .onChange(of: desktopWidgetMode) {
+                    CredentialStore.desktopWidgetMode = desktopWidgetMode
+                    DesktopWidgetWindow.applyMode()
+                }
+                Text("""
+                     A small panel charting every subscription's usage \
+                     window over time, with an average of the selected \
+                     windows' readings and their current headroom. Open it \
+                     from the gear menu. It is a window FrugalBar owns, not a \
+                     WidgetKit widget — those need an app bundle this build \
+                     does not have.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Desktop widget")
             }
         }
         .formStyle(.grouped)

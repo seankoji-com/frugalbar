@@ -90,6 +90,14 @@ struct FooterActionsView: View {
                 }
                 .keyboardShortcut("y", modifiers: .command)
 
+                Toggle(isOn: Binding(
+                    get: { DesktopWidgetVisibility.shared.isVisible },
+                    set: { _ in DesktopWidgetWindow.toggle() }
+                )) {
+                    Label("Desktop Widget", systemImage: "rectangle.on.rectangle")
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
                 Button {
                     // Not the standard panel: it reads Bundle.main, which is
                     // empty for the bare executable a release ships.
