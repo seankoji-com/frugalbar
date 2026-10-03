@@ -78,7 +78,14 @@ public actor QuotaManager {
 
     /// Returns cached snapshots immediately (fast path for UI).
     public func cachedSnapshots() -> [VendorIdentifier: QuotaSnapshot] {
-        cache.mapValues(\.snapshot)
+        visibleCache()
+    }
+
+    /// The cache minus hidden vendors. Every read goes through this, so the
+    /// fresh-cache fast path cannot return a provider the user just hid.
+    private func visibleCache() -> [VendorIdentifier: QuotaSnapshot] {
+        let hidden = displayPreferences().hidden
+        return cache.filter { !hidden.contains($0.key) }.mapValues(\.snapshot)
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
@@ -147,8 +154,7 @@ public actor QuotaManager {
     /// Providers we could not read contribute `.none` — they are reported
     /// separately via `SystemHealthSummary.unavailableCount`.
     public func worstUrgency() -> Urgency {
-        let hidden = displayPreferences().hidden
-        return cache.filter { !hidden.contains($0.key) }.values.map(\.snapshot.status.urgency).max() ?? .none
+        visibleCache().values.map(\.status.urgency).max() ?? .none
     }
 
     // MARK: Fetch (with concurrency + dedup)
@@ -311,7 +317,7 @@ public actor QuotaManager {
             cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
-        return cache.mapValues(\.snapshot)
+        return visibleCache()
     }
 
     /// Adds the user's hand-entered renewal countdown, when they recorded one

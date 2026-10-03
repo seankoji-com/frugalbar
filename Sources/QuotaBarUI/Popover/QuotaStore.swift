@@ -118,9 +118,20 @@ public final class QuotaStore {
     /// Re-applies Preferences → Providers: a hidden provider is dropped and a
     /// newly shown one fetched. Vendors polled inside the poll floor are
     /// served from cache, so changing a toggle cannot hammer a vendor.
+    ///
+    /// If a refresh is already running it was planned against the old
+    /// preferences (a provider shown meanwhile was left out of that fetch),
+    /// so this queues one more pass for when it ends instead of dropping the
+    /// request.
     public func applyProviderPreferences() async {
+        if isRefreshing {
+            preferenceRefreshPending = true
+            return
+        }
         await forceRefresh()
     }
+
+    private var preferenceRefreshPending = false
 
     private func run(_ fetch: @escaping @Sendable () async -> [VendorIdentifier: QuotaSnapshot]) async {
         guard !isRefreshing else { return }
@@ -128,6 +139,11 @@ public final class QuotaStore {
         defer { isRefreshing = false }
         _ = await fetch()
         await reloadFromCache()
+        while preferenceRefreshPending {
+            preferenceRefreshPending = false
+            _ = await manager.forceRefresh()
+            await reloadFromCache()
+        }
     }
 
     private func reloadFromCache() async {

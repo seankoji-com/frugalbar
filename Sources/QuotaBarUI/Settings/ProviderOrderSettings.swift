@@ -105,6 +105,8 @@ struct ProviderOrderSettings: View {
             .accessibilityLabel("Show \(vendor.displayName)")
         }
         .buttonStyle(.borderless)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(vendor.displayName), \(isShown ? "shown" : "hidden"), position \(index + 1) of \(order.count)")
     }
 
     private func move(_ vendor: VendorIdentifier, by offset: Int) {

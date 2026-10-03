@@ -170,4 +170,25 @@ struct QuotaStoreTests {
         #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
         #expect(hits.count(.grok) == before + 1)
     }
+
+    /// The refresh in flight was planned against the old preferences, so a
+    /// provider shown meanwhile was left out of it. The request must be
+    /// queued, not dropped.
+    @Test("a preference change during a refresh is applied when it ends")
+    func preferenceChangeDuringRefreshIsQueued() async {
+        let prefs = PrefsBox(ProviderDisplayPreferences(hidden: [.grok]))
+        let hits = Hits()
+        let s = store([
+            StubProvider(vendorId: .claude, hits: hits, delay: .milliseconds(150)),
+            StubProvider(vendorId: .grok, hits: hits),
+        ], prefs: prefs, cacheTTL: 0)
+        async let first: Void = s.load()
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(s.isRefreshing)
+        prefs.value.hidden = []
+        await s.applyProviderPreferences()   // returns at once, queued
+        await first
+        #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
+        #expect(s.isRefreshing == false)
+    }
 }

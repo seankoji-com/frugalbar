@@ -28,18 +28,23 @@ private struct Provider: QuotaProvider {
     let counter: Counter
     var used: Double = 0.1
     var resetsInHours: Double = 10
+    /// When set, the window resets at exactly this date, so two providers can
+    /// tie on reset time deterministically.
+    var fixedReset: Date? = nil
+    /// False yields a snapshot with no window at all (the undated band).
+    var hasWindow = true
 
     func fetchSnapshot() async throws -> QuotaSnapshot {
         counter.hit(vendorId)
-        let reset = Date().addingTimeInterval(resetsInHours * 3600)
+        let reset = fixedReset ?? Date().addingTimeInterval(resetsInHours * 3600)
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
             metric: .percentage(usedFraction: used, displayDetails: nil),
-            status: .measured(.none), resetsAt: reset, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(
+            status: .measured(.none), resetsAt: hasWindow ? reset : nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            row1: hasWindow ? DualBarMetrics(
                 primaryFraction: used, label: "WK",
-                resetsAt: reset, windowLength: QuotaWindow.week))
+                resetsAt: reset, windowLength: QuotaWindow.week) : nil)
     }
 }
 
@@ -128,5 +133,56 @@ struct ProviderVisibilityTests {
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .grok])
         box.value.ordering = .automatic
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .claude])
+    }
+
+    // MARK: Tie-breaks follow the user's list
+
+    private static let sharedReset = Date(timeIntervalSince1970: 1_900_000_000)
+
+    @Test("vendors with an identical reset time are ordered by the user's list")
+    func equalResetsFollowTheList() async {
+        let counter = Counter()
+        let providers = [
+            Provider(vendorId: .claude, counter: counter, fixedReset: Self.sharedReset),
+            Provider(vendorId: .kiro, counter: counter, fixedReset: Self.sharedReset),
+        ]
+        let box = PreferenceBox(ProviderDisplayPreferences(order: [.kiro, .claude]))
+        let m = manager(providers, box: box)
+        _ = await m.forceRefresh()
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.kiro, .claude])
+        box.value.order = [.claude, .kiro]
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .kiro])
+    }
+
+    @Test("vendors with no window keep the user's list order")
+    func undatedFollowTheList() async {
+        let counter = Counter()
+        let providers = [
+            Provider(vendorId: .claude, counter: counter, hasWindow: false),
+            Provider(vendorId: .kiro, counter: counter, hasWindow: false),
+        ]
+        let box = PreferenceBox(ProviderDisplayPreferences(order: [.kiro, .claude]))
+        let m = manager(providers, box: box)
+        _ = await m.forceRefresh()
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.kiro, .claude])
+        box.value.order = [.claude, .kiro]
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .kiro])
+    }
+
+    /// The fresh-cache fast path returns the cache itself, so it must not
+    /// hand back a provider hidden since the last poll.
+    @Test("cached reads never include a hidden provider")
+    func cachedReadsExcludeHidden() async {
+        let counter = Counter()
+        let box = PreferenceBox(.default)
+        let m = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 3600, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [Provider(vendorId: .claude, counter: counter), Provider(vendorId: .grok, counter: counter)] },
+            displayPreferences: { box.value })
+        _ = await m.refresh()
+        box.value.hidden = [.grok]
+        #expect(await m.refresh()[.grok] == nil)          // fresh-cache fast path
+        #expect(await m.cachedSnapshots()[.grok] == nil)
+        #expect(await m.worstUrgency() == .none)
     }
 }

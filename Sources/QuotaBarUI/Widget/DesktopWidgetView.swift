@@ -57,6 +57,10 @@ struct DesktopWidgetView: View {
     // MARK: - Data
 
     private func reload() async {
+        // The overview reads live snapshots only: no history query, no
+        // segmenting or averaging. Switching back to Chart changes the
+        // load key and loads then.
+        guard filters.layout == .chart else { return }
         isLoading = true
         defer { isLoading = false }
         let now = Date()
@@ -395,12 +399,14 @@ struct DesktopWidgetView: View {
             // The bar always fills with what is *remaining*, matching the
             // headroom strip; the figure beside it follows the metric.
             MicroProgressBar(
-                fraction: window.fraction.map { filters.metric == .used ? 1 - $0 : $0 },
+                fraction: window.fraction.map {
+                    window.measuresElapsedTimeOnly || filters.metric == .remaining ? $0 : 1 - $0
+                },
                 statusColor: color
             )
             .frame(maxWidth: .infinity)
             if let fraction = window.fraction {
-                Text("\(Int((fraction * 100).rounded()))%")
+                Text("\(Int((fraction * 100).rounded()))%\(window.measuresElapsedTimeOnly ? " elapsed" : "")")
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
             } else {

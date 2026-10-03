@@ -52,7 +52,10 @@ public enum OverviewPresentation {
                 let used = bar.primaryFraction.map { min(max($0, 0), 1) }
                 return WindowCell(
                     label: bar.label,
-                    fraction: used.map { filters.metric == .used ? $0 : 1 - $0 },
+                    // A billing cycle's fraction is elapsed time. Inverting it
+                    // for "remaining" would read as quota left, so it stays
+                    // in elapsed terms whatever the metric.
+                    fraction: used.map { bar.measuresElapsedTimeOnly || filters.metric == .used ? $0 : 1 - $0 },
                     isBlocked: bar.isBlocked,
                     measuresElapsedTimeOnly: bar.measuresElapsedTimeOnly,
                     resetsAt: bar.resetsAt,
@@ -90,7 +93,7 @@ public enum OverviewPresentation {
                 text += " cycle"
                 if let fraction = window.fraction {
                     // Elapsed share, never a quota figure.
-                    text += " \(Int((fraction * 100).rounded())) percent \(metric == .used ? "elapsed" : "left")"
+                    text += " \(Int((fraction * 100).rounded())) percent elapsed"
                 }
             } else if let fraction = window.fraction {
                 text += " \(Int((fraction * 100).rounded())) percent \(word)"
@@ -102,7 +105,15 @@ public enum OverviewPresentation {
             }
             parts.append(text)
         }
-        if tile.isExhausted { parts.append("exhausted") }
+        if tile.isExhausted {
+            parts.append("exhausted")
+        } else {
+            switch tile.status.urgency {
+            case .none: break
+            case .warning: parts.append("running low")
+            case .critical: parts.append("critically low")
+            }
+        }
         return parts.joined(separator: ". ")
     }
 }

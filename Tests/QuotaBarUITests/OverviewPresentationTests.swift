@@ -99,4 +99,25 @@ struct OverviewPresentationTests {
         #expect(WidgetFilters.decode(filters.encoded()) == filters)
         #expect(AggregateBurndownPresentation.title(for: filters) == "All subscriptions · overview · remaining")
     }
+
+    /// Inverting a cycle for "remaining" would read as quota left.
+    @Test("a billing cycle stays in elapsed terms whatever the metric")
+    func cycleIgnoresMetric() {
+        var cycle = DualBarMetrics(primaryFraction: 0.9, label: "CYCLE", windowLength: 30 * 86_400)
+        cycle.measuresElapsedTimeOnly = true
+        for metric in [WidgetFilters.Metric.used, .remaining] {
+            let tile = O.tiles(snapshots: [snapshot(.devpass, bars: [cycle])], filters: WidgetFilters(metric: metric))[0]
+            #expect(tile.windows[0].fraction == 0.9)
+            #expect(O.accessibilityLabel(for: tile, metric: metric, now: now).contains("90 percent elapsed"))
+            #expect(!O.accessibilityLabel(for: tile, metric: metric, now: now).contains("left"))
+        }
+    }
+
+    @Test("quota pressure is spoken, not only coloured")
+    func urgencySpoken() {
+        let warn = O.tiles(snapshots: [snapshot(.claude, status: .warning, bars: [wk(0.8)])], filters: WidgetFilters())[0]
+        let crit = O.tiles(snapshots: [snapshot(.claude, status: .critical, bars: [wk(0.95)])], filters: WidgetFilters())[0]
+        #expect(O.accessibilityLabel(for: warn, metric: .remaining, now: now).hasSuffix("running low"))
+        #expect(O.accessibilityLabel(for: crit, metric: .remaining, now: now).hasSuffix("critically low"))
+    }
 }
