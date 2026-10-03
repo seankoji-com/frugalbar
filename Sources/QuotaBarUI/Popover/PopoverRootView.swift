@@ -151,6 +151,10 @@ public struct PopoverRootView: View {
                 AdviceSectionView(advice: store.advice, onActionTap: adviceAction)
             }
 
+            if !store.recentEvents.isEmpty {
+                EventsSectionView(events: store.recentEvents)
+            }
+
             ForEach(MetricCategory.allCases, id: \.self) { category in
                 let items = store.snapshots.filter {
                     if category == .developerLimits {
