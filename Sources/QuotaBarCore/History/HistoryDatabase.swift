@@ -47,6 +47,10 @@ public final class HistoryDatabase: @unchecked Sendable {
     private static let queueKey = DispatchSpecificKey<UInt8>()
     #if canImport(SQLite3)
     private var db: OpaquePointer?
+    /// The open connection, for extensions in this module that need a raw
+    /// SQLite call the wrapper does not expose (e.g. `sqlite3_changes`).
+    /// Only valid from a `perform` block.
+    var rawHandle: OpaquePointer? { db }
     #endif
 
     public init(fileURL: URL) {

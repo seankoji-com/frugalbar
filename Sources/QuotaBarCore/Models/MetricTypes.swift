@@ -13,6 +13,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case kiro
     case devpass
     case commandcode
+    case clinepass
     case githubRest   = "github_rest"
     case githubGraphql = "github_graphql"
 
@@ -28,6 +29,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .kiro:          "Kiro"
         case .devpass:       "DevPass"
         case .commandcode:   "Command Code"
+        case .clinepass:     "ClinePass"
         case .githubRest:    "GitHub REST"
         case .githubGraphql: "GitHub GraphQL"
         }
@@ -47,6 +49,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         // Command Code's brand "Burple" foreground; its badge background is
         // #2E1B9C, used for the avatar rather than this accent.
         case .commandcode:   "#546bf3"
+        // Indigo chosen to read as Cline's brand blue; not taken from a
+        // published brand sheet.
+        case .clinepass:     "#5b5bd6"
         case .githubRest:    "#ffb4ab"
         case .githubGraphql: "#ffb4ab"
         }
@@ -64,6 +69,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .kiro:          "bolt"
         case .devpass:       "ticket"
         case .commandcode:   "command"
+        case .clinepass:     "ticket.fill"
         case .githubRest:    "network"
         case .githubGraphql: "point.3.connected.trianglepath.dotted"
         }
@@ -436,6 +442,18 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// nothing. Defaulted here (not as an init parameter) so neither existing
     /// initializer, nor any other provider's call site, has to change.
     public var openRouterCatalogUnavailable: Bool = false
+    /// Banked usage-reset credits the vendor says the user can redeem right
+    /// now (OpenAI's `rate_limit_reset_credits.available_count`). `nil` when
+    /// the vendor published no such figure — never 0 as a stand-in, since
+    /// "none available" and "the vendor has no such thing" are different
+    /// facts. Defaulted here so no initializer or call site has to change.
+    public var resetCreditsAvailable: Int? = nil
+    /// How many of those banked credits the vendor says can be redeemed
+    /// against the current window state (OpenAI's
+    /// `rate_limit_reset_credits.applicable_available_count`). It flips with
+    /// window state, so nothing fires on it changing; display only. `nil`
+    /// when not published.
+    public var resetCreditsApplicable: Int? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
@@ -654,6 +672,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .kiro:          return "Kiro"
         case .devpass:       return "DevPass"
         case .commandcode:   return "Command Code"
+        case .clinepass:     return "ClinePass"
         case .githubRest, .githubGraphql: return "GitHub"
         }
     }

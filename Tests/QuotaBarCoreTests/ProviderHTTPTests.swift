@@ -221,6 +221,96 @@ struct ProviderHTTPTests {
         #expect(snap.badgeText == "8% left")
     }
 
+    @Test("OpenAI reads banked reset credits and names them in the row note")
+    func openAIResetCredits() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":30,"reset_at":1787891551}},
+             "credits":{"has_credits":true,"unlimited":false,"balance":"12.50"},
+             "rate_limit_reset_credits":{"available_count":"2"}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+        #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(snap.resetCreditsApplicable == nil)
+        #expect(snap.row1?.primaryFraction == 0.30)
+    }
+
+    /// Absent is nil, never 0 — and a credit block in a shape we did not
+    /// anticipate costs only the credit count, never the usage reading.
+    @Test("OpenAI without, or with malformed, reset credits keeps the reading and reports nil")
+    func openAIResetCreditsAbsentOrMalformed() throws {
+        let absent = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"rate_limit":{"primary_window":{"used_percent":10}}}
+        """#.utf8))
+        #expect(absent.rate_limit_reset_credits == nil)
+        #expect(absent.credits == nil)
+
+        let malformed = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"rate_limit":{"primary_window":{"used_percent":10}},
+         "credits":"unexpected","rate_limit_reset_credits":{"available_count":"many"}}
+        """#.utf8))
+        #expect(malformed.rate_limit?.primary_window?.used_percent == 10)
+        #expect(malformed.credits == nil)
+        #expect(malformed.rate_limit_reset_credits?.available_count == nil)
+
+        let numeric = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"credits":{"has_credits":"true","balance":3.5},"rate_limit_reset_credits":{"available_count":1}}
+        """#.utf8))
+        #expect(numeric.credits?.has_credits == true)
+        #expect(numeric.credits?.balance == "3.5")
+        #expect(numeric.rate_limit_reset_credits?.available_count == 1)
+
+        let provider = OpenAIQuotaProvider(accessToken: "t")
+        let snap = provider.makeSnapshot(response: absent, accountPlan: nil, cliSource: "test",
+                                         now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(snap.resetCreditsAvailable == nil)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota")
+    }
+
+    @Test("the OpenAI row note mentions credits only when at least one is available")
+    func openAIResetCreditNote() {
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: nil) == "Live ChatGPT subscription quota")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 0) == "Live ChatGPT subscription quota")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 1)
+                == "Live ChatGPT subscription quota · 1 reset credit banked")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 2, applicable: 0)
+                == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 2, applicable: 1)
+                == "Live ChatGPT subscription quota · 2 reset credits banked · 1 redeemable now")
+        // Nothing banked means nothing to say, whatever "applicable" claims.
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 0, applicable: 1)
+                == "Live ChatGPT subscription quota")
+    }
+
+    /// The live `wham/usage` shape from a Pro account (2026-10-03), credit
+    /// blocks included. `balance` is decoded but its unit is unverified, so
+    /// nothing may render it.
+    @Test("OpenAI decodes the live Pro payload's credit blocks")
+    func openAILivePayload() throws {
+        let live = #"""
+        {"plan_type":"pro","credits":{"has_credits":true,"unlimited":false,"overage_limit_reached":false,"balance":"62500","approx_local_messages":[15625,81250],"approx_cloud_messages":[2500,15625]},"rate_limit_reset_credits":{"available_count":2,"applicable_available_count":0},"rate_limit_upsell":null,
+         "rate_limit":{"primary_window":{"used_percent":40,"reset_at":1791050000,"limit_window_seconds":18000}}}
+        """#
+        let response = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(live.utf8))
+        #expect(response.plan_type == "pro")
+        #expect(response.credits == .init(has_credits: true, unlimited: false, balance: "62500"))
+        #expect(response.rate_limit_reset_credits == .init(available_count: 2, applicable_available_count: 0))
+
+        let snap = OpenAIQuotaProvider(accessToken: "t").makeSnapshot(
+            response: response, accountPlan: nil, cliSource: "test",
+            now: Date(timeIntervalSince1970: 1_791_040_000))
+        #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.resetCreditsApplicable == 0)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(!(snap.auxiliaryInfo ?? "").contains("62500"))
+        #expect(snap.badgeText == "60% left")
+    }
+
     @Test("an unlabelled OpenAI window falls back rather than guessing a length")
     func openAIWindowLabels() {
         #expect(OpenAIQuotaProvider.label(forWindowSeconds: 18000) == "5H")
@@ -864,7 +954,7 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 1)
         let request = try #require(URLProtocolStub.capturedRequests.first)
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.absoluteString == "https://api.anthropic.com/api/oauth/usage")
+        #expect(request.url?.absoluteString == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer oauth-token")
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
         #expect(snap.cliSource == "Claude OAuth usage endpoint")
@@ -896,6 +986,61 @@ struct ProviderHTTPTests {
         }
         #expect(snap.status == .measured(.critical))
         #expect(snap.badgeText == "1% left")
+    }
+
+    /// The exact `cedar_ember` block the OAuth surface returned on 3 Oct 2026
+    /// for an account that holds one full reset on claude.ai: Anthropic
+    /// declines to serve grants to this surface. That must read as "no
+    /// figure", never as "0 banked".
+    @Test("Claude reset grants not served to the OAuth surface produce no reset-credit figure")
+    func claudeGrantsNotServed() async throws {
+        let body = #"{"five_hour":{"utilization":32,"resets_at":"2026-10-03T06:09:59.514943+00:00"},"seven_day":{"utilization":77,"resets_at":"2026-10-03T22:59:59.514967+00:00"},"cedar_ember":{"eligible":false,"ineligible_reason":"surface","at_limit":false,"exhausted":[],"grants":[],"next_grant_id":null,"weekly_resets_at":null,"cooldown_until":null,"event_props":null}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.resetCreditsAvailable == nil)
+        #expect(snap.resetCreditsApplicable == nil)
+        #expect(snap.auxiliaryInfo == "Live Claude subscription quota")
+    }
+
+    /// The grant the claude.ai web session was served the same day (from a
+    /// HAR of the usage page). If Anthropic ever serves it to the OAuth
+    /// surface, the row carries the banked count and the usable-now count.
+    @Test("Claude reset grants, when served, are summed into the reset-credit fields")
+    func claudeGrantsServed() async throws {
+        let body = #"{"five_hour":{"utilization":33,"resets_at":"2026-10-03T06:09:59.579123+00:00"},"seven_day":{"utilization":78,"resets_at":"2026-10-03T22:59:59.579146+00:00"},"cedar_ember":{"eligible":true,"ineligible_reason":null,"at_limit":false,"exhausted":[],"grants":[{"id":"opus55-launch-promax-20260921","label":"Claude Opus 5.5 launch: one usage-limit reset for Pro and Max","resets_total":1,"resets_left":1,"starts_at":"2026-09-22T16:00:00+00:00","ends_at":"2026-10-22T16:00:00+00:00","clears":["five_hour","seven_day","seven_day_overage_included"],"paused":false,"usable_now":true,"use_requires_limit":false,"percent_used":{"five_hour":33,"seven_day":78},"blocking":[],"arm":null},{"id":"fivehour-x","resets_total":2,"resets_left":1,"clears":["five_hour"],"usable_now":false}],"next_grant_id":"opus55-launch-promax-20260921"}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.resetCreditsApplicable == 1)
+        #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
+    }
+
+    /// A grant without its count makes the total unknowable: nil, never a
+    /// partial sum.
+    @Test("a Claude grant missing resets_left yields no reset-credit figure")
+    func claudeGrantWithoutCount() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":1,"usable_now":true},{"id":"b","clears":["five_hour"]}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == nil)
+        #expect(snap.resetCreditsApplicable == nil)
+        #expect(snap.auxiliaryInfo == "Live Claude subscription quota")
+    }
+
+    /// A malformed grant entry must not take the usage windows down with it.
+    @Test("a malformed cedar_ember block never breaks the Claude usage reading")
+    func claudeGrantsMalformed() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":"nope"}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.resetCreditsAvailable == nil)
     }
 
     /// A 200 whose body is not the usage shape must not render as health.
@@ -1005,7 +1150,7 @@ struct ProviderHTTPTests {
                 let bodyData = extractBody(from: request)
                 let json = (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ?? [:]
                 #expect(json["auth_index"] as? String == "claude_idx_123")
-                #expect(json["url"] as? String == "https://api.anthropic.com/api/oauth/usage")
+                #expect(json["url"] as? String == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1")
                 #expect(json["method"] as? String == "GET")
 
                 return canned(body: #"""

@@ -4,10 +4,19 @@ import Foundation
 public struct QuotaTransitions: Sendable, Equatable {
     public let recoveries: [QuotaRecoveryEvent]
     public let resets: [QuotaResetEvent]
+    public let restores: [UsageRestoredEvent]
+    public let creditGrants: [ResetCreditGrantedEvent]
 
-    public init(recoveries: [QuotaRecoveryEvent], resets: [QuotaResetEvent]) {
+    public init(
+        recoveries: [QuotaRecoveryEvent],
+        resets: [QuotaResetEvent],
+        restores: [UsageRestoredEvent] = [],
+        creditGrants: [ResetCreditGrantedEvent] = []
+    ) {
         self.recoveries = recoveries
         self.resets = resets
+        self.restores = restores
+        self.creditGrants = creditGrants
     }
 }
 
@@ -34,7 +43,8 @@ public actor QuotaNotificationObserver {
         observeTransitions(current: current, now: Date()).recoveries
     }
 
-    /// Same bookkeeping as `observe(current:)`, returning resets as well.
+    /// Same bookkeeping as `observe(current:)`, returning resets, unscheduled
+    /// restores and reset-credit grants as well.
     /// `now` decides whether a previously reported reset time has passed.
     public func observeTransitions(current: [QuotaSnapshot], now: Date) -> QuotaTransitions {
         var currentByVendor: [VendorIdentifier: QuotaSnapshot] = [:]
@@ -43,7 +53,9 @@ public actor QuotaNotificationObserver {
         }
         let transitions = QuotaTransitions(
             recoveries: QuotaTransitionDetector.detect(previous: previous, current: currentByVendor),
-            resets: QuotaResetDetector.detect(previous: previous, current: currentByVendor, now: now)
+            resets: QuotaResetDetector.detect(previous: previous, current: currentByVendor, now: now),
+            restores: UsageRestoreDetector.detect(previous: previous, current: currentByVendor, now: now),
+            creditGrants: ResetCreditDetector.detect(previous: previous, current: currentByVendor)
         )
         previous = currentByVendor
         return transitions

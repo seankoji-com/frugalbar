@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 import QuotaBarCore
 
-/// Inspector modal presenting detailed metrics and diagnostics.
+/// Inspector modal: the provider's windows, a burndown or usage-history
+/// chart from recorded readings, its recent events, and diagnostics.
 ///
 /// Carried a "Test Quota Simulation" slider that wrote a made-up fraction into
 /// the live snapshot — which then drove the advice engine and the menu bar
@@ -10,16 +11,54 @@ import QuotaBarCore
 /// report has no business shipping, so it is gone.
 public struct MetricDetailModalView: View {
 
-    @State private var snapshot: QuotaSnapshot
+    let snapshot: QuotaSnapshot
+    let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]
+    let eventsLoader: (VendorIdentifier, Date?, Int?) async -> [AIEvent]
     let onClose: () -> Void
 
     @State private var copied = false
+    @State private var chartMode: ChartMode = .burndown
+    @State private var historyRange: HistoryPresentation.TimeRange = .last24Hours
+    @State private var selectedBarLabel: String?
+    @State private var readings: [QuotaHistoryStore.ReadingRecord] = []
+    @State private var recentEvents: [AIEvent] = []
+    @State private var markerEvents: [AIEvent] = []
+    @State private var isLoading = true
+    /// Fixed when the data loads, so every derived figure on screen agrees
+    /// on one instant instead of each calling `Date()`.
+    @State private var now = Date()
+    @State private var bodyHeight: CGFloat = 0
 
+    enum ChartMode: String, CaseIterable, Identifiable {
+        case burndown = "Burndown"
+        case history = "History"
+        var id: String { rawValue }
+    }
+
+    /// The ranges the inspector offers; "All" belongs to the History window.
+    static let historyRanges: [HistoryPresentation.TimeRange] = [.last24Hours, .last7Days, .last30Days]
+    /// How far back the inspector reads, covering the longest offered range.
+    static let historyLookback: TimeInterval = 30 * 86_400
+    static let chartHeight: CGFloat = 150
+    /// Keeps the whole modal near 600pt: header and footer sit outside this.
+    static let maxBodyHeight: CGFloat = 480
+
+    /// - Parameters:
+    ///   - readingsLoader: one vendor's recorded readings since a date.
+    ///   - eventsLoader: one vendor's recorded events since a date, newest
+    ///     first, at most `limit`.
+    ///
+    /// Both run once per vendor when the modal appears, never on the refresh
+    /// path.
     public init(
         snapshot: QuotaSnapshot,
+        readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord],
+        eventsLoader: @escaping (VendorIdentifier, Date?, Int?) async -> [AIEvent],
         onClose: @escaping () -> Void
     ) {
-        _snapshot = State(initialValue: snapshot)
+        self.snapshot = snapshot
+        self.readingsLoader = readingsLoader
+        self.eventsLoader = eventsLoader
         self.onClose = onClose
     }
 
@@ -46,7 +85,15 @@ public struct MetricDetailModalView: View {
             // Modal card
             VStack(spacing: 0) {
                 header
-                content
+                ScrollView(.vertical) {
+                    content
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            bodyHeight = $0
+                        }
+                }
+                .frame(height: min(bodyHeight > 0 ? bodyHeight : Self.maxBodyHeight, Self.maxBodyHeight))
+                .scrollBounceBehavior(.basedOnSize)
                 footer
             }
             .frame(width: 348)
@@ -59,6 +106,30 @@ public struct MetricDetailModalView: View {
             .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
             .padding(Theme.edgeMargin)
         }
+        .task(id: snapshot.vendorId) { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        let vendor = snapshot.vendorId
+        let loadTime = Date()
+        // Far enough back for the longest offered range and for the start
+        // of the longest window the vendor published.
+        var since = loadTime.addingTimeInterval(-Self.historyLookback)
+        for bar in snapshot.quotaBars {
+            if let reset = bar.resetsAt, let length = bar.windowLength {
+                since = min(since, reset.addingTimeInterval(-length))
+            }
+        }
+        let r = await readingsLoader(vendor, since)
+        let e = await eventsLoader(vendor, nil, 5)
+        let m = await eventsLoader(vendor, loadTime.addingTimeInterval(-Self.historyLookback), nil)
+        guard !Task.isCancelled else { return }
+        readings = r
+        recentEvents = e
+        markerEvents = m
+        now = loadTime
+        isLoading = false
     }
 
     // MARK: - Header
@@ -106,6 +177,7 @@ public struct MetricDetailModalView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close \(snapshot.displayName) details")
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, 12)
@@ -147,6 +219,7 @@ public struct MetricDetailModalView: View {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(statusBannerColor.opacity(0.3), lineWidth: 0.5)
             )
+            .accessibilityElement(children: .combine)
 
             // Quick metrics grid — the two longest consumable windows, in the
             // vendor's own order. Hardcoded "5H"/"Weekly" titles assumed every
@@ -174,15 +247,28 @@ public struct MetricDetailModalView: View {
                 )
             }
 
-            // Technical diagnostics
-            VStack(spacing: 6) {
-                // Every value here is either measured or absent. A plausible
-                // placeholder in a diagnostics panel is worse than a dash: it
-                // is read as fact.
-                diagRow(label: "Latency & Ping", value: snapshot.latencyMs.map { "\($0)ms" } ?? "—", valueColor: Theme.secondary)
-                diagRow(label: "Auth / CLI Source", value: snapshot.cliSource ?? "—")
-                diagRow(label: "Key Fingerprint", value: snapshot.keyMasked ?? "—")
-                diagRow(label: "Plan Tier", value: snapshot.planName ?? snapshot.badgeText ?? "—", valueColor: Theme.primary)
+            chartCard
+
+            if !recentEvents.isEmpty {
+                recentEventsCard
+            }
+
+            // Technical diagnostics. Every value here is either measured or
+            // absent: a plausible placeholder in a diagnostics panel is read
+            // as fact.
+            VStack(spacing: 5) {
+                diagRow(label: "Latency", value: snapshot.latencyMs.map { "\($0)ms" } ?? "—", valueColor: Theme.secondary)
+                diagRow(label: "Source", value: snapshot.cliSource ?? "—")
+                diagRow(label: "Plan", value: snapshot.planName ?? snapshot.badgeText ?? "—", valueColor: Theme.primary)
+                if let key = snapshot.keyMasked {
+                    diagRow(label: "Key", value: key)
+                }
+                if let credits = BurndownPresentation.resetCreditsText(
+                    available: snapshot.resetCreditsAvailable,
+                    applicable: snapshot.resetCreditsApplicable
+                ) {
+                    diagRow(label: "Reset credits", value: credits, valueColor: Theme.healthy)
+                }
             }
             .padding(10)
             .background(Theme.surfaceContainerLowest.opacity(0.6))
@@ -191,7 +277,6 @@ public struct MetricDetailModalView: View {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
             )
-
         }
         .padding(Theme.cardPadding)
     }
@@ -243,6 +328,165 @@ public struct MetricDetailModalView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Chart card
+
+    /// Consumable windows, longest first — the burndown's choices.
+    private var burndownLabels: [String] {
+        snapshot.quotaBars.map(\.label)
+    }
+
+    private var activeBurndownLabel: String? {
+        if let selectedBarLabel, burndownLabels.contains(selectedBarLabel) { return selectedBarLabel }
+        return burndownLabels.first
+    }
+
+    private var chartCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Picker("Chart", selection: $chartMode) {
+                    ForEach(ChartMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 170)
+                .accessibilityLabel("Chart type")
+
+                Spacer(minLength: 0)
+
+                switch chartMode {
+                case .burndown:
+                    if burndownLabels.count > 1, let active = activeBurndownLabel {
+                        Picker("Window", selection: Binding(
+                            get: { active },
+                            set: { selectedBarLabel = $0 }
+                        )) {
+                            ForEach(burndownLabels, id: \.self) { Text($0).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                        .accessibilityLabel("Burndown window")
+                    }
+                case .history:
+                    Picker("Range", selection: $historyRange) {
+                        ForEach(Self.historyRanges) { range in
+                            Text(range.rawValue).tag(range)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("History range")
+                }
+            }
+
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel("Loading readings")
+                } else {
+                    switch chartMode {
+                    case .burndown: burndownContent
+                    case .history: historyContent
+                    }
+                }
+            }
+            .frame(height: Self.chartHeight)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surfaceContainerLowest.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+
+    @ViewBuilder
+    private var burndownContent: some View {
+        if let label = activeBurndownLabel,
+           let burndown = BurndownPresentation.burndown(
+               readings: readings, vendorId: snapshot.vendorId, barLabel: label, now: now
+           ) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(BurndownPresentation.summaryLine(for: burndown, now: now))
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .accessibilityHidden(true)
+                BurndownChartView(burndown: burndown, now: now)
+                if burndown.ideal == nil {
+                    Text("No window length published, so no pace line can be drawn")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.outline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+        } else if burndownLabels.isEmpty {
+            ChartEmptyState(
+                symbol: "chart.line.downtrend.xyaxis",
+                message: "No consumable window, so there is no burndown to draw"
+            )
+        } else {
+            ChartEmptyState(
+                symbol: "chart.line.downtrend.xyaxis",
+                message: "No readings yet — history accumulates as FrugalBar polls"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
+        let series = BurndownPresentation.history(
+            readings: readings, vendorId: snapshot.vendorId, range: historyRange, now: now
+        )
+        if series.isEmpty {
+            ChartEmptyState(
+                symbol: "chart.line.uptrend.xyaxis",
+                message: "No readings yet — history accumulates as FrugalBar polls"
+            )
+        } else {
+            UsageHistoryChartView(
+                series: series,
+                range: historyRange,
+                markers: EventsPresentation.markerEvents(
+                    markerEvents, vendor: snapshot.vendorId, range: historyRange, now: now
+                ),
+                now: now
+            )
+        }
+    }
+
+    // MARK: - Recent events
+
+    private var recentEventsCard: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Recent events")
+                .font(Theme.Typography.subtitle.weight(.semibold))
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                .accessibilityAddTraits(.isHeader)
+            ForEach(recentEvents) { event in
+                EventRowView(event: event, now: now, compact: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surfaceContainerLowest.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
     }
 
     /// "Burning 1.8x pace" or "0.6x pace" — how fast the window is being
@@ -268,7 +512,7 @@ public struct MetricDetailModalView: View {
     /// window length, never a guess dressed up as one.
     private func exhaustionText(_ bar: DualBarMetrics?) -> String? {
         guard let date = bar?.projectedExhaustionDate else { return nil }
-        let relative = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+        let relative = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)
         return "Exhausts \(relative)"
     }
 
@@ -283,6 +527,8 @@ public struct MetricDetailModalView: View {
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label): \(value == "—" ? "not reported" : value)")
     }
 
     // MARK: - Footer
@@ -299,6 +545,7 @@ public struct MetricDetailModalView: View {
                 .foregroundStyle(copied ? Theme.secondary : Theme.onSurfaceVariant)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(copied ? "Copied details as JSON" : "Copy details as JSON")
 
             Spacer()
 
@@ -310,6 +557,7 @@ public struct MetricDetailModalView: View {
                 .background(Color.white.opacity(0.12))
                 .clipShape(Capsule())
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close details")
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, 10)
@@ -320,16 +568,7 @@ public struct MetricDetailModalView: View {
     }
 
     private func copyJson() {
-        let json = """
-        {
-          "id": "\(snapshot.id)",
-          "vendor": "\(snapshot.displayName)",
-          "category": "\(snapshot.category.rawValue)",
-          "status": "\(snapshot.status.confidence == .measured ? "measured" : "unavailable")",
-          "5h_fraction": \(snapshot.row1?.primaryFraction.map { String($0) } ?? "null"),
-          "last_updated": "\(snapshot.lastUpdated)"
-        }
-        """
+        guard let json = InspectorExport(snapshot: snapshot, readingsCount: readings.count).jsonString() else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
         copied = true

@@ -83,23 +83,122 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         }
     }
 
+    /// One banked usage-limit reset Anthropic has granted the account.
+    ///
+    /// Served under the `cedar_ember` key — an Anthropic feature codename,
+    /// requested with `?cedar_ember=1` — which the claude.ai web UI reads to
+    /// draw its "Limit resets" panel. As of October 2026 the OAuth surface
+    /// FrugalBar authenticates with answers `eligible: false,
+    /// ineligible_reason: "surface"` with an empty `grants` list, so this
+    /// decodes to nothing for a CLI login. It is parsed anyway so the row and
+    /// the reset-credit event light up the day Anthropic opens the surface,
+    /// and shows nothing until then — never a 0 standing in for "not served".
+    public struct ResetGrant: Decodable, Sendable, Equatable {
+        public let id: String?
+        public let label: String?
+        public let resetsLeft: Int?
+        public let resetsTotal: Int?
+        /// The windows one use clears, e.g. `["five_hour", "seven_day"]`. A
+        /// grant that clears `seven_day` is a "full reset" in the web UI; one
+        /// that clears only `five_hour` is a "5-hour reset".
+        public let clears: [String]?
+        public let usableNow: Bool?
+        public let endsAt: String?
+
+        public init(id: String?, label: String?, resetsLeft: Int?, resetsTotal: Int?,
+                    clears: [String]?, usableNow: Bool?, endsAt: String?) {
+            self.id = id
+            self.label = label
+            self.resetsLeft = resetsLeft
+            self.resetsTotal = resetsTotal
+            self.clears = clears
+            self.usableNow = usableNow
+            self.endsAt = endsAt
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, label, clears
+            case resetsLeft = "resets_left"
+            case resetsTotal = "resets_total"
+            case usableNow = "usable_now"
+            case endsAt = "ends_at"
+        }
+    }
+
+    /// The `cedar_ember` block. `grants` is empty both when the account holds
+    /// no reset and when the surface is not served one, so `eligible` is
+    /// kept to tell the two apart in logs; neither is turned into a figure.
+    public struct ResetGrants: Decodable, Sendable, Equatable {
+        public let eligible: Bool?
+        public let ineligibleReason: String?
+        public let grants: [ResetGrant]
+
+        public init(eligible: Bool?, ineligibleReason: String?, grants: [ResetGrant]) {
+            self.eligible = eligible
+            self.ineligibleReason = ineligibleReason
+            self.grants = grants
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case eligible, grants
+            case ineligibleReason = "ineligible_reason"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            eligible = try? container.decodeIfPresent(Bool.self, forKey: .eligible)
+            ineligibleReason = try? container.decodeIfPresent(String.self, forKey: .ineligibleReason)
+            // One malformed grant must not hide the others.
+            grants = (try? container.decodeIfPresent([LenientGrant].self, forKey: .grants))?
+                .compactMap(\.grant) ?? []
+        }
+
+        private struct LenientGrant: Decodable {
+            let grant: ResetGrant?
+            init(from decoder: Decoder) throws {
+                grant = try? ResetGrant(from: decoder)
+            }
+        }
+
+        /// Banked resets the vendor says the account holds, summed over
+        /// grants. `nil` when there are no grants at all — including the
+        /// not-served case — because "no figure" and "zero" are different.
+        public var resetsAvailable: Int? {
+            // Every grant must carry its count. A grant without one (a
+            // renamed field, say) makes the sum unknowable; summing the rest
+            // would print a figure nobody published.
+            guard !grants.isEmpty, grants.allSatisfy({ $0.resetsLeft != nil }) else { return nil }
+            return grants.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
+        }
+
+        /// Of those, the ones the vendor flags as usable right now.
+        public var resetsUsableNow: Int? {
+            guard resetsAvailable != nil else { return nil }
+            return grants.filter { $0.usableNow == true }.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
+        }
+    }
+
     public let fiveHour: Window?
     public let sevenDay: Window?
     /// Model-scoped weekly windows. Only some plans report them, and they
     /// arrive as `null` otherwise.
     public let sevenDayOpus: Window?
     public let sevenDaySonnet: Window?
+    /// Banked reset grants, when the surface is served them. See `ResetGrant`.
+    public let resetGrants: ResetGrants?
 
     public init(
         fiveHour: Window? = nil,
         sevenDay: Window? = nil,
         sevenDayOpus: Window? = nil,
-        sevenDaySonnet: Window? = nil
+        sevenDaySonnet: Window? = nil,
+        resetGrants: ResetGrants? = nil
     ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
         self.sevenDayOpus = sevenDayOpus
         self.sevenDaySonnet = sevenDaySonnet
+        self.resetGrants = resetGrants
     }
 
     public init(from decoder: Decoder) throws {
@@ -111,6 +210,7 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         sevenDay = try? container.decodeIfPresent(Window.self, forKey: .sevenDay)
         sevenDayOpus = try? container.decodeIfPresent(Window.self, forKey: .sevenDayOpus)
         sevenDaySonnet = try? container.decodeIfPresent(Window.self, forKey: .sevenDaySonnet)
+        resetGrants = try? container.decodeIfPresent(ResetGrants.self, forKey: .resetGrants)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -118,6 +218,7 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         case sevenDay = "seven_day"
         case sevenDayOpus = "seven_day_opus"
         case sevenDaySonnet = "seven_day_sonnet"
+        case resetGrants = "cedar_ember"
     }
 }
 
@@ -127,6 +228,9 @@ public enum CLIProxyClient {
     /// Anthropic's OAuth usage endpoint. Reading it is free, unlike a
     /// messages request, which spends the quota it reports on.
     public static let claudeOAuthUsageURL = "https://api.anthropic.com/api/oauth/usage"
+    /// The same endpoint asked to include banked reset grants. A feature
+    /// flag, not a credential, so it may travel in the query string.
+    public static let claudeOAuthUsageWithGrantsURL = claudeOAuthUsageURL + "?cedar_ember=1"
 
     public static func base64url(string: String) -> String {
         Data(string.utf8).base64EncodedString()
@@ -305,7 +409,7 @@ public enum CLIProxyClient {
         let payload: [String: Any] = [
             "auth_index": claudeAccount.authIndex,
             "method": "GET",
-            "url": claudeOAuthUsageURL,
+            "url": claudeOAuthUsageWithGrantsURL,
             "header": [
                 "Authorization": "Bearer $TOKEN$",
                 "anthropic-beta": "oauth-2025-04-20"

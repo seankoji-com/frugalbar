@@ -40,6 +40,13 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
     static let usageURL = "https://api.llmgateway.io/v1/key"
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        try await fetchSnapshot(now: Date())
+    }
+
+    /// `now` decides which monthly renewal the cycle rolls to. Tests pass a
+    /// fixed date so an assertion about the renewal never depends on the day
+    /// the suite happens to run (the pinned renewal has already passed once).
+    func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
         guard let key = await credential(injected: apiKey, for: .devpass) else {
             return unavailable(.notConfigured)
         }
@@ -54,7 +61,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
         guard let response = try? JSONDecoder().decode(KeyResponse.self, from: data) else {
             return unavailable(.badResponse)
         }
-        return Self.snapshot(from: response.data, provider: self, now: Date())
+        return Self.snapshot(from: response.data, provider: self, now: now)
     }
 
     // MARK: - Snapshot construction

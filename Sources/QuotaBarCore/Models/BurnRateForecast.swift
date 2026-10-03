@@ -168,7 +168,7 @@ public struct BurnRateForecast: Sendable, Equatable {
     }
 
     /// Rounded to the nearest minute: "45m", "1h 20m", "2d 3h".
-    static func formatDuration(_ interval: TimeInterval) -> String {
+    public static func formatDuration(_ interval: TimeInterval) -> String {
         let totalMinutes = max(1, Int((interval / 60).rounded()))
         if totalMinutes < 60 { return "\(totalMinutes)m" }
         let hours = totalMinutes / 60

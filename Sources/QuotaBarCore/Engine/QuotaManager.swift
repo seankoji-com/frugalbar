@@ -61,6 +61,7 @@ public actor QuotaManager {
             KiroQuotaProvider(),
             DevPassQuotaProvider(),
             CommandCodeQuotaProvider(),
+            ClinePassQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ]
@@ -79,7 +80,7 @@ public actor QuotaManager {
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode,
         .openrouter, .grok, .kiro, .devpass,
-        .commandcode,
+        .commandcode, .clinepass,
         .githubRest, .githubGraphql,
     ]
 
@@ -367,6 +368,8 @@ public actor QuotaManager {
             // attach pass or it silently disappears until the next poll, even
             // though the failure is still real.
             rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+            rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
+            rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             updated = rebuilt
         }
         return updated
@@ -433,6 +436,8 @@ public actor QuotaManager {
         // retention pass or it silently disappears until the next poll, even
         // though the failure is still real.
         rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+        rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
+        rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         return rebuilt
     }
 

@@ -175,6 +175,21 @@ public enum CredentialStore {
     /// through the same `osascript` path as recovery notifications.
     public static let resetAlertVendorsDefaultsKey = "QuotaBarResetAlertVendors"
 
+    /// Whether to poll OpenRouter's public model catalog and the vendor news
+    /// feeds for model releases and price changes.
+    ///
+    /// On by default, unlike every other opt-in here: the requests carry no
+    /// credential and read only public data (OpenRouter's key-less catalog,
+    /// public RSS), once every six hours. Quota-derived events (resets,
+    /// restores, reset credits) are recorded regardless; this gates only the
+    /// outbound polling.
+    public static let eventTrackingEnabledDefaultsKey = "QuotaBarEventTracking"
+
+    /// Which AI-event kinds post a notification, stored as sorted raw values.
+    /// `.usageReset` is listed here for completeness but its banners stay
+    /// governed per vendor by `resetAlertVendors`.
+    public static let eventNotificationKindsDefaultsKey = "QuotaBarEventNotificationKinds"
+
     /// Whether the History window is viewing synthetic sample fixture data
     /// rather than the live historical database.
     public static let sampleModeDefaultsKey = "QuotaBarHistorySampleMode"
@@ -249,9 +264,64 @@ public enum CredentialStore {
         Set((raw ?? []).compactMap(VendorIdentifier.init(rawValue:)))
     }
 
+    public static var isEventTrackingEnabled: Bool {
+        // `bool(forKey:)` reads an absent key as false; this default is true.
+        get { preferences.object(forKey: eventTrackingEnabledDefaultsKey) as? Bool ?? true }
+        set { preferences.set(newValue, forKey: eventTrackingEnabledDefaultsKey) }
+    }
+
+    /// The kinds that notify when the user has never chosen.
+    public static let defaultEventNotificationKinds: Set<AIEventKind> = [
+        .usageRestored, .resetCreditGranted, .newModel, .priceChange,
+    ]
+
+    public static var eventNotificationKinds: Set<AIEventKind> {
+        get { eventNotificationKinds(fromStored: preferences.stringArray(forKey: eventNotificationKindsDefaultsKey)) }
+        set { preferences.set(newValue.map(\.rawValue).sorted(), forKey: eventNotificationKindsDefaultsKey) }
+    }
+
+    /// An absent key is the default set; a stored empty list is a deliberate
+    /// "notify about nothing" and stays empty. Unknown raw values are dropped.
+    static func eventNotificationKinds(fromStored raw: [String]?) -> Set<AIEventKind> {
+        guard let raw else { return defaultEventNotificationKinds }
+        return Set(raw.compactMap(AIEventKind.init(rawValue:)))
+    }
+
     public static var isSampleModeEnabled: Bool {
         get { preferences.bool(forKey: sampleModeDefaultsKey) }
         set { preferences.set(newValue, forKey: sampleModeDefaultsKey) }
+    }
+
+    // MARK: Desktop widget
+
+    /// Whether the desktop widget panel was open, so launch can re-show it.
+    public static let desktopWidgetVisibleDefaultsKey = "QuotaBarDesktopWidgetVisible"
+    /// `DesktopWidgetMode` raw value.
+    public static let desktopWidgetModeDefaultsKey = "QuotaBarDesktopWidgetMode"
+    /// The panel frame, as `NSStringFromRect`.
+    public static let desktopWidgetFrameDefaultsKey = "QuotaBarDesktopWidgetFrame"
+    /// JSON-encoded chart filters (vendors, window, range, metric).
+    public static let desktopWidgetFiltersDefaultsKey = "QuotaBarDesktopWidgetFilters"
+
+    public static var isDesktopWidgetVisible: Bool {
+        get { preferences.bool(forKey: desktopWidgetVisibleDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetVisibleDefaultsKey) }
+    }
+
+    /// Unknown or missing values read as `.desktop`, the default.
+    public static var desktopWidgetMode: DesktopWidgetMode {
+        get { DesktopWidgetMode(stored: preferences.string(forKey: desktopWidgetModeDefaultsKey)) }
+        set { preferences.set(newValue.rawValue, forKey: desktopWidgetModeDefaultsKey) }
+    }
+
+    public static var desktopWidgetFrameString: String? {
+        get { preferences.string(forKey: desktopWidgetFrameDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetFrameDefaultsKey) }
+    }
+
+    public static var desktopWidgetFiltersData: Data? {
+        get { preferences.data(forKey: desktopWidgetFiltersDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetFiltersDefaultsKey) }
     }
 
     /// Returns the API key for a vendor: Keychain first, then — only when the
@@ -617,7 +687,27 @@ public enum CredentialStore {
                   let key = (json["apiKey"] as? String)?.trimmed, !key.isEmpty
             else { return nil }
             return key
+
+        case .clinepass:
+            // Env vars, then the Cline CLI/SDK's providers.json, then the
+            // legacy secrets.json — see `discoverCLICredential` for the exact
+            // keys and their provenance.
+            return ClinePassQuotaProvider.discoverCLICredential()
         }
+    }
+}
+
+/// Where the desktop widget panel sits. Lives beside its preference key so
+/// Settings and the panel read one definition.
+public enum DesktopWidgetMode: String, Sendable, CaseIterable {
+    /// On the wallpaper, below the desktop icons — out of the way of windows.
+    case desktop
+    /// Above ordinary windows.
+    case floating
+
+    /// Missing or unrecognised stored values fall back to `.desktop`.
+    public init(stored raw: String?) {
+        self = raw.flatMap(Self.init(rawValue:)) ?? .desktop
     }
 }
 
@@ -698,6 +788,7 @@ extension CredentialStore {
         case .kiro:          "kiro-cli state database"
         case .devpass:       "DevPass dashboard key"
         case .commandcode:   "~/.commandcode/auth.json"
+        case .clinepass:     "~/.cline/data/settings/providers.json"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }

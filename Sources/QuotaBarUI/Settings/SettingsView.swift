@@ -43,6 +43,10 @@ public struct SettingsView: View {
               placeholder: "user_…",
               note: "Discovered from ~/.commandcode/auth.json when CLI discovery is on. "
                   + "Run `cmd login` to sign in."),
+        .init(id: .clinepass, label: "ClinePass",
+              placeholder: "Cline API key or account token",
+              note: "Discovered from ~/.cline/data/settings/providers.json when CLI discovery is on. "
+                  + "Run `cline auth` (or sign in in the Cline extension) to create it."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -73,6 +77,10 @@ public struct SettingsView: View {
     private var notificationsEnabled = false
     /// Read once from the shared suite; each toggle writes straight back.
     @State private var resetAlertVendors: Set<VendorIdentifier> = CredentialStore.resetAlertVendors
+    @AppStorage(CredentialStore.eventTrackingEnabledDefaultsKey, store: CredentialStore.preferences)
+    private var eventTracking = true
+    @State private var eventNotificationKinds: Set<AIEventKind> = CredentialStore.eventNotificationKinds
+    @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
 
     public init() {}
 
@@ -85,6 +93,21 @@ public struct SettingsView: View {
             set: { isOn in
                 if isOn { resetAlertVendors.insert(vendor) } else { resetAlertVendors.remove(vendor) }
                 CredentialStore.resetAlertVendors = resetAlertVendors
+            }
+        )
+    }
+
+    /// `.usageReset` is absent: the per-vendor "Reset alerts" govern it.
+    private static let eventNotificationCandidates: [AIEventKind] = [
+        .usageRestored, .resetCreditGranted, .newModel, .priceChange,
+    ]
+
+    private func eventNotificationBinding(for kind: AIEventKind) -> Binding<Bool> {
+        Binding(
+            get: { eventNotificationKinds.contains(kind) },
+            set: { isOn in
+                if isOn { eventNotificationKinds.insert(kind) } else { eventNotificationKinds.remove(kind) }
+                CredentialStore.eventNotificationKinds = eventNotificationKinds
             }
         )
     }
@@ -354,8 +377,9 @@ public struct SettingsView: View {
                      CLI Proxy hubs (~/.t3/userdata/settings.json); read \
                      ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
                      ~/.claude/.credentials.json, \
-                     ~/.config/github-copilot/hosts.json, or \
-                     ~/.commandcode/auth.json; read the \
+                     ~/.config/github-copilot/hosts.json, \
+                     ~/.commandcode/auth.json, or \
+                     ~/.cline/data/settings/providers.json; read the \
                      OPENROUTER_API_KEY environment variable; or read the \
                      Claude Code login Keychain item — if the Keychain has no \
                      entry for a provider. Off by default: this reads \
@@ -401,6 +425,47 @@ public struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Reset alerts")
+            }
+
+            Section {
+                Toggle("Track model releases and pricing (polls OpenRouter's catalog and vendor news feeds every 6 hours)",
+                       isOn: $eventTracking)
+                Text("Notify about")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(Self.eventNotificationCandidates) { kind in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
+                        Text(kind.notificationCaption)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            } header: {
+                Text("AI events")
+            }
+
+            Section {
+                Picker("Position", selection: $desktopWidgetMode) {
+                    Text("Pinned to desktop").tag(DesktopWidgetMode.desktop)
+                    Text("Floats above windows").tag(DesktopWidgetMode.floating)
+                }
+                .onChange(of: desktopWidgetMode) {
+                    CredentialStore.desktopWidgetMode = desktopWidgetMode
+                    DesktopWidgetWindow.applyMode()
+                }
+                Text("""
+                     A small panel charting every subscription's usage \
+                     window over time, with an average of the selected \
+                     windows' readings and their current headroom. Open it \
+                     from the gear menu. It is a window FrugalBar owns, not a \
+                     WidgetKit widget — those need an app bundle this build \
+                     does not have.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Desktop widget")
             }
         }
         .formStyle(.grouped)
@@ -557,6 +622,7 @@ public struct SettingsView: View {
         case .kiro:        provider = KiroQuotaProvider()
         case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
         case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
+        case .clinepass:   provider = ClinePassQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 

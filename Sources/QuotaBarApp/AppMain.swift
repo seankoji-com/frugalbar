@@ -17,12 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let historyStore: QuotaHistoryStore
     private let activityEngine: ActivityIngestionEngine
     private let store: QuotaStore
+    private let eventEngine: AIEventEngine
 
     override init() {
         let hStore = QuotaHistoryStore()
         let aEngine = ActivityIngestionEngine(store: hStore)
         self.historyStore = hStore
         self.activityEngine = aEngine
+        self.eventEngine = AIEventEngine(store: hStore)
         self.store = QuotaStore(
             manager: QuotaManager.shared,
             historyRecorder: { snapshots in
@@ -53,6 +55,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return try await hStore.fetchReadings(since: since)
                 } catch {
                     NSLog("frugalbar: failed to read quota history for forecast: \(error)")
+                    return []
+                }
+            },
+            vendorReadingsLoader: { vendor, since in
+                do {
+                    return try await hStore.fetchReadings(vendor: vendor, since: since)
+                } catch {
+                    NSLog("frugalbar: failed to read quota history for \(vendor.rawValue): \(error)")
+                    return []
+                }
+            },
+            eventsLoader: { vendor, kinds, since, limit in
+                do {
+                    return try await hStore.fetchEvents(vendor: vendor, kinds: kinds, since: since, limit: limit)
+                } catch {
+                    NSLog("frugalbar: failed to read AI events: \(error)")
                     return []
                 }
             }
@@ -110,12 +128,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.applyStatusItemPresentation()
         }
         applyStatusItemPresentation()
+        DesktopWidgetWindow.configure(store: store)
 
         // Capture `store` rather than `self`: an implicit strong `self` here
         // makes the handler's `[weak self]` meaningless (and is an error under
         // Swift 6.4 with warnings-as-errors).
         Task { [weak self, store] in
             await store.load()
+            if CredentialStore.isDesktopWidgetVisible { DesktopWidgetWindow.show() }
             await BackgroundScheduler.shared.start(interval: 120)
             // One handler for both jobs: adding a second would make the
             // recovery check race the refresh it depends on for no reason.
@@ -135,7 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the observer's "previous" state stays current even while notifications
     /// are off — only delivery is gated below.
     private func checkForQuotaTransitions() async {
-        let transitions = await notificationObserver.observeTransitions(current: store.snapshots, now: Date())
+        let now = Date()
+        let transitions = await notificationObserver.observeTransitions(current: store.snapshots, now: now)
         if CredentialStore.isNotificationsEnabled, !transitions.recoveries.isEmpty {
             deliverRecoveryNotification(for: transitions.recoveries)
         }
@@ -143,6 +164,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let resets = transitions.resets.filter { optedIn.contains($0.vendorId) }
         if !resets.isEmpty {
             deliverResetNotification(for: resets)
+        }
+        await recordAIEvents(transitions, now: now)
+    }
+
+    /// Records every poll-derived event (resets for all vendors, not just the
+    /// opted-in ones — the log is a record, the banner is the opt-in), then
+    /// the external sources when due, and notifies on what was actually new.
+    private func recordAIEvents(_ transitions: QuotaTransitions, now: Date) async {
+        var fresh = await eventEngine.recordPollEvents(
+            resets: transitions.resets,
+            restores: transitions.restores,
+            creditGrants: transitions.creditGrants,
+            now: now
+        )
+        fresh += await eventEngine.pollExternalSources(now: now)
+        guard !fresh.isEmpty else { return }
+        await store.reloadRecentEvents()
+        let banners = AIEventNotification.banners(
+            for: fresh, enabledKinds: CredentialStore.eventNotificationKinds, now: now)
+        for banner in banners {
+            deliverNotification(title: banner.title, body: banner.body)
         }
     }
 

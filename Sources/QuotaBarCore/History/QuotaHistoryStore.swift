@@ -51,7 +51,7 @@ public actor QuotaHistoryStore {
     }
 
     nonisolated public let databaseURL: URL
-    private let database: HistoryDatabase
+    let database: HistoryDatabase
     public let retentionInterval: TimeInterval
 
     /// Returns the database URL. Under test runs (`isTestHost == true`), uses an
@@ -107,8 +107,9 @@ public actor QuotaHistoryStore {
 
     /// Opens the database on its own serial queue rather than from the actor's
     /// executor, so every touch of the SQLite handle happens on the one thread
-    /// the connection is confined to.
-    private func ensureOpen() async throws {
+    /// the connection is confined to. Internal (not private) so the event and
+    /// catalog extensions in `QuotaHistoryStore+Events.swift` can share it.
+    func ensureOpen() async throws {
         guard !isOpened else { return }
         #if canImport(SQLite3)
         try await database.perform { db in try db.open() }
@@ -578,7 +579,10 @@ public actor QuotaHistoryStore {
         try await ensureOpen()
         try await database.perform { db in
             #if canImport(SQLite3)
-            for table in [HistorySchema.readingTable, HistorySchema.activityTable, HistorySchema.ingestWatermarkTable] {
+            for table in [
+                HistorySchema.readingTable, HistorySchema.activityTable, HistorySchema.ingestWatermarkTable,
+                HistorySchema.eventTable, HistorySchema.catalogModelTable, HistorySchema.feedItemTable,
+            ] {
                 try db.execute(sql: "DELETE FROM \(table);")
             }
             #endif

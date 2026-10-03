@@ -52,6 +52,31 @@ deciding both axes there, deliberately.
 Adding an `UnavailableReason` case *does* force updates: `headline`, `remedy`
 (`MetricTypes.swift`), and `SettingsView.verify`.
 
+**Events are observations, never inferences.** An `AIEvent` records something a
+vendor published or a source FrugalBar fetched: a reset time that passed, a
+consumed fraction that fell before the published reset, a model id in the
+catalog, a price on both sides of a change. Never create one from silence, from
+a drop alone, or from a reading that was lost (`nil` is not 0, and treating it as
+0 turns every outage into a "usage restored" banner). Detectors need both polls
+`.measured`. Event ids are built from the facts (`AIEvent.makeID`), never a UUID
+or prose, because `recordEvents` dedups on the id and notifications fire only on
+what it reports as new. Anthropic reset grants are requested (`?cedar_ember=1`)
+but the OAuth surface answers `ineligible_reason: "surface"` with no grants;
+that decodes to `nil`, never 0, and guessing them would be a synthesised figure.
+
+**History tables are additive only; do not bump `HistorySchema.version`.** A
+bump drops the table set, which deletes the user's readings. New tables go in
+`createTablesSQL` as `CREATE TABLE IF NOT EXISTS` (as `event`, `catalog_model`
+and `feed_item` did). A change to an existing table's shape needs a real
+migration, not a version bump.
+
+**The desktop widget's average is not a quota.** It is the mean of real
+readings from the selected windows, labelled with how many contributed
+(`sampleCount`, never padded), and it appears only with two or more windows.
+Don't add, normalise or sum windows across vendors into a "total" or "combined"
+figure: vendors meter different things over different windows. The widget is an
+app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
+
 **Credentials never reach user-facing or persisted fields.** Send keys in
 headers, never query strings. Never put `error.localizedDescription` in a
 `QuotaSnapshot` — `URLError`'s description carries the request URL. Map errors

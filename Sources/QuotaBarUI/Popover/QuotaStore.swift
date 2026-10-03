@@ -20,6 +20,11 @@ public final class QuotaStore {
     /// Recent-pace forecast per provider, from recorded history. Empty when no
     /// `readingsLoader` was given or history is too thin to fit a trend.
     public private(set) var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
+    /// The most recent AI-platform events, newest first, for the popover's
+    /// events section. Empty when no `eventsLoader` was given.
+    public private(set) var recentEvents: [AIEvent] = []
+    /// How many events `recentEvents` holds at most.
+    public static let recentEventsLimit = 20
 
     /// Called on the main actor whenever `summary` changes.
     ///
@@ -32,15 +37,56 @@ public final class QuotaStore {
     private let manager: QuotaManager
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
+    private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
+    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
 
+    /// - Parameters:
+    ///   - readingsLoader: every vendor's readings since a date, for the
+    ///     recent-pace forecast computed on each reload.
+    ///   - vendorReadingsLoader: one vendor's readings, for the detail
+    ///     inspector's history and burndown charts. Fetched on demand, never
+    ///     on the refresh path.
+    ///   - eventsLoader: recorded AI-platform events, newest first. Used both
+    ///     for `recentEvents` on each reload and on demand by the inspector.
     public init(
         manager: QuotaManager = .shared,
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
-        readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil
+        readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
+        vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
+        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil
     ) {
         self.manager = manager
         self.historyRecorder = historyRecorder
         self.readingsLoader = readingsLoader
+        self.vendorReadingsLoader = vendorReadingsLoader
+        self.eventsLoader = eventsLoader
+    }
+
+    /// One vendor's recorded readings since `since` (all of them when nil).
+    /// Empty when no loader was injected.
+    public func readings(for vendor: VendorIdentifier, since: Date?) async -> [QuotaHistoryStore.ReadingRecord] {
+        guard let vendorReadingsLoader else { return [] }
+        return await vendorReadingsLoader(vendor, since)
+    }
+
+    /// Recorded events, newest first, optionally scoped to one vendor.
+    /// Empty when no loader was injected.
+    public func events(for vendor: VendorIdentifier?, since: Date?, limit: Int?) async -> [AIEvent] {
+        guard let eventsLoader else { return [] }
+        return await eventsLoader(vendor, nil, since, limit)
+    }
+
+    /// The kinds the popover's card shows: everything but scheduled
+    /// rollovers, which are logged for every vendor and would otherwise take
+    /// every one of the `recentEventsLimit` slots before the card filters them.
+    public static let recentEventKinds: Set<AIEventKind> =
+        Set(AIEventKind.allCases).subtracting([.usageReset])
+
+    /// Re-reads `recentEvents`. Called after every reload and by whoever
+    /// records new events, so the popover section is never a poll behind.
+    public func reloadRecentEvents() async {
+        guard let eventsLoader else { return }
+        recentEvents = await eventsLoader(nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
     }
 
     /// Loads from cache when fresh, otherwise fetches.
@@ -80,6 +126,7 @@ public final class QuotaStore {
             }
             self.forecasts = next
         }
+        await reloadRecentEvents()
     }
 
 }

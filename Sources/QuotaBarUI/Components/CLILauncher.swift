@@ -32,6 +32,7 @@ public enum CLILauncher {
         // being the one FrugalBar can name with confidence.
         case .devpass:                      "opencode"
         case .commandcode:                  "command-code"
+        case .clinepass:                    "cline"
         case .githubRest, .githubGraphql:   nil
         }
     }

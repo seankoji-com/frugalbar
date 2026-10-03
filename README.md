@@ -7,6 +7,8 @@
 
 A native macOS menu bar app that shows how much headroom you have left across AI subscriptions, API spend caps, and developer rate limits.
 
+Click a provider row to open its inspector: a Burndown | History chart, the vendor's recent events and any banked reset credits. An ideal-pace line appears only when the vendor publishes a window length and reset, and a projection only from a measured recent pace. See [docs/inspector.md](docs/inspector.md).
+
 ---
 
 ## Why FrugalBar?
@@ -85,7 +87,8 @@ swift run
    - **Grok**: Sign in with the Grok CLI (`grok login`); enable CLI discovery and FrugalBar reads `~/.grok/auth.json`.
    - **Kiro**: Sign in with the Kiro CLI or IDE; enable CLI discovery and FrugalBar reads the CLI's own state database.
    - **DevPass**: Paste an `llmgtwy_…` key from the LLM Gateway dashboard.
-   - **Command Code**: Sign in with the `cmd` CLI (`cmd login`); enable CLI discovery and FrugalBar reads `~/.commandcode/auth.json`. A `user_…` API key can also be pasted directly.
+   - **Command Code**: Sign in with the `cmd` CLI (`cmd login`); enable CLI discovery and FrugalBar reads `~/.commandcode/auth.json`. A `user_…` API key can also be pasted directly, or set `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`.
+   - **ClinePass**: Sign in with the Cline CLI (`cline auth`) or the Cline extension; enable CLI discovery and FrugalBar reads `~/.cline/data/settings/providers.json` (or `$CLINE_DATA_DIR`). A Cline API key from app.cline.bot can also be pasted directly, or set `CLINE_API_KEY` / `CLINEPASS_API_KEY`.
 
 Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
 
@@ -100,7 +103,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **GitHub REST** | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge: requests/hour remaining with reset countdown |
 | **GitHub GraphQL** | `GET https://api.github.com/rate_limit` → `resources.graphql` | Live gauge: points/hour remaining with reset countdown |
 | **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key`, then `GET https://openrouter.ai/api/v1/credits` | Live account credit balance in USD when the key may read it; otherwise that key's USD spend cap |
-| **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session or CLI Proxy hub | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports |
+| **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session or CLI Proxy hub | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports. Also the count of banked reset credits (`rate_limit_reset_credits`) when OpenAI reports one; `credits.balance` is not shown because its unit is unverified |
 | **GitHub Copilot** | `GET https://api.github.com/copilot_internal/user` with the GitHub OAuth token | Live gauge: premium-interaction and chat allowances, with reset date. Plans billed by token publish no window and say so |
 | **Google Gemini** | `POST daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (Google OAuth) | Live five-hour and weekly Antigravity windows, plus the paid subscription tier; failures remain unavailable rather than substituting another quota pool |
 | **OpenCode** | `GET https://opencode.ai/zen/go/v1/usage` with the `opencode-go` key | Live gauge: rolling, weekly and monthly Go windows, each with the reset time and whether it is currently blocking |
@@ -108,7 +111,8 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **Grok** | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI's token | Live gauge: percentage of the plan's credit allowance used, plus the billing period xAI names (weekly or monthly) and its reset. On-demand spend appears as a second bar once enabled |
 | **Kiro** | `POST https://codewhisperer.us-east-1.amazonaws.com/` (`AmazonCodeWhispererService.GetUsageLimits`) with the Kiro CLI's token | Live gauge: plan credits used against the monthly allowance with reset date, plus separate bars for bonus credits (with expiry) and for overage once the account has it switched on |
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
-| **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan |
+| **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan. A plan id FrugalBar does not recognise gets no credit gauge rather than a guessed denominator |
+| **ClinePass** | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` with the Cline API key or account token | Live gauges: the 5-hour, weekly and monthly ClinePass windows as percentages with reset times. The account's credit balance is deliberately not shown: the API's unit for it is undocumented. HTTP 404 means the account has no ClinePass subscription, and is reported as such |
 
 ### Caveats worth knowing
 
@@ -130,11 +134,26 @@ Optionally record the cost per period and it appears alongside the countdown.
 
 ---
 
+## Events & notifications
+
+FrugalBar keeps a log of what happened on the platforms you use: a window rolled over, usage was restored before its published reset, OpenAI granted a reset credit, a model was listed, a price changed. Every event is an observation with its evidence attached; none is inferred, and a lost reading is never treated as a drop to zero. Anthropic reset grants are requested too, but Anthropic currently serves them only to the claude.ai web session, not to a CLI login, so the Claude row shows none until that changes.
+
+Model and price events come from OpenRouter's public catalog (no key) for Anthropic, OpenAI, Google and xAI, and from the OpenAI and Google/DeepMind feeds. Anthropic's feed is a community scrape and is labelled unofficial. xAI has no feed. External sources poll every 6 hours and can be switched off under **Preferences → General → AI events**, where each kind also has its own notification toggle. Events appear in the popover, in **History → Events**, as timeline markers and in the inspector, and are kept for 365 days. Details: [docs/events.md](docs/events.md).
+
+---
+
+## Desktop widget
+
+**Gear menu → Desktop Widget** (⌘D) opens a small panel charting your usage windows with current headroom beneath. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
+
+---
+
 ## Security & Keychain Architecture
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), and `~/.commandcode/auth.json` — is **disabled by default** and can be enabled under **Preferences → General**.
+- **Credential-free event sources**: the two outbound sources added for events, OpenRouter's public model catalog (`GET https://openrouter.ai/api/v1/models`) and the vendor news feeds, send no credential and read only public data. Switch them off under **Preferences → General → AI events**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---
 
