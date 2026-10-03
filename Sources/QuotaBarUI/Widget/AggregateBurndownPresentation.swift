@@ -20,27 +20,46 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         }
     }
 
+    /// Which body the panel draws.
+    public enum Layout: String, Codable, CaseIterable, Sendable {
+        /// Burndown lines with an average and a headroom strip.
+        case chart
+        /// One tile per provider with each of its windows. Per-provider
+        /// figures only: nothing here is summed or averaged.
+        case overview
+
+        public var title: String {
+            switch self {
+            case .chart: "Chart"
+            case .overview: "Overview"
+            }
+        }
+    }
+
     /// Empty means every vendor with a consumable window.
     public var vendors: Set<VendorIdentifier>
     /// nil means each vendor's longest consumable window.
     public var windowLabel: String?
     public var range: HistoryPresentation.TimeRange
     public var metric: Metric
+    public var layout: Layout
 
     public init(
         vendors: Set<VendorIdentifier> = [],
         windowLabel: String? = nil,
         range: HistoryPresentation.TimeRange = .last24Hours,
-        metric: Metric = .remaining
+        metric: Metric = .remaining,
+        layout: Layout = .chart
     ) {
         self.vendors = vendors
         self.windowLabel = windowLabel
         self.range = range
         self.metric = metric
+        self.layout = layout
     }
 
     private enum CodingKeys: String, CodingKey {
-        case vendors, windowLabel, range, metric
+        case vendors, windowLabel, range, metric, layout
     }
 
     /// Tolerant decoding: a vendor removed in a later release is dropped rather
@@ -53,6 +72,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         windowLabel = (try? c.decodeIfPresent(String.self, forKey: .windowLabel)) ?? nil
         range = ((try? c.decodeIfPresent(HistoryPresentation.TimeRange.self, forKey: .range)) ?? nil) ?? .last24Hours
         metric = ((try? c.decodeIfPresent(Metric.self, forKey: .metric)) ?? nil) ?? .remaining
+        layout = ((try? c.decodeIfPresent(Layout.self, forKey: .layout)) ?? nil) ?? .chart
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -61,6 +81,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         try c.encodeIfPresent(windowLabel, forKey: .windowLabel)
         try c.encode(range, forKey: .range)
         try c.encode(metric, forKey: .metric)
+        try c.encode(layout, forKey: .layout)
     }
 
     /// Reads persisted filters; anything undecodable yields the defaults.
@@ -447,8 +468,14 @@ public enum AggregateBurndownPresentation {
         case 1: parts.append(filters.vendors.first!.displayName)
         default: parts.append("\(filters.vendors.count) subscriptions")
         }
-        if let label = filters.windowLabel { parts.append(label) }
-        parts.append(rangeShortTitle(filters.range))
+        if filters.layout == .overview {
+            // Window and range are chart concerns; the overview shows each
+            // provider's current windows.
+            parts.append("overview")
+        } else {
+            if let label = filters.windowLabel { parts.append(label) }
+            parts.append(rangeShortTitle(filters.range))
+        }
         parts.append(filters.metric.rawValue)
         return parts.joined(separator: " · ")
     }

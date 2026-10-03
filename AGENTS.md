@@ -83,7 +83,8 @@ migration, not a version bump.
 readings from the selected windows, labelled with how many contributed
 (`sampleCount`, never padded), and it appears only with two or more windows.
 Don't add, normalise or sum windows across vendors into a "total" or "combined"
-figure: vendors meter different things over different windows. The widget is an
+figure: vendors meter different things over different windows. The widget's Overview layout is per-provider tiles only: it carries no
+total, and a configured-but-unreadable provider keeps its tile. The widget is an
 app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
 
 **A hidden provider is not polled, not counted, and not remembered.**

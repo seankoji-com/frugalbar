@@ -28,9 +28,14 @@ struct DesktopWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            chartArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            headroomStrip
+            if filters.layout == .overview {
+                overviewArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                chartArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                headroomStrip
+            }
             filterBar
         }
         .padding(.horizontal, 14)
@@ -309,6 +314,106 @@ struct DesktopWidgetView: View {
         .accessibilityHidden(true)   // the chart's accessibility value covers it
     }
 
+    // MARK: - Overview
+
+    @ViewBuilder
+    private var overviewArea: some View {
+        let tiles = OverviewPresentation.tiles(snapshots: store.snapshots, filters: filters)
+        if tiles.isEmpty {
+            placeholder(
+                symbol: "tray",
+                title: "No providers to show",
+                detail: "Add a provider in Settings, or widen the subscriptions filter."
+            )
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
+                        ForEach(tiles) { tile in
+                            overviewTile(tile, now: context.date)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func overviewTile(_ tile: OverviewPresentation.Tile, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                VendorAvatarView(vendorId: tile.vendorId, status: tile.status, isExhausted: tile.isExhausted, size: 16)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(tile.name)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(Theme.onSurface)
+                        .lineLimit(1)
+                    if let plan = tile.planName {
+                        Text(plan)
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                }
+            }
+            if let headline = tile.unavailableHeadline {
+                Text(headline)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                if let remedy = tile.unavailableRemedy {
+                    Text(remedy)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                        .lineLimit(2)
+                }
+            } else if tile.windows.isEmpty {
+                Text("No usage windows")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+            } else {
+                ForEach(tile.windows) { window in
+                    overviewWindow(window, now: now)
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.card))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(OverviewPresentation.accessibilityLabel(for: tile, metric: filters.metric, now: now))
+    }
+
+    private func overviewWindow(_ window: OverviewPresentation.WindowCell, now: Date) -> some View {
+        let color = DualBarProgressView.stateColor(for: window.metrics)
+        return HStack(spacing: 5) {
+            Text(window.label)
+                .font(Theme.Typography.token)
+                .tracking(Theme.Tracking.token)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: 30, alignment: .leading)
+            // The bar always fills with what is *remaining*, matching the
+            // headroom strip; the figure beside it follows the metric.
+            MicroProgressBar(
+                fraction: window.fraction.map { filters.metric == .used ? 1 - $0 : $0 },
+                statusColor: color
+            )
+            .frame(maxWidth: .infinity)
+            if let fraction = window.fraction {
+                Text("\(Int((fraction * 100).rounded()))%")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.onSurface)
+            } else {
+                Text(window.isBlocked ? "blocked" : "—")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+            }
+        }
+        .help(window.measuresElapsedTimeOnly
+              ? "\(window.label): billing cycle, elapsed time only"
+              : ResetCountdownBadge.description(window.resetsAt, now: now))
+    }
+
     // MARK: - Headroom strip
 
     @ViewBuilder
@@ -447,23 +552,38 @@ struct DesktopWidgetView: View {
         .accessibilityLabel("Show percent remaining or used")
     }
 
+    private var layoutPicker: some View {
+        Picker("Layout", selection: $filters.layout) {
+            ForEach(WidgetFilters.Layout.allCases, id: \.self) { layout in
+                Text(layout.title).tag(layout)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityLabel("Widget layout")
+    }
+
     private var filterBar: some View {
-        ViewThatFits(in: .horizontal) {
+        let chart = filters.layout == .chart
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
+                layoutPicker
                 vendorMenu
-                windowMenu
+                if chart { windowMenu }
                 Spacer(minLength: 4)
-                rangePicker
+                if chart { rangePicker }
                 metricPicker
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
+                    layoutPicker
                     vendorMenu
-                    windowMenu
+                    if chart { windowMenu }
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 8) {
-                    rangePicker
+                    if chart { rangePicker }
                     Spacer(minLength: 0)
                     metricPicker
                 }

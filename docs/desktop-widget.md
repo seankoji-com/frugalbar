@@ -2,7 +2,18 @@
 
 A small panel that charts your subscription usage windows over time, with a strip of current headroom underneath. Open it from the gear menu (**Desktop Widget**, ⌘D). Choosing it again hides it.
 
-## What it shows
+## Layouts
+
+The segmented **Chart | Overview** control in the filter bar picks the body. The choice is stored with the filters.
+
+| Layout | Shows |
+|---|---|
+| **Chart** (default) | Burndown lines, the average and the headroom strip, described below |
+| **Overview** | One tile per provider with each of its windows: a bar, the figure in the chosen metric and a reset tooltip. Tiles follow the popover's provider order and visibility. A configured provider that cannot be read keeps its tile and says why; one that is not configured has none. A hand-entered billing cycle is labelled elapsed time, never usage. Window and range filters are chart-only and hidden here |
+
+The Overview has **no total, average or combined figure**: each number belongs to one provider's own window. Its tiles are read as, for example, "Claude, Max (5x). weekly 60 percent remaining, resets in 3 days. 5-hour blocked".
+
+## What it shows (Chart layout)
 
 | Part | Content | Source |
 |---|---|---|
@@ -47,7 +58,7 @@ Everything lives in the app's explicit preference suite (`CredentialStore.prefer
 | `QuotaBarDesktopWidgetVisible` | Whether it was open. If so, it reopens at launch. Quitting does not close windows, so a widget left open comes back |
 | `QuotaBarDesktopWidgetMode` | `desktop` or `floating`. A missing or unrecognised value means `desktop` |
 | `QuotaBarDesktopWidgetFrame` | Last position and size. Restored only if it is large enough and still intersects a connected screen, so an unplugged monitor cannot strand it off-screen |
-| `QuotaBarDesktopWidgetFilters` | The filters above as JSON. Decoding is tolerant: an unknown vendor is dropped and an unknown or missing field takes its default |
+| `QuotaBarDesktopWidgetFilters` | The filters above, and the layout, as JSON. Decoding is tolerant: an unknown vendor is dropped and an unknown or missing field takes its default |
 
 ## Why it is not a WidgetKit widget
 
