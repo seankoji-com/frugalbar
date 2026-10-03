@@ -687,6 +687,12 @@ public enum CredentialStore {
                   let key = (json["apiKey"] as? String)?.trimmed, !key.isEmpty
             else { return nil }
             return key
+
+        case .clinepass:
+            // Env vars, then the Cline CLI/SDK's providers.json, then the
+            // legacy secrets.json — see `discoverCLICredential` for the exact
+            // keys and their provenance.
+            return ClinePassQuotaProvider.discoverCLICredential()
         }
     }
 }
@@ -782,6 +788,7 @@ extension CredentialStore {
         case .kiro:          "kiro-cli state database"
         case .devpass:       "DevPass dashboard key"
         case .commandcode:   "~/.commandcode/auth.json"
+        case .clinepass:     "~/.cline/data/settings/providers.json"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }

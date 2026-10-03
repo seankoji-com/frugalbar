@@ -48,6 +48,30 @@ enum CLIConfigLocations {
         return fallback
     }
 
+    /// The Cline CLI/SDK data directory: `$CLINE_DATA_DIR`, then
+    /// `$CLINE_DIR/data`, when either holds `probe`; else `~/.cline/data`.
+    /// Mirrors `resolveClineDataDir()` in cline's
+    /// `sdk/packages/shared/src/storage/paths.ts`.
+    static func clineDataRoot(
+        containing probe: String,
+        environment: [String: String],
+        home: URL,
+        fileExists: FileExists
+    ) -> URL {
+        let fallback = home.appendingPathComponent(".cline/data", isDirectory: true)
+        let candidates = [
+            override("CLINE_DATA_DIR", environment: environment, home: home),
+            override("CLINE_DIR", environment: environment, home: home)?
+                .appendingPathComponent("data", isDirectory: true),
+        ].compactMap { $0 }
+        guard !candidates.isEmpty else { return fallback }
+        if let root = candidates.first(where: { fileExists($0.appendingPathComponent(probe)) }) {
+            return root
+        }
+        logSkipped("CLINE_DATA_DIR or CLINE_DIR", probe, fallback)
+        return fallback
+    }
+
     /// The same lookups against this process's environment and filesystem.
     static func liveClaudeRoot(containing probe: String) -> URL {
         claudeRoot(containing: probe, environment: ProcessInfo.processInfo.environment,
@@ -87,6 +111,11 @@ enum CLIConfigLocations {
     /// default location's data (or none) with no hint why.
     private static func logSkipped(_ name: String, _ probe: String, _ chosen: URL) {
         NSLog("frugalbar: %@ has no %@; using %@", name, probe, chosen.path)
+    }
+
+    static func liveClineDataRoot(containing probe: String) -> URL {
+        clineDataRoot(containing: probe, environment: ProcessInfo.processInfo.environment,
+                      home: liveHome, fileExists: liveFileExists)
     }
 
     private static var liveHome: URL { FileManager.default.homeDirectoryForCurrentUser }

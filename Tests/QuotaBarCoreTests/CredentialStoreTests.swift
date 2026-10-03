@@ -382,3 +382,107 @@ struct CredentialStoreTests {
         if let k = key { #expect(k.isEmpty == false) }
     }
 }
+
+// MARK: - ClinePass discovery
+
+/// Every case runs against a temporary home and an explicit environment, so
+/// nothing depends on whether the developer has Cline installed.
+extension CredentialStoreTests {
+
+    private func clineHome(
+        providers: String? = nil,
+        secrets: String? = nil,
+        dataDir: String = ".cline/data"
+    ) throws -> URL {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clinepass-\(UUID().uuidString)", isDirectory: true)
+        let data = home.appendingPathComponent(dataDir, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: data.appendingPathComponent("settings"), withIntermediateDirectories: true)
+        if let providers {
+            try Data(providers.utf8).write(to: data.appendingPathComponent("settings/providers.json"))
+        }
+        if let secrets {
+            try Data(secrets.utf8).write(to: data.appendingPathComponent("secrets.json"))
+        }
+        return home
+    }
+
+    private func discover(home: URL, environment: [String: String] = [:]) -> String? {
+        ClinePassQuotaProvider.discoverCLICredential(
+            environment: environment, home: home, now: Date(timeIntervalSince1970: 1_790_000_000))
+    }
+
+    @Test("ClinePass: the cline entry's account token is read from providers.json")
+    func clinePassProvidersJSON() throws {
+        let home = try clineHome(providers: """
+            {"version":1,"lastUsedProvider":"cline","providers":{"cline":{"settings":{"provider":"cline",
+             "auth":{"accessToken":"workos:account-token","refreshToken":"r","accountId":"u1","expiresAt":1890000000000}}}}}
+            """)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == "workos:account-token")
+    }
+
+    @Test("ClinePass: an expired account token falls through to the entry's API key")
+    func clinePassExpiredTokenFallsThrough() throws {
+        let home = try clineHome(providers: """
+            {"providers":{"cline":{"settings":{"apiKey":"api-key",
+             "auth":{"accessToken":"workos:stale","expiresAt":1700000000000}}}}}
+            """)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == "api-key")
+    }
+
+    @Test("ClinePass: the legacy cline-pass entry is read when cline has nothing")
+    func clinePassLegacyEntry() throws {
+        let home = try clineHome(providers: """
+            {"providers":{"cline":{"settings":{}},"cline-pass":{"settings":{"apiKey":"legacy-key"}}}}
+            """)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == "legacy-key")
+    }
+
+    @Test("ClinePass: secrets.json clineApiKey is the last resort")
+    func clinePassSecretsJSON() throws {
+        let home = try clineHome(secrets: #"{"clineApiKey":" secret-key "}"#)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == "secret-key")
+    }
+
+    @Test("ClinePass: CLINE_DATA_DIR relocates the data directory")
+    func clinePassDataDirOverride() throws {
+        let home = try clineHome(
+            providers: #"{"providers":{"cline":{"settings":{"apiKey":"relocated"}}}}"#,
+            dataDir: "elsewhere/cline-data")
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == nil)
+        #expect(discover(home: home, environment: ["CLINE_DATA_DIR": "~/elsewhere/cline-data"]) == "relocated")
+        let absolute = home.appendingPathComponent("elsewhere/cline-data").path
+        #expect(discover(home: home, environment: ["CLINE_DATA_DIR": absolute]) == "relocated")
+    }
+
+    @Test("ClinePass: an environment key wins over the files")
+    func clinePassEnvironment() throws {
+        let home = try clineHome(providers: #"{"providers":{"cline":{"settings":{"apiKey":"file-key"}}}}"#)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home, environment: ["CLINE_API_KEY": "env-key"]) == "env-key")
+        #expect(discover(home: home, environment: ["CLINEPASS_API_KEY": "pass-key"]) == "pass-key")
+    }
+
+    @Test("ClinePass: an unreadable providers.json and no secrets discovers nothing")
+    func clinePassNothing() throws {
+        let home = try clineHome(providers: "not json")
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(discover(home: home) == nil)
+    }
+
+    /// Reduced to a Bool before `#expect`, like the other agreement tests: a
+    /// failing comparison must not print a stored key.
+    @Test("ClinePass: with CLI discovery off, resolution agrees with the Keychain")
+    func clinePassDiscoveryOff() async {
+        CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        let stored = (try? KeychainManager.shared.get(label: VendorIdentifier.clinepass.rawValue)) ?? ""
+        let resolved = await CredentialStore.apiKeyAsync(for: .clinepass)
+        #expect((resolved == nil) == stored.isEmpty)
+    }
+}

@@ -43,6 +43,10 @@ public struct SettingsView: View {
               placeholder: "user_…",
               note: "Discovered from ~/.commandcode/auth.json when CLI discovery is on. "
                   + "Run `cmd login` to sign in."),
+        .init(id: .clinepass, label: "ClinePass",
+              placeholder: "Cline API key or account token",
+              note: "Discovered from ~/.cline/data/settings/providers.json when CLI discovery is on. "
+                  + "Run `cline auth` (or sign in in the Cline extension) to create it."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -373,8 +377,9 @@ public struct SettingsView: View {
                      CLI Proxy hubs (~/.t3/userdata/settings.json); read \
                      ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
                      ~/.claude/.credentials.json, \
-                     ~/.config/github-copilot/hosts.json, or \
-                     ~/.commandcode/auth.json; read the \
+                     ~/.config/github-copilot/hosts.json, \
+                     ~/.commandcode/auth.json, or \
+                     ~/.cline/data/settings/providers.json; read the \
                      OPENROUTER_API_KEY environment variable; or read the \
                      Claude Code login Keychain item — if the Keychain has no \
                      entry for a provider. Off by default: this reads \
@@ -617,6 +622,7 @@ public struct SettingsView: View {
         case .kiro:        provider = KiroQuotaProvider()
         case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
         case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
+        case .clinepass:   provider = ClinePassQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 
