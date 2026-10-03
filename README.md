@@ -13,7 +13,7 @@ Each subscription's windows line up in **5H / WK / MO** columns, with the share 
 
 ## Why FrugalBar?
 
-Modern engineering workflows rely heavily on multiple AI models and developer platforms (Claude, OpenAI / OpenRouter, Google Gemini, GitHub Copilot, and GitHub APIs). However:
+Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass and the GitHub APIs). However:
 
 - **Surprise quota exhaustion**: Running multi-step autonomous agent runs or code generation tasks often grinds to a halt midway through a long job because a hidden rate limit or budget cap was breached.
 - **Scattered dashboards**: Checking balances requires navigating half a dozen provider dashboards, consoles, and billing portals.
@@ -94,6 +94,21 @@ Credentials are validated against live vendor endpoints upon saving to immediate
 
 ---
 
+## Preferences
+
+Gear menu → **Settings…** (⌘,) has four tabs:
+
+| Tab | What it does |
+|---|---|
+| **API Keys** | Credentials per provider, and where each one is coming from |
+| **Providers** | Show or hide each provider, and choose the order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* shows exactly the list you arrange with the up and down buttons. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
+| **Cycles** | Renewal dates for vendors that publish no billing period |
+| **General** | CLI discovery, notifications, AI events, desktop widget position |
+
+The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
+
+---
+
 ## What It Can Actually Measure
 
 Not every vendor publishes usage telemetry. Where a vendor doesn't provide real consumption numbers, FrugalBar states so explicitly instead of fabricating an estimate:
@@ -144,7 +159,7 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 
 ## Desktop widget
 
-**Gear menu → Desktop Widget** (⌘D) opens a small panel charting your usage windows with current headroom beneath. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
+**Gear menu → Desktop Widget** (⌘D) opens a small panel with two layouts: a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
 
 ---
 

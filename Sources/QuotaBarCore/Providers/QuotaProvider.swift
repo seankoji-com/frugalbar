@@ -59,7 +59,10 @@ public enum QuotaHTTP {
         cfg.timeoutIntervalForRequest = 4.0
         cfg.timeoutIntervalForResource = 8.0
         cfg.waitsForConnectivity = false
-        cfg.httpAdditionalHeaders = ["User-Agent": "QuotaBar/1.0"]
+        // The app's own name and the version actually running, so a vendor's
+        // access log can tell releases apart; the old "QuotaBar/1.0" named a
+        // product that no longer exists at a version that never changed.
+        cfg.httpAdditionalHeaders = ["User-Agent": AppInfo.userAgent]
         return URLSession(configuration: cfg)
     }
 

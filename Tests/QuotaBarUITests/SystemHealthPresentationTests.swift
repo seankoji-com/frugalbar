@@ -11,8 +11,8 @@ import QuotaBarCore
 /// statics both the header and footer render — so a future refactor that
 /// changes the mapping is caught here rather than only in a re-derived copy
 /// that could silently drift from the real logic.
-@Suite("HeaderSummaryView — presentation logic")
-struct HeaderSummaryViewPresentationTests {
+@Suite("SystemHealthPresentation")
+struct SystemHealthPresentationTests {
     /// Build a summary from snapshots rather than calling the internal init.
     private func summary(
         snapshots: [(status: ProviderStatus, lastUpdated: Date)]

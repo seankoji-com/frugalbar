@@ -33,6 +33,10 @@ treat them as the review checklist, not hypotheticals.
   instead of `CredentialStore.preferences` — the bundled app and the
   SwiftPM binary have different process names and silently get separate
   stores.
+- **Provider visibility.** A provider the user hid must never be polled,
+  counted in `SystemHealthSummary`, advised on, recorded, or notified about.
+  Anything that iterates `providerFactory()` or `cache` directly instead of
+  going through `ProviderDisplayPreferences` is suspect.
 - **New or changed tests.** Must inject `QuotaManager(providerFactory:)`
   (never `.shared`), stub HTTP via `QuotaHTTP.$session`, assert the stub
   was actually hit, use a randomized Keychain label, and pass an explicit

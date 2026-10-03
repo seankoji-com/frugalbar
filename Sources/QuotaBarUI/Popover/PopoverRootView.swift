@@ -202,11 +202,35 @@ public struct PopoverRootView: View {
 
 
             if store.snapshots.isEmpty {
-                Text("Loading…")
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.outline)
+                if store.hasLoaded {
+                    // Loaded, and nothing came back: only possible when every
+                    // provider is hidden, so say how to fix that.
+                    VStack(spacing: 10) {
+                        Text("Nothing to show")
+                            .font(Theme.Typography.title)
+                            .foregroundStyle(Theme.onSurface)
+                        Text("Every provider is hidden. Choose which to show in Preferences → Providers.")
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .multilineTextAlignment(.center)
+                        Button("Open Preferences") {
+                            if let onOpenSettings {
+                                onOpenSettings()
+                            } else {
+                                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                            }
+                        }
+                    }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 32)
+                    .padding(.vertical, 28)
+                    .accessibilityElement(children: .combine)
+                } else {
+                    Text("Loading…")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.outline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 32)
+                }
             }
         }
         .padding(.horizontal, Theme.edgeMargin)

@@ -15,7 +15,8 @@ public actor QuotaManager {
             // before this change is never resurrected as a CYCLE bar, and there
             // is no UI left to clear it from.
             vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
-        })
+        },
+        displayPreferences: { CredentialStore.providerDisplayPreferences })
 
     // --- State ---
     private var cache: [VendorIdentifier: CacheEntry] = [:]
@@ -23,6 +24,7 @@ public actor QuotaManager {
     private let cachePolicy: CachePolicy
     private let providerFactory: @Sendable () -> [any QuotaProvider]
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
+    private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     private var activeTask: Task<[VendorIdentifier: QuotaSnapshot], Never>?
 
     private struct CacheEntry: Sendable {
@@ -42,11 +44,16 @@ public actor QuotaManager {
     public init(
         cachePolicy: CachePolicy = .default,
         providerFactory: @escaping @Sendable () -> [any QuotaProvider] = QuotaManager.defaultProviders,
-        cycleLookup: @escaping @Sendable (VendorIdentifier) -> SubscriptionCycle? = { _ in nil }
+        cycleLookup: @escaping @Sendable (VendorIdentifier) -> SubscriptionCycle? = { _ in nil },
+        // Same rule as `cycleLookup`: the default shows every provider in
+        // canonical order and reads no preference store, so a test sees
+        // exactly the providers its factory serves.
+        displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default }
     ) {
         self.cachePolicy = cachePolicy
         self.providerFactory = providerFactory
         self.cycleLookup = cycleLookup
+        self.displayPreferences = displayPreferences
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -71,7 +78,14 @@ public actor QuotaManager {
 
     /// Returns cached snapshots immediately (fast path for UI).
     public func cachedSnapshots() -> [VendorIdentifier: QuotaSnapshot] {
-        cache.mapValues(\.snapshot)
+        visibleCache()
+    }
+
+    /// The cache minus hidden vendors. Every read goes through this, so the
+    /// fresh-cache fast path cannot return a provider the user just hid.
+    private func visibleCache() -> [VendorIdentifier: QuotaSnapshot] {
+        let hidden = displayPreferences().hidden
+        return cache.filter { !hidden.contains($0.key) }.mapValues(\.snapshot)
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
@@ -99,9 +113,15 @@ public actor QuotaManager {
     ///   3. Exhausted — last regardless of reset, because a spent vendor is
     ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
+        let prefs = displayPreferences()
         let rank = Dictionary(
-            uniqueKeysWithValues: Self.canonicalOrder.enumerated().map { ($0.element, $0.offset) })
-        let snapshots = Self.canonicalOrder.compactMap { cache[$0]?.snapshot }
+            uniqueKeysWithValues: prefs.order.enumerated().map { ($0.element, $0.offset) })
+        // A hidden vendor is dropped here as well as purged at fetch time, so
+        // hiding one takes effect on the very next read, before any poll.
+        let snapshots = prefs.visibleOrder.compactMap { cache[$0]?.snapshot }
+
+        // A custom order is the user's, verbatim: no band or deadline moves a row.
+        if prefs.ordering == .custom { return snapshots }
 
         return snapshots.sorted { a, b in
             let bandA = Self.sortBand(a), bandB = Self.sortBand(b)
@@ -134,7 +154,7 @@ public actor QuotaManager {
     /// Providers we could not read contribute `.none` — they are reported
     /// separately via `SystemHealthSummary.unavailableCount`.
     public func worstUrgency() -> Urgency {
-        cache.values.map(\.snapshot.status.urgency).max() ?? .none
+        visibleCache().values.map(\.status.urgency).max() ?? .none
     }
 
     // MARK: Fetch (with concurrency + dedup)
@@ -177,7 +197,13 @@ public actor QuotaManager {
     }
 
     private func parallelFetch(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
-        let providers: [any QuotaProvider] = providerFactory()
+        // Read once, so a preference change mid-fetch cannot split the pass.
+        // A hidden provider is not polled at all, and its cache entry goes so
+        // it vanishes from every surface and, once shown again, is fetched at
+        // once instead of being served from under the poll floor.
+        let hidden = displayPreferences().hidden
+        for vendor in hidden { cache[vendor] = nil }
+        let providers: [any QuotaProvider] = providerFactory().filter { !hidden.contains($0.vendorId) }
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
         let startNow = Date()
@@ -291,7 +317,7 @@ public actor QuotaManager {
             cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
         lastCompleteFetch = now
-        return cache.mapValues(\.snapshot)
+        return visibleCache()
     }
 
     /// Adds the user's hand-entered renewal countdown, when they recorded one

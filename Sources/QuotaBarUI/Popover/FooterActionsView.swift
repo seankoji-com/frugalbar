@@ -21,6 +21,14 @@ struct FooterActionsView: View {
                     .font(Theme.Typography.footer)
                     .foregroundStyle(Theme.onSurface)
 
+                // The running version, as a token: "v1.4.2", or "dev" for a
+                // local build. Muted so the wordmark still leads; the tooltip
+                // carries the long form the About window shows.
+                Text(AppInfo.compactVersion)
+                    .font(Theme.Typography.footerMeta)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                    .help(AppInfo.versionDisplay)
+
                 // A shape, not colour alone, carries the status (WCAG 1.4.1) —
                 // shares SystemHealthPresentation's symbol mapping so the
                 // header and footer indicators can never disagree about what a
@@ -144,7 +152,9 @@ struct FooterActionsView: View {
     /// the mapping — the footer dot and the header dot must never be able to
     /// disagree about what a given summary means.
     private var footerAccessibilityLabel: String {
-        var label = "FrugalBar. \(SystemHealthPresentation.text(for: summary))"
+        // The version token is on screen, so it is spoken too — in the long
+        // form, since "vee one point four" is not how anyone says a version.
+        var label = "FrugalBar, \(AppInfo.versionDisplay). \(SystemHealthPresentation.text(for: summary))"
         if let oldest = summary.oldestReading {
             label += ". Oldest reading \(SystemHealthPresentation.elapsed(since: oldest)) ago"
         }

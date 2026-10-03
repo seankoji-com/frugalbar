@@ -4,7 +4,9 @@ import QuotaBarCore
 /// Tabbed preferences: credentials and general behaviour.
 public struct SettingsView: View {
 
-    private enum Tab: String { case keys = "API Keys", cycles = "Cycles", general = "General" }
+    private enum Tab: String {
+        case keys = "API Keys", providers = "Providers", cycles = "Cycles", general = "General"
+    }
 
     /// Only vendors we can actually do something with are offered. Claude is
     /// absent because Anthropic publishes no quota API, so a key field there
@@ -115,6 +117,9 @@ public struct SettingsView: View {
             keysTab
                 .tabItem { Label(Tab.keys.rawValue, systemImage: "key") }
                 .tag(Tab.keys)
+            ProviderOrderSettings()
+                .tabItem { Label(Tab.providers.rawValue, systemImage: "list.bullet") }
+                .tag(Tab.providers)
             cyclesTab
                 .tabItem { Label(Tab.cycles.rawValue, systemImage: "calendar") }
                 .tag(Tab.cycles)

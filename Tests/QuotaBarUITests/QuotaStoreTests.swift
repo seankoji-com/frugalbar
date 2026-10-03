@@ -3,224 +3,192 @@ import Foundation
 import QuotaBarCore
 @testable import QuotaBarUI
 
-/// A QuotaManager that returns a fixed set of snapshots without performing any
-/// real work, so QuotaStore tests don't need to stub the network or deal with
-/// concurrency complexity around actor-isolated state.
-private actor FixedSnapshotManager {
-    private let snapshots: [VendorIdentifier: QuotaSnapshot]
-    private let delay: TimeInterval
+// These drive the real `QuotaStore` over a real `QuotaManager` whose providers
+// are stubs. An earlier version of this file tested a private reimplementation
+// of the store, so it kept passing whatever the production class did.
 
-    init(snapshots: [VendorIdentifier: QuotaSnapshot], delay: TimeInterval = 0) {
-        self.snapshots = snapshots
-        self.delay = delay
-    }
+private final class Hits: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [VendorIdentifier: Int] = [:]
+    func hit(_ vendor: VendorIdentifier) { lock.lock(); counts[vendor, default: 0] += 1; lock.unlock() }
+    func count(_ vendor: VendorIdentifier) -> Int { lock.lock(); defer { lock.unlock() }; return counts[vendor] ?? 0 }
+}
 
-    func refresh() async -> [VendorIdentifier: QuotaSnapshot] {
-        if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-        return snapshots
-    }
-
-    func forceRefresh() async -> [VendorIdentifier: QuotaSnapshot] {
-        if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-        return snapshots
-    }
-
-    func sortedSnapshots() -> [QuotaSnapshot] {
-        // Return in a deterministic order (sorted by vendorId rawValue for
-        // simplicity in tests)
-        snapshots.values.sorted { $0.vendorId.rawValue < $1.vendorId.rawValue }
+private final class PrefsBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: ProviderDisplayPreferences
+    init(_ value: ProviderDisplayPreferences = .default) { _value = value }
+    var value: ProviderDisplayPreferences {
+        get { lock.lock(); defer { lock.unlock() }; return _value }
+        set { lock.lock(); defer { lock.unlock() }; _value = newValue }
     }
 }
 
-/// Wraps FixedSnapshotManager into the QM interface that QuotaStore expects.
-private actor TestQuotaManager {
-    private let fixed: FixedSnapshotManager
-    private var _forceRefreshCount = 0
-
-    var forceRefreshCount: Int { _forceRefreshCount }
-
-    init(fixed: FixedSnapshotManager) {
-        self.fixed = fixed
-    }
-
-    func refresh() async -> [VendorIdentifier: QuotaSnapshot] {
-        await fixed.refresh()
-    }
-
-    func forceRefresh() async -> [VendorIdentifier: QuotaSnapshot] {
-        _forceRefreshCount += 1
-        return await fixed.forceRefresh()
-    }
-
-    func sortedSnapshots() async -> [QuotaSnapshot] {
-        await fixed.sortedSnapshots()
-    }
+private final class Recorded: @unchecked Sendable {
+    private let lock = NSLock()
+    private var batches: [[VendorIdentifier]] = []
+    func add(_ snapshots: [QuotaSnapshot]) { lock.lock(); batches.append(snapshots.map(\.vendorId)); lock.unlock() }
+    var all: [[VendorIdentifier]] { lock.lock(); defer { lock.unlock() }; return batches }
 }
 
-// MARK: - QuotaStore (adapted for test)
+private struct StubProvider: QuotaProvider {
+    let vendorId: VendorIdentifier
+    let displayName = "Stub"
+    let category: MetricCategory = .aiSubscriptions
+    let hits: Hits
+    var status: ProviderStatus = .healthy
+    var delay: Duration = .zero
 
-/// A test-only version of QuotaStore that uses TestQuotaManager instead of a
-/// real QuotaManager, so we can control what it returns.
-private actor TestQuotaStore {
-    private let manager: TestQuotaManager
-    private(set) var snapshots: [QuotaSnapshot] = []
-    private(set) var summary: SystemHealthSummary = .compute(from: [])
-    private(set) var isRefreshing = false
-    private(set) var summaryChangeCount = 0
-    var onSummaryChange: (@MainActor (SystemHealthSummary) -> Void)?
-
-    func forceRefreshCount() async -> Int { await manager.forceRefreshCount }
-
-    init(manager: TestQuotaManager) {
-        self.manager = manager
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        hits.hit(vendorId)
+        if delay > .zero { try await Task.sleep(for: delay) }
+        return QuotaSnapshot(
+            id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.1, displayDetails: nil),
+            status: status, resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
     }
-
-    func load() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
-        _ = await manager.refresh()
-        await reloadFromCache()
-    }
-
-    func forceRefresh() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
-        _ = await manager.forceRefresh()
-        await reloadFromCache()
-    }
-
-    private func reloadFromCache() async {
-        let snaps = await manager.sortedSnapshots()
-        snapshots = snaps
-        summary = SystemHealthSummary.compute(from: snaps)
-        summaryChangeCount += 1
-    }
-}
-
-/// Snapshot factory for tests.
-private func makeSnapshot(
-    vendor: VendorIdentifier,
-    status: ProviderStatus = .healthy,
-    category: MetricCategory = .aiSubscriptions
-) -> QuotaSnapshot {
-    QuotaSnapshot(
-        id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
-        category: category,
-        metric: .percentage(usedFraction: 0.1, displayDetails: nil),
-        status: status,
-        resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
-    )
 }
 
 @Suite("QuotaStore")
+@MainActor
 struct QuotaStoreTests {
 
-    @Test("initial state: empty snapshots and summary")
-    func initialStateEmpty() async {
-        let fixed = FixedSnapshotManager(snapshots: [:])
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-        let snaps = await store.snapshots
-        let summary = await store.summary
-        let refreshing = await store.isRefreshing
-        #expect(snaps.isEmpty)
-        #expect(summary.totalProviders == 0)
-        #expect(refreshing == false)
+    private func store(
+        _ providers: [StubProvider],
+        prefs: PrefsBox = PrefsBox(),
+        cacheTTL: TimeInterval = 30,
+        recorder: Recorded? = nil
+    ) -> QuotaStore {
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: cacheTTL, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { providers },
+            displayPreferences: { prefs.value })
+        return QuotaStore(
+            manager: manager,
+            historyRecorder: recorder.map { r in { @Sendable snaps in r.add(snaps) } })
     }
 
-    @Test("load populates snapshots and summary")
-    func loadPopulatesData() async {
-        let c = makeSnapshot(vendor: .claude)
-        let g = makeSnapshot(vendor: .gemini)
-        let fixed = FixedSnapshotManager(snapshots: [.claude: c, .gemini: g])
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-
-        await store.load()
-        let snaps = await store.snapshots
-        let summary = await store.summary
-        #expect(snaps.count == 2)
-        #expect(summary.totalProviders == 2)
-        #expect(summary.hasAnyReading)
+    @Test("starts empty and not loaded")
+    func initialState() {
+        let s = store([])
+        #expect(s.snapshots.isEmpty)
+        #expect(s.summary.totalProviders == 0)
+        #expect(s.isRefreshing == false)
+        #expect(s.hasLoaded == false)
     }
 
-    @Test("forceRefresh increments force refresh count")
-    func forceRefreshCount() async {
-        let fixed = FixedSnapshotManager(snapshots: [:])
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-
-        await store.forceRefresh()
-        let count = await store.forceRefreshCount()
-        #expect(count == 1)
+    @Test("load populates snapshots, summary and advice")
+    func loadPopulates() async {
+        let hits = Hits()
+        let s = store([
+            StubProvider(vendorId: .claude, hits: hits),
+            StubProvider(vendorId: .grok, hits: hits, status: .critical),
+        ])
+        await s.load()
+        #expect(s.snapshots.count == 2)
+        #expect(s.summary.totalProviders == 2)
+        #expect(s.summary.criticalCount == 1)
+        #expect(s.summary.worstUrgency == .critical)
+        #expect(s.hasLoaded)
+        #expect(s.isRefreshing == false)
+        #expect(hits.count(.claude) == 1)
     }
 
-    @Test("summary updates on load")
-    func summaryUpdatesOnLoad() async {
-        let snap = makeSnapshot(vendor: .claude, status: .critical)
-        let fixed = FixedSnapshotManager(snapshots: [.claude: snap])
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-
-        await store.load()
-        let summary = await store.summary
-        #expect(summary.criticalCount == 1)
-        #expect(summary.worstUrgency == .critical)
+    @Test("onSummaryChange fires with the new summary")
+    func summaryCallback() async {
+        let s = store([StubProvider(vendorId: .claude, hits: Hits(), status: .warning)])
+        var seen: [Urgency] = []
+        s.onSummaryChange = { seen.append($0.worstUrgency) }
+        await s.load()
+        #expect(seen == [.warning])
     }
 
-    @Test("isRefreshing is true during load")
-    func isRefreshingDuringLoad() async {
-        // Use a delay so we can observe the refreshing state
-        let snap = makeSnapshot(vendor: .claude)
-        let fixed = FixedSnapshotManager(snapshots: [.claude: snap], delay: 0.1)
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-
-        async let loadCall = store.load()
-        // While loading...
-        try? await Task.sleep(for: .milliseconds(20))
-        let refreshing = await store.isRefreshing
-        #expect(refreshing == true)
-        await loadCall
+    @Test("a fresh cache is served without refetching; forceRefresh bypasses it")
+    func cacheVersusForce() async {
+        let hits = Hits()
+        let s = store([StubProvider(vendorId: .claude, hits: hits)])
+        await s.load()
+        await s.load()
+        #expect(hits.count(.claude) == 1)
+        await s.forceRefresh()
+        #expect(hits.count(.claude) == 2)
     }
 
-    @Test("concurrent load calls do not double-fetch")
-    func concurrentLoadsCollapse() async {
-        let snap = makeSnapshot(vendor: .claude)
-        let fixed = FixedSnapshotManager(snapshots: [.claude: snap], delay: 0.1)
-        let manager = TestQuotaManager(fixed: fixed)
-        let store = TestQuotaStore(manager: manager)
-
-        async let a = store.load()
-        async let b = store.load()
-        async let c = store.load()
-        let _ = await (a, b, c)
-
-        // load() calls refresh, not forceRefresh — so forceRefreshCount is 0
-        // Just verify we didn't crash
-        let snaps = await store.snapshots
-        #expect(snaps.count == 1)
+    @Test("a refresh requested during a refresh is dropped, not doubled")
+    func overlappingRefreshesCollapse() async {
+        let hits = Hits()
+        let s = store([StubProvider(vendorId: .claude, hits: hits, delay: .milliseconds(150))], cacheTTL: 0)
+        async let first: Void = s.load()
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(s.isRefreshing)
+        await s.forceRefresh()   // returns at once: one is already in flight
+        await first
+        #expect(hits.count(.claude) == 1)
+        #expect(s.isRefreshing == false)
     }
 
-    @Test("load after forceRefresh replaces previous data")
-    func loadReplacesData() async {
-        let snap1 = makeSnapshot(vendor: .claude, status: .healthy)
-        let fixed1 = FixedSnapshotManager(snapshots: [.claude: snap1])
-        let manager1 = TestQuotaManager(fixed: fixed1)
-        let store = TestQuotaStore(manager: manager1)
+    @Test("every poll hands the history recorder the visible snapshots")
+    func recorderReceivesSnapshots() async {
+        let recorded = Recorded()
+        let s = store([StubProvider(vendorId: .claude, hits: Hits())], recorder: recorded)
+        await s.load()
+        #expect(recorded.all == [[.claude]])
+    }
 
-        await store.load()
-        let snaps = await store.snapshots
-        #expect(snaps.count == 1)
-        #expect(snaps.first?.vendorId == .claude)
-        _ = snaps  // silence warning
+    /// The popover's "Nothing to show" card keys off this: loaded, and empty.
+    @Test("hiding every provider leaves a loaded, empty store")
+    func allHiddenIsLoadedAndEmpty() async {
+        let prefs = PrefsBox(ProviderDisplayPreferences(hidden: Set(VendorIdentifier.allCases)))
+        let hits = Hits()
+        let s = store([StubProvider(vendorId: .claude, hits: hits)], prefs: prefs)
+        await s.load()
+        #expect(s.snapshots.isEmpty)
+        #expect(s.hasLoaded)
+        #expect(hits.count(.claude) == 0)
+    }
 
-        // Simulate a new load with different data by recreating the manager
-        // (in the real QuotaStore, QuotaManager owns the data)
-        // We'll just verify the summary changed count
-        let changeCount = await store.summaryChangeCount
-        #expect(changeCount > 0)
+    @Test("applyProviderPreferences drops a hidden provider and fetches a shown one")
+    func applyPreferences() async {
+        let prefs = PrefsBox()
+        let hits = Hits()
+        let s = store([
+            StubProvider(vendorId: .claude, hits: hits),
+            StubProvider(vendorId: .grok, hits: hits),
+        ], prefs: prefs)
+        await s.load()
+        #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
+
+        prefs.value.hidden = [.grok]
+        await s.applyProviderPreferences()
+        #expect(s.snapshots.map(\.vendorId) == [.claude])
+        #expect(s.summary.totalProviders == 1)
+
+        prefs.value.hidden = []
+        let before = hits.count(.grok)
+        await s.applyProviderPreferences()
+        #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
+        #expect(hits.count(.grok) == before + 1)
+    }
+
+    /// The refresh in flight was planned against the old preferences, so a
+    /// provider shown meanwhile was left out of it. The request must be
+    /// queued, not dropped.
+    @Test("a preference change during a refresh is applied when it ends")
+    func preferenceChangeDuringRefreshIsQueued() async {
+        let prefs = PrefsBox(ProviderDisplayPreferences(hidden: [.grok]))
+        let hits = Hits()
+        let s = store([
+            StubProvider(vendorId: .claude, hits: hits, delay: .milliseconds(150)),
+            StubProvider(vendorId: .grok, hits: hits),
+        ], prefs: prefs, cacheTTL: 0)
+        async let first: Void = s.load()
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(s.isRefreshing)
+        prefs.value.hidden = []
+        await s.applyProviderPreferences()   // returns at once, queued
+        await first
+        #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
+        #expect(s.isRefreshing == false)
     }
 }

@@ -51,6 +51,7 @@ public struct AboutView: View {
 
             HStack(spacing: 10) {
                 linkButton("Source", url: AppInfo.repositoryURL)
+                linkButton("Releases", url: AppInfo.releasesURL)
                 linkButton("Report an issue", url: AppInfo.issuesURL)
             }
 

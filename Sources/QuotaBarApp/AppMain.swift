@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
     private var schedulerToken: UUID?
+    private var providerPreferencesObserver: NSObjectProtocol?
     private let notificationObserver = QuotaNotificationObserver()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -129,6 +130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         applyStatusItemPresentation()
         DesktopWidgetWindow.configure(store: store)
+
+        // A change in Preferences → Providers takes effect now rather than on
+        // the next two-minute poll. Captures `store`, not `self`.
+        providerPreferencesObserver = NotificationCenter.default.addObserver(
+            forName: .frugalbarProviderPreferencesDidChange, object: nil, queue: .main
+        ) { [store] _ in
+            Task { @MainActor in await store.applyProviderPreferences() }
+        }
 
         // Capture `store` rather than `self`: an implicit strong `self` here
         // makes the handler's `[weak self]` meaningless (and is an error under
@@ -286,16 +295,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
+        // Sized by the view: SettingsView is 540x520 plus padding, which a
+        // fixed 480x380 content rect used to clip.
+        let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
+        window.styleMask = [.titled, .closable, .miniaturizable]
         window.title = "FrugalBar Preferences"
         window.center()
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: SettingsView())
         self.settingsWindow = window
         window.makeKeyAndOrderFront(nil)
     }

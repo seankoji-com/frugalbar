@@ -15,7 +15,7 @@ FrugalBar is structured into modular Swift targets:
 
 ## Core Invariants & Rules
 
-When submitting changes, adhere strictly to these principles:
+[`AGENTS.md`](AGENTS.md) is the complete list, including how each rule failed in practice. The essentials:
 
 1. **Never synthesize or fabricate a quota**: If a provider does not expose a real limit or remaining count, return `.unavailable(...)`. Do not synthesize fake limits (e.g. `?? 500` or `?? 100%`).
 2. **Never treat failure as healthy**: HTTP status checks must precede parsing; a decode failure must map to `.badResponse` or an appropriate unavailable state.
