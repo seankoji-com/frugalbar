@@ -73,6 +73,7 @@ public struct SettingsView: View {
     private var notificationsEnabled = false
     /// Read once from the shared suite; each toggle writes straight back.
     @State private var resetAlertVendors: Set<VendorIdentifier> = CredentialStore.resetAlertVendors
+    @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
 
     public init() {}
 
@@ -401,6 +402,29 @@ public struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Reset alerts")
+            }
+
+            Section {
+                Picker("Position", selection: $desktopWidgetMode) {
+                    Text("Pinned to desktop").tag(DesktopWidgetMode.desktop)
+                    Text("Floats above windows").tag(DesktopWidgetMode.floating)
+                }
+                .onChange(of: desktopWidgetMode) {
+                    CredentialStore.desktopWidgetMode = desktopWidgetMode
+                    DesktopWidgetWindow.applyMode()
+                }
+                Text("""
+                     A small panel charting every subscription's usage \
+                     window over time, with an average of the selected \
+                     windows' readings and their current headroom. Open it \
+                     from the gear menu. It is a window FrugalBar owns, not a \
+                     WidgetKit widget — those need an app bundle this build \
+                     does not have.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Desktop widget")
             }
         }
         .formStyle(.grouped)

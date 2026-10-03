@@ -254,6 +254,38 @@ public enum CredentialStore {
         set { preferences.set(newValue, forKey: sampleModeDefaultsKey) }
     }
 
+    // MARK: Desktop widget
+
+    /// Whether the desktop widget panel was open, so launch can re-show it.
+    public static let desktopWidgetVisibleDefaultsKey = "QuotaBarDesktopWidgetVisible"
+    /// `DesktopWidgetMode` raw value.
+    public static let desktopWidgetModeDefaultsKey = "QuotaBarDesktopWidgetMode"
+    /// The panel frame, as `NSStringFromRect`.
+    public static let desktopWidgetFrameDefaultsKey = "QuotaBarDesktopWidgetFrame"
+    /// JSON-encoded chart filters (vendors, window, range, metric).
+    public static let desktopWidgetFiltersDefaultsKey = "QuotaBarDesktopWidgetFilters"
+
+    public static var isDesktopWidgetVisible: Bool {
+        get { preferences.bool(forKey: desktopWidgetVisibleDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetVisibleDefaultsKey) }
+    }
+
+    /// Unknown or missing values read as `.desktop`, the default.
+    public static var desktopWidgetMode: DesktopWidgetMode {
+        get { DesktopWidgetMode(stored: preferences.string(forKey: desktopWidgetModeDefaultsKey)) }
+        set { preferences.set(newValue.rawValue, forKey: desktopWidgetModeDefaultsKey) }
+    }
+
+    public static var desktopWidgetFrameString: String? {
+        get { preferences.string(forKey: desktopWidgetFrameDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetFrameDefaultsKey) }
+    }
+
+    public static var desktopWidgetFiltersData: Data? {
+        get { preferences.data(forKey: desktopWidgetFiltersDefaultsKey) }
+        set { preferences.set(newValue, forKey: desktopWidgetFiltersDefaultsKey) }
+    }
+
     /// Returns the API key for a vendor: Keychain first, then — only when the
     /// user has opted in — known CLI config locations.
     public static func apiKey(for vendor: VendorIdentifier) -> String? {
@@ -618,6 +650,20 @@ public enum CredentialStore {
             else { return nil }
             return key
         }
+    }
+}
+
+/// Where the desktop widget panel sits. Lives beside its preference key so
+/// Settings and the panel read one definition.
+public enum DesktopWidgetMode: String, Sendable, CaseIterable {
+    /// On the wallpaper, below the desktop icons — out of the way of windows.
+    case desktop
+    /// Above ordinary windows.
+    case floating
+
+    /// Missing or unrecognised stored values fall back to `.desktop`.
+    public init(stored raw: String?) {
+        self = raw.flatMap(Self.init(rawValue:)) ?? .desktop
     }
 }
 

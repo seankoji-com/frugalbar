@@ -126,12 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.applyStatusItemPresentation()
         }
         applyStatusItemPresentation()
+        DesktopWidgetWindow.configure(store: store)
 
         // Capture `store` rather than `self`: an implicit strong `self` here
         // makes the handler's `[weak self]` meaningless (and is an error under
         // Swift 6.4 with warnings-as-errors).
         Task { [weak self, store] in
             await store.load()
+            if CredentialStore.isDesktopWidgetVisible { DesktopWidgetWindow.show() }
             await BackgroundScheduler.shared.start(interval: 120)
             // One handler for both jobs: adding a second would make the
             // recovery check race the refresh it depends on for no reason.
