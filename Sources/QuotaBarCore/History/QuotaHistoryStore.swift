@@ -581,7 +581,9 @@ public actor QuotaHistoryStore {
             #if canImport(SQLite3)
             for table in [
                 HistorySchema.readingTable, HistorySchema.activityTable, HistorySchema.ingestWatermarkTable,
-                HistorySchema.eventTable, HistorySchema.catalogModelTable, HistorySchema.feedItemTable,
+                // Not the retired catalog/feed tables: a new database no
+                // longer has them, and DELETE on a missing table throws.
+                HistorySchema.eventTable, HistorySchema.accountModelTable,
             ] {
                 try db.execute(sql: "DELETE FROM \(table);")
             }

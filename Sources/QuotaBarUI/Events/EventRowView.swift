@@ -3,8 +3,8 @@ import AppKit
 import QuotaBarCore
 
 extension EventsPresentation {
-    /// Tint for an event kind. Decoration only: the kind's SF Symbol is the
-    /// channel that carries it (WCAG 1.4.1), and the row's label says it.
+    /// Tint for an event kind, used by the History filter chips. Decoration
+    /// only: the chip's text and symbol carry the kind (WCAG 1.4.1).
     public static func kindTint(_ kind: AIEventKind) -> Color {
         switch kind {
         case .usageReset:         Theme.primary
@@ -12,12 +12,19 @@ extension EventsPresentation {
         case .resetCreditGranted: Color(hexString: "#5EEAD4") ?? Theme.healthy
         case .newModel:           Color(hexString: "#C4B5FD") ?? Theme.primary
         case .priceChange:        Theme.tertiary
+        case .vendorReset:        Theme.healthy
+        case .outageStarted:      Theme.error
+        case .outageResolved:     Theme.healthy
         }
     }
 }
 
-/// One compact event row: kind symbol, vendor mark, one-line title, and a
-/// caption naming when it happened and where the evidence came from.
+/// One compact event row: vendor mark, one-line title, and a caption naming
+/// when it happened and where the evidence came from.
+///
+/// No kind symbol: every title says what happened in words ("Codex reset for
+/// everyone", "Outage: …", "Resolved: …", "… now available in Codex"), which
+/// is the non-colour channel, and the spoken label names the kind as well.
 ///
 /// Every width here is flexible; the title truncates rather than pushing the
 /// row past the popover's 324pt content budget.
@@ -35,16 +42,10 @@ public struct EventRowView: View {
         self.compact = compact
     }
 
-    private var tint: Color { EventsPresentation.kindTint(event.kind) }
     private var link: URL? { EventsPresentation.openableURL(for: event) }
 
     public var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            Image(systemName: event.kind.symbolName)
-                .font(.system(size: compact ? 13 : 15, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: compact ? 16 : 20)
-
             VendorAvatarView(vendorId: event.vendorId, status: .healthy, size: compact ? 16 : 20)
 
             VStack(alignment: .leading, spacing: 1) {

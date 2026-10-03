@@ -34,13 +34,27 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
     /// vendor-published figure, never inferred.
     case resetCreditGranted = "reset_credit_granted"
 
-    /// A model first seen in a catalog FrugalBar polls, or announced in a
-    /// vendor's own feed.
+    /// A model appeared in the list of models the user's own account can
+    /// select (`AccountModelWatcher`). Rows recorded before that watcher
+    /// existed came from the OpenRouter catalog or a vendor news feed; they
+    /// stay in the log but are never surfaced (see `isSurfaced`).
     case newModel = "new_model"
 
-    /// A model's catalog price differs from the one FrugalBar stored on the
-    /// previous poll, or a vendor's own feed carried a pricing announcement.
+    /// Retired: a catalog or news-feed price change. Nothing records it any
+    /// more; the case stays so rows already on disk still decode.
     case priceChange = "price_change"
+
+    /// A vendor reset everyone's usage (or granted a banked reset), as
+    /// recorded after it landed by a community reset tracker that links the
+    /// vendor's own announcement.
+    case vendorReset = "vendor_reset"
+
+    /// The vendor's official status page opened a major or critical incident
+    /// on a product FrugalBar tracks.
+    case outageStarted = "outage_started"
+
+    /// The vendor's official status page marked that incident resolved.
+    case outageResolved = "outage_resolved"
 
     public var id: String { rawValue }
 
@@ -52,6 +66,9 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
         case .resetCreditGranted: "Reset credit"
         case .newModel:      "New model"
         case .priceChange:   "Price change"
+        case .vendorReset:   "Vendor reset"
+        case .outageStarted: "Outage"
+        case .outageResolved: "Outage resolved"
         }
     }
 
@@ -63,8 +80,20 @@ public enum AIEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
         case .resetCreditGranted: "ticket.circle"
         case .newModel:      "sparkles.rectangle.stack"
         case .priceChange:   "dollarsign.circle"
+        case .vendorReset:   "arrow.clockwise.heart"
+        case .outageStarted: "exclamationmark.triangle"
+        case .outageResolved: "checkmark.shield"
         }
     }
+
+    /// The kinds FrugalBar still produces and shows: resets, outages, and
+    /// models newly selectable on the user's own account. Scheduled window
+    /// rollovers (`usageReset`) are logged and drawn on the timeline but are
+    /// routine, so they never take the popover's one row or a banner here.
+    public static let surfaced: [AIEventKind] = [
+        .vendorReset, .usageRestored, .resetCreditGranted,
+        .outageStarted, .outageResolved, .newModel,
+    ]
 }
 
 // MARK: - Event sources
@@ -80,9 +109,15 @@ public enum AIEventSource: Sendable, Equatable, Hashable, Codable {
     /// (`GET https://openrouter.ai/api/v1/models`), which lists every major
     /// vendor's models with creation dates and API prices.
     case openRouterCatalog
-    /// The event was derived from an item in a vendor's own RSS/Atom feed.
-    /// `name` is the feed's short identifier (e.g. `openai-news`).
+    /// Retired: an item in a vendor news feed. Kept so old rows decode.
     case vendorFeed(name: String)
+    /// A community reset tracker (`ResetTracker.name`).
+    case resetTracker(name: String)
+    /// A vendor's official status page (`StatusPage.name`).
+    case statusPage(name: String)
+    /// The list of models the user's own account can select, fetched with
+    /// the same credential as its quota.
+    case accountModels
 
     /// Stable on-disk representation.
     public var rawValue: String {
@@ -90,6 +125,9 @@ public enum AIEventSource: Sendable, Equatable, Hashable, Codable {
         case .quotaPoll:               "quota-poll"
         case .openRouterCatalog:       "openrouter-catalog"
         case .vendorFeed(let name):    "feed:\(name)"
+        case .resetTracker(let name):  "tracker:\(name)"
+        case .statusPage(let name):    "status:\(name)"
+        case .accountModels:           "account-models"
         }
     }
 
@@ -97,11 +135,20 @@ public enum AIEventSource: Sendable, Equatable, Hashable, Codable {
         switch rawValue {
         case "quota-poll":          self = .quotaPoll
         case "openrouter-catalog":  self = .openRouterCatalog
+        case "account-models":      self = .accountModels
         default:
-            guard rawValue.hasPrefix("feed:") else { return nil }
-            let name = String(rawValue.dropFirst("feed:".count))
-            guard !name.isEmpty else { return nil }
-            self = .vendorFeed(name: name)
+            let prefixed: [(String, (String) -> AIEventSource)] = [
+                ("feed:", { .vendorFeed(name: $0) }),
+                ("tracker:", { .resetTracker(name: $0) }),
+                ("status:", { .statusPage(name: $0) }),
+            ]
+            for (prefix, make) in prefixed where rawValue.hasPrefix(prefix) {
+                let name = String(rawValue.dropFirst(prefix.count))
+                guard !name.isEmpty else { return nil }
+                self = make(name)
+                return
+            }
+            return nil
         }
     }
 
@@ -111,11 +158,13 @@ public enum AIEventSource: Sendable, Equatable, Hashable, Codable {
         switch self {
         case .quotaPoll:            "From the vendor's usage endpoint"
         case .openRouterCatalog:    "From the OpenRouter model catalog"
-        case .vendorFeed(let name):
-            // A third-party scrape must never read as the vendor speaking.
-            VendorFeed.named(name)?.isOfficial == false
-                ? "From the \(name) feed (unofficial scrape)"
-                : "From the \(name) feed"
+        case .vendorFeed(let name):     "From the \(name) feed"
+        case .resetTracker(let name):
+            // A third-party record must never read as the vendor speaking.
+            "Via \(ResetTracker.named(name)?.host ?? name) (community tracker)"
+        case .statusPage(let name):
+            "From \(StatusPage.named(name)?.pageURL.host() ?? name)"
+        case .accountModels:            "From your account's model list"
         }
     }
 
@@ -189,6 +238,17 @@ public struct AIEvent: Identifiable, Sendable, Equatable, Hashable, Codable {
         self.url = url
     }
 
+    /// Whether this event is one FrugalBar shows in the popover, notifies
+    /// about, and lists in the History window: a surfaced kind, and for a new
+    /// model only one the user's own account can select. Catalog listings and
+    /// news-feed rows recorded by earlier versions stay on disk but are not
+    /// a model anyone can pick yet.
+    public var isSurfaced: Bool {
+        guard AIEventKind.surfaced.contains(kind) else { return false }
+        if kind == .newModel { return source == .accountModels }
+        return true
+    }
+
     /// Builds a deterministic id from the facts that define an event.
     ///
     /// `components` must be the facts, not the prose: a reset event is keyed
@@ -197,50 +257,5 @@ public struct AIEvent: Identifiable, Sendable, Equatable, Hashable, Codable {
     /// never create a second copy of the same event.
     public static func makeID(kind: AIEventKind, vendorId: VendorIdentifier, components: [String]) -> String {
         ([kind.rawValue, vendorId.rawValue] + components).joined(separator: "|")
-    }
-}
-
-// MARK: - Catalog model record
-
-/// One model as last seen in the OpenRouter catalog, persisted so the next
-/// poll can be diffed against it.
-///
-/// Prices are kept as `Decimal` and stored as text: OpenRouter publishes them
-/// as decimal strings in USD per token ("0.000003"), and a binary float would
-/// round-trip a value that then looked like a price change that never
-/// happened. `nil` means the catalog published no figure, never zero.
-public struct CatalogModelRecord: Sendable, Equatable, Codable {
-    /// OpenRouter's id, e.g. `anthropic/claude-opus-5-5`.
-    public let modelId: String
-    /// The FrugalBar vendor the catalog prefix maps to.
-    public let vendorId: VendorIdentifier
-    public let name: String
-    /// The catalog's own `created` timestamp.
-    public let createdAt: Date?
-    /// USD per prompt token.
-    public let promptPrice: Decimal?
-    /// USD per completion token.
-    public let completionPrice: Decimal?
-    public let firstSeen: Date
-    public let lastSeen: Date
-
-    public init(
-        modelId: String,
-        vendorId: VendorIdentifier,
-        name: String,
-        createdAt: Date?,
-        promptPrice: Decimal?,
-        completionPrice: Decimal?,
-        firstSeen: Date,
-        lastSeen: Date
-    ) {
-        self.modelId = modelId
-        self.vendorId = vendorId
-        self.name = name
-        self.createdAt = createdAt
-        self.promptPrice = promptPrice
-        self.completionPrice = completionPrice
-        self.firstSeen = firstSeen
-        self.lastSeen = lastSeen
     }
 }

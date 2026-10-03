@@ -5,16 +5,14 @@ import SQLite3
 
 /// Persistence for AI-platform events and the watcher state behind them.
 ///
-/// Three tables, all additive to the schema that shipped (see
+/// Two tables, both additive to the schema that shipped (see
 /// `HistorySchema.createTablesSQL`):
 ///
 /// - `event`: every `AIEvent` ever recorded, keyed by its deterministic id.
 ///   `recordEvents` is the deduplication point — the engine hands it every
 ///   candidate and acts only on the ones that were actually new.
-/// - `catalog_model`: the OpenRouter catalog as of the last poll, so the next
-///   poll can be diffed against it for new models and price changes.
-/// - `feed_item`: the ids of every vendor-feed item already seen, so a feed
-///   that re-serves old items never re-announces them.
+/// - `account_model`: every model each account's own model list has carried,
+///   so the next poll can be diffed against it for newly selectable models.
 extension QuotaHistoryStore {
 
     // MARK: - Events
@@ -208,50 +206,32 @@ extension QuotaHistoryStore {
         }
     }
 
-    // MARK: - Catalog models
+    // MARK: - Account models
 
-    /// Every model from the last catalog poll, keyed by model id.
-    public func catalogModels() async throws -> [String: CatalogModelRecord] {
+    /// Every model ever seen on `vendor`'s own model list, keyed by model id.
+    /// Rows are never deleted, so a model that drops out of one response and
+    /// comes back is not announced a second time.
+    public func accountModels(vendor: VendorIdentifier) async throws -> [String: AccountModelRecord] {
         try await ensureOpen()
-        return try await database.perform { db -> [String: CatalogModelRecord] in
+        let vendorString = vendor.rawValue
+        return try await database.perform { db -> [String: AccountModelRecord] in
             #if canImport(SQLite3)
-            let sql = """
-            SELECT model_id, vendor, name, created_at, prompt_price, completion_price, first_seen, last_seen
-            FROM catalog_model;
-            """
-            let stmt = try db.prepare(sql: sql)
+            let stmt = try db.prepare(sql: """
+            SELECT model_id, name, first_seen, last_seen FROM account_model WHERE vendor = ?;
+            """)
             defer { db.finalize(stmt) }
+            try db.bindText(stmt, 1, vendorString)
 
-            var result: [String: CatalogModelRecord] = [:]
+            var result: [String: AccountModelRecord] = [:]
             while sqlite3_step(stmt) == SQLITE_ROW {
-                guard let idText = sqlite3_column_text(stmt, 0),
-                      let vendorText = sqlite3_column_text(stmt, 1),
-                      let nameText = sqlite3_column_text(stmt, 2),
-                      let vendorId = VendorIdentifier(rawValue: String(cString: vendorText))
-                else { continue }
-
-                let createdAt: Date? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
-                    ? nil
-                    : Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 3)))
-                let promptPrice = sqlite3_column_text(stmt, 4)
-                    .map { String(cString: $0) }
-                    .flatMap { Decimal(string: $0) }
-                let completionPrice = sqlite3_column_text(stmt, 5)
-                    .map { String(cString: $0) }
-                    .flatMap { Decimal(string: $0) }
-                let firstSeen = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 6)))
-                let lastSeen = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
-
+                guard let idText = sqlite3_column_text(stmt, 0) else { continue }
                 let modelId = String(cString: idText)
-                result[modelId] = CatalogModelRecord(
+                result[modelId] = AccountModelRecord(
+                    vendorId: vendor,
                     modelId: modelId,
-                    vendorId: vendorId,
-                    name: String(cString: nameText),
-                    createdAt: createdAt,
-                    promptPrice: promptPrice,
-                    completionPrice: completionPrice,
-                    firstSeen: firstSeen,
-                    lastSeen: lastSeen
+                    name: sqlite3_column_text(stmt, 1).map { String(cString: $0) },
+                    firstSeen: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 2))),
+                    lastSeen: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 3)))
                 )
             }
             return result
@@ -261,10 +241,9 @@ extension QuotaHistoryStore {
         }
     }
 
-    /// Writes the given records, replacing any existing row for the same
-    /// model id. Callers compute `firstSeen` themselves (carrying the stored
-    /// value forward for a model already known), so this is a plain upsert.
-    public func upsertCatalogModels(_ records: [CatalogModelRecord]) async throws {
+    /// Upserts the given records. Callers carry `firstSeen` forward for a
+    /// model already known, so this is a plain replace.
+    public func upsertAccountModels(_ records: [AccountModelRecord]) async throws {
         try await ensureOpen()
         guard !records.isEmpty else { return }
         let rows = records
@@ -275,85 +254,20 @@ extension QuotaHistoryStore {
             var didCommit = false
             defer { if !didCommit { try? db.rollbackTransaction() } }
 
-            let sql = """
-            INSERT OR REPLACE INTO catalog_model (
-              model_id, vendor, name, created_at, prompt_price, completion_price, first_seen, last_seen
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-            """
-            let stmt = try db.prepare(sql: sql)
+            let stmt = try db.prepare(sql: """
+            INSERT OR REPLACE INTO account_model (vendor, model_id, name, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?);
+            """)
             defer { db.finalize(stmt) }
 
             for row in rows {
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
-                try db.bindText(stmt, 1, row.modelId)
-                try db.bindText(stmt, 2, row.vendorId.rawValue)
+                try db.bindText(stmt, 1, row.vendorId.rawValue)
+                try db.bindText(stmt, 2, row.modelId)
                 try db.bindText(stmt, 3, row.name)
-                try db.bindInt64(stmt, 4, row.createdAt.map { Int64($0.timeIntervalSince1970) })
-                try db.bindText(stmt, 5, row.promptPrice.map { "\($0)" })
-                try db.bindText(stmt, 6, row.completionPrice.map { "\($0)" })
-                try db.bindInt64(stmt, 7, Int64(row.firstSeen.timeIntervalSince1970))
-                try db.bindInt64(stmt, 8, Int64(row.lastSeen.timeIntervalSince1970))
-
-                let status = sqlite3_step(stmt)
-                guard status == SQLITE_DONE else {
-                    throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
-                }
-            }
-
-            try db.commitTransaction()
-            didCommit = true
-            #endif
-        }
-    }
-
-    // MARK: - Feed items
-
-    /// The ids of every item of `feed` already seen.
-    public func seenFeedItemIDs(feed: String) async throws -> Set<String> {
-        try await ensureOpen()
-        return try await database.perform { db -> Set<String> in
-            #if canImport(SQLite3)
-            let stmt = try db.prepare(sql: "SELECT item_id FROM feed_item WHERE feed = ?;")
-            defer { db.finalize(stmt) }
-            try db.bindText(stmt, 1, feed)
-            var ids: Set<String> = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                if let text = sqlite3_column_text(stmt, 0) {
-                    ids.insert(String(cString: text))
-                }
-            }
-            return ids
-            #else
-            return []
-            #endif
-        }
-    }
-
-    /// Records `ids` as seen for `feed`. Already-seen ids keep their original
-    /// `seen_at`.
-    public func markFeedItemsSeen(feed: String, ids: [String], at seenAt: Date) async throws {
-        try await ensureOpen()
-        guard !ids.isEmpty else { return }
-        let epoch = Int64(seenAt.timeIntervalSince1970)
-        let rows = ids
-
-        try await database.perform { db in
-            #if canImport(SQLite3)
-            try db.beginTransaction()
-            var didCommit = false
-            defer { if !didCommit { try? db.rollbackTransaction() } }
-
-            let stmt = try db.prepare(
-                sql: "INSERT OR IGNORE INTO feed_item (feed, item_id, seen_at) VALUES (?, ?, ?);")
-            defer { db.finalize(stmt) }
-
-            for id in rows {
-                sqlite3_reset(stmt)
-                sqlite3_clear_bindings(stmt)
-                try db.bindText(stmt, 1, feed)
-                try db.bindText(stmt, 2, id)
-                try db.bindInt64(stmt, 3, epoch)
+                try db.bindInt64(stmt, 4, Int64(row.firstSeen.timeIntervalSince1970))
+                try db.bindInt64(stmt, 5, Int64(row.lastSeen.timeIntervalSince1970))
                 let status = sqlite3_step(stmt)
                 guard status == SQLITE_DONE else {
                     throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)

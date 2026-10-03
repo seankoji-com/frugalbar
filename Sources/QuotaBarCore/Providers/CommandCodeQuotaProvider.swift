@@ -175,7 +175,10 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         )
     }
 
-    /// The plan's monthly credits as a real gauge.
+    /// The plan's monthly credits as a real gauge, under the standard monthly
+    /// token "MO" so it sits in the popover's monthly column. (It was "CR",
+    /// a token no other provider used; `HistorySchema.dataMigrationsSQL`
+    /// renames the readings stored under it.)
     ///
     /// The denominator is the allowance Command Code publishes for the plan;
     /// the balance (`monthlyCredits`) is what is left of it. Purchased and free
@@ -193,7 +196,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         guard let allowance = planAllowance(credits.planId), allowance > 0 else {
             return DualBarMetrics(
                 primaryFraction: nil,
-                label: "CR",
+                label: "MO",
                 usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left"
             )
         }
@@ -210,7 +213,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         let used = min(max(total - remaining, 0), total)
         return DualBarMetrics(
             primaryFraction: used / total,
-            label: "CR",
+            label: "MO",
             usedText: "\(money(used))/\(money(total)) credits used"
         )
     }

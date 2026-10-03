@@ -7,13 +7,14 @@ public enum HistorySchema {
     public static let eventTable = "event"
     public static let catalogModelTable = "catalog_model"
     public static let feedItemTable = "feed_item"
+    public static let accountModelTable = "account_model"
 
     /// The on-disk schema generation. A mismatch on open drops every table.
     ///
     /// Version 1 has shipped, so this must not be bumped any more: a bump
     /// deletes the user's readings. New tables are added to `createTablesSQL`
-    /// as `CREATE TABLE IF NOT EXISTS` (the `event`, `catalog_model` and
-    /// `feed_item` tables arrived that way, additively, under the same
+    /// as `CREATE TABLE IF NOT EXISTS` (the `event`, `catalog_model`,
+    /// `feed_item` and `account_model` tables arrived that way, additively, under the same
     /// version). Changing an existing table's shape needs a real migration.
     public static let version: Int32 = 1
 
@@ -62,7 +63,7 @@ public enum HistorySchema {
       PRIMARY KEY (source, file_path)
     ) WITHOUT ROWID;
 
-    -- The three tables below were added after `version` 1 shipped. They are
+    -- The tables below were added after `version` 1 shipped. They are
     -- purely additive (`CREATE TABLE IF NOT EXISTS` on every open), so the
     -- version is deliberately NOT bumped: a bump drops the user's readings.
 
@@ -82,24 +83,30 @@ public enum HistorySchema {
     CREATE INDEX IF NOT EXISTS event_time ON event(occurred_at);
     CREATE INDEX IF NOT EXISTS event_vendor_time ON event(vendor, occurred_at);
 
-    CREATE TABLE IF NOT EXISTS catalog_model (
-      model_id         TEXT    NOT NULL,  -- e.g. "anthropic/claude-opus-5-5"
-      vendor           TEXT    NOT NULL,  -- VendorIdentifier.rawValue
-      name             TEXT    NOT NULL,
-      created_at       INTEGER,           -- the catalog's own `created`; NULL when unpublished
-      prompt_price     TEXT,              -- USD per token, decimal text; NULL = unpublished
-      completion_price TEXT,
-      first_seen       INTEGER NOT NULL,
-      last_seen        INTEGER NOT NULL,
-      PRIMARY KEY (model_id)
-    ) WITHOUT ROWID;
+    -- `catalog_model` and `feed_item` (the OpenRouter catalog and vendor news
+    -- feeds) are retired: nothing reads or writes them, and databases that
+    -- already have them keep them untouched. `dropTablesSQL` still names them.
 
-    CREATE TABLE IF NOT EXISTS feed_item (
-      feed          TEXT    NOT NULL,    -- feed short name, e.g. "openai-news"
-      item_id       TEXT    NOT NULL,    -- the item's guid/id, or its link when it has none
-      seen_at       INTEGER NOT NULL,
-      PRIMARY KEY (feed, item_id)
+    CREATE TABLE IF NOT EXISTS account_model (
+      vendor        TEXT    NOT NULL,    -- VendorIdentifier.rawValue
+      model_id      TEXT    NOT NULL,    -- the vendor's own id, e.g. "gpt-6.1-sol"
+      name          TEXT,                -- display name when the vendor publishes one
+      first_seen    INTEGER NOT NULL,
+      last_seen     INTEGER NOT NULL,
+      PRIMARY KEY (vendor, model_id)
     ) WITHOUT ROWID;
+    """
+
+    /// Idempotent in-place rewrites of stored values, run on every open after
+    /// the tables exist. Never a shape change and never a delete.
+    ///
+    /// - Command Code's monthly plan credits were stored under the window
+    ///   token "CR" until the token was standardised to "MO". Renaming the
+    ///   old rows keeps that history one continuous series. The vendor never
+    ///   wrote an "MO" row before, so the primary key cannot collide; `OR
+    ///   IGNORE` makes that certain rather than assumed.
+    public static let dataMigrationsSQL = """
+    UPDATE OR IGNORE reading SET bar_label = 'MO' WHERE vendor = 'commandcode' AND bar_label = 'CR';
     """
 
     /// Drops every table. Used only to reset a development database whose schema
@@ -111,6 +118,7 @@ public enum HistorySchema {
     DROP TABLE IF EXISTS \(eventTable);
     DROP TABLE IF EXISTS \(catalogModelTable);
     DROP TABLE IF EXISTS \(feedItemTable);
+    DROP TABLE IF EXISTS \(accountModelTable);
     """
 }
 

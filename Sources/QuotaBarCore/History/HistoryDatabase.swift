@@ -130,6 +130,7 @@ public final class HistoryDatabase: @unchecked Sendable {
             try execute(sql: HistorySchema.dropTablesSQL)
         }
         try execute(sql: HistorySchema.createTablesSQL)
+        try execute(sql: HistorySchema.dataMigrationsSQL)
         try execute(sql: "PRAGMA user_version = \(HistorySchema.version);")
 
         if existingVersion != 0 && existingVersion != HistorySchema.version {

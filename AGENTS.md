@@ -64,6 +64,15 @@ what it reports as new. Anthropic reset grants are requested (`?cedar_ember=1`)
 but the OAuth surface answers `ineligible_reason: "surface"` with no grants;
 that decodes to `nil`, never 0, and guessing them would be a synthesised figure.
 
+**External event sources record the past, never the future.** Status pages,
+community reset trackers and account model lists are read for what already
+happened: an incident the vendor opened or resolved, a reset that landed, a
+model the account now serves. Trackers also publish forecasts and "reset
+expected" windows (codex-reset.com's `/api/forecast` labels itself
+experimental); those are never decoded. A "new model" is a model on the
+account's own list (`AccountModelWatcher`), never a launch post or a catalog
+listing: the question is whether the user can select it right now.
+
 **History tables are additive only; do not bump `HistorySchema.version`.** A
 bump drops the table set, which deletes the user's readings. New tables go in
 `createTablesSQL` as `CREATE TABLE IF NOT EXISTS` (as `event`, `catalog_model`
@@ -121,9 +130,14 @@ only go in alongside a signed, entitled `.app`.
 
 ## UI constraints
 
-Popover is 340pt wide; a row has 16pt horizontal padding, so row content must
-fit **324pt**. Use flexible widths, not fixed ones — the previous layout summed
-to 356pt and clipped on launch.
+Popover is 384pt wide; with the 12pt edge margin and 14pt card padding a row
+has **332pt**: avatar 28 + 8 + name 112 + 8 + a 176pt grid of three window
+columns (5H / WK / MO, 8pt apart). Use flexible widths inside the grid, not
+fixed ones — an earlier layout summed past its budget and clipped on launch.
+A provider's bar goes in the column its token names (`WindowColumn`), so new
+providers must use the standard tokens `5H`, `WK`, `MO` for those windows;
+anything else (`BN`, `OV`, `OD`, `SP`, `1D`, `PLAN`, `CYCLE`) is drawn on its
+own line under the row.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the

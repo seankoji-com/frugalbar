@@ -1,22 +1,22 @@
 import SwiftUI
 import QuotaBarCore
 
-/// The popover's "Recent events" card: the newest few recorded events and a
-/// way into the full list in the History window.
+/// The popover's "Recent events" card: the newest recorded event and a way
+/// into the full list in the History window.
 ///
-/// Kept to three compact rows (about 30pt each) so it never pushes the quota
-/// rows — the reason the popover exists — far below the fold.
+/// One compact row (about 30pt) so it never pushes the quota rows — the
+/// reason the popover exists — below the fold.
 struct EventsSectionView: View {
 
     let events: [AIEvent]
     var onSeeAll: () -> Void = { HistoryWindow.show(tab: .events) }
 
-    static let visibleCount = 3
+    static let visibleCount = 1
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text("Recent events")
+                Text("Latest event")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .accessibilityAddTraits(.isHeader)
@@ -58,6 +58,6 @@ struct EventsSectionView: View {
         .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Recent events")
+        .accessibilityLabel("Latest event")
     }
 }

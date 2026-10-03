@@ -5,45 +5,69 @@ import Foundation
 /// Owns the one deduplication point: every candidate goes through
 /// `QuotaHistoryStore.recordEvents`, and only what that call reports as newly
 /// inserted is returned. Callers notify on the return value and nothing else,
-/// so a restart, a re-poll, or a feed that re-serves an item can never post the
-/// same banner twice.
+/// so a restart, a re-poll, or a source that re-serves an item can never post
+/// the same banner twice.
 ///
-/// External sources (the OpenRouter catalog and vendor feeds) are polled at
-/// most every `externalPollInterval`, independent of the 2-minute quota poll
-/// that drives this: the catalog and the feeds change on the order of days,
-/// and fetching a megabyte of catalog every two minutes would be rude to a
-/// free, key-less endpoint.
+/// Three external sources, each on its own cadence, independent of the
+/// 2-minute quota poll that drives this:
+///
+/// - Official status pages, every `statusPollInterval`: an outage is only
+///   worth knowing about while it is happening.
+/// - Community reset trackers, every `trackerPollInterval`.
+/// - Each account's own model list, every `modelPollInterval`. These calls
+///   carry the user's credential, like the quota poll itself.
 public actor AIEventEngine {
 
-    public static let externalPollInterval: TimeInterval = 6 * 3600
-    /// When nothing was reachable (launch before Wi-Fi is up, say), the next
-    /// attempt comes this soon rather than a full interval later.
-    public static let failedPollRetryInterval: TimeInterval = 10 * 60
+    public static let statusPollInterval: TimeInterval = 10 * 60
+    public static let trackerPollInterval: TimeInterval = 60 * 60
+    public static let modelPollInterval: TimeInterval = 60 * 60
+    /// When a source answered nothing (launch before Wi-Fi is up, say), its
+    /// next attempt comes this soon rather than a full interval later.
+    public static let failedPollRetryInterval: TimeInterval = 5 * 60
+    /// How often old events are pruned.
+    public static let pruneInterval: TimeInterval = 6 * 3600
     /// Events are small and stay useful for a long time — "when did OpenAI
-    /// last restore limits?" is a question about months, not days.
+    /// last reset limits?" is a question about months, not days.
     public static let eventRetentionInterval: TimeInterval = 365 * 86_400
 
+    enum Source: String, CaseIterable, Sendable {
+        case status, trackers, models
+
+        var interval: TimeInterval {
+            switch self {
+            case .status:   AIEventEngine.statusPollInterval
+            case .trackers: AIEventEngine.trackerPollInterval
+            case .models:   AIEventEngine.modelPollInterval
+            }
+        }
+    }
+
     private let store: QuotaHistoryStore
-    private let catalogWatcher: OpenRouterCatalogWatcher
-    private let feedWatcher: VendorFeedWatcher
+    private let trackerWatcher: ResetTrackerWatcher
+    private let statusWatcher: StatusIncidentWatcher
+    private let modelWatcher: AccountModelWatcher
     private let isTrackingEnabled: @Sendable () -> Bool
-    private var lastExternalPoll: Date?
+    private var nextPoll: [Source: Date] = [:]
 
     /// - Parameters:
-    ///   - catalogFetcher / feedFetcher: injectable so tests never touch the
-    ///     network and can assert whether a fetch happened at all.
+    ///   - trackerFetcher / statusFetcher / modelLister: injectable so tests
+    ///     never touch the network and can assert whether a fetch happened.
     ///   - isTrackingEnabled: read on every external poll, so flipping the
     ///     Settings toggle takes effect without a relaunch.
     public init(
         store: QuotaHistoryStore,
-        catalogFetcher: @escaping OpenRouterCatalogWatcher.Fetcher = OpenRouterCatalogWatcher.liveFetch,
-        feedFetcher: @escaping VendorFeedWatcher.Fetcher = VendorFeedWatcher.liveFetch,
-        feeds: [VendorFeed] = VendorFeed.all,
+        trackerFetcher: @escaping ResetTrackerWatcher.Fetcher = ResetTrackerWatcher.liveFetch,
+        statusFetcher: @escaping StatusIncidentWatcher.Fetcher = StatusIncidentWatcher.liveFetch,
+        modelLister: @escaping AccountModelWatcher.Lister = AccountModelLister.live,
+        trackers: [ResetTracker] = ResetTracker.all,
+        statusPages: [StatusPage] = StatusPage.all,
+        modelVendors: [VendorIdentifier] = AccountModelLister.supportedVendors,
         isTrackingEnabled: @escaping @Sendable () -> Bool = { CredentialStore.isEventTrackingEnabled }
     ) {
         self.store = store
-        self.catalogWatcher = OpenRouterCatalogWatcher(fetch: catalogFetcher)
-        self.feedWatcher = VendorFeedWatcher(feeds: feeds, fetch: feedFetcher)
+        self.trackerWatcher = ResetTrackerWatcher(trackers: trackers, fetch: trackerFetcher)
+        self.statusWatcher = StatusIncidentWatcher(pages: statusPages, fetch: statusFetcher)
+        self.modelWatcher = AccountModelWatcher(vendors: modelVendors, list: modelLister)
         self.isTrackingEnabled = isTrackingEnabled
     }
 
@@ -60,47 +84,51 @@ public actor AIEventEngine {
         return await record(candidates)
     }
 
-    /// Polls the catalog and the feeds when due and tracking is on, records
-    /// what they produced, prunes old events, and returns the new ones.
+    /// Polls whichever external sources are due, records what they produced,
+    /// prunes old events, and returns the new ones.
     ///
-    /// With tracking off nothing is fetched and the cadence clock does not
-    /// advance, so switching tracking on polls on the very next call.
-    public func pollExternalSources(now: Date) async -> [AIEvent] {
+    /// - Parameter vendors: the vendors the user has configured. A reset or
+    ///   outage for a product they do not use is not recorded at all.
+    ///
+    /// With tracking off nothing is fetched and no schedule advances, so
+    /// switching tracking on polls every source on the very next call.
+    public func pollExternalSources(now: Date, vendors: Set<VendorIdentifier>) async -> [AIEvent] {
         // Retention is independent of tracking: poll-derived events (resets,
-        // restores, credits) are recorded whether or not the catalog and
-        // feeds are polled, so they must age out either way.
+        // restores, credits) are recorded whether or not anything external
+        // is polled, so they must age out either way.
         await pruneIfDue(now: now)
 
-        guard isTrackingEnabled() else { return [] }
-        if let lastExternalPoll, now.timeIntervalSince(lastExternalPoll) < Self.externalPollInterval {
-            return []
-        }
+        guard isTrackingEnabled(), !vendors.isEmpty else { return [] }
+        let due = Source.allCases.filter { nextPoll[$0].map { now >= $0 } ?? true }
+        guard !due.isEmpty else { return [] }
 
-        let catalog = await catalogWatcher.prepare(store: store, now: now)
-        let feeds = await feedWatcher.prepare(store: store, now: now)
-        guard catalog.fetched || feeds.fetched else {
-            // Nothing answered. Back-date the clock so the next attempt is
-            // `failedPollRetryInterval` away, not a full interval.
-            lastExternalPoll = now.addingTimeInterval(Self.failedPollRetryInterval - Self.externalPollInterval)
-            return []
-        }
-        lastExternalPoll = now
+        var fresh: [AIEvent] = []
+        for source in due {
+            let pending: PendingPoll
+            switch source {
+            case .status:   pending = await statusWatcher.prepare(vendors: vendors, now: now)
+            case .trackers: pending = await trackerWatcher.prepare(vendors: vendors, now: now)
+            case .models:   pending = await modelWatcher.prepare(store: store, vendors: vendors, now: now)
+            }
+            guard pending.fetched else {
+                // Nothing answered: retry soon rather than a full interval on.
+                nextPoll[source] = now.addingTimeInterval(min(source.interval, Self.failedPollRetryInterval))
+                continue
+            }
+            nextPoll[source] = now.addingTimeInterval(source.interval)
 
-        // Events first, checkpoints second. A checkpoint written before its
-        // events were stored loses them for good — see `PendingPoll`.
-        let candidates = catalog.events + feeds.events
-        let fresh: [AIEvent]
-        do {
-            fresh = try await store.recordEvents(candidates)
-        } catch {
-            NSLog("frugalbar: failed to record external AI events; sources will be re-derived next poll: \(error)")
-            return []
-        }
-        for commit in [catalog.commit, feeds.commit] {
+            // Events first, checkpoint second. A checkpoint written before its
+            // events were stored loses them for good — see `PendingPoll`.
             do {
-                try await commit()
+                fresh += try await store.recordEvents(pending.events)
             } catch {
-                NSLog("frugalbar: failed to store an external-source checkpoint: \(error)")
+                NSLog("frugalbar: failed to record \(source.rawValue) events; they will be re-derived next poll: \(error)")
+                continue
+            }
+            do {
+                try await pending.commit()
+            } catch {
+                NSLog("frugalbar: failed to store the \(source.rawValue) checkpoint: \(error)")
             }
         }
         return fresh
@@ -108,10 +136,10 @@ public actor AIEventEngine {
 
     private var lastPrune: Date?
 
-    /// Prunes events past `eventRetentionInterval` on the external-poll
-    /// cadence, whatever the tracking toggle says.
+    /// Prunes events past `eventRetentionInterval` every `pruneInterval`,
+    /// whatever the tracking toggle says.
     private func pruneIfDue(now: Date) async {
-        if let lastPrune, now.timeIntervalSince(lastPrune) < Self.externalPollInterval { return }
+        if let lastPrune, now.timeIntervalSince(lastPrune) < Self.pruneInterval { return }
         lastPrune = now
         do {
             try await store.pruneEvents(before: now.addingTimeInterval(-Self.eventRetentionInterval))

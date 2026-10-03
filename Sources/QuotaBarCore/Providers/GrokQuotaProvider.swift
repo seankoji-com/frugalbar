@@ -258,7 +258,10 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         case "USAGE_PERIOD_TYPE_DAILY":   return "1D"
         default: break
         }
-        guard let windowLength else { return "CR" }
+        // No named period and no length: the plan's allowance for a period
+        // nobody said the length of. "PLAN", the same token OpenAI uses for a
+        // window of unknown length, rather than a one-off code.
+        guard let windowLength else { return "PLAN" }
         switch windowLength {
         case ..<(2 * 86_400):  return "1D"
         case ..<(10 * 86_400): return "WK"

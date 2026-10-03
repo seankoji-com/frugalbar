@@ -110,7 +110,8 @@ struct EventsPresentationTests {
 
     private var mixed: [AIEvent] {
         [
-            event("claude-new", kind: .newModel, vendor: .claude, occurredAt: now.addingTimeInterval(-3600)),
+            event("claude-new", kind: .newModel, vendor: .claude, occurredAt: now.addingTimeInterval(-3600),
+                  source: .accountModels),
             event("openai-reset", kind: .usageReset, vendor: .openai, occurredAt: now.addingTimeInterval(-2 * 86_400)),
             event("openai-price", kind: .priceChange, vendor: .openai, occurredAt: now.addingTimeInterval(-10 * 86_400)),
         ]
@@ -128,10 +129,28 @@ struct EventsPresentationTests {
     func filterVendor() {
         let all = Set(AIEventKind.allCases)
         let everyone = EventsPresentation.filter(events: mixed, kinds: all, vendor: nil, range: .allTime, now: now)
-        #expect(everyone.map(\.id) == ["claude-new", "openai-reset", "openai-price"])
+        // The retired price-change row is never listed, whatever the kinds.
+        #expect(everyone.map(\.id) == ["claude-new", "openai-reset"])
 
         let openai = EventsPresentation.filter(events: mixed, kinds: all, vendor: .openai, range: .allTime, now: now)
-        #expect(openai.map(\.id) == ["openai-reset", "openai-price"])
+        #expect(openai.map(\.id) == ["openai-reset"])
+    }
+
+    @Test("retired catalog and news-feed rows are never listed or shown in the popover")
+    func retiredRowsHidden() {
+        let rows = [
+            event("catalog", kind: .newModel, occurredAt: now, source: .openRouterCatalog),
+            event("feed", kind: .newModel, occurredAt: now, source: .vendorFeed(name: "openai-news")),
+            event("account", kind: .newModel, occurredAt: now, source: .accountModels),
+            event("outage", kind: .outageStarted, occurredAt: now, source: .statusPage(name: "claude")),
+            event("rollover", kind: .usageReset, occurredAt: now),
+        ]
+        let listed = EventsPresentation.filter(
+            events: rows, kinds: Set(AIEventKind.allCases), vendor: nil, range: .allTime, now: now)
+        #expect(Set(listed.map(\.id)) == ["account", "outage", "rollover"])
+        #expect(Set(EventsPresentation.popoverEvents(rows).map(\.id)) == ["account", "outage"])
+        #expect(EventsPresentation.listKinds.last == .usageReset)
+        #expect(!EventsPresentation.listKinds.contains(.priceChange))
     }
 
     @Test("the time range excludes events before its start")
@@ -139,7 +158,7 @@ struct EventsPresentationTests {
         let all = Set(AIEventKind.allCases)
         #expect(EventsPresentation.filter(events: mixed, kinds: all, vendor: nil, range: .last24Hours, now: now).map(\.id) == ["claude-new"])
         #expect(EventsPresentation.filter(events: mixed, kinds: all, vendor: nil, range: .last7Days, now: now).map(\.id) == ["claude-new", "openai-reset"])
-        #expect(EventsPresentation.filter(events: mixed, kinds: all, vendor: nil, range: .last30Days, now: now).count == 3)
+        #expect(EventsPresentation.filter(events: mixed, kinds: all, vendor: nil, range: .last30Days, now: now).count == 2)
     }
 
     @Test("kinds narrow the result")
@@ -150,7 +169,7 @@ struct EventsPresentationTests {
 
     // MARK: - markerEvents
 
-    @Test("markerEvents keeps only this vendor's reset, restore and credit events, oldest first")
+    @Test("markerEvents keeps only this vendor's reset, restore, credit and vendor-reset events, oldest first")
     func markerEventsKinds() {
         let events = [
             event("reset", kind: .usageReset, vendor: .openai, occurredAt: now.addingTimeInterval(-3600)),
@@ -158,12 +177,16 @@ struct EventsPresentationTests {
             event("credit", kind: .resetCreditGranted, vendor: .openai, occurredAt: now.addingTimeInterval(-10_800)),
             event("model", kind: .newModel, vendor: .openai, occurredAt: now.addingTimeInterval(-600)),
             event("price", kind: .priceChange, vendor: .openai, occurredAt: now.addingTimeInterval(-600)),
+            event("vendor-reset", kind: .vendorReset, vendor: .openai, occurredAt: now.addingTimeInterval(-14_400),
+                  source: .resetTracker(name: "claude-resets")),
+            event("outage", kind: .outageStarted, vendor: .openai, occurredAt: now.addingTimeInterval(-600),
+                  source: .statusPage(name: "openai")),
             event("other-vendor", kind: .usageReset, vendor: .claude, occurredAt: now.addingTimeInterval(-600)),
             event("too-old", kind: .usageReset, vendor: .openai, occurredAt: now.addingTimeInterval(-2 * 86_400)),
         ]
         let markers = EventsPresentation.markerEvents(events, vendor: .openai, range: .last24Hours, now: now)
-        #expect(markers.map(\.id) == ["credit", "restored", "reset"])
-        #expect(EventsPresentation.markerKinds == [.usageReset, .usageRestored, .resetCreditGranted])
+        #expect(markers.map(\.id) == ["vendor-reset", "credit", "restored", "reset"])
+        #expect(EventsPresentation.markerKinds == [.usageReset, .usageRestored, .resetCreditGranted, .vendorReset])
     }
 
     @Test("marker accessibility summary pluralises and says nothing for zero")
@@ -178,11 +201,11 @@ struct EventsPresentationTests {
     @Test("accessibility label names kind, vendor, title, spoken age and source")
     func accessibilityLabelWording() {
         let e = event(
-            "x", kind: .newModel, vendor: .claude, title: "Claude Sonnet 5.5 listed",
-            occurredAt: now.addingTimeInterval(-3 * 3600), source: .openRouterCatalog
+            "x", kind: .vendorReset, vendor: .claude, title: "Claude reset for everyone",
+            occurredAt: now.addingTimeInterval(-3 * 3600), source: .resetTracker(name: "claude-resets")
         )
         #expect(EventsPresentation.accessibilityLabel(for: e, now: now, locale: enUS, timeZone: utc)
-                == "New model, Claude: Claude Sonnet 5.5 listed, 3 hours ago, from the OpenRouter model catalog")
+                == "Vendor reset, Claude: Claude reset for everyone, 3 hours ago, via claude-resets.com (community tracker)")
     }
 
     @Test("accessibility label appends the measured detail and uses singular units")

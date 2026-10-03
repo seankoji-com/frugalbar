@@ -26,7 +26,7 @@ Points carry urgency as a shape (circle, diamond, triangle, square for blocked),
 
 ## Recent events
 
-The vendor's five newest recorded [events](events.md), each with its source caption. An empty list means none have been recorded, not that none happened: events accumulate from the first poll after you install.
+The vendor's five newest [events](events.md) of the kinds FrugalBar surfaces (resets, outages, newly selectable models), each with its source caption. Scheduled window rollovers are left out here; they are markers on the chart. Status-page and reset-tracker history is backfilled on the first poll, so these usually fill at once; an empty list means nothing has been recorded, not that nothing happened.
 
 ## Reset credits row
 

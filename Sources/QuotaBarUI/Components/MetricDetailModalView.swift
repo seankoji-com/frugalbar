@@ -122,7 +122,9 @@ public struct MetricDetailModalView: View {
             }
         }
         let r = await readingsLoader(vendor, since)
-        let e = await eventsLoader(vendor, nil, 5)
+        // Over-fetch, then keep the surfaced ones: scheduled rollovers and
+        // retired catalog/news rows would otherwise fill all five slots.
+        let e = Array(EventsPresentation.popoverEvents(await eventsLoader(vendor, nil, 40)).prefix(5))
         let m = await eventsLoader(vendor, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
         readings = r

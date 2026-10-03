@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             creditGrants: transitions.creditGrants,
             now: now
         )
-        fresh += await eventEngine.pollExternalSources(now: now)
+        fresh += await eventEngine.pollExternalSources(now: now, vendors: store.configuredVendors)
         guard !fresh.isEmpty else { return }
         await store.reloadRecentEvents()
         let banners = AIEventNotification.banners(
