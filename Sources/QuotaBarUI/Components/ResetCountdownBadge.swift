@@ -30,6 +30,26 @@ public enum ResetCountdownBadge {
         }
     }
 
+    /// The shortest form, for a cell under a bar: `45m`, `3h`, `6d`. One unit,
+    /// rounded, so it fits a 53pt column beside a percentage. nil when there
+    /// is no reset time; `now` once it has passed.
+    public static func compact(_ date: Date?, now: Date = Date()) -> String? {
+        guard let date else { return nil }
+        let interval = date.timeIntervalSince(now)
+        guard interval > 0 else { return "now" }
+        let minutes = Int((interval / 60).rounded())
+        switch minutes {
+        case ..<1:      return "1m"
+        case ..<60:     return "\(minutes)m"
+        case ..<(24 * 60):
+            // 23.6h rounds to 24: that is a day, not "24h".
+            let hours = Int((interval / 3600).rounded())
+            return hours >= 24 ? "1d" : "\(hours)h"
+        default:
+            return "\(Int((interval / 86_400).rounded()))d"
+        }
+    }
+
     /// Expanded form for tooltips and accessibility labels.
     public static func description(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }

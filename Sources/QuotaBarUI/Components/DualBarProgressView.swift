@@ -1,34 +1,30 @@
 import SwiftUI
 import QuotaBarCore
 
-/// Progress bar with pro-rata burndown pacing marker and exact colored delta:
-/// - Red between marker and bar when usage is above pro-rata pace (over budget)
-/// - Green between bar and marker when usage is below pro-rata pace (healthy buffer)
+/// A window's progress bar: a track, one solid fill, and — only when the
+/// vendor published a window length and reset — a single tick where an even
+/// pace would be by now.
+///
+/// The fill is drawn in one state colour (`stateColor(for:)`), the same one
+/// the percentage beneath it uses, so a bar and its figure can never disagree.
+/// There is no second marker for current usage (the fill's end is that) and no
+/// extra over/under-pace segments: they asserted nothing the colour and the
+/// tick do not already say, and three colours per bar made the card unreadable.
 public struct DualBarProgressView: View {
 
     let metrics: DualBarMetrics
-    let accentColor: Color
     /// Draw the window token beside the track. Off in the popover grid, where
     /// the column header names the window and the cell prints the figure.
     let showsLabel: Bool
 
     /// Track and fill thickness.
-    static let barHeight: CGFloat = 8
-    /// Edge length of each triangular caret marker.
-    static let caretSize: CGFloat = 6
-    /// Gap between a caret and the track's edge.
-    static let caretGap: CGFloat = 2
-    /// Full layout height: the 8pt track plus both carets and a small shadow
-    /// margin so neither marker clips at a scroll-view edge.
-    static let markerHeight: CGFloat = barHeight + caretSize * 2 + caretGap * 2 + 4
+    static let barHeight: CGFloat = 6
+    /// The pace tick stands slightly proud of the track.
+    static let tickHeight: CGFloat = barHeight + 5
+    static let tickWidth: CGFloat = 2
 
-    public init(
-        metrics: DualBarMetrics,
-        accentColor: Color,
-        showsLabel: Bool = true
-    ) {
+    public init(metrics: DualBarMetrics, showsLabel: Bool = true) {
         self.metrics = metrics
-        self.accentColor = accentColor
         self.showsLabel = showsLabel
     }
 
@@ -39,83 +35,44 @@ public struct DualBarProgressView: View {
         metrics.primaryFraction.map { max(0, min(1, $0)) }
     }
 
-    /// nil when the vendor gave us no way to know how far through the window we
-    /// are. The bar then shows consumption alone rather than measuring it
-    /// against an invented target.
-    private var targetPacePct: Double? {
-        metrics.expectedPaceFraction.map { max(0, min(1, $0)) }
+    /// The tick's position, or nil when the vendor gave no way to know how far
+    /// through the window we are, or the position is at an end of the track
+    /// (where a tick says nothing the track's edge does not).
+    private var tickPace: Double? {
+        // A spent window is full whatever the pace; a tick on it says nothing.
+        if let consumed = consumedPct, consumed >= 0.999 { return nil }
+        guard let pace = metrics.expectedPaceFraction.map({ max(0, min(1, $0)) }),
+              pace > 0, pace < 1 else { return nil }
+        return pace
     }
 
-    /// Only ever evaluated once `hasNoReading` has already routed the nil
-    /// case away (see `body` and `labelColor`), so the `?? 0` here never
-    /// stands in as a fabricated "not exhausted" verdict for an unmeasured
-    /// window.
-    private var isExhausted: Bool {
-        (consumedPct ?? 0) >= 0.999
-    }
-
-    /// The vendor's own colour, honoured only for a window the vendor itself
-    /// declared blocked. That per-bar flag is the one case where the vendor
-    /// knows something the pace/exhaustion arithmetic below cannot derive —
-    /// a blocked window with a low percentage used to still render green.
-    ///
-    /// Deliberately *not* also keyed on `urgency == .critical`. `urgency` is
-    /// the whole snapshot's, applied to every one of its bars, and
-    /// `blockedColor` is a brand colour for the vendors that use it. Letting
-    /// critical urgency pull it in painted a spent OpenAI bar green and
-    /// repainted the snapshot's still-healthy weekly/monthly bars along with
-    /// it.
-    private var vendorStatusColor: Color? {
-        guard metrics.isBlocked else { return nil }
-        return metrics.blockedColor.flatMap(Color.init(hexString:))
-    }
-
-    /// The colour a blocked placeholder must fall back to when the vendor gave
-    /// no colour of its own: the shared error tone, so a hatched placeholder,
-    /// its stroke, and an exhausted-fill bar all agree rather than drawing the
-    /// same state in different colours.
-    private var blockedFillColor: Color {
-        vendorStatusColor ?? Theme.errorBold
-    }
-
-    /// True whenever the vendor gave no percentage to measure this window
-    /// with, blocked or not. The umbrella guard that keeps every fraction
-    /// below (`aX`, `isExhausted`, the pace comparison in `labelColor`) from
-    /// ever substituting a coerced 0 for a reading that does not exist —
-    /// `DualBarMetrics(primaryFraction: nil, expectedPaceFraction: 0.5)` must
-    /// never render as "0% used" against a real pace marker.
-    private var hasNoReading: Bool {
-        metrics.primaryFraction == nil
-    }
+    private var hasNoReading: Bool { metrics.primaryFraction == nil }
 
     /// True exactly in the case the vendor told us "blocked" but gave no
-    /// percentage to measure it with. The bar still has to draw *something*
-    /// here — omitting it entirely reads as "nothing to report" rather than
-    /// "this window is blocked" — but it must not fabricate a fraction to do
-    /// it.
+    /// percentage to measure it with. The bar still has to draw *something* —
+    /// omitting it reads as "nothing to report" rather than "this window is
+    /// blocked" — but it must not fabricate a fraction to do it.
     private var isBlockedWithoutReading: Bool {
         metrics.isBlocked && hasNoReading
     }
 
     private var labelColor: Color { Self.stateColor(for: metrics) }
 
-    /// The colour that carries a window's state: green at or under pace,
-    /// amber ahead of it, red once it is spent or blocked, neutral with no
-    /// reading. Shared with the popover grid's percentage text so a figure
-    /// and the bar above it never disagree.
-    static func stateColor(for metrics: DualBarMetrics) -> Color {
+    /// The colour that carries a window's state: green at or behind an even
+    /// pace, amber when meaningfully ahead of it, red once it is spent or
+    /// blocked, neutral with no reading. Shared with the popover grid's
+    /// percentage text so a figure and the bar above it never disagree.
+    nonisolated static func stateColor(for metrics: DualBarMetrics) -> Color {
         let consumed = metrics.primaryFraction.map { max(0, min(1, $0)) }
-        let pace = metrics.expectedPaceFraction.map { max(0, min(1, $0)) }
         let vendorStatusColor = metrics.isBlocked
             ? metrics.blockedColor.flatMap(Color.init(hexString:))
             : nil
         if let vendorStatusColor {
             return vendorStatusColor
         } else if metrics.isBlocked && consumed == nil {
-            // Matches the hatched placeholder bar's own fallback
-            // (`vendorStatusColor ?? Theme.errorBold`) — a blocked window
-            // with no vendor colour and no reading must not show a label in
-            // one colour beside a bar drawn in another.
+            // Matches the hatched placeholder's own fallback, so a blocked
+            // window with no vendor colour and no reading never shows a
+            // label in one colour beside a bar drawn in another.
             return Theme.errorBold
         } else if consumed == nil {
             // No reading and not vendor-flagged blocked: neutral, not a
@@ -123,10 +80,13 @@ public struct DualBarProgressView: View {
             return Theme.outline
         } else if let consumed, consumed >= 0.999 {
             return Theme.errorBold
-        } else if let pace, let consumed, consumed > pace {
-            return Color(red: 0.96, green: 0.72, blue: 0.15) // Bright warning yellow
+        } else if metrics.isAboveProrataPace {
+            // The model's own "meaningfully ahead" threshold, not any
+            // difference at all: a window barely open would otherwise be
+            // amber at 6% used against 2% elapsed.
+            return Color(red: 0.96, green: 0.72, blue: 0.15)
         } else {
-            return Theme.healthy // Vibrant green
+            return Theme.healthy
         }
     }
 
@@ -134,194 +94,66 @@ public struct DualBarProgressView: View {
         Color.white.opacity(0.08)
     }
 
-    /// Keeps a caret's centre inside the track even when the position it marks
-    /// sits at (or past) the track's ends, so the triangle never overhangs the
-    /// rounded capsule into the neighbouring column.
-    private static func clampedCaretX(_ x: CGFloat, boxWidth: CGFloat) -> CGFloat {
-        let half = Self.caretSize / 2
-        return min(max(x, half), boxWidth - half)
+    @ViewBuilder
+    private func fill(width w: CGFloat) -> some View {
+        if isBlockedWithoutReading {
+            RoundedRectangle(cornerRadius: Self.barHeight / 2)
+                .fill(labelColor.opacity(0.30))
+                .frame(width: w, height: Self.barHeight)
+            RoundedRectangle(cornerRadius: Self.barHeight / 2)
+                .strokeBorder(labelColor, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                .frame(width: w, height: Self.barHeight)
+        } else if let consumed = consumedPct, consumed > 0 {
+            // A sliver stays visible at very low values so a small figure
+            // reads as "a little used" rather than "not drawn".
+            Rectangle()
+                .fill(labelColor)
+                .frame(width: max(3, consumed * w), height: Self.barHeight)
+                .animation(.easeOut(duration: 0.35), value: consumed)
+        }
+        // No reading and not blocked: the track alone. A fill here would be
+        // an invented 0%.
     }
 
     public var body: some View {
         HStack(spacing: 8) {
             GeometryReader { geo in
                 let w = geo.size.width
-                let aX = (consumedPct ?? 0) * w
-                let mX = (targetPacePct ?? 0) * w
-                let hasPace = targetPacePct != nil
-
                 ZStack(alignment: .leading) {
-                    // Track and every consumption/pace segment are flat
-                    // rectangles clipped together to a single outer Capsule,
-                    // so only the bar's two true ends round — an internal
-                    // seam between two independently-capsuled segments (e.g.
-                    // brand colour meeting the red overuse delta) used to
-                    // leave a lens-shaped notch where their rounded caps met.
+                    // Track and fill are clipped together to one capsule, so
+                    // only the bar's two true ends round.
                     ZStack(alignment: .leading) {
-                        // 1. Subtle background track across full width
                         Rectangle()
                             .fill(trackColor)
                             .frame(height: Self.barHeight)
-
-                        if isBlockedWithoutReading {
-                            // --- CASE B: BLOCKED, NO READING ---
-                            // The vendor told us this window cannot be used at
-                            // all but gave no percentage. Omitting the bar
-                            // here used to read as "nothing to report"; a
-                            // hatched placeholder in the vendor's declared
-                            // status colour says "blocked" without inventing
-                            // a fraction to fill it with.
-                            RoundedRectangle(cornerRadius: Self.barHeight / 2)
-                                .fill(blockedFillColor.opacity(0.30))
-                                .frame(width: w, height: Self.barHeight)
-                            RoundedRectangle(cornerRadius: Self.barHeight / 2)
-                                .strokeBorder(
-                                    blockedFillColor,
-                                    style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
-                                )
-                                .frame(width: w, height: Self.barHeight)
-                        } else if hasNoReading {
-                            // --- CASE B': NO READING, NOT BLOCKED ---
-                            // The vendor gave no percentage but isn't
-                            // reporting the window blocked either — e.g. a
-                            // real pace target with no usage to compare it
-                            // against. The track alone is drawn above; adding
-                            // a fill here would mean inventing a 0% reading
-                            // this window never reported.
-                        } else if isExhausted {
-                            // --- CASE 1: NOTHING LEFT ---
-                            // Red end to end. Splitting this at the pace marker
-                            // painted most of the bar in the vendor's brand colour
-                            // and reddened only the tail, so a spent quota read as
-                            // a mostly-healthy one with a red tip.
-                            Rectangle()
-                                .fill(blockedFillColor)
-                                .frame(width: w, height: Self.barHeight)
-                                .shadow(color: blockedFillColor.opacity(0.6), radius: 2)
-                        } else if !hasPace {
-                            // --- CASE 0: NO PACE TARGET ---
-                            // Consumption only. Nothing here is measured against a
-                            // number we did not receive.
-                            if aX > 0 {
-                                Rectangle()
-                                    .fill(vendorStatusColor ?? accentColor)
-                                    .frame(width: max(4, aX), height: Self.barHeight)
-                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
-                            }
-                        } else if aX > mX {
-                            // --- CASE 2: OVERUSE (Marker is INSIDE the bar: aX > mX) ---
-                            // Actual usage bar within budget (0 -> mX) in vendor
-                            // brand color, or the vendor's declared blocked
-                            // colour when this bar's own isBlocked flag is set —
-                            // reaching pace is not "fine" for a window the
-                            // vendor has already cut off.
-                            if mX > 0 {
-                                Rectangle()
-                                    .fill(vendorStatusColor ?? accentColor)
-                                    .frame(width: max(4, mX), height: Self.barHeight)
-                            }
-
-                            // Overuse delta segment between marker and actual usage (mX -> aX) in RED
-                            if aX > mX {
-                                Rectangle()
-                                    .fill(Theme.error)
-                                    .frame(width: max(4, aX - mX), height: Self.barHeight)
-                                    .offset(x: mX)
-                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
-                            }
-                        } else if aX < mX {
-                            // --- CASE 3: UNDERUSE (Marker is OUTSIDE the bar: aX < mX) ---
-                            // Underuse buffer segment between actual usage and
-                            // marker (aX -> mX) in GREEN — but never for a
-                            // blocked window: "healthy margin before budget"
-                            // is exactly the false-health reading vendorStatusColor
-                            // exists to prevent, and pace alone can't override that.
-                            if mX > aX, !metrics.isBlocked {
-                                Rectangle()
-                                    .fill(Theme.healthy)
-                                    .frame(width: max(4, mX - aX), height: Self.barHeight)
-                                    .offset(x: aX)
-                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
-                            }
-
-                            // Actual usage bar (0 -> aX) in vendor brand color,
-                            // or the vendor's declared blocked colour when
-                            // this bar's own isBlocked flag is set.
-                            if aX > 0 {
-                                Rectangle()
-                                    .fill(vendorStatusColor ?? accentColor)
-                                    .frame(width: max(4, aX), height: Self.barHeight)
-                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
-                            }
-                        } else {
-                            // --- CASE 4: AT PACE (aX == mX) ---
-                            if aX > 0 {
-                                Rectangle()
-                                    .fill(vendorStatusColor ?? accentColor)
-                                    .frame(width: max(4, aX), height: Self.barHeight)
-                                    .animation(.easeOut(duration: 0.35), value: consumedPct)
-                            }
-                        }
+                        fill(width: w)
                     }
                     .frame(width: w, height: Self.barHeight, alignment: .leading)
                     .clipShape(Capsule())
 
-                    // 3. Caret above: where current usage actually is. A
-                    // down-pointing caret (apex toward the bar) hangs from the
-                    // top edge of the track at the consumed fraction. Drawn for
-                    // any real reading — including exactly 0% used, which is a
-                    // valid answer — and never for a window that reported no
-                    // percentage, nor in the blocked-without-reading slot where
-                    // a caret would assert a usage nobody measured.
-                    if !hasNoReading {
-                        Triangle(pointingUp: false)
-                            .fill(Color.white)
-                            .frame(width: Self.caretSize, height: Self.caretSize)
-                            .position(
-                                x: Self.clampedCaretX(aX, boxWidth: w),
-                                y: Self.markerHeight / 2 - Self.barHeight / 2 - Self.caretGap - Self.caretSize / 2
-                            )
-                            .shadow(color: Color.black.opacity(0.65), radius: 2, x: 0, y: 0)
-                    }
-
-                    // 4. Caret below: how far through the period we are. An
-                    // up-pointing caret (apex toward the bar) rises from the
-                    // bottom edge of the track at the pro-rata pace — the share
-                    // of the period that has already elapsed. Only when the
-                    // vendor gave us a real window to measure it against, at a
-                    // marker that is actually inside the track.
-                    if hasPace, mX > 0, mX < w, !isBlockedWithoutReading {
-                        Triangle(pointingUp: true)
-                            .fill(Color.white)
-                            .frame(width: Self.caretSize, height: Self.caretSize)
-                            .position(
-                                x: Self.clampedCaretX(mX, boxWidth: w),
-                                y: Self.markerHeight / 2 + Self.barHeight / 2 + Self.caretGap + Self.caretSize / 2
-                            )
-                            .shadow(color: Color.black.opacity(0.65), radius: 2, x: 0, y: 0)
+                    // The single marker: where an even pace would be by now.
+                    if let pace = tickPace, !isBlockedWithoutReading {
+                        Capsule()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: Self.tickWidth, height: Self.tickHeight)
+                            .shadow(color: Color.black.opacity(0.6), radius: 1.5)
+                            .position(x: min(max(pace * w, 1), w - 1), y: geo.size.height / 2)
                     }
                 }
                 .frame(height: geo.size.height, alignment: .center)
             }
-            // Taller than the track so the two carets have room to stand above
-            // and below it instead of overflowing the 8pt layout box.
-            .frame(height: Self.markerHeight)
+            .frame(height: Self.tickHeight)
 
-            // The window token. Colour carries the state: green at or under
-            // pace, amber ahead of it, red once it is spent.
+            // The window token, in the state colour.
             if showsLabel {
                 Text(metrics.label)
                     .font(Theme.Typography.token)
                     .tracking(Theme.Tracking.token)
                     .foregroundStyle(labelColor)
                     .lineLimit(1)
-                    // Most window codes are two characters and need no scaling —
-                    // that's what kept the column from looking ragged when every
-                    // label shrank together regardless of length. But not every
-                    // label is two characters: GitHub's REST/GraphQL rows, an
-                    // absent-limit OpenAI "PLAN", and the hand-entered "CYCLE"
-                    // row all run longer, and were truncating silently without a
-                    // fallback. Only those get scaled.
+                    // Most window codes are two characters and need no scaling.
+                    // Longer ones (REST, GraphQL, PLAN, CYCLE) are scaled
+                    // rather than truncated.
                     .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
                     .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
             }
@@ -329,8 +161,6 @@ public struct DualBarProgressView: View {
         .help(helpText)
         .accessibilityHidden(true)
     }
-
-
 
     /// The fallback detail shown for a window with no percentage. Blocked
     /// windows name the state plainly; a window that is merely unmeasured
@@ -373,27 +203,6 @@ public struct DualBarProgressView: View {
 
 
 
-
-/// A small triangular caret used to mark a position on a progress bar.
-///
-/// `pointingUp` picks which edge holds the apex: an up-pointing caret draws its
-/// apex at the top (a "^" risen from below the bar, pointing up at the track)
-/// and a down-pointing one draws its apex at the bottom (a "v" hanging from
-/// above, pointing down at the track) — each triangular tip aiming at the bar.
-private struct Triangle: Shape {
-    let pointingUp: Bool
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let apexY: CGFloat = pointingUp ? rect.minY : rect.maxY
-        let baseY: CGFloat = pointingUp ? rect.maxY : rect.minY
-        path.move(to: CGPoint(x: rect.midX, y: apexY))
-        path.addLine(to: CGPoint(x: rect.minX, y: baseY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: baseY))
-        path.closeSubpath()
-        return path
-    }
-}
 
 extension Color {
     init?(hexString: String) {

@@ -149,6 +149,14 @@ providers must use the standard tokens `5H`, `WK`, `MO` for those windows;
 anything else (`BN`, `OV`, `OD`, `SP`, `1D`, `PLAN`, `CYCLE`) is drawn on its
 own line under the row.
 
+A window cell is one bar, one fill colour and one marker. The fill is the
+state colour (`DualBarProgressView.stateColor`, shared with the percentage under
+it) and the single tick is where an even pace would be, drawn only when the
+vendor published a window length and reset, and never on a spent window. Don't
+add a second marker or extra over/under-pace segments: three colours and two
+triangles per bar made the card unreadable. A column the vendor does not publish
+shows a faint dash, never a track, which would read as 0% used.
+
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
