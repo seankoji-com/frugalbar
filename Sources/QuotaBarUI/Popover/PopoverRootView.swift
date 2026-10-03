@@ -153,8 +153,9 @@ public struct PopoverRootView: View {
                 AdviceSectionView(advice: store.advice, onActionTap: adviceAction)
             }
 
-            if !store.recentEvents.isEmpty {
-                EventsSectionView(events: store.recentEvents)
+            let popoverEvents = EventsPresentation.popoverEvents(store.recentEvents)
+            if !popoverEvents.isEmpty {
+                EventsSectionView(events: popoverEvents)
             }
 
             ForEach(MetricCategory.allCases, id: \.self) { category in

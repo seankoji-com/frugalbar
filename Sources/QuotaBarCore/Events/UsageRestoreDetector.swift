@@ -96,7 +96,13 @@ public enum UsageRestoreDetector {
                       let currentFraction = bar.primaryFraction,
                       previousFraction - currentFraction >= minimumDrop - tolerance,
                       let previousReset = oldBar.resetsAt,
-                      previousReset > now,
+                      // The old reset must still be clearly ahead. Within
+                      // `minimumAdvance` of it, a slow Mac clock or a vendor
+                      // rolling a few seconds early makes a scheduled
+                      // rollover look like a restore; that band belongs to
+                      // `QuotaResetDetector`, which accepts the same tolerance
+                      // on its side, so the two stay disjoint.
+                      previousReset.timeIntervalSince(now) > QuotaResetDetector.minimumAdvance,
                       // Without a current reset time there is no window to
                       // describe the restore against; stay silent.
                       let currentReset = bar.resetsAt

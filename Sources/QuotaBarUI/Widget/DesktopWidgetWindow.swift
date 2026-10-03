@@ -68,7 +68,11 @@ public enum DesktopWidgetWindow {
         case .desktop:
             // One below the icon layer: on the wallpaper, under the icons,
             // beneath every ordinary window.
-            panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
+            // One level ABOVE the desktop icons, still far below every
+            // ordinary window. Below the icons, Finder's full-screen desktop
+            // layer swallowed every click: the panel could be seen but not
+            // dragged, resized, closed or filtered.
+            panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
         case .floating:
             panel.level = .floating
         }

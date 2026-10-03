@@ -16,6 +16,9 @@ import Foundation
 public actor AIEventEngine {
 
     public static let externalPollInterval: TimeInterval = 6 * 3600
+    /// When nothing was reachable (launch before Wi-Fi is up, say), the next
+    /// attempt comes this soon rather than a full interval later.
+    public static let failedPollRetryInterval: TimeInterval = 10 * 60
     /// Events are small and stay useful for a long time — "when did OpenAI
     /// last restore limits?" is a question about months, not days.
     public static let eventRetentionInterval: TimeInterval = 365 * 86_400
@@ -72,11 +75,35 @@ public actor AIEventEngine {
         if let lastExternalPoll, now.timeIntervalSince(lastExternalPoll) < Self.externalPollInterval {
             return []
         }
+
+        let catalog = await catalogWatcher.prepare(store: store, now: now)
+        let feeds = await feedWatcher.prepare(store: store, now: now)
+        guard catalog.fetched || feeds.fetched else {
+            // Nothing answered. Back-date the clock so the next attempt is
+            // `failedPollRetryInterval` away, not a full interval.
+            lastExternalPoll = now.addingTimeInterval(Self.failedPollRetryInterval - Self.externalPollInterval)
+            return []
+        }
         lastExternalPoll = now
 
-        let candidates = await catalogWatcher.poll(store: store, now: now)
-            + feedWatcher.poll(store: store, now: now)
-        return await record(candidates)
+        // Events first, checkpoints second. A checkpoint written before its
+        // events were stored loses them for good — see `PendingPoll`.
+        let candidates = catalog.events + feeds.events
+        let fresh: [AIEvent]
+        do {
+            fresh = try await store.recordEvents(candidates)
+        } catch {
+            NSLog("frugalbar: failed to record external AI events; sources will be re-derived next poll: \(error)")
+            return []
+        }
+        for commit in [catalog.commit, feeds.commit] {
+            do {
+                try await commit()
+            } catch {
+                NSLog("frugalbar: failed to store an external-source checkpoint: \(error)")
+            }
+        }
+        return fresh
     }
 
     private var lastPrune: Date?

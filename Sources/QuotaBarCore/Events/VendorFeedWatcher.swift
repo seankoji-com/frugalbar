@@ -77,9 +77,25 @@ public struct VendorFeedWatcher: Sendable {
     /// Polls every feed. One feed failing — network, status, or the store —
     /// skips that feed only.
     public func poll(store: QuotaHistoryStore, now: Date) async -> [AIEvent] {
+        let pending = await prepare(store: store, now: now)
+        do {
+            try await pending.commit()
+        } catch {
+            NSLog("frugalbar: failed to mark feed items seen: \(error)")
+        }
+        return pending.events
+    }
+
+    /// The same as `poll`, but the seen-ids are handed back as a `commit`
+    /// closure instead of written, so the caller can record the events first.
+    /// See `PendingPoll` for why the order matters.
+    public func prepare(store: QuotaHistoryStore, now: Date) async -> PendingPoll {
         var events: [AIEvent] = []
+        var toMark: [(feed: String, ids: [String])] = []
+        var fetched = false
         for feed in feeds {
             guard let items = await fetch(feed) else { continue }
+            fetched = true
             let seen: Set<String>
             do {
                 seen = try await store.seenFeedItemIDs(feed: feed.name)
@@ -90,13 +106,14 @@ public struct VendorFeedWatcher: Sendable {
                 continue
             }
             events += Self.events(for: feed, items: items, seen: seen, now: now)
-            do {
-                try await store.markFeedItemsSeen(feed: feed.name, ids: items.map(\.id), at: now)
-            } catch {
-                NSLog("frugalbar: failed to mark items seen for \(feed.name): \(error)")
+            toMark.append((feed.name, items.map(\.id)))
+        }
+        let marks = toMark
+        return PendingPoll(events: events, fetched: fetched) {
+            for mark in marks {
+                try await store.markFeedItemsSeen(feed: mark.feed, ids: mark.ids, at: now)
             }
         }
-        return events
     }
 
     /// The pure decision: which unseen items become which events.

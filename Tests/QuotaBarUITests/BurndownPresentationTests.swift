@@ -129,13 +129,24 @@ struct BurndownPresentationTests {
 
     @Test("readings with no fraction are skipped, never drawn as 0 or 100")
     func nilFractionsSkipped() throws {
-        let readings = [
+        // A trailing nil means the current reading is unavailable: no
+        // burndown, rather than the older 30% revived as "70% left".
+        let trailingNil = [
             reading(minutesAgo: 20, fraction: 0.3),
             reading(minutesAgo: 10, fraction: nil),
         ]
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
-        #expect(b.actual.map(\.usedFraction) == [0.3])
-        #expect(b.nowRemaining.map { abs($0 - 0.7) < 1e-9 } == true)
+        #expect(P.burndown(readings: trailingNil, vendorId: .claude, barLabel: "5H", now: now) == nil)
+
+        // A nil in the middle breaks the segment; the current window is what
+        // follows it.
+        let middleNil = [
+            reading(minutesAgo: 30, fraction: 0.3),
+            reading(minutesAgo: 20, fraction: nil),
+            reading(minutesAgo: 10, fraction: 0.4),
+        ]
+        let b = try #require(P.burndown(readings: middleNil, vendorId: .claude, barLabel: "5H", now: now))
+        #expect(b.actual.map(\.usedFraction) == [0.4])
+        #expect(b.nowRemaining.map { abs($0 - 0.6) < 1e-9 } == true)
 
         let none = [reading(minutesAgo: 10, fraction: nil)]
         #expect(P.burndown(readings: none, vendorId: .claude, barLabel: "5H", now: now) == nil)

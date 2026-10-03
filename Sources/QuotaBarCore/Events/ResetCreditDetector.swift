@@ -26,9 +26,10 @@ public struct ResetCreditGrantedEvent: Sendable, Equatable {
 ///
 /// Edge-triggered like the other poll detectors: a vendor with no previous
 /// reading produces nothing, so the first poll after launch never announces
-/// credits the user already had. Both polls must be `.measured`; a lost
-/// reading is not "zero credits", and treating it as one would announce every
-/// existing credit again the moment the connection came back.
+/// credits the user already had. Both polls must be `.measured` and both must
+/// carry a count; a lost reading or a missing field is not "zero credits",
+/// and treating either as one would announce every existing credit again the
+/// moment the figure came back.
 public enum ResetCreditDetector {
 
     public static func detect(
@@ -41,9 +42,12 @@ public enum ResetCreditDetector {
                   previousSnapshot.status.confidence == .measured,
                   currentSnapshot.status.confidence == .measured,
                   let currentCount = currentSnapshot.resetCreditsAvailable,
-                  // An absent field on a measured poll is compared as zero:
-                  // the vendor published the usage windows and no credits.
-                  currentCount > (previousSnapshot.resetCreditsAvailable ?? 0)
+                  // Both polls must carry the figure. An absent count on a
+                  // measured poll is "not published this time", not zero:
+                  // comparing it as zero re-announced every banked credit
+                  // whenever the field dropped out of one poll and came back.
+                  let previousCount = previousSnapshot.resetCreditsAvailable,
+                  currentCount > previousCount
             else { continue }
             events.append(ResetCreditGrantedEvent(
                 vendorId: vendorId,

@@ -16,7 +16,7 @@ Windows that measure elapsed time only (a recorded subscription **cycle**) are e
 
 ### The average is not a quota
 
-Vendors meter different things over different windows, so FrugalBar never combines them into one allowance. The average line is the mean of real readings that exist in each time bucket (5 min buckets for 24h, 30 min for 7d, 2 h for 30d; the line also breaks across a gap of more than 2 hours). `sampleCount` is whatever contributed to the bucket and is never padded to the number selected, which is why the label can read "Average (2–3 windows)". It appears only when two or more windows are charted. Hovering it says "Mean of the selected windows' real readings — not a combined quota."
+Vendors meter different things over different windows, so FrugalBar never combines them into one allowance. The average line is the mean of real readings that exist in each time bucket (5 min buckets for 24h, 30 min for 7d, 2 h for 30d; the line also breaks across a gap of more than 2 hours). `sampleCount` is whatever contributed to the bucket and is never padded to the number selected, which is why the label can read "Average (2–3 windows)". The line breaks whenever the set of contributing windows changes, so one vendor's outage shows as a gap rather than a plunge. It appears only when two or more windows are charted. Hovering it says "Mean of the selected windows' real readings — not a combined quota."
 
 ## Filters
 
@@ -33,7 +33,7 @@ Vendors meter different things over different windows, so FrugalBar never combin
 
 | Mode | Behaviour |
 |---|---|
-| Pinned to desktop (default) | On the wallpaper, one level below the desktop icons and beneath every ordinary window |
+| Pinned to desktop (default) | On the wallpaper, one level above the desktop icons and beneath every ordinary window. Above the icons on purpose: below them, Finder's desktop layer takes every click and the panel cannot be dragged, resized or filtered |
 | Floats above windows | A normal floating panel above other windows |
 
 Either way the panel can be dragged by its background, resized (minimum 340 × 260, default 420 × 320), joins all Spaces, and doesn't steal focus from the app you are using. The chart is always drawn dark.

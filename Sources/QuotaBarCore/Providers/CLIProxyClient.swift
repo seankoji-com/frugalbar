@@ -164,13 +164,16 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         /// grants. `nil` when there are no grants at all — including the
         /// not-served case — because "no figure" and "zero" are different.
         public var resetsAvailable: Int? {
-            guard !grants.isEmpty else { return nil }
+            // Every grant must carry its count. A grant without one (a
+            // renamed field, say) makes the sum unknowable; summing the rest
+            // would print a figure nobody published.
+            guard !grants.isEmpty, grants.allSatisfy({ $0.resetsLeft != nil }) else { return nil }
             return grants.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
         }
 
         /// Of those, the ones the vendor flags as usable right now.
         public var resetsUsableNow: Int? {
-            guard !grants.isEmpty else { return nil }
+            guard resetsAvailable != nil else { return nil }
             return grants.filter { $0.usableNow == true }.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
         }
     }

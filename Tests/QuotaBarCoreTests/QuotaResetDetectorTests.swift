@@ -49,6 +49,17 @@ struct QuotaResetDetectorTests {
         #expect(events.isEmpty)
     }
 
+    @Test("a reset a few seconds ahead of a slow clock still counts once the window advanced")
+    func slowClockRolloverFires() {
+        let old = now.addingTimeInterval(3)
+        let new = old.addingTimeInterval(QuotaWindow.fiveHours)
+        let events = QuotaResetDetector.detect(
+            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
+            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
+            now: now)
+        #expect(events.count == 1)
+    }
+
     @Test("a few seconds of drift in a rolling window is not a reset")
     func driftDoesNotFire() {
         let old = now.addingTimeInterval(-5)

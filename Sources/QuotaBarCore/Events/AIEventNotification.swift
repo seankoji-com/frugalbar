@@ -67,7 +67,7 @@ extension AIEventKind {
         case .usageRestored:
             "Usage fell sharply before the provider's published reset — an unscheduled restore."
         case .resetCreditGranted:
-            "OpenAI granted a banked reset credit you can redeem in Codex."
+            "The vendor granted a banked reset credit you can redeem (OpenAI in Codex, Anthropic on claude.ai)."
         case .newModel:
             "A Claude, GPT, Gemini or Grok model appeared in the OpenRouter catalog or a vendor feed."
         case .priceChange:

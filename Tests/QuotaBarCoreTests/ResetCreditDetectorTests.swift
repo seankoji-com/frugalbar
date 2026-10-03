@@ -31,10 +31,16 @@ struct ResetCreditDetectorTests {
         #expect(detect(snapshot(credits: 1), snapshot(credits: 3)).first?.currentCount == 3)
     }
 
-    @Test("an absent previous count on a measured poll compares as zero")
-    func absentPreviousIsZero() {
-        #expect(detect(snapshot(credits: nil), snapshot(credits: 1)).first?.previousCount == nil)
+    /// A count that drops out of one poll and comes back is not a grant. The
+    /// old `?? 0` turned every such flap into a fresh banner (the event id
+    /// carries the poll time, so dedup could not catch it).
+    @Test("an absent count on either poll never fires, so a field that flaps is silent")
+    func absentCountNeverFires() {
+        #expect(detect(snapshot(credits: nil), snapshot(credits: 1)).isEmpty)
         #expect(detect(snapshot(credits: nil), snapshot(credits: 0)).isEmpty)
+        #expect(detect(snapshot(credits: 2), snapshot(credits: nil)).isEmpty)
+        // 2 → nil → 2: the balance never changed.
+        #expect(detect(snapshot(credits: nil), snapshot(credits: 2)).isEmpty)
     }
 
     @Test("the first poll after launch fires nothing")

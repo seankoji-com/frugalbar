@@ -1018,6 +1018,19 @@ struct ProviderHTTPTests {
         #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
     }
 
+    /// A grant without its count makes the total unknowable: nil, never a
+    /// partial sum.
+    @Test("a Claude grant missing resets_left yields no reset-credit figure")
+    func claudeGrantWithoutCount() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":1,"usable_now":true},{"id":"b","clears":["five_hour"]}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == nil)
+        #expect(snap.resetCreditsApplicable == nil)
+        #expect(snap.auxiliaryInfo == "Live Claude subscription quota")
+    }
+
     /// A malformed grant entry must not take the usage windows down with it.
     @Test("a malformed cedar_ember block never breaks the Claude usage reading")
     func claudeGrantsMalformed() async throws {

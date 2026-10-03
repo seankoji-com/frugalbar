@@ -7,11 +7,14 @@ import Foundation
 /// than a missed one: the user stops trusting the banners, and the OpenRouter
 /// catalog catches most real releases anyway. So:
 ///
-/// - A **new model** needs an announcement phrase *and* a model-family name,
-///   both in the **title**. Summaries are too noisy to qualify on: a
-///   partnership post's summary routinely names the model the partner uses,
-///   and "Introducing SynthID Bio" built on Gemini is still not a Gemini
-///   release.
+/// - A **new model** needs an announcement phrase *and* a versioned model
+///   name ("Claude Sonnet 5.5", "GPT-6", "Gemini 4", "Grok 5", "o5"), both in
+///   the **title**. A family name alone is not enough: "Introducing Gemini in
+///   Chrome", "Introducing Claude for Financial Services" and "Meet the new
+///   Gemini app" are product posts, and a vendor blog publishes several a
+///   week. Summaries are too noisy to qualify on: a partnership post's
+///   summary routinely names the model the partner uses, and "Introducing
+///   SynthID Bio" built on Gemini is still not a Gemini release.
 /// - A **price change** needs a pricing phrase in the title, plus some sign
 ///   in the title or summary that it is about a model, a plan or the API.
 ///   Money alone is not pricing — "Anthropic invests $100 million" mentions a
@@ -33,12 +36,22 @@ public enum FeedItemClassifier {
     ]
 
     /// Model-family names. "pro" is deliberately absent: it only ever
-    /// qualifies alongside one of these, and then it adds nothing.
+    /// qualifies alongside one of these, and then it adds nothing. Used as
+    /// pricing context; a *release* needs `versionedModelPatterns`.
     static let familyPatterns = [
         "claude", "sonnet", "opus", "haiku",
         "gpt", "o[0-9]",
         "gemini", "flash",
         "grok",
+    ]
+
+    /// A model name with a version number attached — what a release title
+    /// carries and a product post does not: "Sonnet 5.5", "GPT-6", "Gemini
+    /// 4", "Grok 4.7", "o5". Matched on word boundaries, so "operations"
+    /// never yields "o3".
+    static let versionedModelPatterns = [
+        #"(?:claude|sonnet|opus|haiku|gpt|gemini|flash|grok)[ -]?v?\d"#,
+        "o[0-9]",
     ]
 
     static let pricingPatterns = [
@@ -67,7 +80,7 @@ public enum FeedItemClassifier {
     ]
 
     public static func classify(title: String, summary: String) -> AIEventKind? {
-        if matchesAny(announcementPatterns, in: title), matchesAny(familyPatterns, in: title) {
+        if matchesAny(announcementPatterns, in: title), matchesAny(versionedModelPatterns, in: title) {
             return .newModel
         }
         let isPricing = matchesAny(pricingPatterns, in: title)

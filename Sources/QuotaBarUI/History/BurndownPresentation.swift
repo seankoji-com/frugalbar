@@ -117,9 +117,14 @@ public enum BurndownPresentation {
             .filter { $0.vendor == vendorId.rawValue && $0.barLabel == barLabel && $0.measuredAt <= now }
             .sorted { $0.measuredAt < $1.measuredAt }
 
+        // The newest record must itself carry a fraction. Reaching back past
+        // a trailing nil to an older reading would present stale headroom as
+        // current, and project from it — the one thing a chart titled "now"
+        // must never do.
         guard let segment = HistoryPresentation.segments(from: records).last,
-              let latest = records.last(where: { $0.fraction != nil }),
-              let latestFraction = latest.fraction
+              let latest = records.last,
+              let latestFraction = latest.fraction,
+              segment.points.last?.timestamp == latest.measuredAt
         else { return nil }
         if let resetsAt = latest.resetsAt, resetsAt <= now { return nil }
 

@@ -65,18 +65,26 @@ struct DesktopWidgetView: View {
             if Task.isCancelled { return }
         }
 
-        let computed = AggregateBurndownPresentation.series(
-            readings: readings, snapshots: snapshots, filters: filters, now: now
-        )
-        let avg = computed.count > 1
-            ? AggregateBurndownPresentation.average(
-                of: computed,
-                bucket: AggregateBurndownPresentation.bucketInterval(for: filters.range),
-                now: now
+        // Segmenting and averaging up to 30 days of readings is pure work on
+        // Sendable values; keep it off the main actor so a poll never stalls
+        // the popover.
+        let input = readings
+        let filtersNow = filters
+        let (computed, avg) = await Task.detached(priority: .utility) {
+            let computed = AggregateBurndownPresentation.series(
+                readings: input, snapshots: snapshots, filters: filtersNow, now: now
             )
-            : []
+            let avg = computed.count > 1
+                ? AggregateBurndownPresentation.average(
+                    of: computed,
+                    bucket: AggregateBurndownPresentation.bucketInterval(for: filtersNow.range),
+                    now: now
+                )
+                : []
+            return (computed.map { AggregateBurndownPresentation.decimated($0) }, avg)
+        }.value
         guard !Task.isCancelled else { return }
-        series = computed.map { AggregateBurndownPresentation.decimated($0) }
+        series = computed
         average = avg
         chartNow = now
         hasLoaded = true

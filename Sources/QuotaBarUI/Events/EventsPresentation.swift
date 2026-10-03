@@ -6,6 +6,14 @@ import QuotaBarCore
 /// markers. No view state and no clock reads — every function takes `now`.
 public enum EventsPresentation {
 
+    /// The events worth the popover's three rows. Scheduled rollovers are
+    /// logged for every vendor and would fill the card with "5H window
+    /// reset" lines on top of the quota rows the popover exists for; they
+    /// stay in the History window's Events tab and on the timeline.
+    public static func popoverEvents(_ events: [AIEvent]) -> [AIEvent] {
+        events.filter { $0.kind != .usageReset }
+    }
+
     /// Kinds drawn on the quota timeline. Only these say something about the
     /// allowance the chart plots; a new model or price change does not.
     public static let markerKinds: Set<AIEventKind> = [.usageReset, .usageRestored, .resetCreditGranted]

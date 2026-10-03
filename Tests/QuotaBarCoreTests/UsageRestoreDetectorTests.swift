@@ -62,7 +62,9 @@ struct UsageRestoreDetectorTests {
     /// time to have passed. Neither announcing it twice nor not at all.
     @Test("a drop with an advanced reset while the old reset was still ahead fires as a restarted window")
     func restoreThatRestartedTheWindow() {
-        let oldReset = now.addingTimeInterval(60)
+        // Clearly ahead of now — well outside the tolerance band that
+        // `rolloverWithinToleranceIsNotARestore` covers.
+        let oldReset = now.addingTimeInterval(3600)
         let newReset = oldReset.addingTimeInterval(QuotaWindow.fiveHours)
         let before = snapshot(.claude, bars: [bar("5H", fraction: 0.9, resetsAt: oldReset)])
         let after = snapshot(.claude, bars: [bar("5H", fraction: 0.0, resetsAt: newReset)])
@@ -72,6 +74,19 @@ struct UsageRestoreDetectorTests {
         #expect(events.first?.resetsAt == newReset)
         #expect(QuotaResetDetector.detect(
             previous: [.claude: before], current: [.claude: after], now: now).isEmpty)
+    }
+
+    /// A slow clock: the poll runs 3 s before the published reset and the
+    /// vendor has already rolled over. That is the reset detector's event.
+    @Test("a drop within the tolerance band of the old reset is a rollover, not a restore")
+    func rolloverWithinToleranceIsNotARestore() {
+        let oldReset = now.addingTimeInterval(3)
+        let newReset = oldReset.addingTimeInterval(QuotaWindow.fiveHours)
+        let before = snapshot(.claude, bars: [bar("5H", fraction: 0.8, resetsAt: oldReset)])
+        let after = snapshot(.claude, bars: [bar("5H", fraction: 0.02, resetsAt: newReset)])
+        #expect(detect(before, after).isEmpty)
+        #expect(QuotaResetDetector.detect(
+            previous: [.claude: before], current: [.claude: after], now: now).count == 1)
     }
 
     @Test("a drop with an unchanged reset is a restore that kept its window")

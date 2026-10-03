@@ -59,7 +59,13 @@ public enum QuotaResetDetector {
                           $0.label == bar.label && !$0.measuresElapsedTimeOnly
                       }),
                       let oldReset = oldBar.resetsAt,
-                      oldReset <= now,
+                      // "Passed" with `minimumAdvance` of tolerance: a Mac
+                      // clock a few seconds slow, or a vendor rolling a few
+                      // seconds before its published time, must not turn a
+                      // scheduled rollover into `UsageRestoreDetector`'s
+                      // event (which requires the old reset to be *more* than
+                      // this far ahead).
+                      oldReset.timeIntervalSince(now) <= minimumAdvance,
                       newReset.timeIntervalSince(oldReset) > minimumAdvance
                 else { continue }
                 events.append(QuotaResetEvent(

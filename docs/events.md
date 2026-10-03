@@ -8,7 +8,7 @@ FrugalBar keeps a log of things that happened on the platforms you use: a quota 
 |---|---|---|---|
 | **Usage reset** | A quota window rolled over at the reset time the vendor published. | Two consecutive polls: the previous poll's `resetsAt` has passed and the new poll reports a reset time more than 60 s later. A drop in the used fraction alone never counts. | From the vendor's usage endpoint |
 | **Usage restored** | Used fell by 15 points or more *before* the published reset. This is how an unscheduled restore looks from outside. If the vendor also moved the reset time forward (a vendor-wide "we've reset everyone's limits" that restarts the clock), the event says the window restarted early. | Two measured polls of the same window: both fractions, a previous reset time still in the future, and a current reset time. The event states those figures and never says why. | From the vendor's usage endpoint |
-| **Reset credit** | The vendor granted a banked reset credit you can redeem. | OpenAI: `rate_limit_reset_credits.available_count` in the Codex usage payload rose between two polls. Anthropic: the summed `resets_left` of the `cedar_ember` grants rose (see the note below on why this is empty today). | From the vendor's usage endpoint |
+| **Reset credit** | The vendor granted a banked reset credit you can redeem. | OpenAI: `rate_limit_reset_credits.available_count` in the Codex usage payload rose between two polls that both carried it. Anthropic: the summed `resets_left` of the `cedar_ember` grants rose (see the note below on why this is empty today). | From the vendor's usage endpoint |
 | **New model** | A model appeared in a source FrugalBar fetched. | A model id first seen in the OpenRouter catalog, or a vendor feed item whose title announces a model. | From the OpenRouter model catalog, or From the `<feed>` feed |
 | **Price change** | A model's API price differs from the one stored last poll. | OpenRouter catalog prices on both sides of the change, or a vendor feed item whose title announces pricing. | As above |
 
@@ -16,19 +16,19 @@ FrugalBar keeps a log of things that happened on the platforms you use: a quota 
 
 - **A lost reading is not a drop to zero.** Reset, restore and credit detection all need both polls to be `.measured`. A 401 or a timeout never produces a "usage restored" banner.
 - **A restore is not a reset.** The two detectors split on one fact, the vendor's reset time: once it has passed, a drop is a Usage reset; while it is still ahead, a drop is a Usage restored. A restore whose reset time also jumped forward is recorded as a restore that restarted the window, and the reset detector stays silent, so no poll is announced twice.
-- **Credits count the banked total only.** `applicable_available_count` (redeemable right now) changes as you consume usage, so it is shown but never triggers an event. `credits.balance` is not displayed anywhere: its unit is unverified.
+- **Credits count the banked total only, and only when both polls published it.** `applicable_available_count` (redeemable right now) changes as you consume usage, so it is shown but never triggers an event. A count that drops out of one poll and comes back is not a grant. `credits.balance` is not displayed anywhere: its unit is unverified.
 - **No first-launch backlog.** Reset credits, restores and resets are edge-triggered (they need a previous poll). The catalog's first poll seeds silently. A feed's first poll keeps only items from the last 7 days, and undated items are treated as history.
 - **Price needs two figures.** A price appearing where there was none, or vanishing, is stored but not announced.
 - **Variants are ignored.** OpenRouter ids containing `:` (`:free`, `:thinking`, `:extended`) never produce events.
 - **Anthropic reset grants are parsed but currently empty.** FrugalBar asks the OAuth usage endpoint for them (`?cedar_ember=1`, a feature flag the claude.ai web UI uses). As of 3 Oct 2026 Anthropic answers a CLI login with `eligible: false, ineligible_reason: "surface"` and no grants, even for an account that holds a full reset on claude.ai, so the Claude row shows no reset-credit figure. Nothing is substituted for the missing figure. If Anthropic opens the surface, the row and the Reset credit event start working without a code change.
-- **Feed matching is conservative.** A false "New model" banner costs more trust than a missed one, and the catalog catches most releases anyway. A new-model item needs an announcement phrase *and* a model-family name in the title. A price item needs a pricing phrase in the title plus a model, plan or API context. Summaries alone never qualify.
+- **Feed matching is conservative.** A false "New model" banner costs more trust than a missed one, and the catalog catches most releases anyway. A new-model item needs an announcement phrase *and* a versioned model name in the title ("Claude Sonnet 5.5", "GPT-6", "Gemini 4"); "Introducing Gemini in Chrome" or "Meet the new Gemini app" name a family, not a release, and never qualify. A price item needs a pricing phrase in the title plus a model, plan or API context. Summaries alone never qualify.
 
 ## Where the evidence comes from
 
 | Source | Request | Credential | Vendors | Notes |
 |---|---|---|---|---|
 | Quota polls | The vendor usage endpoint you already configured | Yours, as for the quota row | All with a measured window | No extra request |
-| OpenRouter catalog | `GET https://openrouter.ai/api/v1/models` | **None** (public) | Anthropic, OpenAI, Google, xAI, by id prefix (`anthropic/`, `openai/`, `google/`, `x-ai/`) | The only source for Grok model and price news |
+| OpenRouter catalog | `GET https://openrouter.ai/api/v1/models` | **None** (public) | Anthropic, OpenAI, Google, xAI, by id prefix (`anthropic/`, `openai/`, `google/`, `x-ai/`) | The only source for Grok model and price news. Polled every 6 hours; if nothing is reachable (launch before Wi-Fi), the retry comes 10 minutes later. Events are recorded *before* the new baseline is stored, so a crash in between re-derives them rather than losing them |
 | OpenAI news | `https://openai.com/news/rss.xml` | None | OpenAI | Official |
 | Google AI blog | `https://blog.google/technology/ai/rss/` | None | Gemini | Official |
 | Google DeepMind | `https://deepmind.google/blog/rss.xml` | None | Gemini | Official |

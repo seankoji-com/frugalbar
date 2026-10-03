@@ -204,28 +204,36 @@ public struct OpenRouterCatalogWatcher: Sendable {
     /// against an empty catalog because the read failed would reseed it and
     /// lose every `firstSeen`.
     public func poll(store: QuotaHistoryStore, now: Date) async -> [AIEvent] {
-        guard let data = await fetch() else { return [] }
+        let pending = await prepare(store: store, now: now)
+        do {
+            try await pending.commit()
+        } catch {
+            NSLog("frugalbar: failed to store model catalog: \(error)")
+        }
+        return pending.events
+    }
+
+    /// The same as `poll`, but the new baseline is handed back as a
+    /// `commit` closure instead of written, so the caller can record the
+    /// events first. See `PendingPoll` for why the order matters.
+    public func prepare(store: QuotaHistoryStore, now: Date) async -> PendingPoll {
+        guard let data = await fetch() else { return .empty }
         guard let entries = Self.parse(data) else {
             NSLog("frugalbar: OpenRouter catalog returned an unparseable body; no catalog events this poll")
-            return []
+            return PendingPoll(events: [], fetched: true, commit: {})
         }
         let previous: [String: CatalogModelRecord]
         do {
             previous = try await store.catalogModels()
         } catch {
             NSLog("frugalbar: failed to read stored model catalog: \(error)")
-            return []
+            return PendingPoll(events: [], fetched: true, commit: {})
         }
         let diff = CatalogDiff.compute(previous: previous, current: entries, now: now)
-        do {
-            try await store.upsertCatalogModels(diff.records)
-        } catch {
-            // Without the new baseline stored, the same events would be
-            // derived again next poll; recording them is still deduplicated,
-            // so this costs nothing worse than a log line.
-            NSLog("frugalbar: failed to store model catalog: \(error)")
+        let records = diff.records
+        return PendingPoll(events: diff.events, fetched: true) {
+            try await store.upsertCatalogModels(records)
         }
-        return diff.events
     }
 
     /// The production fetch. Checks the status before handing back a body:
