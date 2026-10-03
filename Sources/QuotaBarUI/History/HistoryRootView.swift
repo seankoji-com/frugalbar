@@ -17,16 +17,30 @@ public struct HistoryRootView: View {
     /// Readings existed but none of them measure consumption (a billing-cycle
     /// row, say), so there is nothing legitimate to plot on a "Used %" axis.
     @State private var hasOnlyElapsedReadings: Bool = false
+    @State private var selectedTab: HistoryTab
+    /// Reset-type events for the selected vendor, drawn on the timeline.
+    /// Always from the live store: the sample fixture records no events, and
+    /// live markers over synthetic readings would assert a correlation that
+    /// never happened.
+    @State private var markers: [AIEvent] = []
+    /// Set when the marker read failed, so missing markers are not mistaken
+    /// for "no resets happened".
+    @State private var markerLoadFailed: Bool = false
 
     private let liveStore: QuotaHistoryStore
     private let sampleStore: QuotaHistoryStore
+    private let tabRequest: HistoryTabRequest?
 
     public init(
         liveStore: QuotaHistoryStore? = nil,
-        sampleStore: QuotaHistoryStore? = nil
+        sampleStore: QuotaHistoryStore? = nil,
+        initialTab: HistoryTab = .timeline,
+        tabRequest: HistoryTabRequest? = nil
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
+        self.tabRequest = tabRequest
+        _selectedTab = State(initialValue: initialTab)
     }
 
     private var activeStore: QuotaHistoryStore {
@@ -56,29 +70,37 @@ public struct HistoryRootView: View {
                 sampleModeBanner
             }
 
-            ScrollView {
-                VStack(spacing: 14) {
-                    if let loadError {
-                        failureCard(loadError)
+            switch selectedTab {
+            case .timeline:
+                ScrollView {
+                    VStack(spacing: 14) {
+                        if let loadError {
+                            failureCard(loadError)
+                        }
+
+                        if let pace {
+                            paceCard(pace)
+                        }
+
+                        chartCard
+
+                        attributionCard
+
+                        telemetryCard
                     }
-
-                    if let pace {
-                        paceCard(pace)
-                    }
-
-                    chartCard
-
-                    attributionCard
-
-                    telemetryCard
+                    .padding(16)
                 }
-                .padding(16)
+            case .events:
+                EventsListView(store: liveStore, isSampleMode: isSampleMode)
             }
         }
         .frame(minWidth: 640, minHeight: 460)
         .background(Theme.surface)
         .task(id: reloadKey) {
             await reloadData()
+        }
+        .onChange(of: tabRequest?.serial) {
+            if let tabRequest { selectedTab = tabRequest.tab }
         }
     }
 
@@ -109,23 +131,36 @@ public struct HistoryRootView: View {
 
             Spacer()
 
-            // Vendor Picker
-            Picker("", selection: $selectedVendor) {
-                ForEach(VendorIdentifier.allCases, id: \.self) { vendor in
-                    Text(vendor.displayName).tag(vendor)
+            Picker("View", selection: $selectedTab) {
+                ForEach(HistoryTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
                 }
             }
             .labelsHidden()
-            .frame(width: 140)
-
-            // Time Range Picker
-            Picker("", selection: $timeRange) {
-                ForEach(HistoryPresentation.TimeRange.allCases) { range in
-                    Text(range.title).tag(range)
-                }
-            }
             .pickerStyle(.segmented)
-            .frame(width: 220)
+            .fixedSize()
+            .accessibilityLabel("History view")
+
+            // The events tab has its own filter bar; these drive the timeline.
+            if selectedTab == .timeline {
+                // Vendor Picker
+                Picker("", selection: $selectedVendor) {
+                    ForEach(VendorIdentifier.allCases, id: \.self) { vendor in
+                        Text(vendor.displayName).tag(vendor)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+
+                // Time Range Picker
+                Picker("", selection: $timeRange) {
+                    ForEach(HistoryPresentation.TimeRange.allCases) { range in
+                        Text(range.title).tag(range)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+            }
 
             // Sample Mode Toggle Button
             Button {
@@ -277,8 +312,21 @@ public struct HistoryRootView: View {
                 }
             }
 
-            QuotaTimelineChart(segments: segments, timeRange: timeRange)
+            QuotaTimelineChart(segments: segments, timeRange: timeRange, markers: markers)
                 .frame(height: 240)
+
+            if markerLoadFailed {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.tertiary)
+                    Text("Reset markers could not be read, so resets may be missing from this chart.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+            }
 
             if hasOnlyElapsedReadings {
                 HStack(alignment: .top, spacing: 6) {
@@ -495,6 +543,7 @@ public struct HistoryRootView: View {
 
         loadError = nil
         hasOnlyElapsedReadings = false
+        await reloadMarkers()
 
         if isSampleMode {
             do {
@@ -566,6 +615,27 @@ public struct HistoryRootView: View {
             segments = []
             pace = nil
             attribution = nil
+        }
+    }
+
+    /// Reset markers for the timeline, from the live store only.
+    private func reloadMarkers() async {
+        markerLoadFailed = false
+        guard !isSampleMode else {
+            markers = []
+            return
+        }
+        let now = Date()
+        do {
+            let events = try await liveStore.fetchEvents(
+                vendor: selectedVendor,
+                kinds: EventsPresentation.markerKinds,
+                since: timeRange.startDate(from: now)
+            )
+            markers = EventsPresentation.markerEvents(events, vendor: selectedVendor, range: timeRange, now: now)
+        } catch {
+            markers = []
+            markerLoadFailed = true
         }
     }
 

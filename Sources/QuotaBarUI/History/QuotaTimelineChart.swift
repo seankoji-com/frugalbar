@@ -15,13 +15,18 @@ import QuotaBarCore
 public struct QuotaTimelineChart: View {
     public let segments: [HistoryPresentation.TimelineSegment]
     public let timeRange: HistoryPresentation.TimeRange
+    /// Recorded reset-type events, drawn as dashed vertical rules. Callers
+    /// filter with `EventsPresentation.markerEvents`.
+    public let markers: [AIEvent]
 
     public init(
         segments: [HistoryPresentation.TimelineSegment],
-        timeRange: HistoryPresentation.TimeRange
+        timeRange: HistoryPresentation.TimeRange,
+        markers: [AIEvent] = []
     ) {
         self.segments = segments
         self.timeRange = timeRange
+        self.markers = markers
     }
 
     public var body: some View {
@@ -86,6 +91,19 @@ public struct QuotaTimelineChart: View {
                     .symbolSize(point.isBlocked ? 28 : 18)
                 }
             }
+
+            // Shape (the kind's symbol) carries the marker, not the tint.
+            ForEach(markers) { event in
+                RuleMark(x: .value("Event", event.occurredAt))
+                    .foregroundStyle(EventsPresentation.kindTint(event.kind).opacity(0.7))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .annotation(position: .top, alignment: .center, spacing: 2) {
+                        Image(systemName: event.kind.symbolName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(EventsPresentation.kindTint(event.kind))
+                            .help("\(event.kind.title): \(event.title)")
+                    }
+            }
         }
         .chartYScale(domain: 0...100)
         .chartYAxis {
@@ -122,7 +140,11 @@ public struct QuotaTimelineChart: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Quota timeline, \(timeRange.title)")
-        .accessibilityValue(segments.map(accessibilityDescription(for:)).joined(separator: ". "))
+        .accessibilityValue(
+            (segments.map(accessibilityDescription(for:))
+             + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+            .joined(separator: ". ")
+        )
     }
 
     private var emptyState: some View {
