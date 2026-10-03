@@ -368,6 +368,7 @@ public actor QuotaManager {
             // though the failure is still real.
             rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
+            rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             updated = rebuilt
         }
         return updated
@@ -435,6 +436,7 @@ public actor QuotaManager {
         // though the failure is still real.
         rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
+        rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         return rebuilt
     }
 

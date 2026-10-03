@@ -442,6 +442,12 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// "none available" and "the vendor has no such thing" are different
     /// facts. Defaulted here so no initializer or call site has to change.
     public var resetCreditsAvailable: Int? = nil
+    /// How many of those banked credits the vendor says can be redeemed
+    /// against the current window state (OpenAI's
+    /// `rate_limit_reset_credits.applicable_available_count`). It flips with
+    /// window state, so nothing fires on it changing; display only. `nil`
+    /// when not published.
+    public var resetCreditsApplicable: Int? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.

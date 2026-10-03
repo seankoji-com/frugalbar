@@ -73,6 +73,9 @@ public struct SettingsView: View {
     private var notificationsEnabled = false
     /// Read once from the shared suite; each toggle writes straight back.
     @State private var resetAlertVendors: Set<VendorIdentifier> = CredentialStore.resetAlertVendors
+    @AppStorage(CredentialStore.eventTrackingEnabledDefaultsKey, store: CredentialStore.preferences)
+    private var eventTracking = true
+    @State private var eventNotificationKinds: Set<AIEventKind> = CredentialStore.eventNotificationKinds
 
     public init() {}
 
@@ -85,6 +88,21 @@ public struct SettingsView: View {
             set: { isOn in
                 if isOn { resetAlertVendors.insert(vendor) } else { resetAlertVendors.remove(vendor) }
                 CredentialStore.resetAlertVendors = resetAlertVendors
+            }
+        )
+    }
+
+    /// `.usageReset` is absent: the per-vendor "Reset alerts" govern it.
+    private static let eventNotificationCandidates: [AIEventKind] = [
+        .usageRestored, .resetCreditGranted, .newModel, .priceChange,
+    ]
+
+    private func eventNotificationBinding(for kind: AIEventKind) -> Binding<Bool> {
+        Binding(
+            get: { eventNotificationKinds.contains(kind) },
+            set: { isOn in
+                if isOn { eventNotificationKinds.insert(kind) } else { eventNotificationKinds.remove(kind) }
+                CredentialStore.eventNotificationKinds = eventNotificationKinds
             }
         )
     }
@@ -401,6 +419,24 @@ public struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             } header: {
                 Text("Reset alerts")
+            }
+
+            Section {
+                Toggle("Track model releases and pricing (polls OpenRouter's catalog and vendor news feeds every 6 hours)",
+                       isOn: $eventTracking)
+                Text("Notify about")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(Self.eventNotificationCandidates) { kind in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
+                        Text(kind.notificationCaption)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            } header: {
+                Text("AI events")
             }
         }
         .formStyle(.grouped)

@@ -221,6 +221,96 @@ struct ProviderHTTPTests {
         #expect(snap.badgeText == "8% left")
     }
 
+    @Test("OpenAI reads banked reset credits and names them in the row note")
+    func openAIResetCredits() async throws {
+        let provider = OpenAIQuotaProvider(accessToken: "session-token")
+        let snap = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":30,"reset_at":1787891551}},
+             "credits":{"has_credits":true,"unlimited":false,"balance":"12.50"},
+             "rate_limit_reset_credits":{"available_count":"2"}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+        #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(snap.resetCreditsApplicable == nil)
+        #expect(snap.row1?.primaryFraction == 0.30)
+    }
+
+    /// Absent is nil, never 0 — and a credit block in a shape we did not
+    /// anticipate costs only the credit count, never the usage reading.
+    @Test("OpenAI without, or with malformed, reset credits keeps the reading and reports nil")
+    func openAIResetCreditsAbsentOrMalformed() throws {
+        let absent = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"rate_limit":{"primary_window":{"used_percent":10}}}
+        """#.utf8))
+        #expect(absent.rate_limit_reset_credits == nil)
+        #expect(absent.credits == nil)
+
+        let malformed = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"rate_limit":{"primary_window":{"used_percent":10}},
+         "credits":"unexpected","rate_limit_reset_credits":{"available_count":"many"}}
+        """#.utf8))
+        #expect(malformed.rate_limit?.primary_window?.used_percent == 10)
+        #expect(malformed.credits == nil)
+        #expect(malformed.rate_limit_reset_credits?.available_count == nil)
+
+        let numeric = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(#"""
+        {"credits":{"has_credits":"true","balance":3.5},"rate_limit_reset_credits":{"available_count":1}}
+        """#.utf8))
+        #expect(numeric.credits?.has_credits == true)
+        #expect(numeric.credits?.balance == "3.5")
+        #expect(numeric.rate_limit_reset_credits?.available_count == 1)
+
+        let provider = OpenAIQuotaProvider(accessToken: "t")
+        let snap = provider.makeSnapshot(response: absent, accountPlan: nil, cliSource: "test",
+                                         now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(snap.resetCreditsAvailable == nil)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota")
+    }
+
+    @Test("the OpenAI row note mentions credits only when at least one is available")
+    func openAIResetCreditNote() {
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: nil) == "Live ChatGPT subscription quota")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 0) == "Live ChatGPT subscription quota")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 1)
+                == "Live ChatGPT subscription quota · 1 reset credit banked")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 2, applicable: 0)
+                == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 2, applicable: 1)
+                == "Live ChatGPT subscription quota · 2 reset credits banked · 1 redeemable now")
+        // Nothing banked means nothing to say, whatever "applicable" claims.
+        #expect(OpenAIQuotaProvider.auxiliaryInfo(resetCredits: 0, applicable: 1)
+                == "Live ChatGPT subscription quota")
+    }
+
+    /// The live `wham/usage` shape from a Pro account (2026-10-03), credit
+    /// blocks included. `balance` is decoded but its unit is unverified, so
+    /// nothing may render it.
+    @Test("OpenAI decodes the live Pro payload's credit blocks")
+    func openAILivePayload() throws {
+        let live = #"""
+        {"plan_type":"pro","credits":{"has_credits":true,"unlimited":false,"overage_limit_reached":false,"balance":"62500","approx_local_messages":[15625,81250],"approx_cloud_messages":[2500,15625]},"rate_limit_reset_credits":{"available_count":2,"applicable_available_count":0},"rate_limit_upsell":null,
+         "rate_limit":{"primary_window":{"used_percent":40,"reset_at":1791050000,"limit_window_seconds":18000}}}
+        """#
+        let response = try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: Data(live.utf8))
+        #expect(response.plan_type == "pro")
+        #expect(response.credits == .init(has_credits: true, unlimited: false, balance: "62500"))
+        #expect(response.rate_limit_reset_credits == .init(available_count: 2, applicable_available_count: 0))
+
+        let snap = OpenAIQuotaProvider(accessToken: "t").makeSnapshot(
+            response: response, accountPlan: nil, cliSource: "test",
+            now: Date(timeIntervalSince1970: 1_791_040_000))
+        #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.resetCreditsApplicable == 0)
+        #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
+        #expect(!(snap.auxiliaryInfo ?? "").contains("62500"))
+        #expect(snap.badgeText == "60% left")
+    }
+
     @Test("an unlabelled OpenAI window falls back rather than guessing a length")
     func openAIWindowLabels() {
         #expect(OpenAIQuotaProvider.label(forWindowSeconds: 18000) == "5H")

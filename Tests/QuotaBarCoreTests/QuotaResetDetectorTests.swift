@@ -35,7 +35,7 @@ struct QuotaResetDetectorTests {
             previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old, fraction: 0.9)])],
             current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new, fraction: 0.0)])],
             now: now)
-        #expect(events == [QuotaResetEvent(vendorId: .claude, displayName: "Claude", barLabel: "5H")])
+        #expect(events == [QuotaResetEvent(vendorId: .claude, displayName: "Claude", barLabel: "5H", resetsAt: new)])
     }
 
     @Test("reset time still in the future does not fire, however far it moves")
@@ -116,6 +116,11 @@ struct QuotaResetDetectorTests {
         let later = now.addingTimeInterval(120)
         #expect(await observer.observeTransitions(current: [second], now: later).resets.count == 1)
         #expect(await observer.observeTransitions(current: [second], now: later.addingTimeInterval(120)).resets.isEmpty)
+    }
+
+    @Test("a reset event built without a reset time still compiles and compares")
+    func resetsAtDefaultsToNil() {
+        #expect(QuotaResetEvent(vendorId: .claude, displayName: "Claude", barLabel: "5H").resetsAt == nil)
     }
 
     @Test("stored reset-alert vendors decode, dropping unknown values")

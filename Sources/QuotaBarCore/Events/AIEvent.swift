@@ -111,7 +111,11 @@ public enum AIEventSource: Sendable, Equatable, Hashable, Codable {
         switch self {
         case .quotaPoll:            "From the vendor's usage endpoint"
         case .openRouterCatalog:    "From the OpenRouter model catalog"
-        case .vendorFeed(let name): "From the \(name) feed"
+        case .vendorFeed(let name):
+            // A third-party scrape must never read as the vendor speaking.
+            VendorFeed.named(name)?.isOfficial == false
+                ? "From the \(name) feed (unofficial scrape)"
+                : "From the \(name) feed"
         }
     }
 

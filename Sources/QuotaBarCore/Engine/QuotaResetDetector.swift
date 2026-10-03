@@ -9,11 +9,17 @@ public struct QuotaResetEvent: Sendable, Equatable {
     public let displayName: String
     /// The window that reset, e.g. "5H" or "WK".
     public let barLabel: String
+    /// The new window's reset time, as the current poll reported it. Part of
+    /// the event's identity: the same window rolling over is one event however
+    /// often it is re-derived. Optional with a nil default only so callers
+    /// that predate it still compile; `QuotaResetDetector` always sets it.
+    public let resetsAt: Date?
 
-    public init(vendorId: VendorIdentifier, displayName: String, barLabel: String) {
+    public init(vendorId: VendorIdentifier, displayName: String, barLabel: String, resetsAt: Date? = nil) {
         self.vendorId = vendorId
         self.displayName = displayName
         self.barLabel = barLabel
+        self.resetsAt = resetsAt
     }
 }
 
@@ -59,7 +65,8 @@ public enum QuotaResetDetector {
                 events.append(QuotaResetEvent(
                     vendorId: vendorId,
                     displayName: currentSnapshot.displayName,
-                    barLabel: bar.label
+                    barLabel: bar.label,
+                    resetsAt: newReset
                 ))
             }
         }

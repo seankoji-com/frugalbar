@@ -237,6 +237,18 @@ struct CLIProxyClientTests {
         #expect(usage2.rate_limit?.secondary_window == nil)
     }
 
+    @Test("decodeCodexUsage carries banked reset credits through the proxy wrapper")
+    func decodeCodexUsageResetCredits() throws {
+        let wrapped = #"""
+        {
+          "status_code": 200,
+          "body": "{\"rate_limit\":{\"primary_window\":{\"used_percent\":10}},\"rate_limit_reset_credits\":{\"available_count\":1}}"
+        }
+        """#
+        let usage = try CLIProxyClient.decodeCodexUsage(from: Data(wrapped.utf8))
+        #expect(usage.rate_limit_reset_credits?.available_count == 1)
+    }
+
     @Test("decodeCodexUsage rejects error status in wrapper")
     func decodeCodexUsageErrorStatus() {
         let rejected = #"""

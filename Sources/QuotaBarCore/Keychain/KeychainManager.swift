@@ -175,6 +175,21 @@ public enum CredentialStore {
     /// through the same `osascript` path as recovery notifications.
     public static let resetAlertVendorsDefaultsKey = "QuotaBarResetAlertVendors"
 
+    /// Whether to poll OpenRouter's public model catalog and the vendor news
+    /// feeds for model releases and price changes.
+    ///
+    /// On by default, unlike every other opt-in here: the requests carry no
+    /// credential and read only public data (OpenRouter's key-less catalog,
+    /// public RSS), once every six hours. Quota-derived events (resets,
+    /// restores, reset credits) are recorded regardless; this gates only the
+    /// outbound polling.
+    public static let eventTrackingEnabledDefaultsKey = "QuotaBarEventTracking"
+
+    /// Which AI-event kinds post a notification, stored as sorted raw values.
+    /// `.usageReset` is listed here for completeness but its banners stay
+    /// governed per vendor by `resetAlertVendors`.
+    public static let eventNotificationKindsDefaultsKey = "QuotaBarEventNotificationKinds"
+
     /// Whether the History window is viewing synthetic sample fixture data
     /// rather than the live historical database.
     public static let sampleModeDefaultsKey = "QuotaBarHistorySampleMode"
@@ -247,6 +262,29 @@ public enum CredentialStore {
     /// later release) are dropped rather than failing the whole set.
     static func resetAlertVendors(fromStored raw: [String]?) -> Set<VendorIdentifier> {
         Set((raw ?? []).compactMap(VendorIdentifier.init(rawValue:)))
+    }
+
+    public static var isEventTrackingEnabled: Bool {
+        // `bool(forKey:)` reads an absent key as false; this default is true.
+        get { preferences.object(forKey: eventTrackingEnabledDefaultsKey) as? Bool ?? true }
+        set { preferences.set(newValue, forKey: eventTrackingEnabledDefaultsKey) }
+    }
+
+    /// The kinds that notify when the user has never chosen.
+    public static let defaultEventNotificationKinds: Set<AIEventKind> = [
+        .usageRestored, .resetCreditGranted, .newModel, .priceChange,
+    ]
+
+    public static var eventNotificationKinds: Set<AIEventKind> {
+        get { eventNotificationKinds(fromStored: preferences.stringArray(forKey: eventNotificationKindsDefaultsKey)) }
+        set { preferences.set(newValue.map(\.rawValue).sorted(), forKey: eventNotificationKindsDefaultsKey) }
+    }
+
+    /// An absent key is the default set; a stored empty list is a deliberate
+    /// "notify about nothing" and stays empty. Unknown raw values are dropped.
+    static func eventNotificationKinds(fromStored raw: [String]?) -> Set<AIEventKind> {
+        guard let raw else { return defaultEventNotificationKinds }
+        return Set(raw.compactMap(AIEventKind.init(rawValue:)))
     }
 
     public static var isSampleModeEnabled: Bool {
