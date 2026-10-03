@@ -86,6 +86,15 @@ Don't add, normalise or sum windows across vendors into a "total" or "combined"
 figure: vendors meter different things over different windows. The widget is an
 app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
 
+**A hidden provider is not polled, not counted, and not remembered.**
+`QuotaManager` reads `ProviderDisplayPreferences` once per poll, skips hidden
+vendors' fetches and removes their cache entries, so they vanish from the
+summary, advice, history recorder and widget, and a vendor shown again is
+fetched at once instead of waiting out `minPollInterval`. `sortedSnapshots()`
+also drops them on read. A `.custom` order is the user's list verbatim: no
+band, deadline or exhaustion moves a row. Tests inject
+`displayPreferences:` and never touch the real preference store.
+
 **Credentials never reach user-facing or persisted fields.** Send keys in
 headers, never query strings. Never put `error.localizedDescription` in a
 `QuotaSnapshot` — `URLError`'s description carries the request URL. Map errors

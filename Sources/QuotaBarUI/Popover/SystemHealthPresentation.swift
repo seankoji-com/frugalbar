@@ -4,11 +4,10 @@ import QuotaBarCore
 /// Shared presentation mapping from a `SystemHealthSummary` to the header and
 /// footer indicators.
 ///
-/// `HeaderSummaryView` and `FooterActionsView` each render an aggregate health
-/// indicator (symbol, colour, text) and an "oldest reading" age. Both used to
-/// reach into `HeaderSummaryView`'s statics, a leaky contract between sibling
-/// views. This type is the single source both views read from, so the header
-/// and footer can never disagree about what a given summary means.
+/// The popover footer and the desktop widget header each render an aggregate
+/// health indicator (symbol, colour, text) and an "oldest reading" age. This
+/// type is the single source both read from, so they can never disagree about
+/// what a given summary means.
 enum SystemHealthPresentation {
 
     // `nonisolated`: pure functions of their arguments, so synchronous,

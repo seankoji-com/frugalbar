@@ -48,5 +48,37 @@ struct AppInfoTests {
         #expect(AppInfo.name == "FrugalBar")
         #expect(AppInfo.repositoryURL.host == "github.com")
         #expect(AppInfo.issuesURL.absoluteString.hasSuffix("/issues"))
+        #expect(AppInfo.releasesURL.absoluteString.hasSuffix("/releases"))
+    }
+
+    // MARK: Footer token
+
+    @Test("the footer token is a 'v' prefix for a release and 'dev' for a local build")
+    func compactVersion() {
+        #expect(AppInfo.compactVersion(for: "1.4.2") == "v1.4.2")
+        // "vdevelopment build" would read as a bug in the footer.
+        #expect(AppInfo.compactVersion(for: AppInfo.developmentLabel) == "dev")
+        #expect(!AppInfo.compactVersion.contains("__"))
+        #expect(!AppInfo.compactVersion.contains(" "))
+    }
+
+    // MARK: User agent
+
+    @Test("the user agent names the app and the running version")
+    func userAgentNamesAppAndVersion() {
+        #expect(AppInfo.userAgent(for: "1.4.2") == "FrugalBar/1.4.2")
+        #expect(AppInfo.userAgent(for: AppInfo.developmentLabel) == "FrugalBar/dev")
+    }
+
+    /// An HTTP product token cannot carry whitespace; a spaced label on the
+    /// wire would be two tokens, the second of them meaningless.
+    @Test("the user agent never contains whitespace or the placeholder")
+    func userAgentIsOneToken() {
+        #expect(AppInfo.userAgent(for: "1.4.2 beta") == "FrugalBar/1.4.2-beta")
+        #expect(AppInfo.userAgent(for: "   ") == "FrugalBar/dev")
+        let live = AppInfo.userAgent
+        #expect(live.hasPrefix("FrugalBar/"))
+        #expect(live.rangeOfCharacter(from: .whitespacesAndNewlines) == nil)
+        #expect(!live.contains("__"))
     }
 }

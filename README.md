@@ -13,7 +13,7 @@ Each subscription's windows line up in **5H / WK / MO** columns, with the share 
 
 ## Why FrugalBar?
 
-Modern engineering workflows rely heavily on multiple AI models and developer platforms (Claude, OpenAI / OpenRouter, Google Gemini, GitHub Copilot, and GitHub APIs). However:
+Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass and the GitHub APIs). However:
 
 - **Surprise quota exhaustion**: Running multi-step autonomous agent runs or code generation tasks often grinds to a halt midway through a long job because a hidden rate limit or budget cap was breached.
 - **Scattered dashboards**: Checking balances requires navigating half a dozen provider dashboards, consoles, and billing portals.
@@ -91,6 +91,21 @@ swift run
    - **ClinePass**: Sign in with the Cline CLI (`cline auth`) or the Cline extension; enable CLI discovery and FrugalBar reads `~/.cline/data/settings/providers.json` (or `$CLINE_DATA_DIR`). A Cline API key from app.cline.bot can also be pasted directly, or set `CLINE_API_KEY` / `CLINEPASS_API_KEY`.
 
 Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
+
+---
+
+## Preferences
+
+Gear menu → **Settings…** (⌘,) has four tabs:
+
+| Tab | What it does |
+|---|---|
+| **API Keys** | Credentials per provider, and where each one is coming from |
+| **Providers** | Show or hide each provider, and choose the order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* shows exactly the list you arrange with the up and down buttons. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
+| **Cycles** | Renewal dates for vendors that publish no billing period |
+| **General** | CLI discovery, notifications, AI events, desktop widget position |
+
+The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
 ---
 

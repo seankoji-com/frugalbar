@@ -17,6 +17,9 @@ public final class QuotaStore {
     public private(set) var summary: SystemHealthSummary = .compute(from: [])
     public private(set) var advice: QuotaAdvice = QuotaAdvice.evaluate(from: [])
     public private(set) var isRefreshing = false
+    /// True once a poll has completed. Lets the popover tell "still loading"
+    /// from "loaded, and every provider is hidden".
+    public private(set) var hasLoaded = false
     /// Recent-pace forecast per provider, from recorded history. Empty when no
     /// `readingsLoader` was given or history is too thin to fit a trend.
     public private(set) var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
@@ -112,6 +115,13 @@ public final class QuotaStore {
         await run { await self.manager.forceRefresh() }
     }
 
+    /// Re-applies Preferences → Providers: a hidden provider is dropped and a
+    /// newly shown one fetched. Vendors polled inside the poll floor are
+    /// served from cache, so changing a toggle cannot hammer a vendor.
+    public func applyProviderPreferences() async {
+        await forceRefresh()
+    }
+
     private func run(_ fetch: @escaping @Sendable () async -> [VendorIdentifier: QuotaSnapshot]) async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -122,6 +132,7 @@ public final class QuotaStore {
 
     private func reloadFromCache() async {
         let snaps = await manager.sortedSnapshots()
+        self.hasLoaded = true
         self.snapshots = snaps
         self.summary = SystemHealthSummary.compute(from: snaps)
         self.advice = QuotaAdvice.evaluate(from: snaps)

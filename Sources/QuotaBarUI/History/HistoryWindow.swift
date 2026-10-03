@@ -61,7 +61,7 @@ public enum HistoryWindow {
         let rootView = HistoryRootView(initialTab: tab, tabRequest: tabRequest)
         let hosting = NSHostingController(rootView: rootView)
         let created = NSWindow(contentViewController: hosting)
-        created.title = "Quota History & Attribution"
+        created.title = "FrugalBar — History & Attribution"
         created.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         created.titlebarAppearsTransparent = true
         created.titleVisibility = .visible

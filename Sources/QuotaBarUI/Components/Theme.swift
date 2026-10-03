@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Design system tokens for QuotaBar matching DESIGN.md and stitch designs.
+/// Design system tokens for FrugalBar matching DESIGN.md and stitch designs.
 public enum Theme {
     // MARK: - Surface colors
     /// The page behind the cards. Near-black rather than the previous #121317

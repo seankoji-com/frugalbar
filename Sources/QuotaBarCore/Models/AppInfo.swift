@@ -12,6 +12,7 @@ public enum AppInfo {
 
     public static let repositoryURL = URL(string: "https://github.com/seankoji-com/frugalbar")!
     public static let issuesURL = URL(string: "https://github.com/seankoji-com/frugalbar/issues")!
+    public static let releasesURL = URL(string: "https://github.com/seankoji-com/frugalbar/releases")!
 
     public static let copyright = "© 2026 Sean Carey · MIT licence"
 
@@ -61,4 +62,26 @@ public enum AppInfo {
     }
 
     public static var versionDisplay: String { versionDisplay(for: version) }
+
+    /// "v1.4.2", or "dev" for a local build. The popover footer has room for
+    /// a token beside the wordmark, not for "Version development build".
+    static func compactVersion(for resolved: String) -> String {
+        resolved == developmentLabel ? "dev" : "v\(resolved)"
+    }
+
+    public static var compactVersion: String { compactVersion(for: version) }
+
+    /// The `User-Agent` product token every vendor request carries:
+    /// "FrugalBar/1.4.2". An HTTP product token cannot contain whitespace
+    /// (RFC 9110 §10.1.5), so a development build sends "FrugalBar/dev"
+    /// rather than the spaced label, and any stray whitespace in a stamped
+    /// version is collapsed rather than sent.
+    static func userAgent(for resolved: String) -> String {
+        let token = resolved == developmentLabel
+            ? "dev"
+            : resolved.split(whereSeparator: \.isWhitespace).joined(separator: "-")
+        return "\(name)/\(token.isEmpty ? "dev" : token)"
+    }
+
+    public static var userAgent: String { userAgent(for: version) }
 }
