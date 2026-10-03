@@ -55,6 +55,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSLog("frugalbar: failed to read quota history for forecast: \(error)")
                     return []
                 }
+            },
+            vendorReadingsLoader: { vendor, since in
+                do {
+                    return try await hStore.fetchReadings(vendor: vendor, since: since)
+                } catch {
+                    NSLog("frugalbar: failed to read quota history for \(vendor.rawValue): \(error)")
+                    return []
+                }
+            },
+            eventsLoader: { vendor, since, limit in
+                do {
+                    return try await hStore.fetchEvents(vendor: vendor, since: since, limit: limit)
+                } catch {
+                    NSLog("frugalbar: failed to read AI events: \(error)")
+                    return []
+                }
             }
         )
         super.init()

@@ -4,6 +4,9 @@ public enum HistorySchema {
     public static let readingTable = "reading"
     public static let activityTable = "activity"
     public static let ingestWatermarkTable = "ingest_watermark"
+    public static let eventTable = "event"
+    public static let catalogModelTable = "catalog_model"
+    public static let feedItemTable = "feed_item"
 
     /// Bumped whenever `createTablesSQL` changes shape.
     ///
@@ -58,6 +61,45 @@ public enum HistorySchema {
       byte_offset   INTEGER NOT NULL,    -- resume cursor; unit is source-defined
       PRIMARY KEY (source, file_path)
     ) WITHOUT ROWID;
+
+    -- The three tables below were added after `version` 1 shipped. They are
+    -- purely additive (`CREATE TABLE IF NOT EXISTS` on every open), so the
+    -- version is deliberately NOT bumped: a bump drops the user's readings.
+
+    CREATE TABLE IF NOT EXISTS event (
+      id            TEXT    NOT NULL,    -- AIEvent.id, the dedup key
+      kind          TEXT    NOT NULL,    -- AIEventKind.rawValue
+      vendor        TEXT    NOT NULL,    -- VendorIdentifier.rawValue
+      title         TEXT    NOT NULL,
+      detail        TEXT,
+      occurred_at   INTEGER NOT NULL,    -- epoch seconds
+      observed_at   INTEGER NOT NULL,    -- epoch seconds
+      source        TEXT    NOT NULL,    -- AIEventSource.rawValue
+      url           TEXT,
+      PRIMARY KEY (id)
+    ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS event_time ON event(occurred_at);
+    CREATE INDEX IF NOT EXISTS event_vendor_time ON event(vendor, occurred_at);
+
+    CREATE TABLE IF NOT EXISTS catalog_model (
+      model_id         TEXT    NOT NULL,  -- e.g. "anthropic/claude-opus-5-5"
+      vendor           TEXT    NOT NULL,  -- VendorIdentifier.rawValue
+      name             TEXT    NOT NULL,
+      created_at       INTEGER,           -- the catalog's own `created`; NULL when unpublished
+      prompt_price     TEXT,              -- USD per token, decimal text; NULL = unpublished
+      completion_price TEXT,
+      first_seen       INTEGER NOT NULL,
+      last_seen        INTEGER NOT NULL,
+      PRIMARY KEY (model_id)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS feed_item (
+      feed          TEXT    NOT NULL,    -- feed short name, e.g. "openai-news"
+      item_id       TEXT    NOT NULL,    -- the item's guid/id, or its link when it has none
+      seen_at       INTEGER NOT NULL,
+      PRIMARY KEY (feed, item_id)
+    ) WITHOUT ROWID;
     """
 
     /// Drops every table. Used only to reset a development database whose schema
@@ -66,6 +108,9 @@ public enum HistorySchema {
     DROP TABLE IF EXISTS \(readingTable);
     DROP TABLE IF EXISTS \(activityTable);
     DROP TABLE IF EXISTS \(ingestWatermarkTable);
+    DROP TABLE IF EXISTS \(eventTable);
+    DROP TABLE IF EXISTS \(catalogModelTable);
+    DROP TABLE IF EXISTS \(feedItemTable);
     """
 }
 

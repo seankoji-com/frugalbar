@@ -519,13 +519,19 @@ private func devPassBody(
     """
 }
 
+/// A fixed "now" before the pinned renewal (Oct 1, 2026 09:10 GMT+10), so the
+/// renewal assertions below hold whatever day the suite runs. They used to
+/// call `fetchSnapshot()` with the real clock and went red the day the pinned
+/// date passed — the exact `Date()` dependence AGENTS.md warns about.
+private let devPassFixedNow = Date(timeIntervalSince1970: 1_789_000_000) // 2026-09-10T12:26:40Z
+
 @Suite("DevPassQuotaProvider", .serialized)
 struct DevPassQuotaProviderTests {
 
     @Test("a plan key reports only the monthly allowance")
     func planUsage() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
 
         #expect(snapshot.status.confidence == .measured)
@@ -544,7 +550,7 @@ struct DevPassQuotaProviderTests {
     @Test("the monthly allowance pins the subscriber's renewal so the bar gets a pace marker and countdown")
     func monthlyCycleMarker() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody()) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         // The vendor publishes no monthly turnover date (only the ignored
         // weekly premium reset), so the renewal is the pinned, known one — which
@@ -593,7 +599,7 @@ struct DevPassQuotaProviderTests {
         // instead the monthly allowance stays the sole figure, at ~4%.
         let body = devPassBody(creditsUsed: "\"10.00\"", premiumUsed: "\"30.00\"")
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: body) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         #expect(abs(try #require(snapshot.consumptionFraction) - 10.0 / 237.0) < 0.0001)
         #expect(snapshot.status.urgency == .none)
@@ -611,7 +617,7 @@ struct DevPassQuotaProviderTests {
         let snapshot = try await withStubbedHTTP(
             host: StubHost.devpass, body: devPassBody(creditsUsed: "\"0.10\"", creditsLimit: "\"0.30\"", remaining: "\"0.20\"")
         ) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         // Asserted on the digits, not the currency symbol: the symbol is the
         // reader's locale's business, and pinning it here would fail on a CI
@@ -633,7 +639,7 @@ struct DevPassQuotaProviderTests {
         let snapshot = try await withStubbedHTTP(
             host: StubHost.devpass, body: devPassBody(creditsUsed: "79.5", creditsLimit: "237", remaining: "157.5")
         ) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         #expect(abs(try #require(snapshot.consumptionFraction) - 79.5 / 237.0) < 0.0001)
     }
@@ -641,7 +647,7 @@ struct DevPassQuotaProviderTests {
     @Test("a key with no DevPass plan reports its spend rather than an empty plan gauge")
     func noPlan() async throws {
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: devPassBody(plan: "none")) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         #expect(snapshot.planName == nil)
         #expect(snapshot.status.confidence == .unavailable)
@@ -654,7 +660,7 @@ struct DevPassQuotaProviderTests {
         let body = devPassBody(plan: "none")
             .replacingOccurrences(of: "\"limit\":null", with: "\"limit\":\"500.00\"")
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: body) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
         #expect(snapshot.status.confidence == .measured)
         #expect(snapshot.currencyBasis == .keySpendCap)
@@ -687,7 +693,7 @@ struct DevPassQuotaProviderTests {
           "devPlanPremiumWeekResetsAt":null}}
         """
         let snapshot = try await withStubbedHTTP(host: StubHost.devpass, body: body) {
-            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot()
+            try await DevPassQuotaProvider(apiKey: "llmgtwy_x").fetchSnapshot(now: devPassFixedNow)
         }
 
         #expect(snapshot.status == .measured(.none))
