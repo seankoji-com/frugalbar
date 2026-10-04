@@ -42,6 +42,7 @@ public final class QuotaStore {
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
     private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
     private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
+    private let tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)?
 
     /// - Parameters:
     ///   - readingsLoader: every vendor's readings since a date, for the
@@ -51,18 +52,24 @@ public final class QuotaStore {
     ///     on the refresh path.
     ///   - eventsLoader: recorded AI-platform events, newest first. Used both
     ///     for `recentEvents` on each reload and on demand by the inspector.
+    ///   - tokenUsageLoader: raw token consumption per source per time bucket,
+    ///     for the desktop widget's Tokens layout. Returns nil when the
+    ///     history could not be read, which the widget says rather than
+    ///     drawing an empty chart.
     public init(
         manager: QuotaManager = .shared,
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
         readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
         vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
-        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil
+        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil,
+        tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil
     ) {
         self.manager = manager
         self.historyRecorder = historyRecorder
         self.readingsLoader = readingsLoader
         self.vendorReadingsLoader = vendorReadingsLoader
         self.eventsLoader = eventsLoader
+        self.tokenUsageLoader = tokenUsageLoader
     }
 
     /// One vendor's recorded readings since `since` (all of them when nil).
@@ -70,6 +77,16 @@ public final class QuotaStore {
     public func readings(for vendor: VendorIdentifier, since: Date?) async -> [QuotaHistoryStore.ReadingRecord] {
         guard let vendorReadingsLoader else { return [] }
         return await vendorReadingsLoader(vendor, since)
+    }
+
+    /// Raw token consumption per source per time bucket. nil when the history
+    /// could not be read, or no loader was injected — a failure to read, not
+    /// an absence of activity.
+    public func tokenUsage(
+        since: Date, until: Date, bucketSeconds: Int, anchor: Date
+    ) async -> QuotaHistoryStore.TokenUsage? {
+        guard let tokenUsageLoader else { return nil }
+        return await tokenUsageLoader(since, until, bucketSeconds, anchor)
     }
 
     /// Recorded events, newest first, optionally scoped to one vendor.

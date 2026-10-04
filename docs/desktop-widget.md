@@ -1,17 +1,58 @@
 # Desktop widget
 
-A small panel that charts your subscription usage windows over time, with a strip of current headroom underneath. Open it from the gear menu (**Desktop Widget**, ⌘D). Choosing it again hides it.
+A small panel that shows how much you are using your AI tools. Open it from the gear menu (**Desktop Widget**, ⌘D). Choosing it again hides it.
 
 ## Layouts
 
-The segmented **Chart | Overview** control in the filter bar picks the body. The choice is stored with the filters.
+The segmented **Tokens | Chart | Overview** control in the filter bar picks the body. The choice is stored with the filters.
 
 | Layout | Shows |
 |---|---|
-| **Chart** (default) | Burndown lines, the average and the headroom strip, described below |
+| **Tokens** (default) | Raw token consumption across providers as a stacked area, described under [Tokens layout](#tokens-layout) |
+| **Chart** | Burndown lines, the average and the headroom strip, described under [Chart layout](#what-it-shows-chart-layout) |
 | **Overview** | One tile per provider with each of its windows: a bar, the figure in the chosen metric and a reset tooltip. Tiles follow the popover's provider order and visibility. A configured provider that cannot be read keeps its tile and says why; one that is not configured has none. A hand-entered billing cycle is labelled elapsed time, never usage. Window and range filters are chart-only and hidden here |
 
 The Overview has **no total, average or combined figure**: each number belongs to one provider's own window. Its tiles are read as, for example, "Claude, Max (5x). weekly 60 percent remaining, resets in 3 days. 5-hour blocked".
+
+## Tokens layout
+
+One layer per provider, stacked bottom to top in a fixed order (Claude, OpenAI, OpenCode), with a line along the top for the total and a legend of each provider's total in the range. The y axis is tokens (`1.2k`, `340k`, `12M`); the x axis is time.
+
+| Range | Bucket width |
+|---|---|
+| 24h | 30 minutes |
+| 7d | 3 hours |
+| 30d | 12 hours |
+
+Buckets sit on local midnight, so every width divides the day and edges fall on whole hours.
+
+### Where the numbers come from
+
+The local activity history: tokens that Claude Code, Codex and OpenCode recorded on this Mac, ingested into the history database already used by the History window. They are summed inside SQLite per source per bucket, so a 30-day range does not load every record.
+
+### What it is not
+
+- **Not a quota.** There is no percentage, no "remaining" and no allowance anywhere in this view. Tokens share one unit, which is why stacking and summing them is meaningful; quota windows do not, and the other layouts never combine them.
+- **Not what a vendor billed.** It is what local tools recorded.
+- **Cache tokens are included**, as each tool reports them. The tools may not count cache the same way, so compare each provider's trend over time, not providers against each other. There is deliberately no "without cache" switch: whether a tool's input figure already contains its cached input is not something FrugalBar has verified per tool, and a wrong figure is worse than none.
+
+### What it will not draw
+
+| Case | What happens |
+|---|---|
+| A provider with no token source (Gemini, Grok, Kiro, ClinePass, Copilot, OpenRouter, DevPass, Command Code) | No layer, never a flat zero. It is named under the chart: "No token counts for Gemini, Grok." |
+| A record whose tool reported no token figure | Not summed, and not counted as zero. The chart says how many were left out |
+| A provider with no tokens in the range | No layer and no legend entry |
+| A time bucket where a tool recorded nothing | Zero observed tokens, which is true |
+| A provider you hid | Not drawn, like everywhere else |
+| An unreadable history database | "Could not read token history", never an empty chart |
+| An empty range | "No token activity in this range" and where tokens are counted from |
+
+**Codex lands in lumps.** Codex records one cumulative total per session, placed at that session's last turn, so a long session is a single bump at its end rather than spread over its length. Spreading it would invent a distribution nobody recorded, so the chart says so under itself whenever Codex is drawn. Claude Code and OpenCode record per message.
+
+### Controls
+
+The vendor menu lists the providers that have token data, and the range picker offers 24h, 7d and 30d. The window menu and used/remaining switch are quota concerns and are hidden here. The header shows no "updated" age, which would describe quota readings and not token history.
 
 ## What it shows (Chart layout)
 
@@ -71,6 +112,7 @@ A WidgetKit widget must ship as a signed `.appex` inside a `.app`. FrugalBar shi
 ## Accessibility
 
 - The chart is one accessibility element with a spoken summary of every series and the average, and the label names the metric and range.
+- The Tokens chart is one element too. It speaks the total, each provider's share and every footnote shown under it, from the same strings, so what is read out is what is drawn. Layers are told apart by hue, which is why the three are kept well apart (OpenCode is drawn in blue, not its brand amber, which sits next to Claude's salmon).
 - Each headroom row is read as, for example, "OpenAI WK window, 62 percent remaining. Resets in 3 days". A window with no figure reads "blocked" or "no reading", never 0.
 - Urgency uses marker shape and the health symbol, not colour alone.
 - Every control (vendor menu, window menu, range, metric) has a label.

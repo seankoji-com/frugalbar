@@ -87,6 +87,18 @@ figure: vendors meter different things over different windows. The widget's Over
 total, and a configured-but-unreadable provider keeps its tile. The widget is an
 app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
 
+**Token totals are observations, and summing them is allowed only because tokens
+share a unit.** The Tokens layout stacks locally recorded tokens (the `activity`
+table, summed in SQL by `fetchTokenUsage`) for the providers with an adapter
+(`AttributionEngine.localSourceIdentifiers`). Every other provider is named under
+the chart, never drawn as a zero layer. A record whose total is `NULL` is counted
+as uncounted and said so, never summed as 0. Keep it apart from quota: no
+percentage, no "remaining", no division by an allowance. Codex records one
+cumulative total per session at its last turn, and the chart says so rather than
+spreading it. Cache tokens are included as each tool reports them. Whether a tool's
+input figure already contains its cached input is unverified, so there is no
+"without cache" mode until that is established per tool.
+
 **A hidden provider is not polled, not counted, and not remembered.**
 `QuotaManager` reads `ProviderDisplayPreferences` once per poll, skips hidden
 vendors' fetches and removes their cache entries, so they vanish from the
