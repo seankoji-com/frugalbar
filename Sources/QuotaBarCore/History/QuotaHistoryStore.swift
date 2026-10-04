@@ -584,9 +584,6 @@ public actor QuotaHistoryStore {
                 // Not the retired catalog/feed tables: a new database no
                 // longer has them, and DELETE on a missing table throws.
                 HistorySchema.eventTable, HistorySchema.accountModelTable,
-                // The claim "the first ingestion finished" describes the rows
-                // just deleted, so it goes with them.
-                HistorySchema.ingestionStateTable,
             ] {
                 try db.execute(sql: "DELETE FROM \(table);")
             }

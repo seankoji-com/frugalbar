@@ -8,7 +8,6 @@ public enum HistorySchema {
     public static let catalogModelTable = "catalog_model"
     public static let feedItemTable = "feed_item"
     public static let accountModelTable = "account_model"
-    public static let ingestionStateTable = "ingestion_state"
 
     /// The on-disk schema generation. A mismatch on open drops every table.
     ///
@@ -96,15 +95,6 @@ public enum HistorySchema {
       last_seen     INTEGER NOT NULL,
       PRIMARY KEY (vendor, model_id)
     ) WITHOUT ROWID;
-
-    -- Facts about the ingestion pipeline itself, kept beside the data they
-    -- describe so they cannot outlive it: a database that has been wiped must
-    -- not go on claiming its first full pass has finished.
-    CREATE TABLE IF NOT EXISTS ingestion_state (
-      key           TEXT    NOT NULL,    -- e.g. "activity_full_pass"
-      value         INTEGER NOT NULL,    -- epoch seconds when it last happened
-      PRIMARY KEY (key)
-    ) WITHOUT ROWID;
     """
 
     /// Idempotent in-place rewrites of stored values, run on every open after
@@ -132,7 +122,6 @@ public enum HistorySchema {
     DROP TABLE IF EXISTS \(catalogModelTable);
     DROP TABLE IF EXISTS \(feedItemTable);
     DROP TABLE IF EXISTS \(accountModelTable);
-    DROP TABLE IF EXISTS \(ingestionStateTable);
     """
 }
 

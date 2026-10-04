@@ -201,7 +201,7 @@ struct QuotaStoreTests {
         let manager = QuotaManager(
             cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
             providerFactory: { [] })
-        let status = ActivityIngestionEngine.Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: false)
+        let status = ActivityIngestionEngine.Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false)
         let withLoader = QuotaStore(manager: manager, activityStatusLoader: { status })
         #expect(await withLoader.activityIngestionStatus() == status)
     }

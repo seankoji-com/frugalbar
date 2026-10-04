@@ -46,9 +46,11 @@ The local activity history: tokens that Claude Code, Codex and OpenCode recorded
 | A time bucket where a tool recorded nothing | Zero observed tokens, which is true |
 | A provider you hid | Not drawn, like everywhere else |
 | An unreadable history database | "Could not read token history", never an empty chart |
-| The first ingestion has not finished | The activity table is empty, or partly filled, until FrugalBar has read your session history once. An empty chart says "Reading your local sessions…" and checks every few seconds; a partly filled one says its totals may be incomplete. Never "No token activity" |
-| A tool whose sessions could not be read | The latest pass failed for it, so its tokens are missing from every total. A chart says "Some local sessions could not be read…"; an empty one says "Could not read all local sessions" |
-| An empty range, once a clean pass has finished | "No token activity in this range" and where tokens are counted from |
+| No pass has finished since FrugalBar started | The activity table is empty on a first run and, on every later one, missing whatever the tools wrote while the app was closed. An empty chart says "Reading your local sessions…" and checks every few seconds; a chart with data says its totals may be incomplete. Never "No token activity". Nothing is remembered from an earlier run: that would vouch for a table nothing has caught up |
+| A pass that could not read everything | An adapter failed, or skipped a transcript it may not open, a database that will not open, or an OpenCode table that has gone. Its tokens are missing from every total. A chart says "Some local sessions could not be read…"; an empty one says "Could not read all local sessions". A skipped input is retried on the next pass |
+| An empty range, once a clean pass has finished this run | "No token activity in this range" and where tokens are counted from |
+
+**What "complete" does and does not mean.** It means every adapter read every input it found without error, in this run. It does not mean the table is live: it trails the tools by up to one poll (about two minutes). And a malformed record inside a readable file is dropped by its adapter without a trace, which no status can see.
 
 **Codex lands in lumps.** Codex records one cumulative total per session, placed at that session's last turn, so a long session is a single bump at its end rather than spread over its length. Spreading it would invent a distribution nobody recorded, so the chart says so under itself whenever Codex is drawn. Claude Code and OpenCode record per message.
 

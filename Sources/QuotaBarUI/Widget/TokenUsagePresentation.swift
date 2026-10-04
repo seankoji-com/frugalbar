@@ -25,21 +25,22 @@ public enum TokenUsagePresentation {
     /// How far the local-activity ingestion has got, which decides whether an
     /// empty or short chart may be read as "nothing happened".
     public enum IngestionProgress: Sendable, Equatable {
-        /// The first full pass has finished and the latest pass was clean.
+        /// A pass has finished in this run and read everything it found.
         case complete
-        /// The first full pass has not finished (running, or not yet started),
-        /// so the table is empty or partly filled.
+        /// No pass has finished in this run (running, or not yet started), so
+        /// the table is empty or partly filled on a first run, and on a later
+        /// one is missing whatever the tools wrote while the app was closed.
         case indexing
-        /// The latest pass finished with a source unreadable, so some tokens
-        /// are missing from every total.
+        /// The latest pass could not read everything, so some tokens are
+        /// missing from every total.
         case incomplete
 
         /// `nil` means the status could not be read at all. That is never
         /// evidence of completeness, so it reads as still indexing.
         public init(_ status: ActivityIngestionEngine.Status?) {
             guard let status else { self = .indexing; return }
-            if status.lastPassFailed { self = .incomplete }
-            else if status.hasCompletedFullPass { self = .complete }
+            if status.lastPassIncomplete { self = .incomplete }
+            else if status.hasCompletedCleanPass { self = .complete }
             else { self = .indexing }
         }
     }
@@ -332,7 +333,7 @@ public enum TokenUsagePresentation {
             return (["FrugalBar counts tokens from local Claude Code, Codex and OpenCode sessions on this Mac."]
                     + notes(for: chart)).joined(separator: " ")
         case .indexing:
-            return "FrugalBar is reading your Claude Code, Codex and OpenCode history for the first time. Totals appear as it finishes."
+            return "FrugalBar is reading your Claude Code, Codex and OpenCode history. Totals appear as it finishes."
         case .incomplete:
             return "Some session history could not be read, so this is not an absence of activity."
         }

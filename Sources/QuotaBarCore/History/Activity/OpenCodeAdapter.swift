@@ -46,7 +46,9 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         let openStatus = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil)
         guard openStatus == SQLITE_OK, let db else {
             if let db { sqlite3_close(db) }
-            return .empty
+            // The file is there and will not open (permissions, corruption).
+            // That is a source that could not be read, not an idle one.
+            return ActivityIngestResult(skipped: 1)
         }
         defer { sqlite3_close(db) }
 
@@ -64,7 +66,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
 
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            return .empty
+            // It opened but the query will not run: the `message` table is
+            // missing or reshaped, as a changed OpenCode schema would leave
+            // it. Returning "nothing new" here would mean OpenCode silently
+            // never counts.
+            return ActivityIngestResult(skipped: 1)
         }
         defer { sqlite3_finalize(stmt) }
 

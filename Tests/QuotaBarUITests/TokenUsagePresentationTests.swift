@@ -302,17 +302,17 @@ struct TokenUsagePresentationTests {
 
     private typealias Status = ActivityIngestionEngine.Status
 
-    @Test("only a clean, finished first pass is complete; unknown or unfinished is still indexing")
+    @Test("only a clean pass finished in this run is complete; unknown or unfinished is still indexing")
     func ingestionProgress() {
         #expect(T.IngestionProgress(nil) == .indexing)
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: false, isRunning: true)) == .indexing)
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: false, isRunning: false)) == .indexing)
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: false)) == .complete)
-        // A pass running after the first finished does not un-complete it.
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: true)) == .complete)
-        // A source that could not be read leaves tokens out of every total.
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: true, isRunning: false)) == .incomplete)
-        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: true, isRunning: false)) == .incomplete)
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: false, lastPassIncomplete: false, isRunning: true)) == .indexing)
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: false, lastPassIncomplete: false, isRunning: false)) == .indexing)
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false)) == .complete)
+        // A pass running after one has finished does not un-complete it.
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: true)) == .complete)
+        // An input that could not be read leaves tokens out of every total.
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: true, lastPassIncomplete: true, isRunning: false)) == .incomplete)
+        #expect(T.IngestionProgress(Status(hasCompletedCleanPass: false, lastPassIncomplete: true, isRunning: false)) == .incomplete)
     }
 
     /// The defect this guards: the first ingestion has not finished, the
@@ -338,7 +338,8 @@ struct TokenUsagePresentationTests {
             let words = (T.emptyTitle(pending.emptyReason!) + " " + (T.emptyDetail(for: pending) ?? "")).lowercased()
             #expect(!words.contains("no token activity"), "\(words)")
         }
-        #expect(T.emptyDetail(for: indexing)?.contains("first time") == true)
+        #expect(T.emptyDetail(for: indexing)?.contains("Totals appear as it finishes") == true)
+        #expect(T.emptyDetail(for: indexing)?.contains("first time") == false)   // true on a relaunch too
         #expect(T.emptyDetail(for: broken)?.contains("not an absence of activity") == true)
         #expect(T.emptyDetail(for: chart([bucket("claude_code", slot: 20, 1)])) == nil)
     }

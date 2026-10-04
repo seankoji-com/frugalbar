@@ -99,14 +99,18 @@ spreading it. Cache tokens are included as each tool reports them. Whether a too
 input figure already contains its cached input is unverified, so there is no
 "without cache" mode until that is established per tool.
 
-**An empty activity table is not an empty week.** Until the first full ingestion
-pass has finished the table is empty or partly filled, and while an adapter keeps
-failing a source is missing from every total. `ActivityIngestionEngine.Status`
-says which (`hasCompletedFullPass` is stored in the `ingestion_state` table, so it
-survives restarts and is wiped with the data). The Tokens layout says it is still
-reading, or that it could not read everything, and shows "No token activity" only
-once a clean pass has finished. Read the status before the data, and treat an
-unknown status as not complete.
+**An empty activity table is not an empty week.** The table is empty on a first
+run, stale after every restart until a pass finishes, and short while an input
+cannot be read. `ActivityIngestionEngine.Status` says which, from this process's
+own passes only: never a flag remembered from an earlier run, which would vouch
+for a table nothing has caught up (that was tried, and over-claimed). Adapters
+must report an input they cannot read in `ActivityIngestResult.skipped` and leave
+it without a watermark so it is retried; returning success with it missing makes
+every total quietly short, and recording its new size and mtime made the Claude
+adapter never look at it again. The Tokens layout says it is still reading, or
+could not read everything, and shows "No token activity" only once a clean pass
+has finished this run. Read the status before the data, and treat an unknown
+status as not complete.
 
 **A hidden provider is not polled, not counted, and not remembered.**
 `QuotaManager` reads `ProviderDisplayPreferences` once per poll, skips hidden
