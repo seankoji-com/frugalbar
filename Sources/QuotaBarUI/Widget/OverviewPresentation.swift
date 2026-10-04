@@ -97,6 +97,9 @@ public enum OverviewPresentation {
                 }
             } else if let fraction = window.fraction {
                 text += " \(Int((fraction * 100).rounded())) percent \(word)"
+                // Blocked by the vendor yet reporting a figure: the bar wears
+                // the blocked colour, so say it too.
+                if window.isBlocked { text += ", blocked" }
             } else {
                 text += window.isBlocked ? " blocked" : " no reading"
             }

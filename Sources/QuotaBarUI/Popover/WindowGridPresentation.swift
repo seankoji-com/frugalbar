@@ -113,13 +113,18 @@ public struct WindowGridPresentation: Equatable, Sendable {
             var text: String
             if let percent = Self.percentText(for: bar) {
                 text = "\(name) \(percent) used"
+                // The vendor can block a window and still report how much of
+                // it was used (OpenCode Go does). The bar then wears the
+                // vendor's blocked colour, which is colour alone: say it.
+                if bar.isBlocked { text += ", blocked" }
             } else {
                 text = "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
             }
             guard isColumn else { return text }
-            // The amber fill, in words. Not for a spent window, which is red
-            // and draws no pace tick.
-            if bar.isAboveProrataPace,
+            // The amber fill, in words. Not for a blocked window, which wears
+            // the vendor's blocked colour rather than amber, and not for a
+            // spent one, which is red and draws no pace tick.
+            if !bar.isBlocked, bar.isAboveProrataPace,
                (bar.primaryFraction ?? 0) < QuotaSnapshot.exhaustionThreshold {
                 text += ", ahead of an even pace"
             }

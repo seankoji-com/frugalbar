@@ -216,4 +216,38 @@ struct WindowGridSpokenResetTests {
         let blocked = DualBarMetrics(primaryFraction: nil, expectedPaceFraction: 0.2, label: "WK", isBlocked: true)
         #expect(grid([blocked]).spokenSummary(now: now) == "weekly blocked")
     }
+
+    // MARK: Blocked with a measured percentage (OpenCode Go reports both)
+
+    /// The vendor blocked the window yet reported how much was used, and the
+    /// usage is well above pace. The bar wears the vendor's blocked colour,
+    /// not amber, so "ahead of an even pace" would misdescribe it.
+    private func blockedMeasured(used: Double = 0.90, pace: Double? = 0.20) -> DualBarMetrics {
+        DualBarMetrics(
+            primaryFraction: used, expectedPaceFraction: pace, label: "WK",
+            blockedColor: "#ffb4ab", isBlocked: true,
+            resetsAt: now.addingTimeInterval(86_400))
+    }
+
+    @Test("a blocked window with a percentage says blocked, and never claims to be ahead of pace")
+    func blockedMeasuredIsNotAheadOfPace() {
+        let spoken = grid([blockedMeasured()]).spokenSummary(now: now)
+        #expect(spoken == "weekly 90% used, blocked, resets in 1 day")
+        #expect(spoken?.contains("ahead of an even pace") == false)
+    }
+
+    @Test("the same usage, not blocked, is ahead of pace")
+    func sameUsageNotBlockedIsAhead() {
+        let open = DualBarMetrics(
+            primaryFraction: 0.90, expectedPaceFraction: 0.20, label: "WK",
+            resetsAt: now.addingTimeInterval(86_400))
+        #expect(grid([open]).spokenSummary(now: now) == "weekly 90% used, ahead of an even pace, resets in 1 day")
+    }
+
+    @Test("a blocked pool that is not a window also says blocked")
+    func blockedExtra() {
+        let pool = DualBarMetrics(primaryFraction: 0.5, label: "BN", blockedColor: "#ffb4ab", isBlocked: true)
+        #expect(grid([DualBarMetrics(primaryFraction: 0.3, label: "MO"), pool]).spokenSummary(now: now)
+                == "monthly 30% used, BN 50% used, blocked")
+    }
 }

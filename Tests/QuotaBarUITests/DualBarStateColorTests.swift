@@ -32,4 +32,26 @@ struct DualBarStateColorTests {
         #expect(color(nil) == Theme.outline)
         #expect(color(nil, blocked: true) == Theme.errorBold)
     }
+
+    // MARK: A blocked window is never drawn as healthy
+
+    @Test("a blocked window wears the vendor's colour whatever its percentage and pace")
+    func blockedUsesVendorColour() throws {
+        let vendor = try #require(Color(hexString: "#ffb4ab"))
+        for (used, pace) in [(0.05, 0.03), (0.40, nil), (0.90, 0.20)] as [(Double, Double?)] {
+            let metrics = DualBarMetrics(
+                primaryFraction: used, expectedPaceFraction: pace, label: "WK",
+                blockedColor: "#ffb4ab", isBlocked: true)
+            #expect(DualBarProgressView.stateColor(for: metrics) == vendor)
+        }
+    }
+
+    /// Failure rendering as health: before this, a blocked window with a
+    /// percentage and no vendor colour fell through to green.
+    @Test("a blocked window with a percentage but no vendor colour is the error tone, not green")
+    func blockedWithoutVendorColour() {
+        #expect(color(0.40, pace: 0.50, blocked: true) == Theme.errorBold)
+        #expect(color(0.05, blocked: true) == Theme.errorBold)
+        #expect(color(0.40, pace: 0.50, blocked: true) != Theme.healthy)
+    }
 }

@@ -120,4 +120,12 @@ struct OverviewPresentationTests {
         #expect(O.accessibilityLabel(for: warn, metric: .remaining, now: now).hasSuffix("running low"))
         #expect(O.accessibilityLabel(for: crit, metric: .remaining, now: now).hasSuffix("critically low"))
     }
+
+    @Test("a window the vendor blocked but still measured is spoken as blocked")
+    func blockedMeasuredSpoken() {
+        let blocked = DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true, windowLength: QuotaWindow.week)
+        let tile = O.tiles(snapshots: [snapshot(.opencode, status: .critical, bars: [blocked])], filters: WidgetFilters())[0]
+        let text = O.accessibilityLabel(for: tile, metric: .remaining, now: now)
+        #expect(text.contains("weekly 10 percent remaining, blocked"))
+    }
 }

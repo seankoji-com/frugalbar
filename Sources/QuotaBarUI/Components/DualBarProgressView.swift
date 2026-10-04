@@ -64,16 +64,15 @@ public struct DualBarProgressView: View {
     /// percentage text so a figure and the bar above it never disagree.
     nonisolated static func stateColor(for metrics: DualBarMetrics) -> Color {
         let consumed = metrics.primaryFraction.map { max(0, min(1, $0)) }
-        let vendorStatusColor = metrics.isBlocked
-            ? metrics.blockedColor.flatMap(Color.init(hexString:))
-            : nil
-        if let vendorStatusColor {
-            return vendorStatusColor
-        } else if metrics.isBlocked && consumed == nil {
-            // Matches the hatched placeholder's own fallback, so a blocked
-            // window with no vendor colour and no reading never shows a
-            // label in one colour beside a bar drawn in another.
-            return Theme.errorBold
+        if metrics.isBlocked {
+            // The vendor told us this window cannot be used: its own colour
+            // when it gave one, otherwise the shared error tone. Whatever the
+            // percentage says. A blocked window that reported 40% used must
+            // not be drawn green, which is failure rendering as health. This
+            // also matches the hatched placeholder's fallback, so a blocked
+            // window with no reading never shows a label in one colour beside
+            // a bar drawn in another.
+            return metrics.blockedColor.flatMap(Color.init(hexString:)) ?? Theme.errorBold
         } else if consumed == nil {
             // No reading and not vendor-flagged blocked: neutral, not a
             // fabricated "healthy" green.
