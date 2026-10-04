@@ -127,7 +127,14 @@ struct ActivityAdapterSkipTests {
             throw HistoryDatabaseError.cannotOpen(path: url.path, code: -1)
         }
         defer { sqlite3_close(db) }
-        sqlite3_exec(db, sql, nil, nil, nil)
+        // A statement that does not run would leave an empty database, and
+        // an adapter test over an empty database passes for the wrong reason.
+        var message: UnsafeMutablePointer<CChar>?
+        defer { sqlite3_free(message) }
+        guard sqlite3_exec(db, sql, nil, nil, &message) == SQLITE_OK else {
+            throw HistoryDatabaseError.executionFailed(
+                sql: sql, message: message.map { String(cString: $0) } ?? "unknown")
+        }
     }
 
     /// The failure this guards: OpenCode reshapes its database, the query no
@@ -143,6 +150,62 @@ struct ActivityAdapterSkipTests {
         #expect(result.records.isEmpty)
         #expect(result.skipped == 1)
         #expect(result.watermarks.isEmpty)       // nothing is marked as read
+    }
+
+    /// The failure this guards: the query prepares and then fails on a step
+    /// (corruption, an I/O error). Ending the loop as if it had finished marked
+    /// the database read and reported a clean pass.
+    ///
+    /// A view named `message` whose column overflows when evaluated makes
+    /// `sqlite3_step` fail without damaging a file; it prepares fine, so this
+    /// is not the missing-table case above.
+    @Test("OpenCode: a query that fails on its first step is skipped, with no watermark")
+    func openCodeStepFailure() async throws {
+        let dir = try makeTempDir("opencode-step")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("opencode.db")
+        try makeDatabase(at: url, sql: """
+        CREATE VIEW message AS
+        SELECT 'm1' AS id, 's' AS session_id, 1 AS time_created, 1 AS time_updated,
+               abs(-9223372036854775807 - 1) AS data;
+        """)
+        let result = try await OpenCodeAdapter(databaseURL: url).collectActivities(watermarks: [:])
+        #expect(result.skipped == 1)
+        #expect(result.watermarks.isEmpty)
+    }
+
+    /// Rows read before the failure are real observations and storing them
+    /// again next pass is harmless (the primary key replaces), so they are
+    /// kept; the database still gets no watermark, so it is read again from
+    /// the old cursor, and the pass is incomplete.
+    @Test("OpenCode: rows read before a mid-query failure are kept, and the database is not marked read")
+    func openCodePartialStepFailure() async throws {
+        let dir = try makeTempDir("opencode-partial")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("opencode.db")
+        // The index lets the rows stream in `time_updated` order, so `good`
+        // is delivered before `bad` is evaluated and fails. The failure sits
+        // in a view because a generated column is evaluated on insert.
+        try makeDatabase(at: url, sql: """
+        CREATE TABLE base (
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+          time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+          raw TEXT NOT NULL
+        );
+        CREATE INDEX base_updated ON base(time_updated);
+        INSERT INTO base (id, session_id, time_created, time_updated, raw) VALUES
+          ('good', 's', 1000, 1000, '{"tokens":{"input":1,"output":2,"total":3}}'),
+          ('bad',  's', 2000, 2000, 'x');
+        CREATE VIEW message AS
+        SELECT id, session_id, time_created, time_updated,
+               CASE WHEN id = 'bad' THEN abs(-9223372036854775807 - 1) ELSE raw END AS data
+        FROM base;
+        """)
+        let result = try await OpenCodeAdapter(databaseURL: url).collectActivities(watermarks: [:])
+        #expect(result.records.map(\.recordId) == ["good"])
+        #expect(result.records.first?.totalTokens == 3)
+        #expect(result.skipped == 1)
+        #expect(result.watermarks.isEmpty)
     }
 
     @Test("OpenCode: a file that is not a database is skipped")

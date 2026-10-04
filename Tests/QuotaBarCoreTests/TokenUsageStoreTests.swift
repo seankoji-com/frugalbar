@@ -108,6 +108,29 @@ struct TokenUsageStoreTests {
         #expect(bucketed > 0)
     }
 
+    /// The defect this guards: a query that stops part-way (BUSY, a corrupt
+    /// page, an I/O error) ended the row loop like a normal finish, so the
+    /// widget drew a short or empty chart, even "No token activity", for a
+    /// history it could not read.
+    ///
+    /// SUM over integers raises "integer overflow" from `sqlite3_step`, after
+    /// the statement has prepared and bound, which is a real step failure
+    /// without damaging a file.
+    @Test("a query that fails part-way throws instead of returning what it had")
+    func midQueryFailureThrows() async throws {
+        let (store, dir) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try await store.recordActivities([
+            record("claude_code", "a", at: 10, total: Int.max),
+            record("claude_code", "b", at: 20, total: Int.max),    // same bucket: the sum overflows
+            record("codex", "c", at: 15, total: 7),                // a source that would read fine
+        ])
+        await #expect(performing: { _ = try await usage(store) }, throws: { error in
+            if case HistoryDatabaseError.stepFailed = error { return true }
+            return false
+        })
+    }
+
     @Test("an empty store, an empty range and a zero-width bucket all yield nothing")
     func empties() async throws {
         let (store, dir) = try makeStore()

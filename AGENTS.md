@@ -107,10 +107,13 @@ for a table nothing has caught up (that was tried, and over-claimed). Adapters
 must report an input they cannot read in `ActivityIngestResult.skipped` and leave
 it without a watermark so it is retried; returning success with it missing makes
 every total quietly short, and recording its new size and mtime made the Claude
-adapter never look at it again. The Tokens layout says it is still reading, or
-could not read everything, and shows "No token activity" only once a clean pass
-has finished this run. Read the status before the data, and treat an unknown
-status as not complete.
+adapter never look at it again. A read that fails part-way counts too: ending a
+row loop on any `sqlite3_step` result but `SQLITE_DONE` turns a failed read into
+a short or empty week (the OpenCode adapter and the token query both did; the
+query now throws and the adapter reports the input skipped). The Tokens layout
+says it is still reading, or could not read everything, and shows "No token
+activity" only once a clean pass has finished this run. Read the status before
+the data, and treat an unknown status as not complete.
 
 **A hidden provider is not polled, not counted, and not remembered.**
 `QuotaManager` reads `ProviderDisplayPreferences` once per poll, skips hidden

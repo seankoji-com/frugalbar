@@ -84,7 +84,17 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             if step == SQLITE_BUSY {
                 throw ActivityAdapterError.sourceBusy(path: path)
             }
-            guard step == SQLITE_ROW else { break }
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else {
+                // The query ran and then failed part-way: corruption, an I/O
+                // error, an interrupted read. Ending the loop as if it had
+                // finished would mark the database read up to here and report
+                // a clean pass. Keep the rows read, which are real and which
+                // storing again is harmless (the primary key replaces), but
+                // give the database no watermark, so it is read again from
+                // the old cursor, and count it as skipped.
+                return ActivityIngestResult(records: records, skipped: 1)
+            }
 
             guard let idC = sqlite3_column_text(stmt, 0),
                   let dataC = sqlite3_column_text(stmt, 4) else {
@@ -148,8 +158,8 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             ))
         }
 
-        // Only advance the cursor on a pass that actually ran to completion; the
-        // busy case above throws and leaves it where it was.
+        // Only advance the cursor on a pass that actually ran to completion; a
+        // busy or failed step above leaves it where it was.
         let watermark = ActivityWatermark(
             filePath: path,
             fileSize: 0,

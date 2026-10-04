@@ -90,7 +90,17 @@ extension QuotaHistoryStore {
 
             var buckets: [TokenBucket] = []
             var uncounted: [String: Int] = [:]
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while true {
+                let status = sqlite3_step(stmt)
+                if status == SQLITE_DONE { break }
+                // DONE is the only way this query ends well. BUSY, a corrupt
+                // page, an I/O error or an overflow in SUM stop it part-way,
+                // and returning what was read would draw a short or empty
+                // week, even "No token activity", for a history that could
+                // not be read.
+                guard status == SQLITE_ROW else {
+                    throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
+                }
                 guard let sourceText = sqlite3_column_text(stmt, 0) else { continue }
                 let source = String(cString: sourceText)
                 let index = sqlite3_column_int64(stmt, 1)

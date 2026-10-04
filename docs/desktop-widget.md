@@ -45,9 +45,9 @@ The local activity history: tokens that Claude Code, Codex and OpenCode recorded
 | A provider with no tokens in the range | No layer and no legend entry |
 | A time bucket where a tool recorded nothing | Zero observed tokens, which is true |
 | A provider you hid | Not drawn, like everywhere else |
-| An unreadable history database | "Could not read token history", never an empty chart |
+| An unreadable history database, or a token query that stops part-way | "Could not read token history", never an empty or partial chart |
 | No pass has finished since FrugalBar started | The activity table is empty on a first run and, on every later one, missing whatever the tools wrote while the app was closed. An empty chart says "Reading your local sessions…" and checks every few seconds; a chart with data says its totals may be incomplete. Never "No token activity". Nothing is remembered from an earlier run: that would vouch for a table nothing has caught up |
-| A pass that could not read everything | An adapter failed, or skipped a transcript it may not open, a database that will not open, or an OpenCode table that has gone. Its tokens are missing from every total. A chart says "Some local sessions could not be read…"; an empty one says "Could not read all local sessions". A skipped input is retried on the next pass |
+| A pass that could not read everything | An adapter failed, or skipped a transcript it may not open, a database that will not open, an OpenCode table that has gone, or an OpenCode query that fails part-way (the rows it read first are kept). Its tokens are missing from every total. A chart says "Some local sessions could not be read…"; an empty one says "Could not read all local sessions". A skipped input is retried on the next pass |
 | An empty range, once a clean pass has finished this run | "No token activity in this range" and where tokens are counted from |
 
 **What "complete" does and does not mean.** It means every adapter read every input it found without error, in this run. It does not mean the table is live: it trails the tools by up to one poll (about two minutes). And a malformed record inside a readable file is dropped by its adapter without a trace, which no status can see.
