@@ -46,7 +46,9 @@ The local activity history: tokens that Claude Code, Codex and OpenCode recorded
 | A time bucket where a tool recorded nothing | Zero observed tokens, which is true |
 | A provider you hid | Not drawn, like everywhere else |
 | An unreadable history database | "Could not read token history", never an empty chart |
-| An empty range | "No token activity in this range" and where tokens are counted from |
+| The first ingestion has not finished | The activity table is empty, or partly filled, until FrugalBar has read your session history once. An empty chart says "Reading your local sessions…" and checks every few seconds; a partly filled one says its totals may be incomplete. Never "No token activity" |
+| A tool whose sessions could not be read | The latest pass failed for it, so its tokens are missing from every total. A chart says "Some local sessions could not be read…"; an empty one says "Could not read all local sessions" |
+| An empty range, once a clean pass has finished | "No token activity in this range" and where tokens are counted from |
 
 **Codex lands in lumps.** Codex records one cumulative total per session, placed at that session's last turn, so a long session is a single bump at its end rather than spread over its length. Spreading it would invent a distribution nobody recorded, so the chart says so under itself whenever Codex is drawn. Claude Code and OpenCode record per message.
 

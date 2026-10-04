@@ -22,6 +22,36 @@ public enum TokenUsagePresentation {
 
     // MARK: - Types
 
+    /// How far the local-activity ingestion has got, which decides whether an
+    /// empty or short chart may be read as "nothing happened".
+    public enum IngestionProgress: Sendable, Equatable {
+        /// The first full pass has finished and the latest pass was clean.
+        case complete
+        /// The first full pass has not finished (running, or not yet started),
+        /// so the table is empty or partly filled.
+        case indexing
+        /// The latest pass finished with a source unreadable, so some tokens
+        /// are missing from every total.
+        case incomplete
+
+        /// `nil` means the status could not be read at all. That is never
+        /// evidence of completeness, so it reads as still indexing.
+        public init(_ status: ActivityIngestionEngine.Status?) {
+            guard let status else { self = .indexing; return }
+            if status.lastPassFailed { self = .incomplete }
+            else if status.hasCompletedFullPass { self = .complete }
+            else { self = .indexing }
+        }
+    }
+
+    /// Why a chart with nothing in it is empty.
+    public enum EmptyReason: Sendable, Equatable {
+        /// Ingestion is complete and recorded no tokens in the range.
+        case noActivity
+        case indexing
+        case incomplete
+    }
+
     public struct Point: Identifiable, Sendable, Equatable {
         public var id: Date { bucketStart }
         /// Where the point is drawn: the bucket's centre, held inside the
@@ -66,8 +96,21 @@ public enum TokenUsagePresentation {
         public let uncountedRecords: Int
         /// Providers the user has whose tools publish no token counts here.
         public let vendorsWithoutTokenData: [VendorIdentifier]
+        /// How far ingestion has got: a short or empty chart is only
+        /// "no activity" when this is `.complete`.
+        public let ingestion: IngestionProgress
 
         public var isEmpty: Bool { totalTokens == 0 }
+
+        /// nil when something is drawn.
+        public var emptyReason: EmptyReason? {
+            guard isEmpty else { return nil }
+            switch ingestion {
+            case .complete: return .noActivity
+            case .indexing: return .indexing
+            case .incomplete: return .incomplete
+            }
+        }
 
         /// Codex records one cumulative total per session, placed at the
         /// session's last turn, so its tokens land in lumps rather than
@@ -134,11 +177,15 @@ public enum TokenUsagePresentation {
     ///     everywhere else.
     ///   - configured: Providers the user has set up, to name the ones with
     ///     no token data. Pass the store's snapshots' vendors.
+    ///   - ingestion: How far the local-activity ingestion has got. There is
+    ///     no default: whoever draws a chart must say, since an empty table
+    ///     before the first pass is not an empty week.
     public static func chart(
         usage: QuotaHistoryStore.TokenUsage,
         filters: WidgetFilters,
         hidden: Set<VendorIdentifier>,
         configured: [VendorIdentifier],
+        ingestion: IngestionProgress,
         now: Date,
         calendar: Calendar = .current
     ) -> Chart {
@@ -219,7 +266,8 @@ public enum TokenUsagePresentation {
             totalTokens: layers.reduce(0) { $0 + $1.totalTokens },
             peak: peak,
             uncountedRecords: uncounted,
-            vendorsWithoutTokenData: without
+            vendorsWithoutTokenData: without,
+            ingestion: ingestion
         )
     }
 
@@ -266,11 +314,42 @@ public enum TokenUsagePresentation {
         value == value.rounded() ? "\(Int(value))" : String(format: "%.1f", value)
     }
 
+    // MARK: - Empty states
+
+    public static func emptyTitle(_ reason: EmptyReason) -> String {
+        switch reason {
+        case .noActivity: "No token activity in this range"
+        case .indexing: "Reading your local sessions…"
+        case .incomplete: "Could not read all local sessions"
+        }
+    }
+
+    /// The line under the title, or nil when the chart is not empty.
+    public static func emptyDetail(for chart: Chart) -> String? {
+        guard let reason = chart.emptyReason else { return nil }
+        switch reason {
+        case .noActivity:
+            return (["FrugalBar counts tokens from local Claude Code, Codex and OpenCode sessions on this Mac."]
+                    + notes(for: chart)).joined(separator: " ")
+        case .indexing:
+            return "FrugalBar is reading your Claude Code, Codex and OpenCode history for the first time. Totals appear as it finishes."
+        case .incomplete:
+            return "Some session history could not be read, so this is not an absence of activity."
+        }
+    }
+
     /// What the chart does not say for itself, in the words drawn under it.
     /// The spoken summary uses these same strings, so what is read out and
     /// what is on screen cannot drift apart.
     public static func notes(for chart: Chart) -> [String] {
         var notes: [String] = []
+        // First, and on a chart that has data too: while the first pass runs
+        // the layers drawn may be only the sources read so far.
+        switch chart.ingestion {
+        case .complete: break
+        case .indexing: notes.append("Still reading your local sessions, so these totals may be incomplete.")
+        case .incomplete: notes.append("Some local sessions could not be read, so these totals may be incomplete.")
+        }
         if chart.hasSessionTotals {
             notes.append("Codex counts tokens per session, at its last turn.")
         }
@@ -290,8 +369,12 @@ public enum TokenUsagePresentation {
     public static func accessibilitySummary(
         chart: Chart, range: HistoryPresentation.TimeRange
     ) -> String {
-        guard !chart.isEmpty else {
-            return "No token activity recorded in the \(range.title.lowercased()) range"
+        if let reason = chart.emptyReason {
+            // The title says why it is empty; "no activity" only when it is
+            // true. The detail is spoken too, since it is on screen.
+            let title = emptyTitle(reason)
+            guard let detail = emptyDetail(for: chart) else { return title }
+            return "\(title). \(detail)"
         }
         var parts = ["\(spoken(chart.totalTokens)) observed tokens in the \(range.title.lowercased()) range, from local sessions on this Mac, cache included"]
         parts += chart.layers.map { "\($0.vendorId.displayName) \(spoken($0.totalTokens))" }

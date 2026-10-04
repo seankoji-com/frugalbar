@@ -84,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSLog("frugalbar: failed to read token usage: \(error)")
                     return nil
                 }
-            }
+            },
+            activityStatusLoader: { await aEngine.status() }
         )
         super.init()
     }

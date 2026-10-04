@@ -5,6 +5,8 @@ public actor ActivityIngestionEngine {
     private let store: QuotaHistoryStore
     private let adapters: [ActivityAdapter]
     private var isIngesting = false
+    /// The most recent pass finished with an adapter having failed.
+    private var lastPassFailed = false
 
     public init(
         store: QuotaHistoryStore,
@@ -50,8 +52,52 @@ public actor ActivityIngestionEngine {
             }
         }
 
+        // A pass only counts as complete when every adapter read its source.
+        // A failure to record that fact is a failed pass too: the claim is
+        // never made on evidence that was not stored.
+        if firstError == nil {
+            do {
+                try await store.markActivityFullPassCompleted()
+            } catch {
+                firstError = error
+            }
+        }
+
+        lastPassFailed = firstError != nil
         if let firstError { throw firstError }
         return totalRecorded
+    }
+
+    /// What the activity table can be trusted to contain.
+    ///
+    /// Everything that reads it for display needs this: until a first full
+    /// pass has finished the table is empty or partly filled, which is not the
+    /// same as "nothing happened", and while an adapter keeps failing a source
+    /// is silently missing.
+    public struct Status: Sendable, Equatable {
+        /// A pass in which every adapter succeeded has finished at least once.
+        /// Stored in the history database, so it survives a restart and is
+        /// cleared with the data.
+        public let hasCompletedFullPass: Bool
+        /// The most recent pass finished with an adapter having failed.
+        public let lastPassFailed: Bool
+        /// A pass is running now.
+        public let isRunning: Bool
+
+        public init(hasCompletedFullPass: Bool, lastPassFailed: Bool, isRunning: Bool) {
+            self.hasCompletedFullPass = hasCompletedFullPass
+            self.lastPassFailed = lastPassFailed
+            self.isRunning = isRunning
+        }
+    }
+
+    public func status() async -> Status {
+        // A database that cannot be read cannot vouch for anything: not complete.
+        let completed = ((try? await store.activityFullPassCompletedAt()) ?? nil) != nil
+        return Status(
+            hasCompletedFullPass: completed,
+            lastPassFailed: lastPassFailed,
+            isRunning: isIngesting)
     }
 
     private func ingest(_ adapter: ActivityAdapter) async throws -> Int {

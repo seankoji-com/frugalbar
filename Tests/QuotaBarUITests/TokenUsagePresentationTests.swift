@@ -31,11 +31,12 @@ struct TokenUsagePresentationTests {
         uncounted: [String: Int] = [:],
         filters: WidgetFilters = WidgetFilters(layout: .tokens),
         hidden: Set<VendorIdentifier> = [],
-        configured: [VendorIdentifier] = []
+        configured: [VendorIdentifier] = [],
+        ingestion: T.IngestionProgress = .complete
     ) -> T.Chart {
         T.chart(
             usage: .init(buckets: buckets, uncountedRecords: uncounted),
-            filters: filters, hidden: hidden, configured: configured,
+            filters: filters, hidden: hidden, configured: configured, ingestion: ingestion,
             now: now, calendar: calendar)
     }
 
@@ -158,7 +159,7 @@ struct TokenUsagePresentationTests {
         let early = anchor.addingTimeInterval(64 * slot + 300)       // 08:05
         let c = T.chart(
             usage: .init(buckets: [bucket("claude_code", slot: 64, 5)], uncountedRecords: [:]),
-            filters: WidgetFilters(layout: .tokens), hidden: [], configured: [],
+            filters: WidgetFilters(layout: .tokens), hidden: [], configured: [], ingestion: .complete,
             now: early, calendar: calendar)
         #expect(c.layers[0].points.last?.x == early)
         #expect(c.layers[0].points.allSatisfy { c.domain.contains($0.x) })
@@ -295,5 +296,73 @@ struct TokenUsagePresentationTests {
         #expect(smallest >= 50, "closest pair of layer hues is \(Int(smallest))°")
         // The brand amber that was too close to Claude's salmon.
         #expect(T.layerColorHex(for: .opencode) != VendorIdentifier.opencode.accentColorHex)
+    }
+
+    // MARK: Ingestion progress: an empty table is not an empty week
+
+    private typealias Status = ActivityIngestionEngine.Status
+
+    @Test("only a clean, finished first pass is complete; unknown or unfinished is still indexing")
+    func ingestionProgress() {
+        #expect(T.IngestionProgress(nil) == .indexing)
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: false, isRunning: true)) == .indexing)
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: false, isRunning: false)) == .indexing)
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: false)) == .complete)
+        // A pass running after the first finished does not un-complete it.
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: true)) == .complete)
+        // A source that could not be read leaves tokens out of every total.
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: true, lastPassFailed: true, isRunning: false)) == .incomplete)
+        #expect(T.IngestionProgress(Status(hasCompletedFullPass: false, lastPassFailed: true, isRunning: false)) == .incomplete)
+    }
+
+    /// The defect this guards: the first ingestion has not finished, the
+    /// activity table is empty, and the widget says "No token activity".
+    @Test("an empty chart claims no activity only once ingestion is complete")
+    func emptyReasons() {
+        #expect(chart(ingestion: .complete).emptyReason == .noActivity)
+        #expect(chart(ingestion: .indexing).emptyReason == .indexing)
+        #expect(chart(ingestion: .incomplete).emptyReason == .incomplete)
+        for progress in [T.IngestionProgress.complete, .indexing, .incomplete] {
+            #expect(chart([bucket("claude_code", slot: 20, 1)], ingestion: progress).emptyReason == nil)
+        }
+    }
+
+    @Test("each empty state has its own words, and only the complete one says nothing happened")
+    func emptyWords() {
+        let none = chart(ingestion: .complete), indexing = chart(ingestion: .indexing), broken = chart(ingestion: .incomplete)
+        #expect(T.emptyTitle(.noActivity) == "No token activity in this range")
+        #expect(T.emptyTitle(.indexing) == "Reading your local sessions…")
+        #expect(T.emptyTitle(.incomplete) == "Could not read all local sessions")
+        #expect(T.emptyDetail(for: none)?.contains("counts tokens from local Claude Code, Codex and OpenCode") == true)
+        for pending in [indexing, broken] {
+            let words = (T.emptyTitle(pending.emptyReason!) + " " + (T.emptyDetail(for: pending) ?? "")).lowercased()
+            #expect(!words.contains("no token activity"), "\(words)")
+        }
+        #expect(T.emptyDetail(for: indexing)?.contains("first time") == true)
+        #expect(T.emptyDetail(for: broken)?.contains("not an absence of activity") == true)
+        #expect(T.emptyDetail(for: chart([bucket("claude_code", slot: 20, 1)])) == nil)
+    }
+
+    @Test("what is spoken for an empty chart is the same reason that is drawn")
+    func emptySpoken() {
+        #expect(T.accessibilitySummary(chart: chart(ingestion: .complete), range: .last24Hours).hasPrefix("No token activity"))
+        #expect(T.accessibilitySummary(chart: chart(ingestion: .indexing), range: .last24Hours).hasPrefix("Reading your local sessions"))
+        #expect(T.accessibilitySummary(chart: chart(ingestion: .incomplete), range: .last24Hours).hasPrefix("Could not read all local sessions"))
+    }
+
+    /// While the first pass runs the sources read so far are drawn, and the
+    /// rest are simply absent: a short chart that looks complete.
+    @Test("a partly filled chart says so, first, on screen and aloud")
+    func partialChart() {
+        let data = [bucket("claude_code", slot: 20, 5)]
+        let indexing = chart(data, configured: [.gemini], ingestion: .indexing)
+        #expect(T.notes(for: indexing).first == "Still reading your local sessions, so these totals may be incomplete.")
+        let incomplete = chart(data, ingestion: .incomplete)
+        #expect(T.notes(for: incomplete).first == "Some local sessions could not be read, so these totals may be incomplete.")
+        #expect(T.notes(for: chart(data, ingestion: .complete)).isEmpty)
+        for c in [indexing, incomplete] {
+            let spoken = T.accessibilitySummary(chart: c, range: .last7Days)
+            for note in T.notes(for: c) { #expect(spoken.contains(note.dropLast()), "\(note)") }
+        }
     }
 }

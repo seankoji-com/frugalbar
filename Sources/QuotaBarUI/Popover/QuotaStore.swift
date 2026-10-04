@@ -43,6 +43,7 @@ public final class QuotaStore {
     private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
     private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
     private let tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)?
+    private let activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
     /// - Parameters:
     ///   - readingsLoader: every vendor's readings since a date, for the
@@ -56,13 +57,17 @@ public final class QuotaStore {
     ///     for the desktop widget's Tokens layout. Returns nil when the
     ///     history could not be read, which the widget says rather than
     ///     drawing an empty chart.
+    ///   - activityStatusLoader: whether the local-activity ingestion has
+    ///     finished its first pass. Without it an empty token chart cannot be
+    ///     told from a chart that is still being filled.
     public init(
         manager: QuotaManager = .shared,
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
         readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
         vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
         eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil,
-        tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil
+        tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil,
+        activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
     ) {
         self.manager = manager
         self.historyRecorder = historyRecorder
@@ -70,6 +75,7 @@ public final class QuotaStore {
         self.vendorReadingsLoader = vendorReadingsLoader
         self.eventsLoader = eventsLoader
         self.tokenUsageLoader = tokenUsageLoader
+        self.activityStatusLoader = activityStatusLoader
     }
 
     /// One vendor's recorded readings since `since` (all of them when nil).
@@ -77,6 +83,13 @@ public final class QuotaStore {
     public func readings(for vendor: VendorIdentifier, since: Date?) async -> [QuotaHistoryStore.ReadingRecord] {
         guard let vendorReadingsLoader else { return [] }
         return await vendorReadingsLoader(vendor, since)
+    }
+
+    /// How far the local-activity ingestion has got. nil when it cannot be
+    /// said, which callers must not read as "complete".
+    public func activityIngestionStatus() async -> ActivityIngestionEngine.Status? {
+        guard let activityStatusLoader else { return nil }
+        return await activityStatusLoader()
     }
 
     /// Raw token consumption per source per time bucket. nil when the history

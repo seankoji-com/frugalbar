@@ -72,7 +72,15 @@ struct DesktopWidgetView: View {
         switch filters.layout {
         case .overview: return
         case .tokens:
-            await reloadTokens()
+            // While the first ingestion runs the table fills in behind us, so
+            // look again every few seconds instead of waiting for the next
+            // poll, and stop as soon as it has finished.
+            var again = await reloadTokens()
+            while again, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                again = await reloadTokens()
+            }
             return
         case .chart: break
         }
@@ -116,24 +124,34 @@ struct DesktopWidgetView: View {
 
     /// One aggregate query for the range, summed inside SQLite, then a few
     /// dozen points of arithmetic. Providers the user hid are left out.
-    private func reloadTokens() async {
+    ///
+    /// Returns whether to look again soon: the first ingestion is still
+    /// running and its status is known.
+    @discardableResult
+    private func reloadTokens() async -> Bool {
         let now = Date()
+        // Status BEFORE the data, so it can only be older than what is drawn.
+        // A pass finishing in between then makes the chart show a note it no
+        // longer needs, never a "complete" claim about data read earlier.
+        let status = await store.activityIngestionStatus()
         let window = TokenUsagePresentation.window(range: filters.range, now: now)
         let usage = await store.tokenUsage(
             since: window.since, until: now,
             bucketSeconds: TokenUsagePresentation.bucketSeconds(for: filters.range),
             anchor: window.anchor)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         guard let usage else {
             tokenChart = nil
             tokenLoadFailed = true
-            return
+            return false
         }
         let configured = store.snapshots.map(\.vendorId).filter { store.configuredVendors.contains($0) }
+        let progress = TokenUsagePresentation.IngestionProgress(status)
         tokenChart = TokenUsagePresentation.chart(
             usage: usage, filters: filters, hidden: CredentialStore.hiddenProviders,
-            configured: configured, now: now)
+            configured: configured, ingestion: progress, now: now)
         tokenLoadFailed = false
+        return progress == .indexing && status != nil
     }
 
     private var metricWord: String { filters.metric == .used ? "used" : "remaining" }
@@ -181,18 +199,28 @@ struct DesktopWidgetView: View {
                 detail: "This is a failure to read, not an absence of activity."
             )
         } else if let chart = tokenChart {
-            if chart.isEmpty {
+            if let reason = chart.emptyReason {
+                // Empty means "no activity" only once ingestion is complete;
+                // before that the table is still being filled, and after a
+                // failed pass some sources are missing.
                 placeholder(
-                    symbol: "chart.xyaxis.line",
-                    title: "No token activity in this range",
-                    detail: (["FrugalBar counts tokens from local Claude Code, Codex and OpenCode sessions on this Mac."]
-                             + TokenUsagePresentation.notes(for: chart)).joined(separator: " ")
+                    symbol: Self.emptySymbol(reason),
+                    title: TokenUsagePresentation.emptyTitle(reason),
+                    detail: TokenUsagePresentation.emptyDetail(for: chart)
                 )
             } else {
                 TokenUsageChartView(chart: chart, range: filters.range)
             }
         } else {
             placeholder(symbol: "hourglass", title: "Loading token history…", detail: nil)
+        }
+    }
+
+    private static func emptySymbol(_ reason: TokenUsagePresentation.EmptyReason) -> String {
+        switch reason {
+        case .noActivity: "chart.xyaxis.line"
+        case .indexing: "hourglass"
+        case .incomplete: "exclamationmark.triangle"
         }
     }
 

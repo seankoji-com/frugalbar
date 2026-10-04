@@ -191,4 +191,18 @@ struct QuotaStoreTests {
         #expect(s.snapshots.map(\.vendorId) == [.claude, .grok])
         #expect(s.isRefreshing == false)
     }
+
+    /// No status is not "complete": a caller must be able to tell.
+    @Test("the activity ingestion status is nil without a loader and the loader's answer with one")
+    func ingestionStatus() async {
+        let none = store([])
+        #expect(await none.activityIngestionStatus() == nil)
+
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [] })
+        let status = ActivityIngestionEngine.Status(hasCompletedFullPass: true, lastPassFailed: false, isRunning: false)
+        let withLoader = QuotaStore(manager: manager, activityStatusLoader: { status })
+        #expect(await withLoader.activityIngestionStatus() == status)
+    }
 }
