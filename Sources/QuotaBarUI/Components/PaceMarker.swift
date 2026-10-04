@@ -21,11 +21,16 @@ extension DualBarMetrics {
         return min(max(pace, 0), 1)
     }
 
-    /// Used exceeds an even pace by more than `aheadOfPaceMargin`. Never for a
-    /// blocked window, which wears the vendor's blocked colour rather than
-    /// amber and says "blocked" instead.
+    /// Used exceeds an even pace by more than `aheadOfPaceMargin`.
+    ///
+    /// Read from `paceMarker`, not `evenPace`: a pace claim is only made when
+    /// the tick that shows it is drawn. A pace of exactly zero (a window that
+    /// has just reset) or one (a stale reset) draws no tick, so nothing may
+    /// call the window ahead of it either. Never for a blocked window, which
+    /// wears the vendor's blocked colour rather than amber and says "blocked"
+    /// instead; a spent one has no marker and is red.
     var isMeaningfullyAheadOfPace: Bool {
-        guard !isBlocked, let used = primaryFraction, let pace = evenPace else { return false }
+        guard !isBlocked, let used = primaryFraction, let pace = paceMarker else { return false }
         return used - pace > Self.aheadOfPaceMargin
     }
 

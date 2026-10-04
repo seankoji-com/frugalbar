@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftUI
 import QuotaBarCore
 @testable import QuotaBarUI
 
@@ -126,5 +127,62 @@ struct PaceMarkerTests {
         #expect(!help(bar(used: 0.9, pace: 0.2, blocked: true)).contains("even pace"))
         #expect(!help(bar(used: 1.0, pace: 0.2)).contains("even pace"))
         #expect(!help(bar(used: 0.9, pace: 0.2, reset: false)).contains("even pace"))
+    }
+
+    // MARK: No claim without a marker
+
+    /// The rule AGENTS.md states: the tick, the legend, the colour, the tooltip
+    /// and the spoken label read one definition, so none can claim a pace the
+    /// others would not draw. Checked over every combination rather than the
+    /// cases someone thought of.
+    @Test("any pace claim — amber, tooltip or spoken — implies the tick is drawn")
+    func noClaimWithoutAMarker() {
+        let amber = Color(red: 0.96, green: 0.72, blue: 0.15)
+        let used: [Double?] = [nil, 0, 0.05, 0.3, 0.99, 0.9995, 1.0]
+        let paces: [Double?] = [nil, -0.2, 0, 0.1, 0.5, 0.999, 1, 1.5]
+        let windows: [TimeInterval?] = [nil, 0, QuotaWindow.week]
+        var checked = 0
+        for u in used {
+            for pace in paces {
+                for blocked in [false, true] {
+                    for hasReset in [false, true] {
+                        for window in windows {
+                            let m = bar(used: u, pace: pace, blocked: blocked, reset: hasReset, window: window)
+                            let drawn = m.paceMarker != nil
+                            let amberFill = DualBarProgressView.stateColor(for: m) == amber
+                            let tooltip = DualBarProgressView.helpText(for: m).contains("even pace")
+                            let grid = WindowGridPresentation(snapshot: snapshot([m]), now: reset.addingTimeInterval(-86_400))
+                            let spoken = grid.spokenSummary()?.contains("even pace") == true
+                            let context = "used \(String(describing: u)) pace \(String(describing: pace)) blocked \(blocked) reset \(hasReset) window \(String(describing: window))"
+                            #expect(!amberFill || drawn, "amber with no tick: \(context)")
+                            #expect(!tooltip || drawn, "tooltip claims a pace with no tick: \(context)")
+                            #expect(!spoken || drawn, "spoken label claims a pace with no tick: \(context)")
+                            checked += 1
+                        }
+                    }
+                }
+            }
+        }
+        #expect(checked == 7 * 8 * 2 * 2 * 3)
+    }
+
+    /// A window that has just reset has an even pace of zero: the tick would
+    /// sit on the track's edge and is not drawn, so nothing may call the
+    /// window ahead of it either.
+    @Test("a pace of zero draws no tick and makes no claim")
+    func zeroPace() {
+        let m = bar(used: 0.30, pace: 0)
+        #expect(m.paceMarker == nil)
+        #expect(!m.isMeaningfullyAheadOfPace)
+        #expect(!DualBarProgressView.helpText(for: m).contains("even pace"))
+        #expect(DualBarProgressView.stateColor(for: m) == Theme.healthy)
+    }
+
+    /// And a stale pace of one (the reset has passed).
+    @Test("a pace of one draws no tick and makes no claim")
+    func fullPace() {
+        let m = bar(used: 0.10, pace: 1.0)
+        #expect(m.paceMarker == nil)
+        #expect(!DualBarProgressView.helpText(for: m).contains("even pace"))
     }
 }

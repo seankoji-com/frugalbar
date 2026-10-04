@@ -141,11 +141,10 @@ public struct WindowGridPresentation: Equatable, Sendable {
                 text = "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
             }
             guard isColumn else { return text }
-            // The amber fill, in words. Not for a blocked window, which wears
-            // the vendor's blocked colour rather than amber, and not for a
-            // spent one, which is red and draws no pace tick.
-            if bar.isMeaningfullyAheadOfPace,
-               (bar.primaryFraction ?? 0) < QuotaSnapshot.exhaustionThreshold {
+            // The amber fill, in words. `isMeaningfullyAheadOfPace` already
+            // excludes a blocked window (vendor colour), a spent one (red) and
+            // any pace whose tick is not drawn.
+            if bar.isMeaningfullyAheadOfPace {
                 text += ", ahead of an even pace"
             }
             if let reset = ResetCountdownBadge.compactSpoken(bar.resetsAt, now: now) {

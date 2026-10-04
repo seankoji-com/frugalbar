@@ -194,12 +194,13 @@ public struct DualBarProgressView: View {
     }
 
     /// How the window stands against an even pace, or nil when the bar draws
-    /// no pace claim (none published, spent, or blocked).
+    /// no pace marker (none published, at an end of the track, spent, or
+    /// unread) or is blocked: the tooltip describes the tick, never a pace
+    /// the bar does not show.
     nonisolated static func paceStatusText(for metrics: DualBarMetrics) -> String? {
         guard !metrics.isBlocked,
               let used = metrics.primaryFraction.map({ max(0, min(1, $0)) }),
-              used < QuotaSnapshot.exhaustionThreshold,
-              let pace = metrics.evenPace
+              let pace = metrics.paceMarker
         else { return nil }
         let points = Int(((used - pace) * 100).rounded())
         if metrics.isMeaningfullyAheadOfPace { return "\(points)% ahead of an even pace" }
