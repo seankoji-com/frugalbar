@@ -41,6 +41,7 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
 
         var records: [ActivityRecord] = []
         var updates: [ActivityWatermark] = []
+        var skipped = 0
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -83,8 +84,18 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 }
             }
 
-            let chunk = (try? AppendOnlyLog.readIncrementally(at: fileURL, from: readFrom))
-                ?? AppendOnlyLog.Chunk(lines: [], newCursor: readFrom, tail: "")
+            // A file that cannot be read is NOT recorded as read. Substituting
+            // an empty chunk and then storing this size and mtime made the next
+            // pass see the file as unchanged, so the unread part was never
+            // retried. Leave it without a watermark so it is read again, and
+            // say so.
+            let chunk: AppendOnlyLog.Chunk
+            do {
+                chunk = try AppendOnlyLog.readIncrementally(at: fileURL, from: readFrom)
+            } catch {
+                skipped += 1
+                continue
+            }
 
             // An unterminated final line is either a half-written record or a
             // complete one the writer never newline-terminated. Parse it if it
@@ -162,6 +173,6 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
             ))
         }
 
-        return ActivityIngestResult(records: records, watermarks: updates)
+        return ActivityIngestResult(records: records, watermarks: updates, skipped: skipped)
     }
 }

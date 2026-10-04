@@ -49,10 +49,24 @@ public struct ActivityWatermark: Sendable, Equatable {
 public struct ActivityIngestResult: Sendable {
     public let records: [ActivityRecord]
     public let watermarks: [ActivityWatermark]
+    /// Inputs that exist but could not be read this pass: a transcript the
+    /// process may not open, a database that will not open or whose table is
+    /// gone. They get no watermark, so the next pass tries them again, and the
+    /// engine reports the pass as incomplete. Returning success without them
+    /// would let their tokens go missing from every total unannounced.
+    ///
+    /// An input that is simply absent (no tool installed) is not skipped: there
+    /// is nothing to read.
+    public let skipped: Int
 
-    public init(records: [ActivityRecord] = [], watermarks: [ActivityWatermark] = []) {
+    public init(
+        records: [ActivityRecord] = [],
+        watermarks: [ActivityWatermark] = [],
+        skipped: Int = 0
+    ) {
         self.records = records
         self.watermarks = watermarks
+        self.skipped = skipped
     }
 
     public static let empty = ActivityIngestResult()

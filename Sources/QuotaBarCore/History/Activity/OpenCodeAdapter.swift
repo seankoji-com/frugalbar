@@ -46,7 +46,9 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         let openStatus = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil)
         guard openStatus == SQLITE_OK, let db else {
             if let db { sqlite3_close(db) }
-            return .empty
+            // The file is there and will not open (permissions, corruption).
+            // That is a source that could not be read, not an idle one.
+            return ActivityIngestResult(skipped: 1)
         }
         defer { sqlite3_close(db) }
 
@@ -64,7 +66,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
 
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            return .empty
+            // It opened but the query will not run: the `message` table is
+            // missing or reshaped, as a changed OpenCode schema would leave
+            // it. Returning "nothing new" here would mean OpenCode silently
+            // never counts.
+            return ActivityIngestResult(skipped: 1)
         }
         defer { sqlite3_finalize(stmt) }
 
@@ -78,7 +84,17 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             if step == SQLITE_BUSY {
                 throw ActivityAdapterError.sourceBusy(path: path)
             }
-            guard step == SQLITE_ROW else { break }
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else {
+                // The query ran and then failed part-way: corruption, an I/O
+                // error, an interrupted read. Ending the loop as if it had
+                // finished would mark the database read up to here and report
+                // a clean pass. Keep the rows read, which are real and which
+                // storing again is harmless (the primary key replaces), but
+                // give the database no watermark, so it is read again from
+                // the old cursor, and count it as skipped.
+                return ActivityIngestResult(records: records, skipped: 1)
+            }
 
             guard let idC = sqlite3_column_text(stmt, 0),
                   let dataC = sqlite3_column_text(stmt, 4) else {
@@ -142,8 +158,8 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             ))
         }
 
-        // Only advance the cursor on a pass that actually ran to completion; the
-        // busy case above throws and leaves it where it was.
+        // Only advance the cursor on a pass that actually ran to completion; a
+        // busy or failed step above leaves it where it was.
         let watermark = ActivityWatermark(
             filePath: path,
             fileSize: 0,

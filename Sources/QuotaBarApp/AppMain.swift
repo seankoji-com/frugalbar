@@ -73,7 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSLog("frugalbar: failed to read AI events: \(error)")
                     return []
                 }
-            }
+            },
+            tokenUsageLoader: { since, until, bucketSeconds, anchor in
+                do {
+                    return try await hStore.fetchTokenUsage(
+                        since: since, until: until, bucketSeconds: bucketSeconds, anchor: anchor)
+                } catch {
+                    // nil, not an empty usage: the widget says it could not
+                    // read the history rather than drawing "no activity".
+                    NSLog("frugalbar: failed to read token usage: \(error)")
+                    return nil
+                }
+            },
+            activityStatusLoader: { await aEngine.status() }
         )
         super.init()
     }

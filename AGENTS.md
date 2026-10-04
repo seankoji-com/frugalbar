@@ -87,6 +87,34 @@ figure: vendors meter different things over different windows. The widget's Over
 total, and a configured-but-unreadable provider keeps its tile. The widget is an
 app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
 
+**Token totals are observations, and summing them is allowed only because tokens
+share a unit.** The Tokens layout stacks locally recorded tokens (the `activity`
+table, summed in SQL by `fetchTokenUsage`) for the providers with an adapter
+(`AttributionEngine.localSourceIdentifiers`). Every other provider is named under
+the chart, never drawn as a zero layer. A record whose total is `NULL` is counted
+as uncounted and said so, never summed as 0. Keep it apart from quota: no
+percentage, no "remaining", no division by an allowance. Codex records one
+cumulative total per session at its last turn, and the chart says so rather than
+spreading it. Cache tokens are included as each tool reports them. Whether a tool's
+input figure already contains its cached input is unverified, so there is no
+"without cache" mode until that is established per tool.
+
+**An empty activity table is not an empty week.** The table is empty on a first
+run, stale after every restart until a pass finishes, and short while an input
+cannot be read. `ActivityIngestionEngine.Status` says which, from this process's
+own passes only: never a flag remembered from an earlier run, which would vouch
+for a table nothing has caught up (that was tried, and over-claimed). Adapters
+must report an input they cannot read in `ActivityIngestResult.skipped` and leave
+it without a watermark so it is retried; returning success with it missing makes
+every total quietly short, and recording its new size and mtime made the Claude
+adapter never look at it again. A read that fails part-way counts too: ending a
+row loop on any `sqlite3_step` result but `SQLITE_DONE` turns a failed read into
+a short or empty week (the OpenCode adapter and the token query both did; the
+query now throws and the adapter reports the input skipped). The Tokens layout
+says it is still reading, or could not read everything, and shows "No token
+activity" only once a clean pass has finished this run. Read the status before
+the data, and treat an unknown status as not complete.
+
 **A hidden provider is not polled, not counted, and not remembered.**
 `QuotaManager` reads `ProviderDisplayPreferences` once per poll, skips hidden
 vendors' fetches and removes their cache entries, so they vanish from the

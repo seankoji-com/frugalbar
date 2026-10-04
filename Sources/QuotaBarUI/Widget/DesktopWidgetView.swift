@@ -2,9 +2,10 @@ import SwiftUI
 import Charts
 import QuotaBarCore
 
-/// Content of the desktop widget panel: one burndown line per subscription
-/// window, an honestly labelled average across them, a current-headroom
-/// strip, and filters that persist across launches.
+/// Content of the desktop widget panel, in one of three layouts: raw token
+/// consumption stacked across providers (the default), one burndown line per
+/// subscription window with an honestly labelled average and a headroom strip,
+/// or a tile per provider. Filters persist across launches.
 struct DesktopWidgetView: View {
 
     let store: QuotaStore
@@ -19,6 +20,10 @@ struct DesktopWidgetView: View {
     @State private var chartNow = Date()
     /// Bumped whenever the store's snapshots change, to re-query history.
     @State private var generation = 0
+    /// The Tokens layout's chart, nil until loaded.
+    @State private var tokenChart: TokenUsagePresentation.Chart?
+    /// The history could not be read: said, never drawn as "no activity".
+    @State private var tokenLoadFailed = false
 
     private struct LoadKey: Equatable {
         let filters: WidgetFilters
@@ -28,10 +33,14 @@ struct DesktopWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            if filters.layout == .overview {
+            switch filters.layout {
+            case .tokens:
+                tokensArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .overview:
                 overviewArea
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            case .chart:
                 chartArea
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 headroomStrip
@@ -58,9 +67,23 @@ struct DesktopWidgetView: View {
 
     private func reload() async {
         // The overview reads live snapshots only: no history query, no
-        // segmenting or averaging. Switching back to Chart changes the
-        // load key and loads then.
-        guard filters.layout == .chart else { return }
+        // segmenting or averaging. Switching layout changes the load key and
+        // loads then.
+        switch filters.layout {
+        case .overview: return
+        case .tokens:
+            // While the first ingestion runs the table fills in behind us, so
+            // look again every few seconds instead of waiting for the next
+            // poll, and stop as soon as it has finished.
+            var again = await reloadTokens()
+            while again, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                again = await reloadTokens()
+            }
+            return
+        case .chart: break
+        }
         isLoading = true
         defer { isLoading = false }
         let now = Date()
@@ -99,6 +122,38 @@ struct DesktopWidgetView: View {
         hasLoaded = true
     }
 
+    /// One aggregate query for the range, summed inside SQLite, then a few
+    /// dozen points of arithmetic. Providers the user hid are left out.
+    ///
+    /// Returns whether to look again soon: the first ingestion is still
+    /// running and its status is known.
+    @discardableResult
+    private func reloadTokens() async -> Bool {
+        let now = Date()
+        // Status BEFORE the data, so it can only be older than what is drawn.
+        // A pass finishing in between then makes the chart show a note it no
+        // longer needs, never a "complete" claim about data read earlier.
+        let status = await store.activityIngestionStatus()
+        let window = TokenUsagePresentation.window(range: filters.range, now: now)
+        let usage = await store.tokenUsage(
+            since: window.since, until: now,
+            bucketSeconds: TokenUsagePresentation.bucketSeconds(for: filters.range),
+            anchor: window.anchor)
+        guard !Task.isCancelled else { return false }
+        guard let usage else {
+            tokenChart = nil
+            tokenLoadFailed = true
+            return false
+        }
+        let configured = store.snapshots.map(\.vendorId).filter { store.configuredVendors.contains($0) }
+        let progress = TokenUsagePresentation.IngestionProgress(status)
+        tokenChart = TokenUsagePresentation.chart(
+            usage: usage, filters: filters, hidden: CredentialStore.hiddenProviders,
+            configured: configured, ingestion: progress, now: now)
+        tokenLoadFailed = false
+        return progress == .indexing && status != nil
+    }
+
     private var metricWord: String { filters.metric == .used ? "used" : "remaining" }
 
     // MARK: - Header
@@ -118,7 +173,9 @@ struct DesktopWidgetView: View {
 
             Spacer(minLength: 4)
 
-            if let oldest = store.summary.oldestReading {
+            // The age of the oldest quota reading says nothing about token
+            // history, so the Tokens layout does not show it.
+            if filters.layout != .tokens, let oldest = store.summary.oldestReading {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     let age = SystemHealthPresentation.elapsed(since: oldest, now: context.date)
                     Text("updated \(age) ago")
@@ -129,6 +186,42 @@ struct DesktopWidgetView: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Tokens
+
+    @ViewBuilder
+    private var tokensArea: some View {
+        if tokenLoadFailed {
+            placeholder(
+                symbol: "exclamationmark.triangle",
+                title: "Could not read token history",
+                detail: "This is a failure to read, not an absence of activity."
+            )
+        } else if let chart = tokenChart {
+            if let reason = chart.emptyReason {
+                // Empty means "no activity" only once ingestion is complete;
+                // before that the table is still being filled, and after a
+                // failed pass some sources are missing.
+                placeholder(
+                    symbol: Self.emptySymbol(reason),
+                    title: TokenUsagePresentation.emptyTitle(reason),
+                    detail: TokenUsagePresentation.emptyDetail(for: chart)
+                )
+            } else {
+                TokenUsageChartView(chart: chart, range: filters.range)
+            }
+        } else {
+            placeholder(symbol: "hourglass", title: "Loading token history…", detail: nil)
+        }
+    }
+
+    private static func emptySymbol(_ reason: TokenUsagePresentation.EmptyReason) -> String {
+        switch reason {
+        case .noActivity: "chart.xyaxis.line"
+        case .indexing: "hourglass"
+        case .incomplete: "exclamationmark.triangle"
+        }
     }
 
     // MARK: - Chart
@@ -478,8 +571,12 @@ struct DesktopWidgetView: View {
 
     // MARK: - Filters
 
+    /// The providers the vendor menu offers: those with a token source for
+    /// the Tokens layout, those with a usage window otherwise.
     private var availableVendors: [VendorIdentifier] {
-        AggregateBurndownPresentation.availableVendors(snapshots: store.snapshots)
+        filters.layout == .tokens
+            ? TokenUsagePresentation.tokenVendors
+            : AggregateBurndownPresentation.availableVendors(snapshots: store.snapshots)
     }
 
     private func vendorBinding(_ vendor: VendorIdentifier) -> Binding<Bool> {
@@ -562,15 +659,20 @@ struct DesktopWidgetView: View {
     }
 
     private var filterBar: some View {
+        // Which controls mean something for the layout: a window is a chart
+        // concern; a range is for charts over time; used/remaining is for
+        // quota, and token counts are neither.
         let chart = filters.layout == .chart
+        let overTime = filters.layout != .overview
+        let quota = filters.layout != .tokens
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 layoutPicker
                 vendorMenu
                 if chart { windowMenu }
                 Spacer(minLength: 4)
-                if chart { rangePicker }
-                metricPicker
+                if overTime { rangePicker }
+                if quota { metricPicker }
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -580,9 +682,9 @@ struct DesktopWidgetView: View {
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 8) {
-                    if chart { rangePicker }
+                    if overTime { rangePicker }
                     Spacer(minLength: 0)
-                    metricPicker
+                    if quota { metricPicker }
                 }
             }
         }

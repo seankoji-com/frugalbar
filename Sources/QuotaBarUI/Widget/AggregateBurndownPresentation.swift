@@ -22,6 +22,10 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
 
     /// Which body the panel draws.
     public enum Layout: String, Codable, CaseIterable, Sendable {
+        /// Raw token consumption across providers as a stacked area. Tokens
+        /// share one unit, so stacking them is meaningful, unlike quota
+        /// windows. See `TokenUsagePresentation`. First, as the default view.
+        case tokens
         /// Burndown lines with an average and a headroom strip.
         case chart
         /// One tile per provider with each of its windows. Per-provider
@@ -32,6 +36,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
             switch self {
             case .chart: "Chart"
             case .overview: "Overview"
+            case .tokens: "Tokens"
             }
         }
     }
@@ -49,7 +54,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         windowLabel: String? = nil,
         range: HistoryPresentation.TimeRange = .last24Hours,
         metric: Metric = .remaining,
-        layout: Layout = .chart
+        layout: Layout = .tokens
     ) {
         self.vendors = vendors
         self.windowLabel = windowLabel
@@ -72,7 +77,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         windowLabel = (try? c.decodeIfPresent(String.self, forKey: .windowLabel)) ?? nil
         range = ((try? c.decodeIfPresent(HistoryPresentation.TimeRange.self, forKey: .range)) ?? nil) ?? .last24Hours
         metric = ((try? c.decodeIfPresent(Metric.self, forKey: .metric)) ?? nil) ?? .remaining
-        layout = ((try? c.decodeIfPresent(Layout.self, forKey: .layout)) ?? nil) ?? .chart
+        layout = ((try? c.decodeIfPresent(Layout.self, forKey: .layout)) ?? nil) ?? .tokens
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -491,15 +496,21 @@ public enum AggregateBurndownPresentation {
         case 1: parts.append(filters.vendors.first!.displayName)
         default: parts.append("\(filters.vendors.count) subscriptions")
         }
-        if filters.layout == .overview {
+        switch filters.layout {
+        case .overview:
             // Window and range are chart concerns; the overview shows each
             // provider's current windows.
             parts.append("overview")
-        } else {
+            parts.append(filters.metric.rawValue)
+        case .tokens:
+            // Tokens are raw counts: no window, and no used/remaining.
+            parts.append("tokens")
+            parts.append(rangeShortTitle(filters.range))
+        case .chart:
             if let label = filters.windowLabel { parts.append(label) }
             parts.append(rangeShortTitle(filters.range))
+            parts.append(filters.metric.rawValue)
         }
-        parts.append(filters.metric.rawValue)
         return parts.joined(separator: " · ")
     }
 

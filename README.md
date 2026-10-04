@@ -159,7 +159,7 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 
 ## Desktop widget
 
-**Gear menu → Desktop Widget** (⌘D) opens a small panel with two layouts: a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
+**Gear menu → Desktop Widget** (⌘D) opens a small panel with three layouts: a stacked **Tokens** chart (the default) of raw token consumption across the providers FrugalBar can count (Claude Code, Codex, OpenCode), a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The Tokens view is what local tools recorded, cache included, and is never a quota; providers with no token counts are named, not drawn as zero. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
 
 ---
 

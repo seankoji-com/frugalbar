@@ -49,6 +49,7 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
 
         var records: [ActivityRecord] = []
         var updates: [ActivityWatermark] = []
+        var skipped = 0
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -84,6 +85,9 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
 
             guard let data = try? Data(contentsOf: fileURL),
                   let content = String(data: data, encoding: .utf8) else {
+                // Unreadable, or not text. No watermark is stored, so it is
+                // tried again; the pass is reported as incomplete meanwhile.
+                skipped += 1
                 continue
             }
 
@@ -193,6 +197,6 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             ))
         }
 
-        return ActivityIngestResult(records: records, watermarks: updates)
+        return ActivityIngestResult(records: records, watermarks: updates, skipped: skipped)
     }
 }
