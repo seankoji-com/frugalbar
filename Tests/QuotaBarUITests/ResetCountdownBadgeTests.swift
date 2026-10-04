@@ -89,3 +89,34 @@ struct ResetCountdownBadgeTests {
         #expect(!out.contains("24h"))
     }
 }
+
+@Suite("ResetCountdownBadge.compact")
+struct ResetCountdownBadgeCompactTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private func c(_ seconds: TimeInterval) -> String? {
+        ResetCountdownBadge.compact(now.addingTimeInterval(seconds), now: now)
+    }
+
+    @Test("minutes, hours and days, one unit, rounded")
+    func units() {
+        #expect(c(45 * 60) == "45m")
+        #expect(c(3 * 3600 + 10 * 60) == "3h")
+        #expect(c(5.6 * 3600) == "6h")
+        #expect(c(6.2 * 86_400) == "6d")
+        #expect(c(1.0 * 86_400) == "1d")
+    }
+
+    @Test("under a minute reads 1m, never 0m; a passed reset reads now; none reads nothing")
+    func edges() {
+        #expect(c(10) == "1m")
+        #expect(c(-5) == "now")
+        #expect(ResetCountdownBadge.compact(nil, now: now) == nil)
+    }
+
+    /// 59.6 minutes rounds to 60: that belongs in the hours branch, not "60m".
+    @Test("the minute and hour boundaries never print 60m or 24h")
+    func boundaries() {
+        #expect(c(59.6 * 60) == "1h")
+        #expect(c(23.6 * 3600) == "1d")
+    }
+}

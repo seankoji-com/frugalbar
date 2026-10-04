@@ -21,6 +21,10 @@ public enum OverviewPresentation {
         public let measuresElapsedTimeOnly: Bool
         public let resetsAt: Date?
         public let metrics: DualBarMetrics
+
+        /// Blocked by the vendor yet reporting a figure: colour alone would
+        /// carry that, so a glyph sits beside the percentage.
+        public var showsBlockedGlyph: Bool { isBlocked && fraction != nil }
     }
 
     public struct Tile: Identifiable, Sendable, Equatable {
@@ -64,7 +68,12 @@ public enum OverviewPresentation {
             } : []
 
             let reason = snapshot.status.unavailableReason
-            let exhausted = snapshot.isQuotaExhausted || snapshot.isFullyBlockedWithoutReading
+            // The popover's own definition: a spent window, or an account cut
+            // off with no figures. A window the vendor blocked but still
+            // reports a percentage for is blocked, which its own line says,
+            // not exhausted.
+            let spent = snapshot.quotaBars.contains { ($0.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold }
+            let exhausted = spent || snapshot.isFullyBlockedWithoutReading
             return Tile(
                 vendorId: snapshot.vendorId,
                 name: snapshot.shortVendorName,
@@ -76,6 +85,16 @@ public enum OverviewPresentation {
                 unavailableRemedy: reason?.remedy
             )
         }
+    }
+
+    /// The tooltip on one window line: blocked first, when it is, then when it
+    /// resets. A billing cycle says it measures elapsed time, not usage.
+    public static func helpText(for window: WindowCell, now: Date = Date()) -> String {
+        if window.measuresElapsedTimeOnly { return "\(window.label): billing cycle, elapsed time only" }
+        var parts: [String] = []
+        if window.isBlocked { parts.append("\(window.label) is blocked") }
+        parts.append(ResetCountdownBadge.description(window.resetsAt, now: now))
+        return parts.joined(separator: ". ")
     }
 
     /// The spoken form of a tile: every figure a sighted user can read.
@@ -97,6 +116,9 @@ public enum OverviewPresentation {
                 }
             } else if let fraction = window.fraction {
                 text += " \(Int((fraction * 100).rounded())) percent \(word)"
+                // Blocked by the vendor yet reporting a figure: the bar wears
+                // the blocked colour, so say it too.
+                if window.isBlocked { text += ", blocked" }
             } else {
                 text += window.isBlocked ? " blocked" : " no reading"
             }

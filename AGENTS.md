@@ -149,6 +149,25 @@ providers must use the standard tokens `5H`, `WK`, `MO` for those windows;
 anything else (`BN`, `OV`, `OD`, `SP`, `1D`, `PLAN`, `CYCLE`) is drawn on its
 own line under the row.
 
+A window cell is one bar, one fill colour and one marker. The fill is the
+state colour (`DualBarProgressView.stateColor`, shared with the percentage under
+it) and the single tick is where an even pace would be, drawn only when the
+vendor published a window length and reset, and never on a spent window.
+`DualBarMetrics.paceMarker` is the one definition of that, read by the tick, the
+"even pace" legend, the amber colour, the tooltip and the spoken label, so none
+can claim a pace the others would not draw: `expectedPaceFraction` alone, with no
+reset or window length behind it, is not a pace. Countdowns in a row (the cell's
+compact text, the spoken label, the forecast) all read `WindowGridPresentation.now`,
+never their own `Date()`, so they cannot straddle a rounding boundary. Don't
+add a second marker or extra over/under-pace segments: three colours and two
+triangles per bar made the card unreadable. A column the vendor does not publish
+shows a faint dash, never a track, which would read as 0% used. A window the
+vendor blocked but still reports a percentage for (OpenCode Go) wears the
+vendor's blocked colour, which sits too close to amber to tell apart, so a
+`BlockedGlyph` (`nosign`) sits beside its figure everywhere it is drawn and the
+spoken label says "blocked". Without a percentage the cell already says
+"Blocked" in words and draws a dashed placeholder.
+
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.

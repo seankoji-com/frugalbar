@@ -120,4 +120,59 @@ struct OverviewPresentationTests {
         #expect(O.accessibilityLabel(for: warn, metric: .remaining, now: now).hasSuffix("running low"))
         #expect(O.accessibilityLabel(for: crit, metric: .remaining, now: now).hasSuffix("critically low"))
     }
+
+    @Test("a window the vendor blocked but still measured is spoken as blocked")
+    func blockedMeasuredSpoken() {
+        let blocked = DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true, windowLength: QuotaWindow.week)
+        let tile = O.tiles(snapshots: [snapshot(.opencode, status: .critical, bars: [blocked])], filters: WidgetFilters())[0]
+        let text = O.accessibilityLabel(for: tile, metric: .remaining, now: now)
+        #expect(text.contains("weekly 10 percent remaining, blocked"))
+    }
+
+    @Test("only a blocked window that still reports a figure gets the glyph")
+    func overviewGlyph() {
+        func tile(_ bar: DualBarMetrics) -> O.WindowCell {
+            O.tiles(snapshots: [snapshot(.opencode, status: .critical, bars: [bar])], filters: WidgetFilters())[0].windows[0]
+        }
+        #expect(tile(DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true)).showsBlockedGlyph)
+        #expect(!tile(DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true)).showsBlockedGlyph)
+        #expect(!tile(DualBarMetrics(primaryFraction: 0.9, label: "WK")).showsBlockedGlyph)
+    }
+
+    // MARK: Exhausted vs blocked, and the tooltip
+
+    private func firstTile(_ s: QuotaSnapshot) -> O.Tile {
+        O.tiles(snapshots: [s], filters: WidgetFilters())[0]
+    }
+
+    /// The popover does not strike the logo of a window that is merely
+    /// blocked; the Overview must not call it exhausted either.
+    @Test("a blocked window that still reports a figure is blocked, not exhausted")
+    func blockedIsNotExhausted() {
+        let blocked = DualBarMetrics(primaryFraction: 0.4, label: "WK", blockedColor: "#ffb4ab", isBlocked: true, windowLength: QuotaWindow.week)
+        let tile = firstTile(snapshot(.opencode, status: .critical, bars: [blocked]))
+        #expect(!tile.isExhausted)
+        #expect(!O.accessibilityLabel(for: tile, metric: .remaining, now: now).contains("exhausted"))
+    }
+
+    @Test("a spent window, or an account cut off with no figures, is exhausted")
+    func spentIsExhausted() {
+        let spent = firstTile(snapshot(.claude, status: .critical, bars: [DualBarMetrics(primaryFraction: 1.0, label: "WK", windowLength: QuotaWindow.week)]))
+        #expect(spent.isExhausted)
+        let cutOff = firstTile(snapshot(.opencode, status: .critical, bars: [DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true, windowLength: QuotaWindow.week)]))
+        #expect(cutOff.isExhausted)
+    }
+
+    @Test("the window tooltip says blocked, then when it resets")
+    func tooltip() {
+        func cell(_ bar: DualBarMetrics) -> O.WindowCell { firstTile(snapshot(.opencode, status: .critical, bars: [bar])).windows[0] }
+        let reset = now.addingTimeInterval(3 * 3600)
+        let blocked = cell(DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true, resetsAt: reset, windowLength: QuotaWindow.week))
+        #expect(O.helpText(for: blocked, now: now) == "WK is blocked. Resets in 3h 0m")
+        let open = cell(DualBarMetrics(primaryFraction: 0.9, label: "WK", resetsAt: reset, windowLength: QuotaWindow.week))
+        #expect(O.helpText(for: open, now: now) == "Resets in 3h 0m")
+        var cycle = DualBarMetrics(primaryFraction: 0.5, label: "CYCLE", resetsAt: reset, windowLength: 30 * 86_400)
+        cycle.measuresElapsedTimeOnly = true
+        #expect(O.helpText(for: cell(cycle), now: now) == "CYCLE: billing cycle, elapsed time only")
+    }
 }

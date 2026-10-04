@@ -289,8 +289,13 @@ public struct DualBarMetrics: Sendable, Equatable {
         return primaryFraction - expectedPaceFraction
     }
 
+    /// How far past an even pace a window must be before it counts as ahead
+    /// of it. Named once so the colour, the tooltip and the spoken label
+    /// cannot each carry their own copy.
+    public static let aheadOfPaceMargin = 0.04
+
     public var isAboveProrataPace: Bool {
-        (burndownDelta ?? 0) > 0.04
+        (burndownDelta ?? 0) > Self.aheadOfPaceMargin
     }
 
     /// How many times faster the quota is being consumed than the window is

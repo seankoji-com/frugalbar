@@ -406,6 +406,9 @@ struct DesktopWidgetView: View {
             )
             .frame(maxWidth: .infinity)
             if let fraction = window.fraction {
+                if window.showsBlockedGlyph {
+                    BlockedGlyph(color: color, size: 8)
+                }
                 Text("\(Int((fraction * 100).rounded()))%\(window.measuresElapsedTimeOnly ? " elapsed" : "")")
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
@@ -415,9 +418,7 @@ struct DesktopWidgetView: View {
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
             }
         }
-        .help(window.measuresElapsedTimeOnly
-              ? "\(window.label): billing cycle, elapsed time only"
-              : ResetCountdownBadge.description(window.resetsAt, now: now))
+        .help(OverviewPresentation.helpText(for: window, now: now))
     }
 
     // MARK: - Headroom strip
@@ -454,6 +455,9 @@ struct DesktopWidgetView: View {
             MicroProgressBar(fraction: item.remainingFraction, statusColor: headroomColor(item))
                 .frame(maxWidth: .infinity)
             if let percentText {
+                if item.showsBlockedGlyph {
+                    BlockedGlyph(color: headroomColor(item), size: 9)
+                }
                 Text(percentText)
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
@@ -469,20 +473,7 @@ struct DesktopWidgetView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(headroomAccessibilityLabel(item, now: now))
-    }
-
-    private func headroomAccessibilityLabel(_ item: AggregateBurndownPresentation.HeadroomItem, now: Date) -> String {
-        var label = "\(item.vendorId.displayName) \(item.barLabel) window"
-        if let fraction = item.remainingFraction {
-            label += ", \(Int((fraction * 100).rounded())) percent remaining"
-        } else {
-            label += item.isBlocked ? ", blocked" : ", no reading"
-        }
-        if item.resetsAt != nil {
-            label += ". \(ResetCountdownBadge.description(item.resetsAt, now: now))"
-        }
-        return label
+        .accessibilityLabel(AggregateBurndownPresentation.headroomAccessibilityLabel(item, now: now))
     }
 
     // MARK: - Filters

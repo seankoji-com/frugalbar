@@ -47,11 +47,38 @@ struct MetricSectionView: View {
         )
     }
 
+    /// Only when some bar here actually draws a pace tick: the same
+    /// `paceMarker` rule the bars use, so the legend never names a marker
+    /// that is absent (all bars at an end, spent, or unread).
+    nonisolated static func showsPaceLegend(for snapshots: [QuotaSnapshot]) -> Bool {
+        snapshots.contains { $0.displayBars.contains { $0.paceMarker != nil } }
+    }
+
+    private var hasPace: Bool { Self.showsPaceLegend(for: snapshots) }
+
+    /// Names the one marker on the bars, in the header's empty leading space.
+    @ViewBuilder
+    private var paceLegend: some View {
+        if hasPace {
+            HStack(spacing: 4) {
+                Capsule()
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 2, height: 9)
+                Text("even pace")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.outline)
+            }
+            .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        } else {
+            Color.clear.frame(height: 1)
+        }
+    }
+
     /// "5H  WK  MO" over the grid columns, aligned with the cells below.
     private var columnHeader: some View {
         HStack(spacing: Theme.rowSpacing) {
-            Color.clear
-                .frame(width: Theme.gridLeadingInset, height: 1)
+            paceLegend
+                .frame(width: Theme.gridLeadingInset, alignment: .leading)
             HStack(spacing: Theme.gridColumnSpacing) {
                 ForEach(WindowColumn.allCases) { column in
                     Text(column.label)

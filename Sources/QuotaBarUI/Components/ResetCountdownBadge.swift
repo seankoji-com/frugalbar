@@ -30,6 +30,61 @@ public enum ResetCountdownBadge {
         }
     }
 
+    /// One unit, rounded: what the compact cell text and its spoken form both
+    /// say, computed once so the two can never disagree.
+    private enum CompactReset {
+        case now
+        case minutes(Int)
+        case hours(Int)
+        case days(Int)
+    }
+
+    private static func compactReset(_ date: Date?, now: Date) -> CompactReset? {
+        guard let date else { return nil }
+        let interval = date.timeIntervalSince(now)
+        guard interval > 0 else { return .now }
+        let minutes = Int((interval / 60).rounded())
+        switch minutes {
+        case ..<1:
+            return .minutes(1)
+        case ..<60:
+            return .minutes(minutes)
+        case ..<(24 * 60):
+            // 23.6h rounds to 24: that is a day, not "24h".
+            let hours = Int((interval / 3600).rounded())
+            return hours >= 24 ? .days(1) : .hours(hours)
+        default:
+            return .days(Int((interval / 86_400).rounded()))
+        }
+    }
+
+    /// The shortest form, for a cell under a bar: `45m`, `3h`, `6d`. One unit,
+    /// rounded, so it fits a 53pt column beside a percentage. nil when there
+    /// is no reset time; `now` once it has passed.
+    public static func compact(_ date: Date?, now: Date = Date()) -> String? {
+        switch compactReset(date, now: now) {
+        case nil:             nil
+        case .now:            "now"
+        case .minutes(let n): "\(n)m"
+        case .hours(let n):   "\(n)h"
+        case .days(let n):    "\(n)d"
+        }
+    }
+
+    /// The spoken form of `compact`, for VoiceOver: "resets in 3 hours". A
+    /// figure a sighted user can read in the cell has to reach the row's
+    /// label too. nil when there is no reset time.
+    public static func compactSpoken(_ date: Date?, now: Date = Date()) -> String? {
+        func unit(_ n: Int, _ name: String) -> String { "resets in \(n) \(name)\(n == 1 ? "" : "s")" }
+        switch compactReset(date, now: now) {
+        case nil:             return nil
+        case .now:            return "resets now"
+        case .minutes(let n): return unit(n, "minute")
+        case .hours(let n):   return unit(n, "hour")
+        case .days(let n):    return unit(n, "day")
+        }
+    }
+
     /// Expanded form for tooltips and accessibility labels.
     public static func description(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }

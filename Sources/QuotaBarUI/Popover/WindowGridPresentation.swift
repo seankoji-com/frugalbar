@@ -59,8 +59,14 @@ public struct WindowGridPresentation: Equatable, Sendable {
     /// Bars that belong to no column, drawn on their own lines under the
     /// row with their own tokens, in the order the provider gave them.
     public let extras: [DualBarMetrics]
+    /// The instant every reset time in this presentation is measured from, so
+    /// the compact text a cell draws and the words VoiceOver speaks cannot
+    /// land on different sides of a rounding boundary (59m30s is "1h" to one
+    /// and "59 minutes" to the other if each reads its own clock).
+    public let now: Date
 
-    public init(snapshot: QuotaSnapshot) {
+    public init(snapshot: QuotaSnapshot, now: Date = Date()) {
+        self.now = now
         var bars: [WindowColumn: DualBarMetrics] = [:]
         var extras: [DualBarMetrics] = []
         for bar in snapshot.displayBars {
@@ -82,6 +88,12 @@ public struct WindowGridPresentation: Equatable, Sendable {
         self.extras = extras
     }
 
+    /// The compact reset text under a column's bar ("45m", "3h", "6d"), or nil
+    /// when the window published none. Measured from `now`, like the spoken form.
+    public func compactReset(for column: WindowColumn) -> String? {
+        ResetCountdownBadge.compact(bars[column]?.resetsAt, now: now)
+    }
+
     /// True when the row has anything to put in the grid. A row with nothing
     /// there keeps the chip fallback layout.
     public var usesGrid: Bool {
@@ -96,22 +108,52 @@ public struct WindowGridPresentation: Equatable, Sendable {
         return "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
+    /// Whether a figure needs the blocked glyph beside it: the vendor blocked
+    /// the window yet reported how much of it was used. Without a percentage
+    /// the cell says "Blocked" in words, so the glyph would repeat it.
+    public static func showsBlockedGlyph(for bar: DualBarMetrics) -> Bool {
+        bar.isBlocked && bar.primaryFraction != nil
+    }
+
     /// The words for a bar with no fraction.
     public static func unmeasuredText(for bar: DualBarMetrics) -> String {
         bar.isBlocked ? "Blocked" : "—"
     }
 
     /// Everything the grid draws, in words, for the row label: "5-hour 42%
-    /// used, weekly 80% used, monthly blocked", then spend cells ("weekly
-    /// spend $3.10") and the non-window pools by token ("BN 50% used"). A
-    /// figure a sighted user can read must reach VoiceOver too.
-    public func spokenSummary() -> String? {
-        func spoken(_ bar: DualBarMetrics, name: String) -> String {
-            if let text = Self.percentText(for: bar) { return "\(name) \(text) used" }
-            return "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
+    /// used, resets in 3 hours, weekly 80% used, ahead of an even pace, resets
+    /// in 6 days", then spend cells ("weekly spend $3.10") and the non-window
+    /// pools by token ("BN 50% used"). A figure a sighted user can read must
+    /// reach VoiceOver too: the reset time under each bar, and the amber fill
+    /// that means "ahead of an even pace", which would otherwise be colour
+    /// alone. Only windows in columns show either, so only they speak them.
+    public func spokenSummary(now explicitNow: Date? = nil) -> String? {
+        let now = explicitNow ?? self.now
+        func spoken(_ bar: DualBarMetrics, name: String, isColumn: Bool = false) -> String {
+            var text: String
+            if let percent = Self.percentText(for: bar) {
+                text = "\(name) \(percent) used"
+                // The vendor can block a window and still report how much of
+                // it was used (OpenCode Go does). The bar then wears the
+                // vendor's blocked colour, which is colour alone: say it.
+                if bar.isBlocked { text += ", blocked" }
+            } else {
+                text = "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
+            }
+            guard isColumn else { return text }
+            // The amber fill, in words. `isMeaningfullyAheadOfPace` already
+            // excludes a blocked window (vendor colour), a spent one (red) and
+            // any pace whose tick is not drawn.
+            if bar.isMeaningfullyAheadOfPace {
+                text += ", ahead of an even pace"
+            }
+            if let reset = ResetCountdownBadge.compactSpoken(bar.resetsAt, now: now) {
+                text += ", \(reset)"
+            }
+            return text
         }
         var parts = WindowColumn.allCases.compactMap { column -> String? in
-            if let bar = bars[column] { return spoken(bar, name: column.spokenName) }
+            if let bar = bars[column] { return spoken(bar, name: column.spokenName, isColumn: true) }
             if let cell = spend[column] {
                 let amount = cell.amount.map { MetricRowPresentation.currency($0, cell.currencyCode) } ?? "not reported"
                 return "\(column.spokenName) spend \(amount)"

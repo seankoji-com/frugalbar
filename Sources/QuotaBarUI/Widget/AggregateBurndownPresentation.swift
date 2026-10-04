@@ -181,6 +181,11 @@ public enum AggregateBurndownPresentation {
         public let isBlocked: Bool
         public let status: ProviderStatus
 
+        /// Blocked by the vendor yet reporting a figure: the bar is drawn in
+        /// the error colour either way, so a glyph beside the percentage is
+        /// what tells a blocked window from a merely low one.
+        public var showsBlockedGlyph: Bool { isBlocked && remainingFraction != nil }
+
         public init(
             vendorId: VendorIdentifier,
             barLabel: String,
@@ -450,6 +455,24 @@ public enum AggregateBurndownPresentation {
     }
 
     // MARK: - Text
+
+    /// Spoken form of one headroom row: "Claude WK window, 62 percent
+    /// remaining. Resets in 3 days". A window the vendor blocked says so even
+    /// when it still reports a figure; one with no figure reads "blocked" or
+    /// "no reading", never 0.
+    public static func headroomAccessibilityLabel(_ item: HeadroomItem, now: Date = Date()) -> String {
+        var label = "\(item.vendorId.displayName) \(item.barLabel) window"
+        if let fraction = item.remainingFraction {
+            label += ", \(Int((fraction * 100).rounded())) percent remaining"
+            if item.isBlocked { label += ", blocked" }
+        } else {
+            label += item.isBlocked ? ", blocked" : ", no reading"
+        }
+        if item.resetsAt != nil {
+            label += ". \(ResetCountdownBadge.description(item.resetsAt, now: now))"
+        }
+        return label
+    }
 
     public static func rangeShortTitle(_ range: HistoryPresentation.TimeRange) -> String {
         switch range {
