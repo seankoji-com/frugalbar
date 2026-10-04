@@ -128,4 +128,14 @@ struct OverviewPresentationTests {
         let text = O.accessibilityLabel(for: tile, metric: .remaining, now: now)
         #expect(text.contains("weekly 10 percent remaining, blocked"))
     }
+
+    @Test("only a blocked window that still reports a figure gets the glyph")
+    func overviewGlyph() {
+        func tile(_ bar: DualBarMetrics) -> O.WindowCell {
+            O.tiles(snapshots: [snapshot(.opencode, status: .critical, bars: [bar])], filters: WidgetFilters())[0].windows[0]
+        }
+        #expect(tile(DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true)).showsBlockedGlyph)
+        #expect(!tile(DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true)).showsBlockedGlyph)
+        #expect(!tile(DualBarMetrics(primaryFraction: 0.9, label: "WK")).showsBlockedGlyph)
+    }
 }

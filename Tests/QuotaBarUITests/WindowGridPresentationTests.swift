@@ -250,4 +250,31 @@ struct WindowGridSpokenResetTests {
         #expect(grid([DualBarMetrics(primaryFraction: 0.3, label: "MO"), pool]).spokenSummary(now: now)
                 == "monthly 30% used, BN 50% used, blocked")
     }
+
+    // MARK: Blocked glyph, the on-screen non-colour channel
+
+    @Test("a blocked window that reports a percentage gets the glyph; the others do not")
+    func blockedGlyphRule() {
+        let blockedMeasured = DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true)
+        let blockedUnread = DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true)
+        let openMeasured = DualBarMetrics(primaryFraction: 0.9, label: "WK")
+        #expect(WindowGridPresentation.showsBlockedGlyph(for: blockedMeasured))
+        // No percentage: the cell already says "Blocked" in words.
+        #expect(!WindowGridPresentation.showsBlockedGlyph(for: blockedUnread))
+        #expect(WindowGridPresentation.unmeasuredText(for: blockedUnread) == "Blocked")
+        #expect(!WindowGridPresentation.showsBlockedGlyph(for: openMeasured))
+    }
+
+    /// The glyph exists because a shape can be told apart where colours
+    /// cannot; it must not be a shape an urgency already uses.
+    @Test("the blocked glyph is not any shape an urgency or status already uses")
+    func blockedGlyphIsDistinct() {
+        let used: Set<String> = [
+            StatusIndicatorDot.symbol(for: .healthy),
+            StatusIndicatorDot.symbol(for: .warning),
+            StatusIndicatorDot.symbol(for: .critical),
+            StatusIndicatorDot.symbol(for: .unavailable(.offline)),
+        ]
+        #expect(!used.contains(BlockedGlyph.symbolName))
+    }
 }

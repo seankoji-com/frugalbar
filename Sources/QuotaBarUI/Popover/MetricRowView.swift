@@ -309,6 +309,11 @@ struct MetricRowView: View {
                 // reset on the right, dim. Together they answer "how much, and
                 // until when" without opening the row.
                 HStack(spacing: 2) {
+                    // Blocked yet measured: a shape, since the vendor's
+                    // blocked colour is too close to amber to carry it.
+                    if WindowGridPresentation.showsBlockedGlyph(for: bar) {
+                        BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
+                    }
                     Text(WindowGridPresentation.percentText(for: bar)
                          ?? WindowGridPresentation.unmeasuredText(for: bar))
                         .font(Theme.Typography.token)

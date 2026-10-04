@@ -349,4 +349,31 @@ struct AggregateBurndownPresentationTests {
         #expect(WidgetFilters.decode(nil) == WidgetFilters())
         #expect(WidgetFilters.decode(Data("not json".utf8)) == WidgetFilters())
     }
+
+    // MARK: - Headroom strip, blocked
+
+    private func headroom(_ bar: DualBarMetrics) -> P.HeadroomItem {
+        P.currentHeadroom(snapshots: [snapshot(.opencode, status: .critical, bars: [bar])], filters: WidgetFilters())[0]
+    }
+
+    @Test("a blocked window that still reports a figure is spoken as blocked and gets the glyph")
+    func headroomBlockedMeasured() {
+        let item = headroom(DualBarMetrics(primaryFraction: 0.9, label: "WK", blockedColor: "#ffb4ab", isBlocked: true, windowLength: QuotaWindow.week))
+        #expect(item.showsBlockedGlyph)
+        let text = P.headroomAccessibilityLabel(item, now: now)
+        #expect(text.contains("10 percent remaining, blocked"))
+    }
+
+    @Test("the other headroom states keep their wording and get no glyph")
+    func headroomOtherStates() {
+        let unread = headroom(DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true, windowLength: QuotaWindow.week))
+        #expect(!unread.showsBlockedGlyph)
+        #expect(P.headroomAccessibilityLabel(unread, now: now) == "OpenCode WK window, blocked")
+
+        let open = headroom(DualBarMetrics(primaryFraction: 0.4, label: "WK", windowLength: QuotaWindow.week))
+        #expect(!open.showsBlockedGlyph)
+        let spoken = P.headroomAccessibilityLabel(open, now: now)
+        #expect(spoken == "OpenCode WK window, 60 percent remaining")
+        #expect(!spoken.contains("blocked"))
+    }
 }

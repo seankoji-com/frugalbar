@@ -155,7 +155,12 @@ it) and the single tick is where an even pace would be, drawn only when the
 vendor published a window length and reset, and never on a spent window. Don't
 add a second marker or extra over/under-pace segments: three colours and two
 triangles per bar made the card unreadable. A column the vendor does not publish
-shows a faint dash, never a track, which would read as 0% used.
+shows a faint dash, never a track, which would read as 0% used. A window the
+vendor blocked but still reports a percentage for (OpenCode Go) wears the
+vendor's blocked colour, which sits too close to amber to tell apart, so a
+`BlockedGlyph` (`nosign`) sits beside its figure everywhere it is drawn and the
+spoken label says "blocked". Without a percentage the cell already says
+"Blocked" in words and draws a dashed placeholder.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the

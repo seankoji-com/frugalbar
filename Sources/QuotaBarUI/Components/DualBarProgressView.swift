@@ -145,16 +145,21 @@ public struct DualBarProgressView: View {
 
             // The window token, in the state colour.
             if showsLabel {
-                Text(metrics.label)
-                    .font(Theme.Typography.token)
-                    .tracking(Theme.Tracking.token)
-                    .foregroundStyle(labelColor)
-                    .lineLimit(1)
-                    // Most window codes are two characters and need no scaling.
-                    // Longer ones (REST, GraphQL, PLAN, CYCLE) are scaled
-                    // rather than truncated.
-                    .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
-                    .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
+                HStack(spacing: 2) {
+                    if WindowGridPresentation.showsBlockedGlyph(for: metrics) {
+                        BlockedGlyph(color: labelColor, size: 8)
+                    }
+                    Text(metrics.label)
+                        .font(Theme.Typography.token)
+                        .tracking(Theme.Tracking.token)
+                        .foregroundStyle(labelColor)
+                        .lineLimit(1)
+                        // Most window codes are two characters and need no
+                        // scaling. Longer ones (REST, GraphQL, PLAN, CYCLE)
+                        // are scaled rather than truncated.
+                        .minimumScaleFactor(metrics.label.count > 2 ? 0.6 : 1.0)
+                }
+                .frame(width: Theme.tokenColumnWidth, alignment: .trailing)
             }
         }
         .help(helpText)

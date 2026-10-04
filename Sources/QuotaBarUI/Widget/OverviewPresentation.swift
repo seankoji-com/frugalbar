@@ -21,6 +21,10 @@ public enum OverviewPresentation {
         public let measuresElapsedTimeOnly: Bool
         public let resetsAt: Date?
         public let metrics: DualBarMetrics
+
+        /// Blocked by the vendor yet reporting a figure: colour alone would
+        /// carry that, so a glyph sits beside the percentage.
+        public var showsBlockedGlyph: Bool { isBlocked && fraction != nil }
     }
 
     public struct Tile: Identifiable, Sendable, Equatable {

@@ -96,6 +96,13 @@ public struct WindowGridPresentation: Equatable, Sendable {
         return "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
+    /// Whether a figure needs the blocked glyph beside it: the vendor blocked
+    /// the window yet reported how much of it was used. Without a percentage
+    /// the cell says "Blocked" in words, so the glyph would repeat it.
+    public static func showsBlockedGlyph(for bar: DualBarMetrics) -> Bool {
+        bar.isBlocked && bar.primaryFraction != nil
+    }
+
     /// The words for a bar with no fraction.
     public static func unmeasuredText(for bar: DualBarMetrics) -> String {
         bar.isBlocked ? "Blocked" : "—"
