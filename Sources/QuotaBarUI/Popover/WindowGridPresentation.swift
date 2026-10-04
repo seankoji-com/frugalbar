@@ -102,16 +102,34 @@ public struct WindowGridPresentation: Equatable, Sendable {
     }
 
     /// Everything the grid draws, in words, for the row label: "5-hour 42%
-    /// used, weekly 80% used, monthly blocked", then spend cells ("weekly
-    /// spend $3.10") and the non-window pools by token ("BN 50% used"). A
-    /// figure a sighted user can read must reach VoiceOver too.
-    public func spokenSummary() -> String? {
-        func spoken(_ bar: DualBarMetrics, name: String) -> String {
-            if let text = Self.percentText(for: bar) { return "\(name) \(text) used" }
-            return "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
+    /// used, resets in 3 hours, weekly 80% used, ahead of an even pace, resets
+    /// in 6 days", then spend cells ("weekly spend $3.10") and the non-window
+    /// pools by token ("BN 50% used"). A figure a sighted user can read must
+    /// reach VoiceOver too: the reset time under each bar, and the amber fill
+    /// that means "ahead of an even pace", which would otherwise be colour
+    /// alone. Only windows in columns show either, so only they speak them.
+    public func spokenSummary(now: Date = Date()) -> String? {
+        func spoken(_ bar: DualBarMetrics, name: String, isColumn: Bool = false) -> String {
+            var text: String
+            if let percent = Self.percentText(for: bar) {
+                text = "\(name) \(percent) used"
+            } else {
+                text = "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
+            }
+            guard isColumn else { return text }
+            // The amber fill, in words. Not for a spent window, which is red
+            // and draws no pace tick.
+            if bar.isAboveProrataPace,
+               (bar.primaryFraction ?? 0) < QuotaSnapshot.exhaustionThreshold {
+                text += ", ahead of an even pace"
+            }
+            if let reset = ResetCountdownBadge.compactSpoken(bar.resetsAt, now: now) {
+                text += ", \(reset)"
+            }
+            return text
         }
         var parts = WindowColumn.allCases.compactMap { column -> String? in
-            if let bar = bars[column] { return spoken(bar, name: column.spokenName) }
+            if let bar = bars[column] { return spoken(bar, name: column.spokenName, isColumn: true) }
             if let cell = spend[column] {
                 let amount = cell.amount.map { MetricRowPresentation.currency($0, cell.currencyCode) } ?? "not reported"
                 return "\(column.spokenName) spend \(amount)"

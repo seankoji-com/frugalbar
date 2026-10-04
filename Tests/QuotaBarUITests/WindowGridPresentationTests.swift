@@ -122,3 +122,98 @@ struct WindowGridPresentationTests {
         }
     }
 }
+
+/// The reset time under each bar is on screen, so it has to be spoken.
+@Suite("WindowGridPresentation — spoken reset times")
+struct WindowGridSpokenResetTests {
+
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func bar(_ label: String, _ used: Double?, resetsIn seconds: TimeInterval?, blocked: Bool = false) -> DualBarMetrics {
+        DualBarMetrics(
+            primaryFraction: used, label: label, isBlocked: blocked,
+            resetsAt: seconds.map { now.addingTimeInterval($0) })
+    }
+
+    private func grid(_ bars: [DualBarMetrics]) -> WindowGridPresentation {
+        WindowGridPresentation(snapshot: QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0, displayDetails: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bars.indices.contains(0) ? bars[0] : nil,
+            row2: bars.indices.contains(1) ? bars[1] : nil,
+            row3: bars.indices.contains(2) ? bars[2] : nil))
+    }
+
+    @Test("each window speaks its reset beside its figure")
+    func resetsAreSpoken() {
+        let g = grid([bar("5H", 0.06, resetsIn: 3 * 3600), bar("WK", 0.11, resetsIn: 6 * 86_400)])
+        #expect(g.spokenSummary(now: now)
+                == "5-hour 6% used, resets in 3 hours, weekly 11% used, resets in 6 days")
+    }
+
+    @Test("singular units, minutes and now are spoken correctly")
+    func units() {
+        #expect(grid([bar("5H", 0.1, resetsIn: 60)]).spokenSummary(now: now) == "5-hour 10% used, resets in 1 minute")
+        #expect(grid([bar("5H", 0.1, resetsIn: 45 * 60)]).spokenSummary(now: now) == "5-hour 10% used, resets in 45 minutes")
+        #expect(grid([bar("WK", 0.1, resetsIn: 86_400)]).spokenSummary(now: now) == "weekly 10% used, resets in 1 day")
+        #expect(grid([bar("WK", 0.1, resetsIn: -30)]).spokenSummary(now: now) == "weekly 10% used, resets now")
+    }
+
+    /// The spoken figure is the visible one: both come from `compactReset`.
+    @Test("the spoken reset matches the compact text on screen")
+    func matchesVisibleText() {
+        for seconds in [20.0, 45 * 60, 3 * 3600, 23.6 * 3600, 6.2 * 86_400] as [TimeInterval] {
+            let date = now.addingTimeInterval(seconds)
+            let visible = ResetCountdownBadge.compact(date, now: now) ?? ""
+            let spoken = ResetCountdownBadge.compactSpoken(date, now: now) ?? ""
+            let digits = visible.filter(\.isNumber)
+            #expect(spoken.contains(digits), "visible \(visible) vs spoken \(spoken)")
+        }
+    }
+
+    @Test("a window with no published reset speaks none, and a blocked one still does")
+    func absentAndBlocked() {
+        #expect(grid([bar("WK", 0.4, resetsIn: nil)]).spokenSummary(now: now) == "weekly 40% used")
+        #expect(grid([bar("5H", nil, resetsIn: 2 * 3600, blocked: true)]).spokenSummary(now: now)
+                == "5-hour blocked, resets in 2 hours")
+    }
+
+    @Test("non-window pools show no reset text, so they speak none")
+    func extrasSpeakNoReset() {
+        let g = grid([bar("MO", 0.3, resetsIn: 86_400), bar("BN", 0.5, resetsIn: 5 * 86_400)])
+        #expect(g.spokenSummary(now: now) == "monthly 30% used, resets in 1 day, BN 50% used")
+    }
+
+    // MARK: Pace, the amber fill in words
+
+    private func paced(_ used: Double, pace: Double?) -> DualBarMetrics {
+        DualBarMetrics(primaryFraction: used, expectedPaceFraction: pace, label: "WK")
+    }
+
+    /// Amber is colour alone; WCAG 1.4.1 wants the same fact in words.
+    @Test("a window meaningfully ahead of an even pace says so")
+    func aheadIsSpoken() {
+        #expect(grid([paced(0.30, pace: 0.10)]).spokenSummary(now: now) == "weekly 30% used, ahead of an even pace")
+    }
+
+    @Test("a window at or near pace, or with no pace published, says nothing about pace")
+    func notAheadIsSilent() {
+        #expect(grid([paced(0.12, pace: 0.10)]).spokenSummary(now: now) == "weekly 12% used")
+        #expect(grid([paced(0.30, pace: nil)]).spokenSummary(now: now) == "weekly 30% used")
+    }
+
+    @Test("a spent window is not described as ahead of pace")
+    func spentIsSilent() {
+        #expect(grid([paced(1.0, pace: 0.10)]).spokenSummary(now: now) == "weekly 100% used")
+    }
+
+    @Test("pace is spoken before the reset, and an unmeasured window has no pace")
+    func order() {
+        let ahead = DualBarMetrics(primaryFraction: 0.5, expectedPaceFraction: 0.2, label: "WK",
+                                   resetsAt: now.addingTimeInterval(86_400))
+        #expect(grid([ahead]).spokenSummary(now: now) == "weekly 50% used, ahead of an even pace, resets in 1 day")
+        let blocked = DualBarMetrics(primaryFraction: nil, expectedPaceFraction: 0.2, label: "WK", isBlocked: true)
+        #expect(grid([blocked]).spokenSummary(now: now) == "weekly blocked")
+    }
+}
