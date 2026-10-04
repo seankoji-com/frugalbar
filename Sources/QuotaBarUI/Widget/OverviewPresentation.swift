@@ -68,7 +68,12 @@ public enum OverviewPresentation {
             } : []
 
             let reason = snapshot.status.unavailableReason
-            let exhausted = snapshot.isQuotaExhausted || snapshot.isFullyBlockedWithoutReading
+            // The popover's own definition: a spent window, or an account cut
+            // off with no figures. A window the vendor blocked but still
+            // reports a percentage for is blocked, which its own line says,
+            // not exhausted.
+            let spent = snapshot.quotaBars.contains { ($0.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold }
+            let exhausted = spent || snapshot.isFullyBlockedWithoutReading
             return Tile(
                 vendorId: snapshot.vendorId,
                 name: snapshot.shortVendorName,
@@ -80,6 +85,16 @@ public enum OverviewPresentation {
                 unavailableRemedy: reason?.remedy
             )
         }
+    }
+
+    /// The tooltip on one window line: blocked first, when it is, then when it
+    /// resets. A billing cycle says it measures elapsed time, not usage.
+    public static func helpText(for window: WindowCell, now: Date = Date()) -> String {
+        if window.measuresElapsedTimeOnly { return "\(window.label): billing cycle, elapsed time only" }
+        var parts: [String] = []
+        if window.isBlocked { parts.append("\(window.label) is blocked") }
+        parts.append(ResetCountdownBadge.description(window.resetsAt, now: now))
+        return parts.joined(separator: ". ")
     }
 
     /// The spoken form of a tile: every figure a sighted user can read.

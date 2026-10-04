@@ -418,9 +418,7 @@ struct DesktopWidgetView: View {
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
             }
         }
-        .help(window.measuresElapsedTimeOnly
-              ? "\(window.label): billing cycle, elapsed time only"
-              : ResetCountdownBadge.description(window.resetsAt, now: now))
+        .help(OverviewPresentation.helpText(for: window, now: now))
     }
 
     // MARK: - Headroom strip

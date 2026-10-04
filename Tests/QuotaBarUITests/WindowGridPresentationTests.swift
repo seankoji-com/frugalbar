@@ -187,31 +187,36 @@ struct WindowGridSpokenResetTests {
 
     // MARK: Pace, the amber fill in words
 
+    /// A pace the vendor published: it comes with the reset and the window
+    /// length it is measured against.
     private func paced(_ used: Double, pace: Double?) -> DualBarMetrics {
-        DualBarMetrics(primaryFraction: used, expectedPaceFraction: pace, label: "WK")
+        DualBarMetrics(
+            primaryFraction: used, expectedPaceFraction: pace, label: "WK",
+            resetsAt: now.addingTimeInterval(86_400), windowLength: QuotaWindow.week)
     }
 
     /// Amber is colour alone; WCAG 1.4.1 wants the same fact in words.
     @Test("a window meaningfully ahead of an even pace says so")
     func aheadIsSpoken() {
-        #expect(grid([paced(0.30, pace: 0.10)]).spokenSummary(now: now) == "weekly 30% used, ahead of an even pace")
+        #expect(grid([paced(0.30, pace: 0.10)]).spokenSummary(now: now)
+                == "weekly 30% used, ahead of an even pace, resets in 1 day")
     }
 
     @Test("a window at or near pace, or with no pace published, says nothing about pace")
     func notAheadIsSilent() {
-        #expect(grid([paced(0.12, pace: 0.10)]).spokenSummary(now: now) == "weekly 12% used")
-        #expect(grid([paced(0.30, pace: nil)]).spokenSummary(now: now) == "weekly 30% used")
+        #expect(grid([paced(0.12, pace: 0.10)]).spokenSummary(now: now) == "weekly 12% used, resets in 1 day")
+        #expect(grid([paced(0.30, pace: nil)]).spokenSummary(now: now) == "weekly 30% used, resets in 1 day")
     }
 
     @Test("a spent window is not described as ahead of pace")
     func spentIsSilent() {
-        #expect(grid([paced(1.0, pace: 0.10)]).spokenSummary(now: now) == "weekly 100% used")
+        #expect(grid([paced(1.0, pace: 0.10)]).spokenSummary(now: now) == "weekly 100% used, resets in 1 day")
     }
 
     @Test("pace is spoken before the reset, and an unmeasured window has no pace")
     func order() {
         let ahead = DualBarMetrics(primaryFraction: 0.5, expectedPaceFraction: 0.2, label: "WK",
-                                   resetsAt: now.addingTimeInterval(86_400))
+                                   resetsAt: now.addingTimeInterval(86_400), windowLength: QuotaWindow.week)
         #expect(grid([ahead]).spokenSummary(now: now) == "weekly 50% used, ahead of an even pace, resets in 1 day")
         let blocked = DualBarMetrics(primaryFraction: nil, expectedPaceFraction: 0.2, label: "WK", isBlocked: true)
         #expect(grid([blocked]).spokenSummary(now: now) == "weekly blocked")
@@ -226,7 +231,7 @@ struct WindowGridSpokenResetTests {
         DualBarMetrics(
             primaryFraction: used, expectedPaceFraction: pace, label: "WK",
             blockedColor: "#ffb4ab", isBlocked: true,
-            resetsAt: now.addingTimeInterval(86_400))
+            resetsAt: now.addingTimeInterval(86_400), windowLength: QuotaWindow.week)
     }
 
     @Test("a blocked window with a percentage says blocked, and never claims to be ahead of pace")
@@ -240,7 +245,7 @@ struct WindowGridSpokenResetTests {
     func sameUsageNotBlockedIsAhead() {
         let open = DualBarMetrics(
             primaryFraction: 0.90, expectedPaceFraction: 0.20, label: "WK",
-            resetsAt: now.addingTimeInterval(86_400))
+            resetsAt: now.addingTimeInterval(86_400), windowLength: QuotaWindow.week)
         #expect(grid([open]).spokenSummary(now: now) == "weekly 90% used, ahead of an even pace, resets in 1 day")
     }
 
@@ -276,5 +281,43 @@ struct WindowGridSpokenResetTests {
             StatusIndicatorDot.symbol(for: .unavailable(.offline)),
         ]
         #expect(!used.contains(BlockedGlyph.symbolName))
+    }
+}
+
+/// The cell's compact text and the spoken label read one instant.
+@Suite("WindowGridPresentation — one instant")
+struct WindowGridInstantTests {
+
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func grid(resetsIn seconds: TimeInterval, now: Date) -> WindowGridPresentation {
+        let bar = DualBarMetrics(
+            primaryFraction: 0.2, label: "5H", resetsAt: Date(timeIntervalSince1970: 1_800_000_000).addingTimeInterval(seconds),
+            windowLength: QuotaWindow.fiveHours)
+        return WindowGridPresentation(
+            snapshot: QuotaSnapshot(
+                id: "x", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+                metric: .percentage(usedFraction: 0, displayDetails: nil), status: .healthy,
+                resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil, row1: bar),
+            now: now)
+    }
+
+    /// 59m30s sits on a rounding boundary: "1h" to one reading and "59
+    /// minutes" to another if each takes its own clock.
+    @Test("the drawn text and the spoken words come from the grid's own instant")
+    func agree() {
+        let g = grid(resetsIn: 59 * 60 + 30, now: now)
+        #expect(g.now == now)
+        #expect(g.compactReset(for: .fiveHour) == "1h")
+        #expect(g.spokenSummary()?.contains("resets in 1 hour") == true)
+    }
+
+    @Test("a grid built at another instant says something else, so the instant is what decides")
+    func instantDecides() {
+        let early = grid(resetsIn: 3 * 3600, now: now)
+        let late = grid(resetsIn: 3 * 3600, now: now.addingTimeInterval(2.5 * 3600))
+        #expect(early.compactReset(for: .fiveHour) == "3h")
+        #expect(late.compactReset(for: .fiveHour) == "30m")
+        #expect(late.spokenSummary()?.contains("resets in 30 minutes") == true)
     }
 }

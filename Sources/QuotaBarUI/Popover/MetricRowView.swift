@@ -22,13 +22,6 @@ struct MetricRowView: View {
 
     private var p: MetricRowPresentation { MetricRowPresentation(snapshot: snapshot) }
 
-    /// The windows actually drawn, placed in their columns. The
-    /// exhausted-window collapse lives on the model
-    /// (`QuotaSnapshot.displayBars`) so the popover and the inspector agree on
-    /// which windows a spent longer period makes redundant; a collapsed window
-    /// leaves its cell empty.
-    private var grid: WindowGridPresentation { WindowGridPresentation(snapshot: snapshot) }
-
     private var urgencyColor: Color {
         switch p.urgency {
         case .none:     Theme.secondary
@@ -77,7 +70,16 @@ struct MetricRowView: View {
     }
 
     var body: some View {
-        let grid = grid
+        // The windows actually drawn, placed in their columns. The
+        // exhausted-window collapse lives on the model
+        // (`QuotaSnapshot.displayBars`) so the popover and the inspector agree
+        // on which windows a spent longer period makes redundant; a collapsed
+        // window leaves its cell empty.
+        //
+        // Built once per render, and it carries the instant: every countdown
+        // the row draws or speaks reads `grid.now`, never its own clock.
+        let grid = WindowGridPresentation(snapshot: snapshot)
+        let label = combinedAccessibilityLabel(grid: grid)
         VStack(alignment: .leading, spacing: 4) {
             row(grid)
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
@@ -102,7 +104,7 @@ struct MetricRowView: View {
         // of taking a line of its own: shown on hover only, and without
         // moving anything, so the popover never resizes under the pointer.
         .overlay(alignment: forecastAbove ? .top : .bottom) {
-            if isHovered, let forecastText {
+            if isHovered, let forecastText = forecastText(now: grid.now) {
                 forecastBubble(forecastText)
                     .offset(y: forecastAbove ? -Self.bubbleOffset : Self.bubbleOffset)
                     .allowsHitTesting(false)
@@ -114,9 +116,9 @@ struct MetricRowView: View {
         .onTapGesture {
             onSelect?(snapshot)
         }
-        .help(combinedAccessibilityLabel)
+        .help(label)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(combinedAccessibilityLabel)
+        .accessibilityLabel(label)
     }
 
     /// The row collapses into a single accessibility element via
@@ -126,15 +128,18 @@ struct MetricRowView: View {
     /// descriptions are folded in here rather than left on the pills, where
     /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
     /// styling alone is not an accessible status channel).
-    private var combinedAccessibilityLabel: String {
+    private func combinedAccessibilityLabel(grid: WindowGridPresentation) -> String {
+        // Every countdown in the label, including the headline's own, is
+        // measured from the grid's instant: the same one the cells draw.
+        let presentation = MetricRowPresentation(snapshot: snapshot, now: grid.now)
         let windows = grid.spokenSummary()
         // With the grid speaking each window, the headline percentage would
         // be the same figure twice.
-        var parts = [windows == nil ? p.accessibilityLabel : p.accessibilityLabelOmittingPercentage]
+        var parts = [windows == nil ? presentation.accessibilityLabel : presentation.accessibilityLabelOmittingPercentage]
         if let windows {
             parts.append(windows)
         }
-        if let forecastText {
+        if let forecastText = forecastText(now: grid.now) {
             parts.append(forecastText)
         }
         if let free = snapshot.freeTierModelBadge {
@@ -153,9 +158,9 @@ struct MetricRowView: View {
 
     /// Only for a provider we are currently reading: a forecast under an
     /// unavailable row would describe usage we can no longer see.
-    private var forecastText: String? {
+    private func forecastText(now: Date) -> String? {
         guard snapshot.status.confidence == .measured else { return nil }
-        return forecast?.summary(now: Date())
+        return forecast?.summary(now: now)
     }
 
     /// How far the hover bubble sits past the row edge: it overlaps the row
@@ -320,7 +325,7 @@ struct MetricRowView: View {
                         .tracking(Theme.Tracking.token)
                         .foregroundStyle(DualBarProgressView.stateColor(for: bar))
                     Spacer(minLength: 0)
-                    if let reset = ResetCountdownBadge.compact(bar.resetsAt) {
+                    if let reset = grid.compactReset(for: column) {
                         Text(reset)
                             .font(.system(size: 10, weight: .regular).monospaced())
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))

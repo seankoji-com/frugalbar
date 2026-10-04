@@ -47,10 +47,14 @@ struct MetricSectionView: View {
         )
     }
 
-    /// Only when some bar here actually draws a pace tick.
-    private var hasPace: Bool {
-        snapshots.contains { $0.displayBars.contains { $0.expectedPaceFraction != nil } }
+    /// Only when some bar here actually draws a pace tick: the same
+    /// `paceMarker` rule the bars use, so the legend never names a marker
+    /// that is absent (all bars at an end, spent, or unread).
+    nonisolated static func showsPaceLegend(for snapshots: [QuotaSnapshot]) -> Bool {
+        snapshots.contains { $0.displayBars.contains { $0.paceMarker != nil } }
     }
+
+    private var hasPace: Bool { Self.showsPaceLegend(for: snapshots) }
 
     /// Names the one marker on the bars, in the header's empty leading space.
     @ViewBuilder
