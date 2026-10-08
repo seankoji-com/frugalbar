@@ -20,7 +20,7 @@ public struct DualBarProgressView: View {
     /// Track and fill thickness.
     static let barHeight: CGFloat = 6
     /// The pace tick stands slightly proud of the track.
-    static let tickHeight: CGFloat = barHeight + 5
+    static let tickHeight: CGFloat = barHeight + 3.5
     static let tickWidth: CGFloat = 2
 
     public init(metrics: DualBarMetrics, showsLabel: Bool = true) {
