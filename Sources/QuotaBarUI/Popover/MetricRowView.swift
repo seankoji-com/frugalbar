@@ -308,11 +308,11 @@ struct MetricRowView: View {
     @ViewBuilder
     private func gridCell(_ column: WindowColumn, grid: WindowGridPresentation) -> some View {
         if let bar = grid.bars[column] {
-            VStack(spacing: 3) {
+            VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
                 // The share used on the left, in the bar's colour; the time to
-                // reset on the right, dim. Together they answer "how much, and
-                // until when" without opening the row.
+                // reset on the right, high-contrast. Together they answer "how much,
+                // and until when" without opening the row.
                 HStack(spacing: 2) {
                     // Blocked yet measured: a shape, since the vendor's
                     // blocked colour is too close to amber to carry it.
@@ -321,18 +321,17 @@ struct MetricRowView: View {
                     }
                     Text(WindowGridPresentation.percentText(for: bar)
                          ?? WindowGridPresentation.unmeasuredText(for: bar))
-                        .font(Theme.Typography.token)
-                        .tracking(Theme.Tracking.token)
+                        .font(Theme.Typography.gridPercent)
                         .foregroundStyle(DualBarProgressView.stateColor(for: bar))
                     Spacer(minLength: 0)
                     if let reset = grid.compactReset(for: column) {
                         Text(reset)
-                            .font(.system(size: 10, weight: .regular).monospaced())
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                            .font(Theme.Typography.gridReset)
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
                     }
                 }
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.85)
             }
         } else if let spend = grid.spend[column] {
             // Spend per window. Deliberately not a bar: spend has no cap to

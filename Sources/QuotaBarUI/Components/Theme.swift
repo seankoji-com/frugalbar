@@ -107,6 +107,13 @@ public enum Theme {
         /// has one width whatever the labels are.
         public static let token     = Font.system(size: 10.5, weight: .bold).monospaced()
 
+        /// Percentage figure in window grid cells. Semibold tabular digits keep
+        /// column figures aligned without bloating "%" or triggering downscaling
+        /// in compact columns.
+        public static let gridPercent = Font.system(size: 11, weight: .semibold).monospacedDigit()
+        /// High-contrast compact reset countdown beneath or alongside grid bars.
+        public static let gridReset   = Font.system(size: 10, weight: .medium).monospacedDigit()
+
         public static let footer     = Font.system(size: 12.5, weight: .semibold)
         public static let footerMeta = Font.system(size: 11, weight: .regular).monospacedDigit()
     }
@@ -122,4 +129,3 @@ public enum Theme {
         public static let token: CGFloat = 0.3
     }
 }
-
