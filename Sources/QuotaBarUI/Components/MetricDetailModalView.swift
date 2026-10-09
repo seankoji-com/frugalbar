@@ -231,22 +231,33 @@ public struct MetricDetailModalView: View {
             // `quotaBars`, not `bars`: burn rate and exhaustion projection
             // below are consumption metrics that don't apply to a
             // hand-entered cycle countdown.
-            HStack(spacing: 8) {
-                metricCard(
-                    title: displayBars.first.map { "\($0.label) Window Usage" } ?? "Window Usage",
-                    icon: "clock",
-                    primaryValue: displayBars.first?.usedText ?? "—",
-                    secondaryValue: displayBars.first?.resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
-                    bar: displayBars.first
-                )
+            //
+            // Only real windows get a card. A provider that meters money and
+            // publishes no window (an account-credit balance, a spend cap) has
+            // an empty `displayBars`, and drawing the cards anyway put two empty
+            // "Window Usage" gauges where there is no window at all; a
+            // single-window vendor (e.g. GitHub's own rate buckets) got a second
+            // phantom card the same way.
+            if !displayBars.isEmpty {
+                HStack(spacing: 8) {
+                    metricCard(
+                        title: "\(displayBars[0].label) Window Usage",
+                        icon: "clock",
+                        primaryValue: displayBars[0].usedText ?? "—",
+                        secondaryValue: displayBars[0].resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
+                        bar: displayBars[0]
+                    )
 
-                metricCard(
-                    title: displayBars.count > 1 ? "\(displayBars[1].label) Window Usage" : "Window Usage",
-                    icon: "cpu",
-                    primaryValue: displayBars.count > 1 ? (displayBars[1].usedText ?? "—") : "—",
-                    secondaryValue: displayBars.count > 1 ? (displayBars[1].resetText ?? "—") : "—",
-                    bar: displayBars.count > 1 ? displayBars[1] : nil
-                )
+                    if displayBars.count > 1 {
+                        metricCard(
+                            title: "\(displayBars[1].label) Window Usage",
+                            icon: "cpu",
+                            primaryValue: displayBars[1].usedText ?? "—",
+                            secondaryValue: displayBars[1].resetText ?? "—",
+                            bar: displayBars[1]
+                        )
+                    }
+                }
             }
 
             chartCard
@@ -261,7 +272,10 @@ public struct MetricDetailModalView: View {
             VStack(spacing: 5) {
                 diagRow(label: "Latency", value: snapshot.latencyMs.map { "\($0)ms" } ?? "—", valueColor: Theme.secondary)
                 diagRow(label: "Source", value: snapshot.cliSource ?? "—")
-                diagRow(label: "Plan", value: snapshot.planName ?? snapshot.badgeText ?? "—", valueColor: Theme.primary)
+                // Only a real `planName` labels the Plan row. `badgeText` used
+                // to stand in here, which put a money provider's balance under
+                // a "Plan" label ("$110.00 credit") — a plan nobody measured.
+                diagRow(label: "Plan", value: snapshot.planName ?? "—", valueColor: Theme.primary)
                 if let key = snapshot.keyMasked {
                     diagRow(label: "Key", value: key)
                 }

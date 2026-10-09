@@ -1243,6 +1243,17 @@ struct DeepSeekProviderTests {
             .status == .unavailable(.badResponse))
     }
 
+    /// The critical band rests entirely on the vendor's own `is_available`
+    /// flag, so an absent flag is a bad response — never silently defaulted to
+    /// "available", which would publish health the vendor never stated.
+    @Test("a body without is_available is not an assumed-healthy reading")
+    func missingAvailabilityFlag() throws {
+        #expect(try snapshot(#"{"balance_infos":[{"currency":"USD","total_balance":"500.00"}]}"#)
+            .status == .unavailable(.badResponse))
+        #expect(try snapshot(#"{"is_available":null,"balance_infos":[{"currency":"USD","total_balance":"500.00"}]}"#)
+            .status == .unavailable(.badResponse))
+    }
+
     @Test("a non-JSON body does not decode")
     func notJSON() {
         #expect(DeepSeekProvider.parse(Data("not json".utf8)) == nil)

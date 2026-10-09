@@ -106,19 +106,25 @@ public final class DeepSeekProvider: QuotaProvider, Sendable {
     ) -> QuotaSnapshot {
         guard let info = response.balance_infos?.first,
               let currency = info.currency?.trimmed, !currency.isEmpty,
-              let total = info.total_balance?.decimalValue
+              let total = info.total_balance?.decimalValue,
+              // `is_available` is required, not assumed true when absent: it is
+              // the vendor's own statement about whether the account can fund a
+              // call, so defaulting a missing flag to "available" would publish
+              // health the vendor never claimed — the same family as rendering a
+              // failure as health. A body without it is a bad response, exactly
+              // like one without a currency or a total.
+              let available = response.is_available
         else {
             return provider.unavailable(.badResponse)
         }
         let code = currency.uppercased()
 
-        // The vendor's own yes/no about whether a call can be made right now is
-        // authoritative for "critical". With no cap and no period published,
-        // the balance alone has no denominator to derive a percentage from, so
-        // the low-balance bands below are a UI floor, not a measured quota.
-        let urgency: Urgency = response.is_available == false
-            ? .critical
-            : lowBalanceUrgency(total: total, currency: code)
+        // With no cap and no period published, the balance alone has no
+        // denominator to derive a percentage from, so the low-balance bands
+        // below are a UI floor, not a measured quota.
+        let urgency: Urgency = available
+            ? lowBalanceUrgency(total: total, currency: code)
+            : .critical
 
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
@@ -132,9 +138,9 @@ public final class DeepSeekProvider: QuotaProvider, Sendable {
             auxiliaryInfo: auxiliaryInfo(for: info, currency: code),
             row1: nil,
             row2: nil,
-            badgeText: response.is_available == false
-                ? "Insufficient balance"
-                : "\(format(total, currencyCode: code)) credit",
+            badgeText: available
+                ? "\(format(total, currencyCode: code)) credit"
+                : "Insufficient balance",
             planName: nil,
             cliSource: "DEEPSEEK_API_KEY / auth.json",
             currencyBasis: .accountCredit
