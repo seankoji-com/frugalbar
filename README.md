@@ -13,7 +13,7 @@ Each subscription's windows line up in **5H / WK / MO** columns, with the share 
 
 ## Why FrugalBar?
 
-Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass and the GitHub APIs). However:
+Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, DeepSeek, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass and the GitHub APIs). However:
 
 - **Surprise quota exhaustion**: Running multi-step autonomous agent runs or code generation tasks often grinds to a halt midway through a long job because a hidden rate limit or budget cap was breached.
 - **Scattered dashboards**: Checking balances requires navigating half a dozen provider dashboards, consoles, and billing portals.
@@ -80,6 +80,7 @@ swift run
 3. Add your provider credentials:
    - **GitHub**: One PAT covers REST, GraphQL rate limits, and Copilot subscription status.
    - **OpenRouter**: Use a spend-capped API key to display live balance, budget, and spend telemetry.
+   - **DeepSeek**: Paste a `sk-…` API key, or set `DEEPSEEK_API_KEY` / enable CLI discovery to read the OpenCode auth.json entry, to show the prepaid credit balance.
    - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
    - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
    - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
@@ -118,6 +119,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **GitHub REST** | `GET https://api.github.com/rate_limit` → `resources.core` | Live gauge: requests/hour remaining with reset countdown |
 | **GitHub GraphQL** | `GET https://api.github.com/rate_limit` → `resources.graphql` | Live gauge: points/hour remaining with reset countdown |
 | **OpenRouter** | `GET https://openrouter.ai/api/v1/auth/key`, then `GET https://openrouter.ai/api/v1/credits` | Live account credit balance in USD when the key may read it; otherwise that key's USD spend cap |
+| **DeepSeek** | `GET https://api.deepseek.com/user/balance` with the DeepSeek API key | Live prepaid account credit balance in the account's own currency (USD or CNY), with the granted and topped-up split. DeepSeek publishes no spend window and no cap, so this is a balance and never a gauge; the vendor's `is_available` flag carries the critical band |
 | **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session or CLI Proxy hub | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports. Also the count of banked reset credits (`rate_limit_reset_credits`) when OpenAI reports one; `credits.balance` is not shown because its unit is unverified |
 | **GitHub Copilot** | `GET https://api.github.com/copilot_internal/user` with the GitHub OAuth token | Live gauge: premium-interaction and chat allowances, with reset date. Plans billed by token publish no window and say so |
 | **Google Gemini** | `POST daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (Google OAuth) | Live five-hour and weekly Antigravity windows, plus the paid subscription tier; failures remain unavailable rather than substituting another quota pool |
@@ -168,7 +170,7 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
 - **Event sources**: the status pages (`status.claude.com`, `status.openai.com`, `www.githubstatus.com`) and reset trackers (`claude-resets.com`, `whenreset.dev`) are public and get no credential. Account model lists go to each vendor's own API with the credential that vendor's quota already uses, and nowhere else; the Codex list also reads the latest Codex CLI version from `registry.npmjs.org`, without a credential. Switch all of them off under **Preferences → General → AI events**.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter), the `OPENROUTER_API_KEY` environment variable, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → General**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter, DeepSeek), the `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` environment variables, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → General**.
 
 ---
 

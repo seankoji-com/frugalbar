@@ -77,6 +77,7 @@ private enum StubHost {
     static let devpass = "api.llmgateway.io"
     static let opencode = "opencode.ai"
     static let commandcode = "api.commandcode.ai"
+    static let deepseek = "api.deepseek.com"
 }
 
 private func withRoutedHTTP<T: Sendable>(
@@ -1117,5 +1118,168 @@ struct CommandCodeQuotaProviderTests {
     func noCredential() async throws {
         let snap = try await CommandCodeQuotaProvider(apiKey: "").fetchSnapshot()
         #expect(snap.status == .unavailable(.notConfigured))
+    }
+}
+
+// MARK: - DeepSeek
+
+/// The balance body `GET /user/balance` returns. Both balances are quoted
+/// strings in the real API; the helper keeps them that way by default so the
+/// tests exercise the string path unless one deliberately stops quoting them.
+private func deepSeekBody(
+    isAvailable: Bool = true,
+    currency: String = "USD",
+    total: String = "110.00",
+    granted: String? = "10.00",
+    toppedUp: String? = "100.00"
+) -> String {
+    var fields = ["\"currency\":\"\(currency)\"", "\"total_balance\":\"\(total)\""]
+    if let granted { fields.append("\"granted_balance\":\"\(granted)\"") }
+    if let toppedUp { fields.append("\"topped_up_balance\":\"\(toppedUp)\"") }
+    return "{\"is_available\":\(isAvailable),\"balance_infos\":[{\(fields.joined(separator: ","))}]}"
+}
+
+@Suite("DeepSeekProvider", .serialized)
+struct DeepSeekProviderTests {
+
+    private static let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+    /// Parses a body and builds the snapshot at a fixed instant, so no
+    /// assertion depends on the wall clock.
+    private func snapshot(_ body: String) throws -> QuotaSnapshot {
+        let response = try #require(DeepSeekProvider.parse(Data(body.utf8)))
+        return DeepSeekProvider.snapshot(
+            from: response, provider: DeepSeekProvider(), now: Self.fixedNow)
+    }
+
+    @Test("the balance body is a measured account-credit reading with no gauge")
+    func liveBody() throws {
+        let snap = try snapshot(deepSeekBody())
+
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.status.urgency == .none)
+        #expect(snap.currencyBasis == .accountCredit)
+        // A balance has no denominator: no reset, no bars, no spend windows.
+        #expect(snap.resetsAt == nil)
+        #expect(snap.row1 == nil && snap.row2 == nil && snap.row3 == nil)
+        #expect(snap.spendWindows.isEmpty)
+
+        guard case .currency(let balance, let limit, let spent, let code) = snap.metric else {
+            Issue.record("expected .currency, got \(snap.metric)")
+            return
+        }
+        #expect(balance == Decimal(110))
+        #expect(limit == nil)
+        // DeepSeek publishes no spend figure: nil, never 0.
+        #expect(spent == nil)
+        #expect(code == "USD")
+        #expect(snap.badgeText?.contains("110.00") == true)
+        #expect(snap.auxiliaryInfo?.contains("granted") == true)
+        #expect(snap.auxiliaryInfo?.contains("topped up") == true)
+    }
+
+    @Test("the account's own currency is carried verbatim")
+    func cnyCurrency() throws {
+        let snap = try snapshot(deepSeekBody(currency: "CNY", total: "88.00"))
+        guard case .currency(_, _, _, let code) = snap.metric else {
+            Issue.record("expected .currency, got \(snap.metric)")
+            return
+        }
+        #expect(code == "CNY")
+    }
+
+    @Test("is_available false is critical, whatever the balance")
+    func insufficientBalance() throws {
+        let snap = try snapshot(deepSeekBody(isAvailable: false, total: "0.00"))
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "Insufficient balance")
+    }
+
+    @Test("low USD balances cross into warning and critical")
+    func usdBands() throws {
+        #expect(try snapshot(deepSeekBody(total: "50.00")).status.urgency == .none)
+        #expect(try snapshot(deepSeekBody(total: "3.00")).status.urgency == .warning)
+        #expect(try snapshot(deepSeekBody(total: "0.50")).status.urgency == .critical)
+    }
+
+    @Test("CNY balances use their own floors, not the dollar ones")
+    func cnyBands() throws {
+        #expect(try snapshot(deepSeekBody(currency: "CNY", total: "88.00")).status.urgency == .none)
+        #expect(try snapshot(deepSeekBody(currency: "CNY", total: "20.00")).status.urgency == .warning)
+        #expect(try snapshot(deepSeekBody(currency: "CNY", total: "5.00")).status.urgency == .critical)
+    }
+
+    /// The invariant: a currency we have no band for is not judged against a
+    /// guessed dollar threshold. Only the vendor's own flag may say "critical".
+    @Test("an unknown currency is judged by is_available alone, never a guessed threshold")
+    func unknownCurrency() throws {
+        #expect(try snapshot(deepSeekBody(currency: "EUR", total: "0.01")).status.urgency == .none)
+        let unavailable = try snapshot(deepSeekBody(isAvailable: false, currency: "EUR", total: "0.01"))
+        #expect(unavailable.status == .measured(.critical))
+    }
+
+    @Test("a bare JSON number decodes like a quoted decimal string")
+    func bareNumbers() throws {
+        let body = #"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":12.5}]}"#
+        let snap = try snapshot(body)
+        guard case .currency(let balance, _, _, _) = snap.metric else {
+            Issue.record("expected .currency, got \(snap.metric)")
+            return
+        }
+        #expect(balance == Decimal(12.5))
+    }
+
+    @Test("an empty balance list is not rendered as a healthy zero")
+    func emptyBalanceInfos() throws {
+        #expect(try snapshot(#"{"is_available":false,"balance_infos":[]}"#)
+            .status == .unavailable(.badResponse))
+    }
+
+    @Test("a missing currency or total is a bad response, not a blank row")
+    func missingFields() throws {
+        #expect(try snapshot(#"{"is_available":true,"balance_infos":[{"total_balance":"5.00"}]}"#)
+            .status == .unavailable(.badResponse))
+        #expect(try snapshot(#"{"is_available":true,"balance_infos":[{"currency":"USD"}]}"#)
+            .status == .unavailable(.badResponse))
+    }
+
+    @Test("a non-JSON body does not decode")
+    func notJSON() {
+        #expect(DeepSeekProvider.parse(Data("not json".utf8)) == nil)
+    }
+
+    // MARK: HTTP plumbing
+
+    @Test("a 401 is a rejected credential")
+    func rejected() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.deepseek, status: 401, body: "{}") {
+            try await DeepSeekProvider(apiKey: "sk-bad").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    @Test("a 429 is a rate limit, never a fabricated calm reading")
+    func throttled() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.deepseek, status: 429, body: "{}") {
+            try await DeepSeekProvider(apiKey: "sk").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: nil)))
+    }
+
+    @Test("with no key the provider is 'not configured' and never hits the network")
+    func noKey() async throws {
+        let snap = try await DeepSeekProvider(apiKey: "").fetchSnapshot()
+        #expect(snap.status == .unavailable(.notConfigured))
+    }
+
+    @Test("the key rides in the Authorization header, never the URL")
+    func credentialInHeader() async throws {
+        _ = try await withStubbedHTTP(host: StubHost.deepseek, body: deepSeekBody()) {
+            try await DeepSeekProvider(apiKey: "sk-secret").fetchSnapshot()
+        }
+        let request = try #require(NewProviderStub.lastRequest(host: StubHost.deepseek))
+        #expect(request.url?.path.hasSuffix("/user/balance") == true)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-secret")
+        #expect(request.url?.absoluteString.contains("sk-secret") != true)
     }
 }

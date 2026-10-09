@@ -64,6 +64,7 @@ public actor QuotaManager {
             GitHubCopilotProvider(),
             OpenCodeGoProvider(),
             OpenRouterProvider(),
+            DeepSeekProvider(),
             GrokQuotaProvider(),
             KiroQuotaProvider(),
             DevPassQuotaProvider(),
@@ -93,7 +94,7 @@ public actor QuotaManager {
     /// published no window at all. Not the primary sort — see below.
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode,
-        .openrouter, .grok, .kiro, .devpass,
+        .openrouter, .deepseek, .grok, .kiro, .devpass,
         .commandcode, .clinepass,
         .githubRest, .githubGraphql,
     ]

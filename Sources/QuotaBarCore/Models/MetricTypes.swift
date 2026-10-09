@@ -9,6 +9,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case opencode
     case copilot
     case openrouter
+    case deepseek
     case grok
     case kiro
     case devpass
@@ -25,6 +26,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "OpenCode"
         case .copilot:       "GitHub Copilot"
         case .openrouter:    "OpenRouter"
+        case .deepseek:      "DeepSeek"
         case .grok:          "Grok"
         case .kiro:          "Kiro"
         case .devpass:       "DevPass"
@@ -43,6 +45,8 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "#d47b00"
         case .copilot:       "#6e7681"
         case .openrouter:    "#d47b00"
+        // DeepSeek's brand blue; the badge background is the same colour.
+        case .deepseek:      "#4d6bfe"
         case .grok:          "#1a9fff"
         case .kiro:          "#9046ff"
         case .devpass:       "#00b8a9"
@@ -65,6 +69,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .opencode:      "chevron.left.forwardslash.chevron.right"
         case .copilot:       "curlybraces"
         case .openrouter:    "arrow.triangle.branch"
+        case .deepseek:      "brain.head.profile"
         case .grok:          "xmark"
         case .kiro:          "bolt"
         case .devpass:       "ticket"
@@ -673,6 +678,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .opencode:      return "OpenCode"
         case .copilot:       return "GitHub Copilot"
         case .openrouter:    return "OpenRouter"
+        case .deepseek:      return "DeepSeek"
         case .grok:          return "Grok"
         case .kiro:          return "Kiro"
         case .devpass:       return "DevPass"
@@ -689,7 +695,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// subscribers included — which is the same fabrication this app promises
     /// not to commit, just in smaller type. An unknown plan renders as nothing.
     public var shortPlanName: String {
-        if vendorId == .openrouter { return "" }
+        // Money providers carry no plan; the balance takes the subtitle slot.
+        if vendorId == .openrouter || vendorId == .deepseek { return "" }
         guard let plan = planName, !plan.isEmpty else { return "" }
         return plan
     }

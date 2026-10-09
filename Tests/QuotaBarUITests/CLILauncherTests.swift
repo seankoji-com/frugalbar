@@ -11,9 +11,10 @@ struct CLILauncherTests {
         (.gemini, "agy"),
         (.openai, "codex"),
         (.opencode, "opencode"),
-        // No first-party terminal agent; OpenCode drives both as a backend.
+        // No first-party terminal agent; OpenCode drives these as a backend.
         (.copilot, "opencode"),
         (.openrouter, "opencode"),
+        (.deepseek, "opencode"),
     ])
     func vendorCommands(vendor: VendorIdentifier, expected: String) {
         #expect(CLILauncher.command(for: vendor) == expected)

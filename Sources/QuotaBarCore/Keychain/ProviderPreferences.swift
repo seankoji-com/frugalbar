@@ -42,7 +42,7 @@ public struct ProviderDisplayPreferences: Sendable, Equatable {
     /// falls back to: subscriptions first, then spend, then developer limits.
     public static let defaultOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode,
-        .openrouter, .grok, .kiro, .devpass,
+        .openrouter, .deepseek, .grok, .kiro, .devpass,
         .commandcode, .clinepass,
         .githubRest, .githubGraphql,
     ]

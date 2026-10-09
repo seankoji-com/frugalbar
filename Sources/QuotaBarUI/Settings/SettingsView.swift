@@ -31,6 +31,10 @@ public struct SettingsView: View {
         .init(id: .openrouter, label: "OpenRouter",
               placeholder: "sk-or-v1-…",
               note: "Gauge shown only when the key has a spend cap."),
+        .init(id: .deepseek, label: "DeepSeek",
+              placeholder: "sk-…",
+              note: "Prepaid credit balance. Discovered from DEEPSEEK_API_KEY "
+                  + "or OpenCode auth.json when CLI discovery is on."),
         .init(id: .opencode, label: "OpenCode",
               placeholder: "oc_live_…",
               note: "Enables OpenCode Go monitoring."),
@@ -86,8 +90,9 @@ public struct SettingsView: View {
 
     public init() {}
 
-    /// OpenRouter meters money, not a window, so it never resets.
-    private static let resetAlertCandidates = VendorIdentifier.allCases.filter { $0 != .openrouter }
+    /// OpenRouter and DeepSeek meter money, not a window, so they never reset.
+    private static let resetAlertCandidates =
+        VendorIdentifier.allCases.filter { $0 != .openrouter && $0 != .deepseek }
 
     private func resetAlertBinding(for vendor: VendorIdentifier) -> Binding<Bool> {
         Binding(
@@ -368,7 +373,7 @@ public struct SettingsView: View {
     /// renewal date is just as useful for a vendor it cannot read at all.
     private static let cycleVendors: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode, .openrouter,
-        .grok, .kiro,
+        .deepseek, .grok, .kiro,
     ]
 
     private var generalTab: some View {
@@ -624,6 +629,7 @@ public struct SettingsView: View {
         case .openai:      provider = OpenAIQuotaProvider(accessToken: key)
         case .githubRest:  provider = GitHubRestProvider(token: key)
         case .openrouter:  provider = OpenRouterProvider(apiKey: key)
+        case .deepseek:    provider = DeepSeekProvider(apiKey: key)
         // Gemini has no key slot — it is connected through the OAuth button
         // above — but the switch must stay exhaustive.
         case .gemini:      provider = GeminiQuotaProvider(accessToken: key)
