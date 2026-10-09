@@ -13,8 +13,9 @@ public enum CLILauncher {
 
     /// The agent to reach for per vendor.
     ///
-    /// Copilot and OpenRouter have no first-party terminal agent of their own,
-    /// so both route through OpenCode, which can drive either as a backend.
+    /// Copilot, OpenRouter and DeepSeek have no first-party terminal agent of
+    /// their own, so all three route through OpenCode, which can drive any of
+    /// them as a backend.
     /// nil means there is nothing to launch — the GitHub API limits are
     /// telemetry about a service, not a tool you open.
     public static func command(for vendor: VendorIdentifier) -> String? {
@@ -25,6 +26,7 @@ public enum CLILauncher {
         case .opencode:                     "opencode"
         case .copilot:                      "opencode"
         case .openrouter:                   "opencode"
+        case .deepseek:                     "opencode"
         case .grok:                         "grok"
         case .kiro:                         "kiro-cli"
         // DevPass is an OpenAI-compatible gateway rather than an agent of its
@@ -58,8 +60,8 @@ public enum CLILauncher {
     @MainActor
     public static func launch(for vendor: VendorIdentifier) {
         guard let command = command(for: vendor) else { return }
-        // Copilot, OpenRouter and DevPass have no terminal agent of their
-        // own — the advice card still reads "Use DevPass", but the launch
+        // Copilot, OpenRouter, DeepSeek and DevPass have no terminal agent of
+        // their own — the advice card still reads "Use DevPass", but the launch
         // opens whichever backend the *shared* OpenCode session happens to
         // be configured for, which is not necessarily this vendor. Logged
         // rather than silent, so a session that lands on the wrong backend

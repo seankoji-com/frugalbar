@@ -618,6 +618,20 @@ public enum CredentialStore {
             else { return nil }
             return key
 
+        case .deepseek:
+            // DEEPSEEK_API_KEY env or auth.json (the OpenCode provider entry).
+            if let env = ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"], !env.isEmpty {
+                return env
+            }
+            let url = URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".local/share/opencode/auth.json")
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let ds = json["deepseek"] as? [String: Any],
+                  let key = ds["key"] as? String
+            else { return nil }
+            return key
+
         case .gemini:
             // Deliberately nothing. The Gemini provider reads Antigravity
             // subscription quota from the Cloud Code API, which takes a Google
@@ -813,6 +827,7 @@ extension CredentialStore {
         case .opencode:      "OpenCode auth.json"
         case .copilot:       "OpenCode auth.json"
         case .openrouter:    "OpenCode auth.json"
+        case .deepseek:      "OpenCode auth.json"
         case .grok:          "grok CLI auth.json"
         case .kiro:          "kiro-cli state database"
         case .devpass:       "DevPass dashboard key"

@@ -217,9 +217,9 @@ struct DualBarNeverCoercedTests {
 @Suite("VendorIdentifier")
 struct VendorIdentifierTests {
 
-    @Test("13 known vendors")
+    @Test("14 known vendors")
     func allCases() {
-        #expect(VendorIdentifier.allCases.count == 13)
+        #expect(VendorIdentifier.allCases.count == 14)
     }
 
     @Test("all display names are non-empty")
