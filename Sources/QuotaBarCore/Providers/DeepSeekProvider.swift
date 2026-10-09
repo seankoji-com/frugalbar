@@ -59,8 +59,12 @@ public final class DeepSeekProvider: QuotaProvider, Sendable {
     // MARK: - Response shape
 
     /// `balance_infos` is an array because the platform keys each balance by
-    /// currency. A normal account carries exactly one; the first is used, and
-    /// an entry without a currency or a readable total is not a reading.
+    /// currency. A normal DeepSeek account carries exactly one entry, so the
+    /// row takes `.first`. That single-entry assumption is deliberate, not
+    /// incidental: `.currency` carries one code and one balance, so if the
+    /// platform ever returned several currencies the others could not be shown
+    /// in this row anyway; they are not silently folded into a single figure.
+    /// An entry without a currency or a readable total is not a reading.
     struct BalanceResponse: Decodable, Sendable {
         struct BalanceInfo: Decodable, Sendable {
             let currency: String?
@@ -104,6 +108,9 @@ public final class DeepSeekProvider: QuotaProvider, Sendable {
         provider: DeepSeekProvider,
         now: Date = Date()
     ) -> QuotaSnapshot {
+        // Single-entry by design: `balance_infos` is keyed by currency and a
+        // normal account has exactly one, so `.first` is the account's own
+        // balance. See `BalanceResponse` for why extra entries are not merged.
         guard let info = response.balance_infos?.first,
               let currency = info.currency?.trimmed, !currency.isEmpty,
               let total = info.total_balance?.decimalValue,

@@ -1229,6 +1229,21 @@ struct DeepSeekProviderTests {
         #expect(balance == Decimal(12.5))
     }
 
+    /// A normal account carries one entry, but a multi-currency body must not
+    /// be merged into a single figure: the row is single-currency by design, so
+    /// it takes the first entry verbatim. Pinned so that choice stays
+    /// deliberate rather than an incidental `.first`.
+    @Test("with more than one currency entry the first is used, never merged")
+    func multipleCurrencyEntries() throws {
+        let body = #"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"42.00"},{"currency":"CNY","total_balance":"300.00"}]}"#
+        guard case .currency(let balance, _, _, let code) = try snapshot(body).metric else {
+            Issue.record("expected .currency")
+            return
+        }
+        #expect(balance == Decimal(42))
+        #expect(code == "USD")
+    }
+
     @Test("an empty balance list is not rendered as a healthy zero")
     func emptyBalanceInfos() throws {
         #expect(try snapshot(#"{"is_available":false,"balance_infos":[]}"#)
