@@ -463,8 +463,12 @@ struct AggregateBurndownPresentationTests {
         let series = P.series(
             readings: readings, snapshots: [], filters: WidgetFilters(), now: now,
             instanceName: { names[$0] })
-        #expect(series.map(\.displayName) == ["Go Alpha", "Go Beta"])
-        #expect(series.map(\.instanceID) == [alpha.instanceID, beta.instanceID])
+        // Order is the chart's business — stored keys are returned in key
+        // order, and a generated workspace id is a UUID, so that order is
+        // arbitrary — what matters here is that each key keeps its own name.
+        #expect(series.count == 2)
+        let namesByKey = series.reduce(into: [String: String]()) { $0[$1.instanceID] = $1.displayName }
+        #expect(namesByKey == [alpha.instanceID: "Go Alpha", beta.instanceID: "Go Beta"])
         #expect(Set(series.map(\.id)).count == 2)
 
         // The default lookup is the workspace list itself, so a key no
