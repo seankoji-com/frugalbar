@@ -127,13 +127,16 @@ public enum HistorySchema {
     UPDATE OR IGNORE reading SET bar_label = 'PLAN' WHERE vendor = 'grok' AND bar_label = 'CR';
     UPDATE OR IGNORE reading SET vendor = '\(legacyOpenCodeKey)' WHERE vendor = '\(openCodeVendorKey)';
     UPDATE event SET instance_id = '\(legacyOpenCodeKey)'
-      WHERE vendor = '\(openCodeVendorKey)' AND instance_id IS NULL AND source = 'quotaPoll';
+      WHERE vendor = '\(openCodeVendorKey)' AND instance_id IS NULL AND source = '\(quotaPollSource)';
     """
 
     /// The pre-workspace OpenCode Go key, and the key its single subscription
     /// now carries. Named here rather than typed into the SQL above so the
-    /// migration cannot drift from the runtime constants.
+    /// migration cannot drift from the runtime constants — a hand-written
+    /// `'quotaPoll'` where the raw value is `quota-poll` matches nothing, and
+    /// the migration would silently do nothing.
     private static let openCodeVendorKey = VendorIdentifier.opencode.rawValue
+    private static let quotaPollSource = AIEventSource.quotaPoll.rawValue
     static let legacyOpenCodeKey = OpenCodeGoWorkspaceStore.instancePrefix + OpenCodeGoWorkspaceStore.legacyID
 
     /// Drops every table. Used only to reset a development database whose schema

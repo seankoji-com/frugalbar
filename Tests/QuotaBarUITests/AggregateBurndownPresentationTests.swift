@@ -420,12 +420,22 @@ struct AggregateBurndownPresentationTests {
         #expect(series.count == 2)
         #expect(series.map(\.id) == ["\(alphaKey)|WK", "\(betaKey)|WK"])
         #expect(series.map(\.displayName) == ["Go Alpha", "Go Beta"])
-        #expect(series.map { $0.latest?.value } == [0.4, 0.7])
+        // The default metric is remaining, and each series carries its own
+        // workspace's window: alpha at 40% used is 60% remaining, beta at 70%
+        // used is 30%. Compared with a tolerance because 1 - 0.7 is not the
+        // literal 0.3.
+        let seriesValues = series.compactMap { $0.latest?.value }
+        #expect(seriesValues.count == 2)
+        #expect(abs(seriesValues[0] - 0.6) < 1e-9)
+        #expect(abs(seriesValues[1] - 0.3) < 1e-9)
 
         let headroomRows = P.currentHeadroom(snapshots: [alpha, beta], filters: WidgetFilters())
         #expect(headroomRows.map(\.instanceID) == [alphaKey, betaKey])
         #expect(headroomRows.map(\.displayName) == ["Go Alpha", "Go Beta"])
-        #expect(headroomRows.map(\.remainingFraction) == [0.6, 0.3])
+        let remaining = headroomRows.compactMap(\.remainingFraction)
+        #expect(remaining.count == 2)
+        #expect(abs(remaining[0] - 0.6) < 1e-9)
+        #expect(abs(remaining[1] - 0.3) < 1e-9)
         #expect(Set(headroomRows.map(\.id)).count == 2)
 
         let tiles = OverviewPresentation.tiles(snapshots: [alpha, beta], filters: WidgetFilters())
