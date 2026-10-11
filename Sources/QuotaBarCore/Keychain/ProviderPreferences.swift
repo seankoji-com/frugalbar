@@ -93,6 +93,14 @@ extension Notification.Name {
     /// Posted on `NotificationCenter.default` after any provider display
     /// preference is written, so the running app can drop a hidden provider
     /// and fetch a newly shown one without waiting for the next poll.
+    ///
+    /// The `object` names the writer: `CredentialStore.preferencesChangeSender`
+    /// for the display preferences, `OpenCodeGoWorkspaceStore.changeSender` for
+    /// the workspace list. Both are provider preferences, and the app wants to
+    /// hear about either, but a listener that counts one — a test, chiefly —
+    /// must not be at the mercy of a suite running beside it that posts the
+    /// other. Observing with `object: nil`, as the app does, still receives
+    /// every post.
     public static let frugalbarProviderPreferencesDidChange =
         Notification.Name("FrugalBarProviderPreferencesDidChange")
 }
@@ -149,7 +157,13 @@ extension CredentialStore {
         )
     }
 
+    /// The `object` on this store's preference-change posts. See
+    /// `Notification.Name.frugalbarProviderPreferencesDidChange` for why the
+    /// writer is named.
+    public static let preferencesChangeSender = "FrugalBarProviderDisplayPreferences"
+
     private static func postProviderPreferencesDidChange() {
-        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
+        NotificationCenter.default.post(
+            name: .frugalbarProviderPreferencesDidChange, object: preferencesChangeSender)
     }
 }

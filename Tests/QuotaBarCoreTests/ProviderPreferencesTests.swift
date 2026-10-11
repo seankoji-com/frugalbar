@@ -115,7 +115,9 @@ struct ProviderPreferencesTests {
     func writesPostNotification() async {
         clear()
         defer { clear() }
-        let counter = NotificationCounter(name: .frugalbarProviderPreferencesDidChange)
+        let counter = NotificationCounter(
+            name: .frugalbarProviderPreferencesDidChange,
+            object: CredentialStore.preferencesChangeSender)
         defer { counter.stop() }
         CredentialStore.providerOrder = [.claude]
         CredentialStore.hiddenProviders = [.claude]
@@ -137,10 +139,14 @@ private final class NotificationCounter: @unchecked Sendable {
         return _count
     }
 
-    init(name: Notification.Name) {
+    init(name: Notification.Name, object: Any? = nil) {
         // No queue: delivered synchronously on the posting thread, so the
-        // count is final by the time the setter returns.
-        token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+        // count is final by the time the setter returns. The object filter is
+        // what makes the count this store's own: another suite posting the
+        // same name (the workspace list does) must not be counted here.
+        token = NotificationCenter.default.addObserver(
+            forName: name, object: object, queue: nil
+        ) { [weak self] _ in
             guard let self else { return }
             self.lock.lock()
             self._count += 1

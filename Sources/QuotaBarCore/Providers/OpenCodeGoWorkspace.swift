@@ -124,8 +124,15 @@ public enum OpenCodeGoWorkspaceStore {
     public static func set(_ workspaces: [OpenCodeGoWorkspace]) {
         guard let data = try? JSONEncoder().encode(workspaces) else { return }
         CredentialStore.preferences.set(data, forKey: defaultsKey)
-        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
+        NotificationCenter.default.post(
+            name: .frugalbarProviderPreferencesDidChange, object: changeSender)
     }
+
+    /// The `object` on this store's posts — the workspace list is a provider
+    /// preference, but a different writer from the display preferences, and a
+    /// listener counting one must not count the other. See
+    /// `Notification.Name.frugalbarProviderPreferencesDidChange`.
+    public static let changeSender = "FrugalBarOpenCodeGoWorkspaces"
 
     /// The workspace list to read, seeding the legacy workspace in memory only
     /// when nothing has ever been stored — without writing anything.

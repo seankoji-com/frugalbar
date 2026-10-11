@@ -175,8 +175,12 @@ struct OpenCodeGoWorkspaceTests {
         defer { clear() }
 
         let flag = Flag()
+        // Observed by the sender, not `object: nil`: this asserts that the
+        // post is *this* store's, so a sibling suite posting the same
+        // notification name cannot make it pass or fail.
         let token = NotificationCenter.default.addObserver(
-            forName: .frugalbarProviderPreferencesDidChange, object: nil, queue: nil) { _ in
+            forName: .frugalbarProviderPreferencesDidChange,
+            object: OpenCodeGoWorkspaceStore.changeSender, queue: nil) { _ in
             flag.set()
         }
         defer { NotificationCenter.default.removeObserver(token) }
