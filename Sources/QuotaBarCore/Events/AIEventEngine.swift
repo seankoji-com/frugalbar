@@ -186,6 +186,7 @@ public actor AIEventEngine {
                     [reset.barLabel, "\(Int(resetsAt.timeIntervalSince1970))"])),
             kind: .usageReset,
             vendorId: reset.vendorId,
+            instanceId: reset.instanceId,
             title: "\(reset.displayName) \(reset.barLabel) window reset",
             detail: nil,
             occurredAt: now,
@@ -209,6 +210,7 @@ public actor AIEventEngine {
                      "\(before)", "\(after)"])),
             kind: .usageRestored,
             vendorId: restore.vendorId,
+            instanceId: restore.instanceId,
             title: "\(restore.displayName) \(restore.barLabel) usage restored",
             detail: restore.windowRestarted
                 ? "Used fell from \(before)% to \(after)% and the window restarted early; the new reset is \(remaining(until: restore.resetsAt, now: now)) away"
@@ -231,6 +233,7 @@ public actor AIEventEngine {
                     ["\(grant.previousCount ?? 0)", "\(count)", "\(Int(now.timeIntervalSince1970))"])),
             kind: .resetCreditGranted,
             vendorId: grant.vendorId,
+            instanceId: grant.instanceId,
             title: "\(grant.displayName) granted a usage reset credit",
             detail: "\(count) banked reset\(count == 1 ? "" : "s") available — \(redeemHint(for: grant.vendorId))",
             occurredAt: now,

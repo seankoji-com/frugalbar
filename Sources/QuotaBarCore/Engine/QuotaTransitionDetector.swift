@@ -8,10 +8,15 @@ import Foundation
 public struct QuotaRecoveryEvent: Sendable, Equatable {
     public let vendorId: VendorIdentifier
     public let displayName: String
+    /// The instance that recovered, when the vendor serves more than one
+    /// (`QuotaSnapshot.instanceIdOrNil`) — two OpenCode Go workspaces may share
+    /// a display name, and the notification has to name which one came back.
+    public let instanceId: String?
 
-    public init(vendorId: VendorIdentifier, displayName: String) {
+    public init(vendorId: VendorIdentifier, displayName: String, instanceId: String? = nil) {
         self.vendorId = vendorId
         self.displayName = displayName
+        self.instanceId = instanceId
     }
 }
 
@@ -49,11 +54,13 @@ public enum QuotaTransitionDetector {
                   currentSnapshot.status.urgency != .critical else { continue }
             events.append(QuotaRecoveryEvent(
                 vendorId: currentSnapshot.vendorId,
-                displayName: currentSnapshot.displayName
+                displayName: currentSnapshot.displayName,
+                instanceId: currentSnapshot.instanceIdOrNil
             ))
         }
         return events.sorted {
-            ($0.vendorId.rawValue, $0.displayName) < ($1.vendorId.rawValue, $1.displayName)
+            ($0.vendorId.rawValue, $0.instanceId ?? "", $0.displayName)
+                < ($1.vendorId.rawValue, $1.instanceId ?? "", $1.displayName)
         }
     }
 }

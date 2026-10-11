@@ -13,7 +13,7 @@ public struct MetricDetailModalView: View {
 
     let snapshot: QuotaSnapshot
     let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]
-    let eventsLoader: (VendorIdentifier, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]
+    let eventsLoader: (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]
     let onClose: () -> Void
 
     @State private var copied = false
@@ -45,15 +45,17 @@ public struct MetricDetailModalView: View {
 
     /// - Parameters:
     ///   - readingsLoader: one vendor's recorded readings since a date.
-    ///   - eventsLoader: one vendor's recorded events of the given kinds
-    ///     (nil: every kind) since a date, newest first, at most `limit`.
+    ///   - eventsLoader: one vendor's and instance's recorded events of the
+    ///     given kinds (nil: every kind) since a date, newest first, at most
+    ///     `limit`. The instance keeps a sibling workspace's events out; the
+    ///     vendor's own still come through.
     ///
     /// Both run once per vendor when the modal appears, never on the refresh
     /// path.
     public init(
         snapshot: QuotaSnapshot,
         readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord],
-        eventsLoader: @escaping (VendorIdentifier, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent],
+        eventsLoader: @escaping (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent],
         onClose: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -124,8 +126,12 @@ public struct MetricDetailModalView: View {
         let r = await readingsLoader(vendor, since)
         // Filtered by kind in the query, so the five slots are never spent
         // on scheduled rollovers (the store already drops retired rows).
-        let e = await eventsLoader(vendor, QuotaStore.recentEventKinds, nil, 5)
-        let m = await eventsLoader(vendor, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
+        // Scoped to this instance, so a sibling workspace's resets and
+        // restores never appear here — on the chart as a marker or in the
+        // recent-events card. The vendor's own events (no instance) still do.
+        let e = await eventsLoader(vendor, snapshot.id, QuotaStore.recentEventKinds, nil, 5)
+        let m = await eventsLoader(
+            vendor, snapshot.id, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
         readings = r
         recentEvents = e

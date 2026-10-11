@@ -88,11 +88,29 @@ struct AIEventModelTests {
 @Suite("QuotaHistoryStore events")
 struct AIEventStoreTests {
 
-    private func makeIsolatedStore() -> QuotaHistoryStore {
+    private func makeIsolatedURL(_ filename: String = "test-events.sqlite3") -> URL {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("FrugalBarTests-\(UUID().uuidString)", isDirectory: true)
-        let dbURL = tempDir.appendingPathComponent("test-events.sqlite3")
-        return QuotaHistoryStore(databaseURL: dbURL, isTestHost: true)
+        return tempDir.appendingPathComponent(filename)
+    }
+
+    private func makeIsolatedStore() -> QuotaHistoryStore {
+        QuotaHistoryStore(databaseURL: makeIsolatedURL(), isTestHost: true)
+    }
+
+    /// One OpenCode Go workspace's own poll event, carrying its instance key.
+    private func scoped(
+        _ id: String,
+        instanceId: String,
+        occurredAt: TimeInterval = 1_700_000_000
+    ) -> AIEvent {
+        AIEvent(
+            id: id, kind: .usageReset, vendorId: .opencode, instanceId: instanceId,
+            title: "title \(id)", detail: nil,
+            occurredAt: Date(timeIntervalSince1970: occurredAt),
+            observedAt: Date(timeIntervalSince1970: occurredAt + 5),
+            source: .quotaPoll
+        )
     }
 
     private func event(
@@ -193,6 +211,100 @@ struct AIEventStoreTests {
         // An empty kind set is a filter that matches nothing, not "no filter".
         let none = try await store.fetchEvents(kinds: [])
         #expect(none.isEmpty)
+    }
+
+    /// One workspace's events must never be returned to another's query, while
+    /// the vendor's *own* events (no instance) reach every workspace.
+    @Test("an instance-scoped query returns its own events and the vendor's, never a sibling's")
+    func fetchScopesToInstance() async throws {
+        let store = makeIsolatedStore()
+        let alpha = "opencode-go:alpha"
+        let beta = "opencode-go:beta"
+        try await store.recordEvents([
+            scoped("reset-alpha", instanceId: alpha),
+            scoped("reset-beta", instanceId: beta, occurredAt: 1_700_000_100),
+            // The vendor's own: a status-page incident concerns OpenCode, not
+            // one subscription of it.
+            event("incident", kind: .outageStarted, vendor: .opencode,
+                  source: .statusPage(name: "opencode")),
+        ])
+
+        let alphaEvents = try await store.fetchEvents(vendor: .opencode, instanceID: alpha)
+        #expect(Set(alphaEvents.map(\.id)) == ["reset-alpha", "incident"])
+        let betaEvents = try await store.fetchEvents(vendor: .opencode, instanceID: beta)
+        #expect(Set(betaEvents.map(\.id)) == ["reset-beta", "incident"])
+
+        // With no instance the query is the vendor-wide view it always was.
+        let vendorWide = try await store.fetchEvents(vendor: .opencode)
+        #expect(Set(vendorWide.map(\.id)) == ["reset-alpha", "reset-beta", "incident"])
+
+        // And the instance itself round-trips, so a caller can tell them apart.
+        #expect(alphaEvents.first { $0.id == "reset-alpha" }?.instanceId == alpha)
+        #expect(alphaEvents.first { $0.id == "incident" }?.instanceId == nil)
+    }
+
+    /// The sibling's events must not merely be filtered out of the result: the
+    /// limit has to apply to what this workspace has, or five of the other
+    /// workspace's events would take all five inspector slots and hide its own.
+    @Test("the instance filter bounds the limit, so a sibling cannot take the slots")
+    func instanceScopingBoundsLimit() async throws {
+        let store = makeIsolatedStore()
+        var rows = (0..<5).map {
+            scoped("beta-\($0)", instanceId: "opencode-go:beta", occurredAt: 1_700_050_000 + Double($0))
+        }
+        rows.append(scoped("alpha-only", instanceId: "opencode-go:alpha", occurredAt: 1_700_000_000))
+        try await store.recordEvents(rows)
+
+        let alphaRecent = try await store.fetchEvents(
+            vendor: .opencode, instanceID: "opencode-go:alpha", limit: 5)
+        #expect(alphaRecent.map(\.id) == ["alpha-only"])
+    }
+
+    /// The `instance_id` column arrived after the schema shipped. An installed
+    /// database must gain it by an additive `ALTER TABLE` that keeps every
+    /// row — a version bump would drop the table, and with it the user's whole
+    /// event history.
+    @Test("an event table without the instance column gains it, keeping its rows")
+    func instanceColumnIsAddedToAnOlderTable() async throws {
+        let url = makeIsolatedURL("old-events.sqlite3")
+
+        // A database as the build before this column wrote it: the modern file
+        // with the event table put back the way it was.
+        let older = HistoryDatabase(fileURL: url)
+        try older.open()
+        try older.execute(sql: """
+        DROP TABLE event;
+        CREATE TABLE event (
+          id          TEXT    NOT NULL,
+          kind        TEXT    NOT NULL,
+          vendor      TEXT    NOT NULL,
+          title       TEXT    NOT NULL,
+          detail      TEXT,
+          occurred_at INTEGER NOT NULL,
+          observed_at INTEGER NOT NULL,
+          source      TEXT    NOT NULL,
+          url         TEXT,
+          PRIMARY KEY (id)
+        ) WITHOUT ROWID;
+        INSERT INTO event (id, kind, vendor, title, detail, occurred_at, observed_at, source, url)
+        VALUES ('usage_reset|opencode|5H|1700000000', 'usage_reset', 'opencode',
+                'OpenCode 5H window reset', NULL, 1700000000, 1700000000, 'quota-poll', NULL);
+        """)
+
+        // Opening it through the store is the upgrade path.
+        let store = QuotaHistoryStore(databaseURL: url, isTestHost: true)
+        let legacyKey = OpenCodeGoWorkspaceStore.instancePrefix + OpenCodeGoWorkspaceStore.legacyID
+
+        // The pre-workspace row survived and now belongs to the legacy
+        // workspace, the only subscription that existed when it was written.
+        let legacy = try await store.fetchEvents(vendor: .opencode, instanceID: legacyKey)
+        #expect(legacy.map(\.id) == ["usage_reset|opencode|5H|1700000000"])
+        #expect(legacy.first?.instanceId == legacyKey)
+        #expect(try await store.fetchEvents(vendor: .opencode).count == 1)
+
+        // A second workspace does not inherit it.
+        let alpha = try await store.fetchEvents(vendor: .opencode, instanceID: "opencode-go:alpha")
+        #expect(alpha.isEmpty)
     }
 
     /// Regression guard: a backlog of retired catalog and news-feed rows must

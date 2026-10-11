@@ -87,14 +87,35 @@ public enum OpenCodeGoWorkspaceStore {
         key.hasPrefix(instancePrefix) ? .opencode : VendorIdentifier(rawValue: key)
     }
 
+    /// The name an instance key belongs to, from the workspace list, or `nil`
+    /// for a key no workspace claims — a bare vendor key, or one the user has
+    /// removed.
+    ///
+    /// The desktop widget draws a series from stored readings with no snapshot
+    /// in hand; `vendor(forInstanceKey:)` folds every `opencode-go:` key to the
+    /// same vendor, so without this two workspaces would carry the identical
+    /// legend label and the identical spoken entry. Callers fall back to the
+    /// vendor's name when this is nil.
+    public static func displayName(forInstanceKey key: String) -> String? {
+        resolved().first { $0.instanceID == key }?.name
+    }
+
+    /// The stored workspace list, or `nil` when nothing has been stored yet.
+    ///
+    /// The distinction is the whole point: an install that has never stored a
+    /// list seeds the legacy workspace, while a user who removed every
+    /// workspace has stored an *empty* list and must not have one put back.
+    /// `all()` flattens the two for the many callers that only read.
+    public static func stored() -> [OpenCodeGoWorkspace]? {
+        guard let data = CredentialStore.preferences.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode([OpenCodeGoWorkspace].self, from: data)
+    }
+
     /// Every configured workspace, in display order. Empty when none has been
-    /// stored yet — `ensureMigrated()` is what guarantees at least the legacy
-    /// one exists.
+    /// stored, and empty when the user has removed all of them — a stored
+    /// empty list is a decision, not a missing value.
     public static func all() -> [OpenCodeGoWorkspace] {
-        guard let data = CredentialStore.preferences.data(forKey: defaultsKey),
-              let list = try? JSONDecoder().decode([OpenCodeGoWorkspace].self, from: data)
-        else { return [] }
-        return list
+        stored() ?? []
     }
 
     /// Writes the list and tells the running app to re-read it, so adding,
@@ -106,40 +127,30 @@ public enum OpenCodeGoWorkspaceStore {
         NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
     }
 
-    /// The workspace list, guaranteeing the legacy workspace exists — without
-    /// writing anything.
+    /// The workspace list to read, seeding the legacy workspace in memory only
+    /// when nothing has ever been stored — without writing anything.
     ///
     /// This is the read path the fetch and every UI surface use: it never
     /// touches the preference file, so a poll cannot trigger a preference
     /// change (and the refresh such a change posts). `persistLegacyIfNeeded()`
-    /// is what makes the returned list durable, called once at launch.
+    /// is what makes the seeded one durable, called once at launch.
+    ///
+    /// A stored empty list is returned as it is. Removing every workspace is a
+    /// choice, and re-seeding would undo it on the very next poll.
     public static func resolved() -> [OpenCodeGoWorkspace] {
-        let existing = all()
-        return existing.isEmpty ? [legacy] : existing
+        stored() ?? [legacy]
     }
 
     /// Seeds the legacy workspace on a first run, and only then.
     ///
-    /// Idempotent: once a list is stored it is left alone, so a user who
-    /// removed the legacy workspace does not get it resurrected. Returns
-    /// whether it wrote.
+    /// Idempotent: once a list is stored it is left alone — including an empty
+    /// one, so a user who removed every workspace does not get one
+    /// resurrected. Returns whether it wrote.
     @discardableResult
     public static func persistLegacyIfNeeded() -> Bool {
-        guard all().isEmpty else { return false }
+        guard stored() == nil else { return false }
         set([legacy])
         return true
-    }
-
-    /// The workspace list, guaranteeing the legacy workspace exists.
-    ///
-    /// Idempotent: once a list is stored it is returned unchanged, so a user
-    /// who removed the legacy workspace does not get it resurrected.
-    public static func ensureMigrated() -> [OpenCodeGoWorkspace] {
-        let existing = all()
-        guard existing.isEmpty else { return existing }
-        let seeded = [legacy]
-        set(seeded)
-        return seeded
     }
 
     /// Persists a key for one workspace. The key only ever reaches the

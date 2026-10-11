@@ -95,6 +95,30 @@ struct AIEventEngineTests {
         #expect(try await store.fetchEvents().count == 3)
     }
 
+    /// A workspace's event is written with its instance, so the inspector —
+    /// which asks for one workspace's events — finds its own and not its
+    /// sibling's. The event *id* has folded the instance in all along; the
+    /// column is what lets a query apply the same scoping without parsing ids.
+    @Test("a workspace's poll event is stored with its instance")
+    func workspaceEventCarriesInstance() async throws {
+        let store = makeIsolatedEventStore()
+        let engine = engine(store: store, log: FetchLog())
+        let alpha = "opencode-go:alpha"
+        let reset = QuotaResetEvent(
+            vendorId: .opencode, displayName: "Go Alpha", instanceId: alpha, barLabel: "WK",
+            resetsAt: now.addingTimeInterval(3 * 86_400))
+
+        let recorded = await engine.recordPollEvents(
+            resets: [reset], restores: [], creditGrants: [], now: now)
+        #expect(recorded.map(\.instanceId) == [alpha])
+
+        // And what was written down keeps it, so an instance-scoped query
+        // returns it to this workspace only.
+        let stored = try await store.fetchEvents(vendor: .opencode, instanceID: alpha)
+        #expect(stored.map(\.id) == recorded.map(\.id))
+        #expect(try await store.fetchEvents(vendor: .opencode, instanceID: "opencode-go:beta").isEmpty)
+    }
+
     @Test("a reset without a reset time is not recorded")
     func resetWithoutTimeSkipped() async {
         let engine = engine(store: makeIsolatedEventStore(), log: FetchLog())

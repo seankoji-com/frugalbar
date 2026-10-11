@@ -111,6 +111,38 @@ struct OpenCodeGoWorkspaceTests {
         #expect(OpenCodeGoWorkspaceStore.all().map(\.id) == [other.id])
     }
 
+    @Test("nothing stored and a stored empty list are different answers")
+    func missingListIsNotAStoredEmptyList() {
+        clear()
+        defer { clear() }
+
+        // Nothing stored: the legacy workspace is what an install reads, and
+        // the first launch writes it down.
+        #expect(OpenCodeGoWorkspaceStore.stored() == nil)
+        #expect(OpenCodeGoWorkspaceStore.all().isEmpty)
+        #expect(OpenCodeGoWorkspaceStore.resolved().map(\.id) == [OpenCodeGoWorkspaceStore.legacyID])
+        #expect(OpenCodeGoWorkspaceStore.persistLegacyIfNeeded() == true)
+        #expect(OpenCodeGoWorkspaceStore.stored() != nil)
+    }
+
+    @Test("removing every workspace leaves it removed: an empty list is a decision")
+    func storedEmptyListIsNotReseeded() {
+        clear()
+        defer { clear() }
+
+        // What `removeWorkspace` writes when the last row goes.
+        OpenCodeGoWorkspaceStore.set([])
+
+        #expect(OpenCodeGoWorkspaceStore.stored()?.isEmpty == true)
+        #expect(OpenCodeGoWorkspaceStore.all().isEmpty)
+        // `resolved()` must NOT fall back to the legacy workspace here: that is
+        // the bug that made a removed workspace reappear on the next poll, and
+        // `persistLegacyIfNeeded()` write it back on the next launch.
+        #expect(OpenCodeGoWorkspaceStore.resolved().isEmpty)
+        #expect(OpenCodeGoWorkspaceStore.persistLegacyIfNeeded() == false)
+        #expect(OpenCodeGoWorkspaceStore.stored()?.isEmpty == true)
+    }
+
     // MARK: - Persistence carries no secret
 
     @Test("the workspace list round-trips and stores no key material")
@@ -160,5 +192,22 @@ struct OpenCodeGoWorkspaceTests {
         #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: "opencode-go:alpha") == .opencode)
         #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: VendorIdentifier.claude.rawValue) == .claude)
         #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: "no-such-vendor") == nil)
+    }
+
+    @Test("a stored key maps back to its workspace name, so two series are tellable apart")
+    func displayNameForInstanceKey() {
+        clear()
+        defer { clear() }
+
+        let alpha = OpenCodeGoWorkspace(name: "Go Alpha")
+        let legacy = OpenCodeGoWorkspaceStore.legacy
+        OpenCodeGoWorkspaceStore.set([legacy, alpha])
+
+        #expect(OpenCodeGoWorkspaceStore.displayName(forInstanceKey: alpha.instanceID) == "Go Alpha")
+        #expect(OpenCodeGoWorkspaceStore.displayName(forInstanceKey: legacy.instanceID) == legacy.name)
+        // A bare vendor key, and a key no workspace claims, name no workspace:
+        // the caller falls back to the vendor's own name.
+        #expect(OpenCodeGoWorkspaceStore.displayName(forInstanceKey: VendorIdentifier.opencode.rawValue) == nil)
+        #expect(OpenCodeGoWorkspaceStore.displayName(forInstanceKey: "opencode-go:gone") == nil)
     }
 }

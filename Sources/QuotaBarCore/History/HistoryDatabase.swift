@@ -130,6 +130,13 @@ public final class HistoryDatabase: @unchecked Sendable {
             try execute(sql: HistorySchema.dropTablesSQL)
         }
         try execute(sql: HistorySchema.createTablesSQL)
+        // `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that
+        // already exists, and the event table gained `instance_id` after
+        // version 1 shipped. An additive `ALTER TABLE` is the real migration
+        // that shape change needs, guarded so it runs once and never on a
+        // database that already has the column. It touches no row.
+        try addColumnIfMissing(
+            table: HistorySchema.eventTable, column: "instance_id", type: "TEXT")
         try execute(sql: HistorySchema.dataMigrationsSQL)
         try execute(sql: "PRAGMA user_version = \(HistorySchema.version);")
 
@@ -143,6 +150,23 @@ public final class HistoryDatabase: @unchecked Sendable {
         defer { finalize(stmt) }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
         return sqlite3_column_int(stmt, 0)
+    }
+
+    /// Adds a column to an existing table when it is not already there.
+    ///
+    /// SQLite has no `ADD COLUMN IF NOT EXISTS`, and `CREATE TABLE IF NOT
+    /// EXISTS` is a no-op on a table that already exists, so the shape is read
+    /// back before altering. Used for the additive shape changes that must
+    /// reach an installed database without the version bump that would drop
+    /// the user's readings.
+    func addColumnIfMissing(table: String, column: String, type: String) throws {
+        guard db != nil else { throw HistoryDatabaseError.databaseNotOpen }
+        let stmt = try prepare(sql: "PRAGMA table_info(\(table));")
+        defer { finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let name = sqlite3_column_text(stmt, 1), String(cString: name) == column { return }
+        }
+        try execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) \(type);")
     }
 
     public func execute(sql: String) throws {

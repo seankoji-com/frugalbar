@@ -43,7 +43,7 @@ public final class QuotaStore {
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
     private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
-    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
+    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
     private let tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)?
     private let activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
@@ -53,8 +53,9 @@ public final class QuotaStore {
     ///   - vendorReadingsLoader: one vendor's readings, for the detail
     ///     inspector's history and burndown charts. Fetched on demand, never
     ///     on the refresh path.
-    ///   - eventsLoader: recorded AI-platform events, newest first. Used both
-    ///     for `recentEvents` on each reload and on demand by the inspector.
+    ///   - eventsLoader: recorded AI-platform events, newest first, optionally
+    ///     narrowed to one vendor and one instance. Used both for
+    ///     `recentEvents` on each reload and on demand by the inspector.
     ///   - tokenUsageLoader: raw token consumption per source per time bucket,
     ///     for the desktop widget's Tokens layout. Returns nil when the
     ///     history could not be read, which the widget says rather than
@@ -67,7 +68,7 @@ public final class QuotaStore {
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
         readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
         vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
-        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil,
+        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil,
         tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil,
         activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
     ) {
@@ -104,16 +105,21 @@ public final class QuotaStore {
         return await tokenUsageLoader(since, until, bucketSeconds, anchor)
     }
 
-    /// Recorded events, newest first, optionally scoped to one vendor.
-    /// Empty when no loader was injected.
+    /// Recorded events, newest first, optionally scoped to one vendor and one
+    /// of its instances. Empty when no loader was injected.
+    ///
+    /// `instanceId` keeps two OpenCode Go workspaces from reading each other's
+    /// resets and restores; the vendor's own events (no instance) are returned
+    /// either way.
     public func events(
         for vendor: VendorIdentifier?,
+        instanceId: String? = nil,
         kinds: Set<AIEventKind>? = nil,
         since: Date?,
         limit: Int?
     ) async -> [AIEvent] {
         guard let eventsLoader else { return [] }
-        return await eventsLoader(vendor, kinds, since, limit)
+        return await eventsLoader(vendor, instanceId, kinds, since, limit)
     }
 
     /// The kinds the popover's card shows: resets, outages and newly
@@ -134,7 +140,7 @@ public final class QuotaStore {
     /// records new events, so the popover section is never a poll behind.
     public func reloadRecentEvents() async {
         guard let eventsLoader else { return }
-        recentEvents = await eventsLoader(nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
+        recentEvents = await eventsLoader(nil, nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
     }
 
     /// Loads from cache when fresh, otherwise fetches.

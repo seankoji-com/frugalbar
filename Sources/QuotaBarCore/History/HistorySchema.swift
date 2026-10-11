@@ -71,6 +71,7 @@ public enum HistorySchema {
       id            TEXT    NOT NULL,    -- AIEvent.id, the dedup key
       kind          TEXT    NOT NULL,    -- AIEventKind.rawValue
       vendor        TEXT    NOT NULL,    -- VendorIdentifier.rawValue
+      instance_id   TEXT,                -- QuotaSnapshot.id (NULL = the vendor's own event)
       title         TEXT    NOT NULL,
       detail        TEXT,
       occurred_at   INTEGER NOT NULL,    -- epoch seconds
@@ -112,11 +113,28 @@ public enum HistorySchema {
     ///   key, so a workspace-scoped query finds them and a second workspace's
     ///   rows cannot collide with them. Renaming the key keeps that history one
     ///   continuous series.
+    /// - The same rename for OpenCode Go's *poll-derived events* (resets,
+    ///   restores, credit grants). Only `source = 'quotaPoll'` rows are
+    ///   claimed: a status-page incident or a news item is the vendor's own
+    ///   event, not one subscription's, and stays NULL so it shows for every
+    ///   workspace.
+    ///
+    /// The keys are interpolated from the constants that write them. Written
+    /// out by hand they would compile even after `legacyID` or the prefix were
+    /// renamed, silently orphaning the very rows they exist to carry.
     public static let dataMigrationsSQL = """
     UPDATE OR IGNORE reading SET bar_label = 'MO' WHERE vendor = 'commandcode' AND bar_label = 'CR';
     UPDATE OR IGNORE reading SET bar_label = 'PLAN' WHERE vendor = 'grok' AND bar_label = 'CR';
-    UPDATE OR IGNORE reading SET vendor = 'opencode-go:legacy' WHERE vendor = 'opencode';
+    UPDATE OR IGNORE reading SET vendor = '\(legacyOpenCodeKey)' WHERE vendor = '\(openCodeVendorKey)';
+    UPDATE event SET instance_id = '\(legacyOpenCodeKey)'
+      WHERE vendor = '\(openCodeVendorKey)' AND instance_id IS NULL AND source = 'quotaPoll';
     """
+
+    /// The pre-workspace OpenCode Go key, and the key its single subscription
+    /// now carries. Named here rather than typed into the SQL above so the
+    /// migration cannot drift from the runtime constants.
+    private static let openCodeVendorKey = VendorIdentifier.opencode.rawValue
+    static let legacyOpenCodeKey = OpenCodeGoWorkspaceStore.instancePrefix + OpenCodeGoWorkspaceStore.legacyID
 
     /// Drops every table. Used only to reset a development database whose schema
     /// predates `version`.

@@ -351,11 +351,16 @@ public enum AggregateBurndownPresentation {
     /// line rather than being drawn as 0 or 100. Segmentation reuses
     /// `HistoryPresentation.segments`, so a reset never connects to the
     /// previous window's line.
+    ///
+    /// `instanceName` names a stored key whose snapshot is gone. It defaults to
+    /// the workspace list; a test injects a literal table so the widget's
+    /// labels never depend on the shared preference file.
     public static func series(
         readings: [QuotaHistoryStore.ReadingRecord],
         snapshots: [QuotaSnapshot],
         filters: WidgetFilters,
-        now: Date
+        now: Date,
+        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:)
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let inRange = HistoryPresentation.consumptionReadings(readings).filter { record in
@@ -369,7 +374,11 @@ public enum AggregateBurndownPresentation {
                 makeSeries(
                     instanceID: key,
                     vendorId: OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key),
-                    displayName: nil,
+                    // The workspace's own name, which no snapshot here can
+                    // supply: without it every `opencode-go:` key would be
+                    // labelled "OpenCode" and two workspaces would be
+                    // indistinguishable in the legend and the spoken summary.
+                    displayName: instanceName(key),
                     snapshot: nil,
                     readings: inRange, filters: filters
                 )
@@ -525,6 +534,10 @@ public enum AggregateBurndownPresentation {
     /// first and last reading and every point where urgency or the blocked
     /// flag changes, so a transition that mattered is never thinned away. Only
     /// ever drops real points — it never invents or averages one.
+    ///
+    /// Identity is carried through unchanged (`instanceID`, `displayName`): a
+    /// thinned OpenCode Go workspace must stay *that* workspace, or two series
+    /// collide on `id` and their legends both read "OpenCode".
     public static func decimated(_ series: VendorSeries, maxPointsPerSeries: Int = 300) -> VendorSeries {
         let total = series.allPoints.count
         guard total > maxPointsPerSeries, maxPointsPerSeries > 0 else { return series }
@@ -539,7 +552,13 @@ public enum AggregateBurndownPresentation {
             }.map { points[$0] }
             return SeriesSegment(points: kept)
         }
-        return VendorSeries(vendorId: series.vendorId, barLabel: series.barLabel, segments: segments)
+        return VendorSeries(
+            instanceID: series.instanceID,
+            vendorId: series.vendorId,
+            displayName: series.displayName,
+            barLabel: series.barLabel,
+            segments: segments
+        )
     }
 
     // MARK: - Headroom strip
