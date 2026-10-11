@@ -91,7 +91,7 @@ public actor QuotaManager {
             ClinePassQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
-        ])
+        ] as [any QuotaProvider])
         return providers
     }
 
