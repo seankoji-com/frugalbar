@@ -121,8 +121,28 @@ public enum OpenCodeGoWorkspaceStore {
     /// Writes the list and tells the running app to re-read it, so adding,
     /// renaming, disabling or removing a workspace takes effect on the next
     /// refresh rather than on the next two-minute poll.
+    ///
+    /// Names are normalised here, on the single write path, rather than in the
+    /// form that produced them: a cleared rename field would otherwise store an
+    /// empty name, and the row, the popover and the widget legend would all
+    /// draw a blank label with nothing on screen explaining it. A blank name
+    /// falls back to the one already stored for that workspace id, so an
+    /// accidental select-all-delete leaves the workspace named; a non-blank one
+    /// is trimmed. That is the same rule `SettingsView.addWorkspace` applies
+    /// when it refuses to create a workspace from an empty field.
     public static func set(_ workspaces: [OpenCodeGoWorkspace]) {
-        guard let data = try? JSONEncoder().encode(workspaces) else { return }
+        let previous = stored() ?? []
+        let normalised = workspaces.map { workspace -> OpenCodeGoWorkspace in
+            var copy = workspace
+            let trimmed = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                copy.name = previous.first { $0.id == workspace.id }?.name ?? workspace.name
+            } else {
+                copy.name = trimmed
+            }
+            return copy
+        }
+        guard let data = try? JSONEncoder().encode(normalised) else { return }
         CredentialStore.preferences.set(data, forKey: defaultsKey)
         NotificationCenter.default.post(
             name: .frugalbarProviderPreferencesDidChange, object: changeSender)

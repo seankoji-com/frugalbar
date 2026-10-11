@@ -431,27 +431,15 @@ public struct SettingsView: View {
 
     /// Writes the list and refreshes each row's stored/not-stored indicator.
     ///
-    /// Names are normalised here, once, for every writer (rename, toggle,
-    /// move). Blanking the field and pressing Return would otherwise store an
-    /// empty name, and the row, the popover and the widget legend would all
-    /// draw a blank label with nothing on screen explaining it —
-    /// `addWorkspace` already refuses to create one, and this is the same rule
-    /// for a rename.
+    /// Names are normalised by `OpenCodeGoWorkspaceStore.set` — a blanked
+    /// field falls back to the name last committed for that workspace, so an
+    /// accidental select-all-delete leaves it named — and the list is written
+    /// back so the field shows the name that was actually stored rather than
+    /// the blank the user typed.
     private func persistWorkspaces() {
-        let stored = OpenCodeGoWorkspaceStore.all()
-        for index in workspaces.indices {
-            let trimmed = workspaces[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                // Fall back to the name that was last committed, so an
-                // accidental select-all-delete leaves the workspace named.
-                workspaces[index].name =
-                    stored.first { $0.id == workspaces[index].id }?.name ?? workspaces[index].name
-            } else {
-                workspaces[index].name = trimmed
-            }
-        }
         OpenCodeGoWorkspaceStore.set(workspaces)
         refreshWorkspaceHasKey()
+        workspaces = OpenCodeGoWorkspaceStore.all()
     }
 
     private func refreshWorkspaceHasKey() {

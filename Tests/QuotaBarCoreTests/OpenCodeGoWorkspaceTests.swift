@@ -189,6 +189,36 @@ struct OpenCodeGoWorkspaceTests {
         #expect(flag.value)
     }
 
+    // MARK: - Name normalisation
+
+    @Test("a blanked name falls back to the stored one, and a non-blank name is trimmed")
+    func setNameNormalisation() {
+        clear()
+        defer { clear() }
+
+        let workspace = OpenCodeGoWorkspace(name: "Go Alpha")
+        OpenCodeGoWorkspaceStore.set([workspace])
+
+        // What the rename field writes when it is cleared and Return pressed:
+        // the row must not go blank.
+        var blanked = workspace
+        blanked.name = "   "
+        OpenCodeGoWorkspaceStore.set([blanked])
+        #expect(OpenCodeGoWorkspaceStore.all().map(\.name) == ["Go Alpha"])
+
+        // A real rename still lands, without the surrounding whitespace.
+        var renamed = workspace
+        renamed.name = "  Go Alpha Two  "
+        OpenCodeGoWorkspaceStore.set([renamed])
+        #expect(OpenCodeGoWorkspaceStore.all().map(\.name) == ["Go Alpha Two"])
+
+        // A workspace with no earlier name to restore is kept as it stands
+        // rather than dropped or handed a label nobody wrote.
+        let unnamed = OpenCodeGoWorkspace(name: "")
+        OpenCodeGoWorkspaceStore.set([unnamed])
+        #expect(OpenCodeGoWorkspaceStore.all().map(\.id) == [unnamed.id])
+    }
+
     // MARK: - Instance key to vendor
 
     @Test("a stored key maps back to its vendor, and an unknown key to nil")
