@@ -132,7 +132,10 @@ public enum OpenCodeGoWorkspaceStore {
     /// preference, but a different writer from the display preferences, and a
     /// listener counting one must not count the other. See
     /// `Notification.Name.frugalbarProviderPreferencesDidChange`.
-    public static let changeSender = "FrugalBarOpenCodeGoWorkspaces"
+    ///
+    /// A reference instance, not a string: `NotificationCenter` matches a
+    /// block observer's `object` by identity.
+    nonisolated(unsafe) public static let changeSender = NSObject()
 
     /// The workspace list to read, seeding the legacy workspace in memory only
     /// when nothing has ever been stored — without writing anything.

@@ -160,7 +160,11 @@ extension CredentialStore {
     /// The `object` on this store's preference-change posts. See
     /// `Notification.Name.frugalbarProviderPreferencesDidChange` for why the
     /// writer is named.
-    public static let preferencesChangeSender = "FrugalBarProviderDisplayPreferences"
+    ///
+    /// A reference instance, not a string: `NotificationCenter` matches a
+    /// block observer's `object` by identity, so two equal `String`s are not a
+    /// match and a value sentinel would silently receive nothing.
+    nonisolated(unsafe) public static let preferencesChangeSender = NSObject()
 
     private static func postProviderPreferencesDidChange() {
         NotificationCenter.default.post(
