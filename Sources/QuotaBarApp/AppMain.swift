@@ -66,9 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return []
                 }
             },
-            eventsLoader: { vendor, kinds, since, limit in
+            eventsLoader: { vendor, instanceId, kinds, since, limit in
                 do {
-                    return try await hStore.fetchEvents(vendor: vendor, kinds: kinds, since: since, limit: limit)
+                    return try await hStore.fetchEvents(
+                        vendor: vendor, instanceID: instanceId, kinds: kinds, since: since, limit: limit)
                 } catch {
                     NSLog("frugalbar: failed to read AI events: \(error)")
                     return []
@@ -102,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // domain before deciding whether this is a first launch — otherwise
         // renaming the binary reads as a fresh install.
         CredentialStore.migrateLegacyPreferences()
+
+        // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
+        // the fetch path (`resolved()` reads without writing) so a poll never
+        // writes preferences or posts the refresh such a write triggers.
+        OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 

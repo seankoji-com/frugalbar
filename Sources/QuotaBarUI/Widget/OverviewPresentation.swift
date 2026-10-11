@@ -28,7 +28,10 @@ public enum OverviewPresentation {
     }
 
     public struct Tile: Identifiable, Sendable, Equatable {
-        public var id: VendorIdentifier { vendorId }
+        /// The provider instance key, so two workspaces of one vendor are two
+        /// tiles rather than one duplicated id.
+        public var id: String { instanceID }
+        public let instanceID: String
         public let vendorId: VendorIdentifier
         public let name: String
         public let planName: String?
@@ -75,8 +78,9 @@ public enum OverviewPresentation {
             let spent = snapshot.quotaBars.contains { ($0.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold }
             let exhausted = spent || snapshot.isFullyBlockedWithoutReading
             return Tile(
+                instanceID: snapshot.id,
                 vendorId: snapshot.vendorId,
-                name: snapshot.shortVendorName,
+                name: snapshot.rowTitle,
                 planName: snapshot.shortPlanName.isEmpty ? nil : snapshot.shortPlanName,
                 status: snapshot.status,
                 isExhausted: measured && exhausted,

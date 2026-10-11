@@ -19,13 +19,19 @@ public actor QuotaManager {
         displayPreferences: { CredentialStore.providerDisplayPreferences })
 
     // --- State ---
-    private var cache: [VendorIdentifier: CacheEntry] = [:]
+    /// Keyed by each provider's stable `instanceID`, not by vendor: one vendor
+    /// can serve several independent subscriptions (OpenCode Go workspaces),
+    /// and they must coexist rather than overwrite each other.
+    private var cache: [String: CacheEntry] = [:]
+    /// The instance ids in the order the providers were last built, so several
+    /// instances of one vendor keep the order the user arranged them in.
+    private var instanceOrder: [String] = []
     private var lastCompleteFetch: Date?
     private let cachePolicy: CachePolicy
     private let providerFactory: @Sendable () -> [any QuotaProvider]
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
-    private var activeTask: Task<[VendorIdentifier: QuotaSnapshot], Never>?
+    private var activeTask: Task<[String: QuotaSnapshot], Never>?
 
     private struct CacheEntry: Sendable {
         let snapshot: QuotaSnapshot
@@ -57,12 +63,25 @@ public actor QuotaManager {
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
-        [
+        var providers: [any QuotaProvider] = [
             ClaudeQuotaProvider(),
             OpenAIQuotaProvider(),
             GeminiQuotaProvider(),
             GitHubCopilotProvider(),
-            OpenCodeGoProvider(),
+        ]
+        // One provider per OpenCode Go workspace, so each subscription is
+        // polled with its own key and reported as its own reading. Disabled
+        // workspaces are not polled at all — like a hidden provider, they cost
+        // nothing and their credential stays where it is.
+        //
+        // `resolved()` reads without writing: the factory runs at the top of
+        // every fetch, so a first run must not write a preference here and
+        // post a change notification that kicks off a second poll. The list
+        // is made durable once at launch instead.
+        for workspace in OpenCodeGoWorkspaceStore.resolved() where workspace.isEnabled {
+            providers.append(OpenCodeGoProvider(workspace: workspace))
+        }
+        providers.append(contentsOf: [
             OpenRouterProvider(),
             DeepSeekProvider(),
             GrokQuotaProvider(),
@@ -72,21 +91,23 @@ public actor QuotaManager {
             ClinePassQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
-        ]
+        ] as [any QuotaProvider])
+        return providers
     }
 
     // MARK: Public accessors
 
-    /// Returns cached snapshots immediately (fast path for UI).
-    public func cachedSnapshots() -> [VendorIdentifier: QuotaSnapshot] {
+    /// Returns cached snapshots immediately (fast path for UI), keyed by each
+    /// provider instance's stable id.
+    public func cachedSnapshots() -> [String: QuotaSnapshot] {
         visibleCache()
     }
 
     /// The cache minus hidden vendors. Every read goes through this, so the
     /// fresh-cache fast path cannot return a provider the user just hid.
-    private func visibleCache() -> [VendorIdentifier: QuotaSnapshot] {
+    private func visibleCache() -> [String: QuotaSnapshot] {
         let hidden = displayPreferences().hidden
-        return cache.filter { !hidden.contains($0.key) }.mapValues(\.snapshot)
+        return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }.mapValues(\.snapshot)
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
@@ -117,9 +138,30 @@ public actor QuotaManager {
         let prefs = displayPreferences()
         let rank = Dictionary(
             uniqueKeysWithValues: prefs.order.enumerated().map { ($0.element, $0.offset) })
-        // A hidden vendor is dropped here as well as purged at fetch time, so
-        // hiding one takes effect on the very next read, before any poll.
-        let snapshots = prefs.visibleOrder.compactMap { cache[$0]?.snapshot }
+        // Every cached instance of a visible vendor, grouped by vendor so the
+        // user's vendor order is preserved and several instances of one vendor
+        // stay together. A hidden vendor is dropped here as well as purged at
+        // fetch time, so hiding one takes effect on the very next read, before
+        // any poll.
+        var byVendor: [VendorIdentifier: [QuotaSnapshot]] = [:]
+        for entry in cache.values where !prefs.hidden.contains(entry.snapshot.vendorId) {
+            byVendor[entry.snapshot.vendorId, default: []].append(entry.snapshot)
+        }
+        let position = Dictionary(
+            uniqueKeysWithValues: instanceOrder.enumerated().map { ($0.element, $0.offset) })
+        func instanceRank(_ snapshot: QuotaSnapshot) -> Int {
+            position[snapshot.id] ?? Int.max
+        }
+        for vendor in byVendor.keys {
+            // The order the providers were built in — the user's workspace
+            // order for OpenCode Go — with the id as a deterministic fallback
+            // for an instance the last fetch did not name.
+            byVendor[vendor]?.sort {
+                let a = instanceRank($0), b = instanceRank($1)
+                return a != b ? a < b : $0.id < $1.id
+            }
+        }
+        let snapshots = prefs.visibleOrder.flatMap { byVendor[$0] ?? [] }
 
         // A custom order is the user's, verbatim: no band or deadline moves a row.
         if prefs.ordering == .custom { return snapshots }
@@ -133,7 +175,12 @@ public actor QuotaManager {
             {
                 return resetA < resetB
             }
-            return (rank[a.vendorId] ?? .max) < (rank[b.vendorId] ?? .max)
+            // Tie-break by the user's vendor order and then by the instance's
+            // own position, so two workspaces of one vendor keep a stable,
+            // user-chosen order rather than an arbitrary one.
+            let rankA = rank[a.vendorId] ?? .max, rankB = rank[b.vendorId] ?? .max
+            if rankA != rankB { return rankA < rankB }
+            return instanceRank(a) < instanceRank(b)
         }
     }
 
@@ -162,7 +209,7 @@ public actor QuotaManager {
 
     /// Returns cached data when it is still fresh, otherwise fetches.
     /// Concurrent callers share a single in-flight fetch.
-    public func refresh() async -> [VendorIdentifier: QuotaSnapshot] {
+    public func refresh() async -> [String: QuotaSnapshot] {
         if isCacheFresh() {
             return cachedSnapshots()
         }
@@ -170,14 +217,14 @@ public actor QuotaManager {
     }
 
     /// Bypasses the cache entirely. Used by the manual refresh button.
-    public func forceRefresh() async -> [VendorIdentifier: QuotaSnapshot] {
+    public func forceRefresh() async -> [String: QuotaSnapshot] {
         lastCompleteFetch = nil
         return await fetchDeduplicated(force: true)
     }
 
     // MARK: Private
 
-    private func fetchDeduplicated(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
+    private func fetchDeduplicated(force: Bool = false) async -> [String: QuotaSnapshot] {
         if force {
             activeTask?.cancel()
             activeTask = nil
@@ -197,14 +244,29 @@ public actor QuotaManager {
         return result
     }
 
-    private func parallelFetch(force: Bool = false) async -> [VendorIdentifier: QuotaSnapshot] {
+    private func parallelFetch(force: Bool = false) async -> [String: QuotaSnapshot] {
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at
         // once instead of being served from under the poll floor.
         let hidden = displayPreferences().hidden
-        for vendor in hidden { cache[vendor] = nil }
-        let providers: [any QuotaProvider] = providerFactory().filter { !hidden.contains($0.vendorId) }
+        for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
+        let allProviders: [any QuotaProvider] = providerFactory()
+        let providers: [any QuotaProvider] = allProviders.filter { !hidden.contains($0.vendorId) }
+        // A workspace that was removed (or disabled) must not linger in the
+        // cache. Only the multi-instance vendor is pruned here: a single
+        // instance's absence from the provider list is not proof it was
+        // removed — it may simply have been filtered — and the retention path
+        // below depends on its entry surviving a transient failure.
+        let liveOpenCodeInstances = Set(
+            allProviders.filter { $0.vendorId == .opencode }.map(\.instanceID))
+        for key in Array(cache.keys) where key.hasPrefix(OpenCodeGoWorkspaceStore.instancePrefix)
+            && !liveOpenCodeInstances.contains(key) {
+            cache[key] = nil
+        }
+        // Remember the build order so several instances of one vendor keep the
+        // order the user arranged them in when the list is sorted.
+        instanceOrder = providers.map(\.instanceID)
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
         let startNow = Date()
@@ -216,10 +278,10 @@ public actor QuotaManager {
         // so mashing the manual refresh button can't hammer a paid
         // provider's API faster than the floor allows.
         var providersToFetch: [any QuotaProvider] = []
-        var throttledOnForce: [VendorIdentifier] = []
+        var throttledOnForce: [String] = []
         for provider in providers {
             let shouldThrottle: Bool
-            if let entry = cache[provider.vendorId] {
+            if let entry = cache[provider.instanceID] {
                 let withinFloor = startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval
                 switch entry.snapshot.status {
                 case .unavailable(.notConfigured), .unavailable(.credentialRejected):
@@ -241,7 +303,7 @@ public actor QuotaManager {
                 shouldThrottle = false
             }
             if shouldThrottle {
-                if force { throttledOnForce.append(provider.vendorId) }
+                if force { throttledOnForce.append(provider.instanceID) }
             } else {
                 providersToFetch.append(provider)
             }
@@ -251,13 +313,13 @@ public actor QuotaManager {
         // logged rather than left silent, unlike the throttled-but-not-forced
         // case, which is the poll floor working as designed.
         if force, !throttledOnForce.isEmpty {
-            NSLog("frugalbar: forceRefresh() served \(throttledOnForce.count) vendor(s) from cache " +
-                  "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce.map(\.rawValue))")
+            NSLog("frugalbar: forceRefresh() served \(throttledOnForce.count) provider(s) from cache " +
+                  "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce)")
         }
-        var results: [VendorIdentifier: QuotaSnapshot] = [:]
+        var results: [String: QuotaSnapshot] = [:]
         let cycleLookup = self.cycleLookup
 
-        await withTaskGroup(of: (VendorIdentifier, QuotaSnapshot).self) { group in
+        await withTaskGroup(of: (String, QuotaSnapshot).self) { group in
             for provider in providersToFetch {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
@@ -274,21 +336,21 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.vendorId, Self.attachingCycleRow(to: snapshot, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle))
                     case .failure(let reason):
                         let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
-                        return (provider.vendorId, Self.attachingCycleRow(to: placeholder, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle))
                     }
                 }
             }
-            for await (vendorId, snapshot) in group {
-                results[vendorId] = snapshot
+            for await (instanceID, snapshot) in group {
+                results[instanceID] = snapshot
             }
         }
 
         let now = Date()
         for provider in providersToFetch {
-            let id = provider.vendorId
+            let id = provider.instanceID
             guard let snap = results[id] else { continue }
             // Keep the old cache entry's snapshot if a previously successful
             // provider now fails transiently, so we don't wipe out the
@@ -313,7 +375,8 @@ public actor QuotaManager {
                 // Re-attach against `now` so it keeps counting down.
                 let retained = cache[id]!.snapshot
                 displaySnapshot = Self.attachingCycleRow(
-                    to: Self.removingStaleCycleRow(from: retained), cycle: cycleLookup(id), now: now)
+                    to: Self.removingStaleCycleRow(from: retained),
+                    cycle: cycleLookup(provider.vendorId), now: now)
             }
             cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
         }
@@ -475,7 +538,7 @@ public actor QuotaManager {
         reason: UnavailableReason
     ) -> QuotaSnapshot {
         QuotaSnapshot(
-            id: provider.vendorId.rawValue,
+            id: provider.instanceID,
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,

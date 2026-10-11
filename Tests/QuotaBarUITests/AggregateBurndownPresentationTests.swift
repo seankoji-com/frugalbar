@@ -14,6 +14,7 @@ struct AggregateBurndownPresentationTests {
 
     private func reading(
         _ vendor: VendorIdentifier = .claude,
+        key: String? = nil,
         label: String = "5H",
         minutesAgo: Double,
         fraction: Double?,
@@ -23,7 +24,7 @@ struct AggregateBurndownPresentationTests {
         urgency: Urgency = .none
     ) -> QuotaHistoryStore.ReadingRecord {
         QuotaHistoryStore.ReadingRecord(
-            vendor: vendor.rawValue,
+            vendor: key ?? vendor.rawValue,
             barLabel: label,
             measuredAt: now.addingTimeInterval(-minutesAgo * 60),
             fraction: fraction,
@@ -38,13 +39,15 @@ struct AggregateBurndownPresentationTests {
 
     private func snapshot(
         _ vendor: VendorIdentifier,
+        id: String? = nil,
+        displayName: String? = nil,
         status: ProviderStatus = .healthy,
         bars: [DualBarMetrics]
     ) -> QuotaSnapshot {
         QuotaSnapshot(
-            id: vendor.rawValue,
+            id: id ?? vendor.rawValue,
             vendorId: vendor,
-            displayName: vendor.displayName,
+            displayName: displayName ?? vendor.displayName,
             category: .aiSubscriptions,
             metric: .percentage(usedFraction: 0, displayDetails: nil),
             status: status,
@@ -379,5 +382,125 @@ struct AggregateBurndownPresentationTests {
         let spoken = P.headroomAccessibilityLabel(open, now: now)
         #expect(spoken == "OpenCode WK window, 60 percent remaining")
         #expect(!spoken.contains("blocked"))
+    }
+
+    // MARK: - Two instances of one vendor
+
+    private var alphaKey: String { "opencode-go:alpha" }
+    private var betaKey: String { "opencode-go:beta" }
+
+    /// Two OpenCode Go workspaces are two subscriptions under one vendor id.
+    /// `selectedInstances` is the seam the whole feature rests on: keyed by
+    /// `id` they stay two series, two headroom rows and two tiles, and keyed
+    /// by `vendorId.rawValue` they silently become one of each — with one
+    /// workspace's figure drawn under the other's name.
+    @Test("two workspaces of one vendor chart, list and label separately")
+    func twoWorkspacesStaySeparate() {
+        let alpha = snapshot(
+            .opencode, id: alphaKey, displayName: "Go Alpha",
+            bars: [DualBarMetrics(primaryFraction: 0.4, label: "WK", windowLength: QuotaWindow.week)])
+        let beta = snapshot(
+            .opencode, id: betaKey, displayName: "Go Beta",
+            bars: [DualBarMetrics(primaryFraction: 0.7, label: "WK", windowLength: QuotaWindow.week)])
+        let readings = [
+            reading(.opencode, key: alphaKey, label: "WK", minutesAgo: 10, fraction: 0.4,
+                    windowLength: QuotaWindow.week),
+            reading(.opencode, key: betaKey, label: "WK", minutesAgo: 5, fraction: 0.7,
+                    windowLength: QuotaWindow.week),
+        ]
+
+        // Both selected, distinctly — the vendor filter selects the vendor, and
+        // every instance of it comes through.
+        let instances = P.selectedInstances(
+            snapshots: [alpha, beta], filters: WidgetFilters(vendors: [.opencode]))
+        #expect(instances.map(\.id) == [alphaKey, betaKey])
+
+        let series = P.series(
+            readings: readings, snapshots: [alpha, beta], filters: WidgetFilters(), now: now)
+        #expect(series.count == 2)
+        #expect(series.map(\.id) == ["\(alphaKey)|WK", "\(betaKey)|WK"])
+        #expect(series.map(\.displayName) == ["Go Alpha", "Go Beta"])
+        // The default metric is remaining, and each series carries its own
+        // workspace's window: alpha at 40% used is 60% remaining, beta at 70%
+        // used is 30%. Compared with a tolerance because 1 - 0.7 is not the
+        // literal 0.3.
+        let seriesValues = series.compactMap { $0.latest?.value }
+        #expect(seriesValues.count == 2)
+        #expect(abs(seriesValues[0] - 0.6) < 1e-9)
+        #expect(abs(seriesValues[1] - 0.3) < 1e-9)
+
+        let headroomRows = P.currentHeadroom(snapshots: [alpha, beta], filters: WidgetFilters())
+        #expect(headroomRows.map(\.instanceID) == [alphaKey, betaKey])
+        #expect(headroomRows.map(\.displayName) == ["Go Alpha", "Go Beta"])
+        let remaining = headroomRows.compactMap(\.remainingFraction)
+        #expect(remaining.count == 2)
+        #expect(abs(remaining[0] - 0.6) < 1e-9)
+        #expect(abs(remaining[1] - 0.3) < 1e-9)
+        #expect(Set(headroomRows.map(\.id)).count == 2)
+
+        let tiles = OverviewPresentation.tiles(snapshots: [alpha, beta], filters: WidgetFilters())
+        #expect(tiles.map(\.instanceID) == [alphaKey, betaKey])
+        #expect(tiles.map(\.name) == ["Go Alpha", "Go Beta"])
+        #expect(tiles.map(\.id) == [alphaKey, betaKey])
+    }
+
+    /// With no snapshot in hand (the "nothing polled yet" case) a series is
+    /// built from stored readings alone. The key still has to resolve to the
+    /// workspace's own name — read from the workspace list — or both legends
+    /// would read "OpenCode" and neither could be told from the other.
+    @Test("a series built only from stored readings keeps its workspace's name")
+    func storedSeriesKeepsWorkspaceName() {
+        let alpha = OpenCodeGoWorkspace(name: "Go Alpha")
+        let beta = OpenCodeGoWorkspace(name: "Go Beta")
+        let names = [alpha.instanceID: "Go Alpha", beta.instanceID: "Go Beta"]
+
+        let readings = [
+            reading(.opencode, key: alpha.instanceID, label: "WK", minutesAgo: 10, fraction: 0.4,
+                    windowLength: QuotaWindow.week),
+            reading(.opencode, key: beta.instanceID, label: "WK", minutesAgo: 5, fraction: 0.7,
+                    windowLength: QuotaWindow.week),
+        ]
+        let series = P.series(
+            readings: readings, snapshots: [], filters: WidgetFilters(), now: now,
+            instanceName: { names[$0] })
+        // Order is the chart's business — stored keys are returned in key
+        // order, and a generated workspace id is a UUID, so that order is
+        // arbitrary — what matters here is that each key keeps its own name.
+        #expect(series.count == 2)
+        let namesByKey = series.reduce(into: [String: String]()) { $0[$1.instanceID] = $1.displayName }
+        #expect(namesByKey == [alpha.instanceID: "Go Alpha", beta.instanceID: "Go Beta"])
+        #expect(Set(series.map(\.id)).count == 2)
+
+        // The default lookup is the workspace list itself, so a key no
+        // workspace claims falls back to the vendor's own name rather than
+        // failing to draw.
+        let unknown = P.series(
+            readings: [reading(.opencode, key: "opencode-go:gone", label: "WK", minutesAgo: 5,
+                               fraction: 0.4, windowLength: QuotaWindow.week)],
+            snapshots: [], filters: WidgetFilters(), now: now,
+            instanceName: { names[$0] })
+        #expect(unknown.map(\.displayName) == ["OpenCode"])
+    }
+
+    /// Thinning a long series must not drop the instance it belongs to: the
+    /// legend, the spoken summary and the series id all read from it, so a
+    /// thinned workspace would otherwise collide with its sibling on `id`.
+    @Test("thinning a long series keeps the workspace identity")
+    func decimationKeepsInstanceIdentity() {
+        let points = (0..<10).map { index in
+            P.SeriesPoint(
+                timestamp: now.addingTimeInterval(-Double(index) * 60),
+                value: 0.5, urgency: .none, isBlocked: false)
+        }
+        let series = P.VendorSeries(
+            instanceID: alphaKey, vendorId: .opencode, displayName: "Go Alpha",
+            barLabel: "WK", segments: [P.SeriesSegment(points: points)])
+
+        let thinned = P.decimated(series, maxPointsPerSeries: 3)
+
+        #expect(thinned.instanceID == alphaKey)
+        #expect(thinned.displayName == "Go Alpha")
+        #expect(thinned.id == series.id)
+        #expect(thinned.allPoints.count < points.count)
     }
 }

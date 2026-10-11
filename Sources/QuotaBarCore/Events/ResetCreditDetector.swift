@@ -4,15 +4,25 @@ import Foundation
 public struct ResetCreditGrantedEvent: Sendable, Equatable {
     public let vendorId: VendorIdentifier
     public let displayName: String
+    /// The provider instance the credits belong to; `nil` for a single-instance
+    /// vendor. Keeps two workspaces' grants distinct events.
+    public let instanceId: String?
     /// The count on the previous poll. `nil` when that poll was measured but
     /// the vendor's payload carried no credit field at all.
     public let previousCount: Int?
     /// The vendor-published count now available.
     public let currentCount: Int
 
-    public init(vendorId: VendorIdentifier, displayName: String, previousCount: Int?, currentCount: Int) {
+    public init(
+        vendorId: VendorIdentifier,
+        displayName: String,
+        instanceId: String? = nil,
+        previousCount: Int?,
+        currentCount: Int
+    ) {
         self.vendorId = vendorId
         self.displayName = displayName
+        self.instanceId = instanceId
         self.previousCount = previousCount
         self.currentCount = currentCount
     }
@@ -33,12 +43,12 @@ public struct ResetCreditGrantedEvent: Sendable, Equatable {
 public enum ResetCreditDetector {
 
     public static func detect(
-        previous: [VendorIdentifier: QuotaSnapshot],
-        current: [VendorIdentifier: QuotaSnapshot]
+        previous: [String: QuotaSnapshot],
+        current: [String: QuotaSnapshot]
     ) -> [ResetCreditGrantedEvent] {
         var events: [ResetCreditGrantedEvent] = []
-        for (vendorId, currentSnapshot) in current {
-            guard let previousSnapshot = previous[vendorId],
+        for (instanceID, currentSnapshot) in current {
+            guard let previousSnapshot = previous[instanceID],
                   previousSnapshot.status.confidence == .measured,
                   currentSnapshot.status.confidence == .measured,
                   let currentCount = currentSnapshot.resetCreditsAvailable,
@@ -50,12 +60,15 @@ public enum ResetCreditDetector {
                   currentCount > previousCount
             else { continue }
             events.append(ResetCreditGrantedEvent(
-                vendorId: vendorId,
+                vendorId: currentSnapshot.vendorId,
                 displayName: currentSnapshot.displayName,
+                instanceId: currentSnapshot.instanceIdOrNil,
                 previousCount: previousSnapshot.resetCreditsAvailable,
                 currentCount: currentCount
             ))
         }
-        return events.sorted { $0.vendorId.rawValue < $1.vendorId.rawValue }
+        return events.sorted {
+            ($0.vendorId.rawValue, $0.displayName) < ($1.vendorId.rawValue, $1.displayName)
+        }
     }
 }

@@ -35,9 +35,11 @@ public struct SettingsView: View {
               placeholder: "sk-…",
               note: "Prepaid credit balance. Discovered from DEEPSEEK_API_KEY "
                   + "or OpenCode auth.json when CLI discovery is on."),
-        .init(id: .opencode, label: "OpenCode",
-              placeholder: "oc_live_…",
-              note: "Enables OpenCode Go monitoring."),
+        // OpenCode Go is not a single slot: it is one row per named workspace,
+        // each with its own key, managed in the "OpenCode Go workspaces"
+        // section below. The first workspace keeps the legacy `opencode`
+        // Keychain label, so a key entered before workspaces existed is still
+        // the one that is used and never has to be re-entered.
         .init(id: .grok, label: "Grok",
               placeholder: "Grok CLI access token",
               note: "Discovered from ~/.grok/auth.json when CLI discovery is on. "
@@ -87,6 +89,14 @@ public struct SettingsView: View {
     private var eventTracking = true
     @State private var eventNotificationKinds: Set<AIEventKind> = CredentialStore.eventNotificationKinds
     @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
+    /// One row per configured OpenCode Go workspace. Its own key is never read
+    /// into view state; `workspaceKeys` holds a transient, initially-empty
+    /// entry per instance and `workspaceHasKey` records only whether one exists.
+    @State private var workspaces: [OpenCodeGoWorkspace] = []
+    @State private var workspaceKeys: [String: String] = [:]
+    @State private var workspaceStatus: [String: String] = [:]
+    @State private var workspaceHasKey: [String: Bool] = [:]
+    @State private var newWorkspaceName = ""
 
     public init() {}
 
@@ -137,6 +147,7 @@ public struct SettingsView: View {
         .frame(width: 540, height: 520)
         .padding()
         .onAppear(perform: loadKeys)
+        .onAppear(perform: loadWorkspaces)
         .onAppear { cycles = SubscriptionCycleStore.all() }
         .task { await refreshSources() }
         // Turning discovery off can strip a row back to "Not configured";
@@ -171,6 +182,8 @@ public struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            openCodeWorkspaceSection
 
             Section("Google (Gemini)") {
                 HStack {
@@ -286,6 +299,208 @@ public struct SettingsView: View {
         }
     }
 
+    // MARK: - OpenCode Go workspaces
+
+    /// One OpenCode Go subscription per row: name, enable toggle, its own key,
+    /// and reorder/remove. The key is never read back into the field — it starts
+    /// blank and a stored key is only ever indicated.
+    private var openCodeWorkspaceSection: some View {
+        Section {
+            ForEach(workspaces) { workspace in
+                workspaceRow(workspace)
+            }
+            HStack(spacing: 8) {
+                TextField("New workspace name", text: $newWorkspaceName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addWorkspace)
+                Button("Add", action: addWorkspace)
+                    .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("OpenCode Go workspaces")
+        } footer: {
+            Text("""
+                 Each workspace is a separate OpenCode Go subscription with its \
+                 own API key, monitored and shown as its own reading. The first \
+                 workspace keeps your existing OpenCode key and the CLI \
+                 auth.json fallback; later ones are read from their own Keychain \
+                 entry only. A key is written to the Keychain and never shown again.
+                 """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceRow(_ workspace: OpenCodeGoWorkspace) -> some View {
+        let instanceID = workspace.instanceID
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: enabledBinding(for: workspace.id))
+                    .labelsHidden()
+                    .accessibilityLabel("Monitor \(workspace.name)")
+
+                // Renames persist on Return; the whole list is written, so a
+                // rename and a toggle cannot fight over which one is current.
+                TextField("Name", text: nameBinding(for: workspace.id))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(persistWorkspaces)
+
+                Text(workspaceHasKey[instanceID] == true ? "Stored in Keychain" : "Not configured")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button { moveWorkspace(workspace.id, by: -1) } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .buttonStyle(.borderless)
+                .disabled(workspaces.first?.id == workspace.id)
+                .accessibilityLabel("Move \(workspace.name) up")
+
+                Button { moveWorkspace(workspace.id, by: 1) } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .buttonStyle(.borderless)
+                .disabled(workspaces.last?.id == workspace.id)
+                .accessibilityLabel("Move \(workspace.name) down")
+
+                Button(role: .destructive) { removeWorkspace(workspace.id) } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Remove \(workspace.name)")
+            }
+
+            HStack(spacing: 8) {
+                SecureField(
+                    "API key",
+                    text: keyBinding(for: instanceID),
+                    prompt: Text(workspaceHasKey[instanceID] == true
+                                 ? "•••••••• stored — type to replace"
+                                 : "oc_live_…")
+                )
+                .textFieldStyle(.roundedBorder)
+
+                Button("Save") { Task { await saveWorkspaceKey(workspace) } }
+                    .disabled((workspaceKeys[instanceID] ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let status = workspaceStatus[instanceID] {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func enabledBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { workspaces.first { $0.id == id }?.isEnabled ?? false },
+            set: { isOn in
+                guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
+                workspaces[index].isEnabled = isOn
+                persistWorkspaces()
+            }
+        )
+    }
+
+    private func nameBinding(for id: String) -> Binding<String> {
+        Binding(
+            get: { workspaces.first { $0.id == id }?.name ?? "" },
+            set: { name in
+                guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
+                workspaces[index].name = name
+            }
+        )
+    }
+
+    private func keyBinding(for instanceID: String) -> Binding<String> {
+        Binding(
+            get: { workspaceKeys[instanceID] ?? "" },
+            set: { workspaceKeys[instanceID] = $0 }
+        )
+    }
+
+    private func loadWorkspaces() {
+        workspaces = OpenCodeGoWorkspaceStore.resolved()
+        workspaceKeys = [:]
+        workspaceStatus = [:]
+        refreshWorkspaceHasKey()
+    }
+
+    /// Writes the list and refreshes each row's stored/not-stored indicator.
+    ///
+    /// Names are normalised by `OpenCodeGoWorkspaceStore.set` — a blanked
+    /// field falls back to the name last committed for that workspace, so an
+    /// accidental select-all-delete leaves it named — and the list is written
+    /// back so the field shows the name that was actually stored rather than
+    /// the blank the user typed.
+    private func persistWorkspaces() {
+        OpenCodeGoWorkspaceStore.set(workspaces)
+        refreshWorkspaceHasKey()
+        workspaces = OpenCodeGoWorkspaceStore.all()
+    }
+
+    private func refreshWorkspaceHasKey() {
+        var has: [String: Bool] = [:]
+        for workspace in workspaces {
+            has[workspace.instanceID] = OpenCodeGoWorkspaceStore.hasCredential(for: workspace)
+        }
+        workspaceHasKey = has
+    }
+
+    private func addWorkspace() {
+        let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        workspaces.append(OpenCodeGoWorkspace(name: name))
+        newWorkspaceName = ""
+        persistWorkspaces()
+    }
+
+    private func removeWorkspace(_ id: String) {
+        guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
+        let instanceID = workspace.instanceID
+        // A removed workspace must not leave its key behind in the Keychain.
+        // If it cannot be deleted, keep the row: dropping it here would orphan
+        // the secret with no way left to retry from the UI, and it would hide
+        // the failure a moment after it happened.
+        do {
+            try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
+        } catch {
+            workspaceStatus[instanceID] = "Could not remove: its key could not be deleted from the Keychain"
+            return
+        }
+        workspaces.removeAll { $0.id == id }
+        workspaceKeys[instanceID] = nil
+        workspaceHasKey[instanceID] = nil
+        workspaceStatus[instanceID] = nil
+        persistWorkspaces()
+    }
+
+    private func moveWorkspace(_ id: String, by offset: Int) {
+        workspaces = OpenCodeGoWorkspaceStore.moved(workspaces, id: id, by: offset)
+        persistWorkspaces()
+    }
+
+    /// Stores one workspace's key and exercises it, so a truncated paste fails
+    /// here rather than as an unexplained blank row later.
+    private func saveWorkspaceKey(_ workspace: OpenCodeGoWorkspace) async {
+        let instanceID = workspace.instanceID
+        let key = (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        isVerifying = true
+        defer { isVerifying = false }
+        do {
+            try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
+            workspaceKeys[instanceID] = ""
+            workspaceHasKey[instanceID] = true
+            workspaceStatus[instanceID] = await verify(.opencode, key: key)
+        } catch {
+            workspaceStatus[instanceID] = Self.keychainAdvice(for: error)
+        }
+    }
+
     static func describe(_ source: CredentialStore.CredentialSource) -> String {
         switch source {
         case .keychain:            "Stored in Keychain"
@@ -324,6 +539,15 @@ public struct SettingsView: View {
     private var hasChanges: Bool {
         if Self.slots.contains(where: { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }) { return true }
         if geminiClientID != loadedGeminiClientID { return true }
+        // A workspace key typed but not yet saved.
+        if workspaceKeys.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return true
+        }
+        // A workspace renamed in the field but not yet committed with Return.
+        let stored = OpenCodeGoWorkspaceStore.all()
+        if workspaces.contains(where: { workspace in
+            stored.first { $0.id == workspace.id }?.name != workspace.name
+        }) { return true }
         // Blank means "keep the stored secret", so only a typed one is a change.
         return !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -547,6 +771,9 @@ public struct SettingsView: View {
     private func saveAndVerify() async {
         isVerifying = true
         defer { isVerifying = false }
+
+        // Commit any workspace rename the user typed but did not press Return on.
+        persistWorkspaces()
 
         // Persist the Gemini client alongside the vendor keys. Changing it
         // orphans any stored session — a refresh token belongs to the client

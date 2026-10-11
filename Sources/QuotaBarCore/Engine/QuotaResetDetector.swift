@@ -7,6 +7,10 @@ import Foundation
 public struct QuotaResetEvent: Sendable, Equatable {
     public let vendorId: VendorIdentifier
     public let displayName: String
+    /// The provider instance the window belongs to. `nil` for a single-instance
+    /// provider; a namespaced workspace key when one vendor serves several, so
+    /// two workspaces' resets are distinct events rather than one.
+    public let instanceId: String?
     /// The window that reset, e.g. "5H" or "WK".
     public let barLabel: String
     /// The new window's reset time, as the current poll reported it. Part of
@@ -15,9 +19,16 @@ public struct QuotaResetEvent: Sendable, Equatable {
     /// that predate it still compile; `QuotaResetDetector` always sets it.
     public let resetsAt: Date?
 
-    public init(vendorId: VendorIdentifier, displayName: String, barLabel: String, resetsAt: Date? = nil) {
+    public init(
+        vendorId: VendorIdentifier,
+        displayName: String,
+        instanceId: String? = nil,
+        barLabel: String,
+        resetsAt: Date? = nil
+    ) {
         self.vendorId = vendorId
         self.displayName = displayName
+        self.instanceId = instanceId
         self.barLabel = barLabel
         self.resetsAt = resetsAt
     }
@@ -39,13 +50,13 @@ public enum QuotaResetDetector {
     public static let minimumAdvance: TimeInterval = 60
 
     public static func detect(
-        previous: [VendorIdentifier: QuotaSnapshot],
-        current: [VendorIdentifier: QuotaSnapshot],
+        previous: [String: QuotaSnapshot],
+        current: [String: QuotaSnapshot],
         now: Date
     ) -> [QuotaResetEvent] {
         var events: [QuotaResetEvent] = []
-        for (vendorId, currentSnapshot) in current {
-            guard let previousSnapshot = previous[vendorId],
+        for (instanceID, currentSnapshot) in current {
+            guard let previousSnapshot = previous[instanceID],
                   previousSnapshot.status.confidence == .measured,
                   currentSnapshot.status.confidence == .measured
             else { continue }
@@ -69,15 +80,17 @@ public enum QuotaResetDetector {
                       newReset.timeIntervalSince(oldReset) > minimumAdvance
                 else { continue }
                 events.append(QuotaResetEvent(
-                    vendorId: vendorId,
+                    vendorId: currentSnapshot.vendorId,
                     displayName: currentSnapshot.displayName,
+                    instanceId: currentSnapshot.instanceIdOrNil,
                     barLabel: bar.label,
                     resetsAt: newReset
                 ))
             }
         }
         return events.sorted {
-            ($0.vendorId.rawValue, $0.barLabel) < ($1.vendorId.rawValue, $1.barLabel)
+            ($0.vendorId.rawValue, $0.displayName, $0.barLabel)
+                < ($1.vendorId.rawValue, $1.displayName, $1.barLabel)
         }
     }
 }

@@ -39,8 +39,8 @@ extension QuotaHistoryStore {
 
             let sql = """
             INSERT OR IGNORE INTO event (
-              id, kind, vendor, title, detail, occurred_at, observed_at, source, url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+              id, kind, vendor, instance_id, title, detail, occurred_at, observed_at, source, url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             let stmt = try db.prepare(sql: sql)
             defer { db.finalize(stmt) }
@@ -56,12 +56,13 @@ extension QuotaHistoryStore {
                 try db.bindText(stmt, 1, event.id)
                 try db.bindText(stmt, 2, event.kind.rawValue)
                 try db.bindText(stmt, 3, event.vendorId.rawValue)
-                try db.bindText(stmt, 4, event.title)
-                try db.bindText(stmt, 5, event.detail)
-                try db.bindInt64(stmt, 6, Int64(event.occurredAt.timeIntervalSince1970))
-                try db.bindInt64(stmt, 7, Int64(event.observedAt.timeIntervalSince1970))
-                try db.bindText(stmt, 8, event.source.rawValue)
-                try db.bindText(stmt, 9, event.url?.absoluteString)
+                try db.bindText(stmt, 4, event.instanceId)
+                try db.bindText(stmt, 5, event.title)
+                try db.bindText(stmt, 6, event.detail)
+                try db.bindInt64(stmt, 7, Int64(event.occurredAt.timeIntervalSince1970))
+                try db.bindInt64(stmt, 8, Int64(event.observedAt.timeIntervalSince1970))
+                try db.bindText(stmt, 9, event.source.rawValue)
+                try db.bindText(stmt, 10, event.url?.absoluteString)
 
                 let status = sqlite3_step(stmt)
                 guard status == SQLITE_DONE else {
@@ -81,11 +82,20 @@ extension QuotaHistoryStore {
         }
     }
 
-    /// Events newest first, optionally narrowed by vendor, kind, and time.
+    /// Events newest first, optionally narrowed by vendor, instance, kind, and
+    /// time.
     ///
     /// `since` applies to `occurredAt`, so an event recorded late (a status
     /// page incident from last week, read today) is found by the week it
     /// belongs to.
+    ///
+    /// `instanceID` is a `QuotaSnapshot.id`. It narrows the vendor's events to
+    /// one instance *plus the vendor's own* (`instance_id IS NULL`): a
+    /// status-page incident, a news item or a model on the account's list is
+    /// the vendor's, not one subscription's, and hiding it from every
+    /// workspace would be the other kind of wrong. Two OpenCode Go workspaces
+    /// therefore never see each other's resets or restores, and both still see
+    /// the vendor's own.
     ///
     /// Rows from the retired catalog and news-feed watchers (`price_change`,
     /// and `new_model` from any source but the account's own list) are never
@@ -94,6 +104,7 @@ extension QuotaHistoryStore {
     /// every slot of a limited query (see `AIEvent.isSurfaced`).
     public func fetchEvents(
         vendor: VendorIdentifier? = nil,
+        instanceID: String? = nil,
         kinds: Set<AIEventKind>? = nil,
         since: Date? = nil,
         limit: Int? = nil
@@ -108,6 +119,7 @@ extension QuotaHistoryStore {
             #if canImport(SQLite3)
             var conditions: [String] = [Self.retiredRowsExcluded]
             if vendorString != nil { conditions.append("vendor = ?") }
+            if instanceID != nil { conditions.append("(instance_id = ? OR instance_id IS NULL)") }
             if let kindStrings {
                 // An empty kind set is a real filter that matches nothing,
                 // not "no filter": a UI with every kind unticked shows nothing.
@@ -121,7 +133,7 @@ extension QuotaHistoryStore {
             if sinceEpoch != nil { conditions.append("occurred_at >= ?") }
 
             var sql = """
-            SELECT id, kind, vendor, title, detail, occurred_at, observed_at, source, url
+            SELECT id, kind, vendor, instance_id, title, detail, occurred_at, observed_at, source, url
             FROM event
             """
             if !conditions.isEmpty {
@@ -137,6 +149,10 @@ extension QuotaHistoryStore {
             var bindIdx: Int32 = 1
             if let vendorString {
                 try db.bindText(stmt, bindIdx, vendorString)
+                bindIdx += 1
+            }
+            if let instanceID {
+                try db.bindText(stmt, bindIdx, instanceID)
                 bindIdx += 1
             }
             if let kindStrings {
@@ -155,8 +171,8 @@ extension QuotaHistoryStore {
                 guard let idText = sqlite3_column_text(stmt, 0),
                       let kindText = sqlite3_column_text(stmt, 1),
                       let vendorText = sqlite3_column_text(stmt, 2),
-                      let titleText = sqlite3_column_text(stmt, 3),
-                      let sourceText = sqlite3_column_text(stmt, 7)
+                      let titleText = sqlite3_column_text(stmt, 4),
+                      let sourceText = sqlite3_column_text(stmt, 8)
                 else { continue }
 
                 // A row written by a build with a kind, vendor, or source this
@@ -167,10 +183,13 @@ extension QuotaHistoryStore {
                       let source = AIEventSource(rawValue: String(cString: sourceText))
                 else { continue }
 
-                let detail = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
-                let occurredAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 5)))
-                let observedAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 6)))
-                let url = sqlite3_column_text(stmt, 8)
+                // NULL stays nil: the event is the vendor's own, not a
+                // workspace's, and `fetchEvents` shows it for every instance.
+                let instanceId = sqlite3_column_text(stmt, 3).map { String(cString: $0) }
+                let detail = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+                let occurredAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 6)))
+                let observedAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
+                let url = sqlite3_column_text(stmt, 9)
                     .map { String(cString: $0) }
                     .flatMap { URL(string: $0) }
 
@@ -178,6 +197,7 @@ extension QuotaHistoryStore {
                     id: String(cString: idText),
                     kind: kind,
                     vendorId: vendorId,
+                    instanceId: instanceId,
                     title: String(cString: titleText),
                     detail: detail,
                     occurredAt: occurredAt,

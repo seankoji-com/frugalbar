@@ -29,12 +29,13 @@ public struct QuotaTransitions: Sendable, Equatable {
 /// invocation; this type only ever answers "what changed since last time".
 public actor QuotaNotificationObserver {
 
-    private var previous: [VendorIdentifier: QuotaSnapshot] = [:]
+    private var previous: [String: QuotaSnapshot] = [:]
 
     public init() {}
 
-    /// Keys `current` by `vendorId`, diffs it against the stored previous
-    /// state, updates the stored state, and returns any recovery events.
+    /// Keys `current` by each provider instance's stable id, diffs it against
+    /// the stored previous state, updates the stored state, and returns any
+    /// recovery events.
     ///
     /// Called on every poll regardless of whether notifications are enabled,
     /// so the stored "previous" state stays current even while the feature is
@@ -47,17 +48,17 @@ public actor QuotaNotificationObserver {
     /// restores and reset-credit grants as well.
     /// `now` decides whether a previously reported reset time has passed.
     public func observeTransitions(current: [QuotaSnapshot], now: Date) -> QuotaTransitions {
-        var currentByVendor: [VendorIdentifier: QuotaSnapshot] = [:]
+        var currentByInstance: [String: QuotaSnapshot] = [:]
         for snapshot in current {
-            currentByVendor[snapshot.vendorId] = snapshot
+            currentByInstance[snapshot.id] = snapshot
         }
         let transitions = QuotaTransitions(
-            recoveries: QuotaTransitionDetector.detect(previous: previous, current: currentByVendor),
-            resets: QuotaResetDetector.detect(previous: previous, current: currentByVendor, now: now),
-            restores: UsageRestoreDetector.detect(previous: previous, current: currentByVendor, now: now),
-            creditGrants: ResetCreditDetector.detect(previous: previous, current: currentByVendor)
+            recoveries: QuotaTransitionDetector.detect(previous: previous, current: currentByInstance),
+            resets: QuotaResetDetector.detect(previous: previous, current: currentByInstance, now: now),
+            restores: UsageRestoreDetector.detect(previous: previous, current: currentByInstance, now: now),
+            creditGrants: ResetCreditDetector.detect(previous: previous, current: currentByInstance)
         )
-        previous = currentByVendor
+        previous = currentByInstance
         return transitions
     }
 }

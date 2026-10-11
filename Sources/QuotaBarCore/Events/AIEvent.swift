@@ -199,6 +199,18 @@ public struct AIEvent: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public let kind: AIEventKind
     public let vendorId: VendorIdentifier
+    /// The *instance* this event belongs to, when it belongs to one — a
+    /// `QuotaSnapshot.id`, so two OpenCode Go workspaces of one vendor keep
+    /// their resets, restores and credit grants apart.
+    ///
+    /// Nil is a real answer, not a gap: the event is the vendor's own
+    /// (a status-page incident, a news item, a model appearing on the
+    /// account's list), so it is shown wherever that vendor is shown. A
+    /// single-instance vendor's poll events are also nil, because their
+    /// instance key *is* the vendor's raw value and there is nothing to tell
+    /// apart. This is separate from `id`, which folds the instance in only
+    /// for a vendor that has several.
+    public let instanceId: String?
     /// One line, e.g. "OpenAI WK window reset" or "claude-opus-5-5 listed".
     public let title: String
     /// Optional second line carrying the measured facts, e.g.
@@ -220,6 +232,7 @@ public struct AIEvent: Identifiable, Sendable, Equatable, Hashable, Codable {
         id: String,
         kind: AIEventKind,
         vendorId: VendorIdentifier,
+        instanceId: String? = nil,
         title: String,
         detail: String?,
         occurredAt: Date,
@@ -230,6 +243,7 @@ public struct AIEvent: Identifiable, Sendable, Equatable, Hashable, Codable {
         self.id = id
         self.kind = kind
         self.vendorId = vendorId
+        self.instanceId = instanceId
         self.title = title
         self.detail = detail
         self.occurredAt = occurredAt

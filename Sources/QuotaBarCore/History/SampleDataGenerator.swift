@@ -142,7 +142,7 @@ public enum SampleDataGenerator {
 
                 let claudeStatus: ProviderStatus = isBlocked ? .critical : (fraction > 0.8 ? .warning : .healthy)
                 let claudeSnapshot = QuotaSnapshot(
-                    id: "sample_claude",
+                    id: VendorIdentifier.claude.rawValue,
                     vendorId: .claude,
                     displayName: "Claude",
                     category: .aiSubscriptions,
@@ -165,7 +165,7 @@ public enum SampleDataGenerator {
                     windowLength: oneDay
                 )
                 let openaiSnapshot = QuotaSnapshot(
-                    id: "sample_openai",
+                    id: VendorIdentifier.openai.rawValue,
                     vendorId: .openai,
                     displayName: "OpenAI",
                     category: .aiSubscriptions,

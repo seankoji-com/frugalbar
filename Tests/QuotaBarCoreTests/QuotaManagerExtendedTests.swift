@@ -88,7 +88,7 @@ struct QuotaManagerExtendedTests {
         _ = await manager.forceRefresh()
         let snaps = await manager.cachedSnapshots()
         #expect(snaps.count == 1)
-        #expect(snaps[.claude] != nil)
+        #expect(snaps[VendorIdentifier.claude.rawValue] != nil)
     }
 
     // MARK: - Empty provider list
@@ -154,7 +154,7 @@ struct QuotaManagerExtendedTests {
             }
         )
         let results = await manager.forceRefresh()
-        #expect(results[.claude]?.status.confidence == .unavailable)
+        #expect(results[VendorIdentifier.claude.rawValue]?.status.confidence == .unavailable)
         #expect(await manager.worstUrgency() == .none)
         #expect(await manager.isCacheFresh())  // non-zero TTL means fresh after fetch
     }
@@ -170,7 +170,7 @@ struct QuotaManagerExtendedTests {
             }
         )
         let results = await manager.forceRefresh()
-        #expect(results[.claude]?.status == .unavailable(.timedOut))
+        #expect(results[VendorIdentifier.claude.rawValue]?.status == .unavailable(.timedOut))
     }
 
     // MARK: - Multiple failures
@@ -213,14 +213,14 @@ struct QuotaManagerExtendedTests {
         )
         // First fetch: success with warning
         let first = await manager.forceRefresh()
-        #expect(first[.openrouter]?.status == .measured(.warning))
-        #expect(first[.openrouter]?.consumptionFraction != nil)
+        #expect(first[VendorIdentifier.openrouter.rawValue]?.status == .measured(.warning))
+        #expect(first[VendorIdentifier.openrouter.rawValue]?.consumptionFraction != nil)
 
         // Second fetch: failure — should preserve the previous measured entry
         let second = await manager.forceRefresh()
-        #expect(second[.openrouter]?.status == .measured(.warning),
+        #expect(second[VendorIdentifier.openrouter.rawValue]?.status == .measured(.warning),
                 "transient error should preserve measured data")
-        #expect(second[.openrouter]?.consumptionFraction != nil)
+        #expect(second[VendorIdentifier.openrouter.rawValue]?.consumptionFraction != nil)
     }
 
     // MARK: - sortedSnapshots details

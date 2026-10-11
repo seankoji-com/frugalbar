@@ -74,7 +74,7 @@ struct QuotaHistoryStoreTests {
         }
 
         // Seed so the schema exists before the trigger is installed.
-        try await store.record([snapshot("seed", label: "5H", fraction: 0.1)], now: now)
+        try await store.record([snapshot("claude", label: "5H", fraction: 0.1)], now: now)
 
         // Make exactly one row fail, part-way through a two-row batch.
         var rawDB: OpaquePointer?
@@ -89,7 +89,7 @@ struct QuotaHistoryStoreTests {
 
         await #expect(throws: HistoryDatabaseError.self) {
             try await store.record(
-                [snapshot("good", label: "GOOD", fraction: 0.42), snapshot("bad", label: "BOOM", fraction: 0.99)],
+                [snapshot("claude", label: "GOOD", fraction: 0.42), snapshot("claude", label: "BOOM", fraction: 0.99)],
                 now: now.addingTimeInterval(60)
             )
         }
@@ -173,7 +173,7 @@ struct QuotaHistoryStoreTests {
         let recentDate = baseDate.addingTimeInterval(-5 * 86_400) // 5 days ago -> within 10-day cap
 
         var oldSnapshot = QuotaSnapshot(
-            id: "claude-old",
+            id: "claude",
             vendorId: .claude,
             displayName: "Claude",
             category: .aiSubscriptions,
@@ -186,7 +186,7 @@ struct QuotaHistoryStoreTests {
         oldSnapshot.row1 = DualBarMetrics(primaryFraction: 0.2, label: "5H")
 
         var recentSnapshot = QuotaSnapshot(
-            id: "claude-recent",
+            id: "claude",
             vendorId: .claude,
             displayName: "Claude",
             category: .aiSubscriptions,
@@ -199,7 +199,7 @@ struct QuotaHistoryStoreTests {
         recentSnapshot.row1 = DualBarMetrics(primaryFraction: 0.6, label: "5H")
 
         var newSnapshot = QuotaSnapshot(
-            id: "claude-now",
+            id: "claude",
             vendorId: .claude,
             displayName: "Claude",
             category: .aiSubscriptions,

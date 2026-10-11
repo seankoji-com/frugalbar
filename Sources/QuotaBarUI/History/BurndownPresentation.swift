@@ -99,7 +99,10 @@ public enum BurndownPresentation {
 
     // MARK: - Burndown
 
-    /// The current window of `barLabel` for one vendor.
+    /// The current window of `barLabel` for one provider instance.
+    ///
+    /// `instanceID` is the instance's stable key (see `BurnRateForecast`), so
+    /// two OpenCode Go workspaces are charted from their own readings.
     ///
     /// "Current" is the last unbroken segment under
     /// `HistoryPresentation.segments` semantics — consumption readings only,
@@ -109,12 +112,12 @@ public enum BurndownPresentation {
     /// passed (the readings describe a window that is over).
     public static func burndown(
         readings: [QuotaHistoryStore.ReadingRecord],
-        vendorId: VendorIdentifier,
+        instanceID: String,
         barLabel: String,
         now: Date
     ) -> Burndown? {
         let records = HistoryPresentation.consumptionReadings(readings)
-            .filter { $0.vendor == vendorId.rawValue && $0.barLabel == barLabel && $0.measuredAt <= now }
+            .filter { $0.vendor == instanceID && $0.barLabel == barLabel && $0.measuredAt <= now }
             .sorted { $0.measuredAt < $1.measuredAt }
 
         // The newest record must itself carry a fraction. Reaching back past
@@ -146,7 +149,7 @@ public enum BurndownPresentation {
 
         var projection: [LinePoint]?
         if let forecast = BurnRateForecast.compute(
-            vendorId: vendorId, barLabel: barLabel, readings: records,
+            instanceID: instanceID, barLabel: barLabel, readings: records,
             resetsAt: latest.resetsAt, now: now
         ), forecast.fractionPerHour > 0 {
             let origin = LinePoint(date: latest.measuredAt, remainingFraction: nowRemaining)
@@ -194,13 +197,13 @@ public enum BurndownPresentation {
     /// poll. Longest window first, then by time.
     public static func history(
         readings: [QuotaHistoryStore.ReadingRecord],
-        vendorId: VendorIdentifier,
+        instanceID: String,
         range: HistoryPresentation.TimeRange,
         now: Date
     ) -> [Series] {
         let start = range.startDate(from: now)
         let records = HistoryPresentation.consumptionReadings(readings).filter { record in
-            record.vendor == vendorId.rawValue && record.measuredAt <= now
+            record.vendor == instanceID && record.measuredAt <= now
                 && (start.map { record.measuredAt >= $0 } ?? true)
         }
         return labelsLongestFirst(records).flatMap { label in

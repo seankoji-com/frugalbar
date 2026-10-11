@@ -20,7 +20,7 @@ struct ResetCreditDetectorTests {
 
     private func detect(_ before: QuotaSnapshot?, _ after: QuotaSnapshot) -> [ResetCreditGrantedEvent] {
         ResetCreditDetector.detect(
-            previous: before.map { [.openai: $0] } ?? [:], current: [.openai: after])
+            previous: before.map { ["openai": $0] } ?? [:], current: ["openai": after])
     }
 
     @Test("a rising count fires with both counts")
