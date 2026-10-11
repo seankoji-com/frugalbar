@@ -31,7 +31,7 @@ struct UsageRestoreDetectorTests {
 
     private func detect(_ before: QuotaSnapshot, _ after: QuotaSnapshot) -> [UsageRestoredEvent] {
         UsageRestoreDetector.detect(
-            previous: [before.vendorId: before], current: [after.vendorId: after], now: now)
+            previous: [before.id: before], current: [after.id: after], now: now)
     }
 
     @Test("a large drop before an unchanged future reset fires with the measured figures")
@@ -73,7 +73,7 @@ struct UsageRestoreDetectorTests {
         #expect(events.first?.windowRestarted == true)
         #expect(events.first?.resetsAt == newReset)
         #expect(QuotaResetDetector.detect(
-            previous: [.claude: before], current: [.claude: after], now: now).isEmpty)
+            previous: ["claude": before], current: ["claude": after], now: now).isEmpty)
     }
 
     /// A slow clock: the poll runs 3 s before the published reset and the
@@ -86,7 +86,7 @@ struct UsageRestoreDetectorTests {
         let after = snapshot(.claude, bars: [bar("5H", fraction: 0.02, resetsAt: newReset)])
         #expect(detect(before, after).isEmpty)
         #expect(QuotaResetDetector.detect(
-            previous: [.claude: before], current: [.claude: after], now: now).count == 1)
+            previous: ["claude": before], current: ["claude": after], now: now).count == 1)
     }
 
     @Test("a drop with an unchanged reset is a restore that kept its window")
@@ -151,7 +151,7 @@ struct UsageRestoreDetectorTests {
         let reset = now.addingTimeInterval(3600)
         let events = UsageRestoreDetector.detect(
             previous: [:],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", fraction: 0.0, resetsAt: reset)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", fraction: 0.0, resetsAt: reset)])],
             now: now)
         #expect(events.isEmpty)
     }

@@ -771,6 +771,29 @@ extension CredentialStore {
         }
     }
 
+    /// Async accessor for a credential stored under an explicit Keychain label.
+    ///
+    /// Used by providers that keep one credential per instance (OpenCode Go
+    /// workspaces) rather than one per vendor. `cliVendorFallback` is offered
+    /// only when the caller has a CLI source to fall back to — and only when
+    /// the user opted into CLI discovery — so a workspace that never had one
+    /// cannot silently read another workspace's CLI credential.
+    static func apiKeyAsync(label: String, cliVendorFallback: VendorIdentifier? = nil) async -> String? {
+        await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                if let stored = try? KeychainManager.shared.get(label: label), !stored.isEmpty {
+                    continuation.resume(returning: stored)
+                    return
+                }
+                guard isCLIDiscoveryEnabled, let vendor = cliVendorFallback else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: discoverFromCLI(vendor: vendor))
+            }
+        }
+    }
+
     /// The credential blob the Claude Code CLI writes to the macOS login
     /// Keychain. It lives under a different service name than our own items,
     /// so `KeychainManager` — scoped to `com.quotabar.keys` — cannot serve it.

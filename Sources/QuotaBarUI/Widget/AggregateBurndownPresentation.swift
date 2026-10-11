@@ -140,15 +140,40 @@ public enum AggregateBurndownPresentation {
 
     /// One vendor window's history, as chosen by the filters.
     public struct VendorSeries: Identifiable, Sendable, Equatable {
-        public var id: String { "\(vendorId.rawValue)|\(barLabel)" }
+        /// The instance key, so two OpenCode Go workspaces are two series.
+        public var id: String { "\(instanceID)|\(barLabel)" }
+        public let instanceID: String
         public let vendorId: VendorIdentifier
+        /// The workspace's own name when the vendor has several instances, else
+        /// the vendor's name. Used for the legend and the spoken summary.
+        public let displayName: String
         public let barLabel: String
         public let segments: [SeriesSegment]
 
-        public init(vendorId: VendorIdentifier, barLabel: String, segments: [SeriesSegment]) {
+        public init(
+            instanceID: String,
+            vendorId: VendorIdentifier,
+            displayName: String,
+            barLabel: String,
+            segments: [SeriesSegment]
+        ) {
+            self.instanceID = instanceID
             self.vendorId = vendorId
+            self.displayName = displayName
             self.barLabel = barLabel
             self.segments = segments
+        }
+
+        /// Convenience for a single-instance vendor, where the instance key is
+        /// the vendor raw value and the name is the vendor's.
+        public init(vendorId: VendorIdentifier, barLabel: String, segments: [SeriesSegment]) {
+            self.init(
+                instanceID: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: vendorId.displayName,
+                barLabel: barLabel,
+                segments: segments
+            )
         }
 
         public var allPoints: [SeriesPoint] { segments.flatMap(\.points) }
@@ -176,8 +201,12 @@ public enum AggregateBurndownPresentation {
     }
 
     public struct HeadroomItem: Identifiable, Sendable, Equatable {
-        public var id: String { "\(vendorId.rawValue)|\(barLabel)" }
+        public var id: String { "\(instanceID)|\(barLabel)" }
+        /// The instance key, so two workspaces of one vendor are two rows.
+        public let instanceID: String
         public let vendorId: VendorIdentifier
+        /// The workspace's own name when the vendor has several instances.
+        public let displayName: String
         public let barLabel: String
         /// nil when the vendor gave no percentage — drawn as an absence.
         public let remainingFraction: Double?
@@ -192,6 +221,29 @@ public enum AggregateBurndownPresentation {
         public var showsBlockedGlyph: Bool { isBlocked && remainingFraction != nil }
 
         public init(
+            instanceID: String,
+            vendorId: VendorIdentifier,
+            displayName: String,
+            barLabel: String,
+            remainingFraction: Double?,
+            resetsAt: Date?,
+            urgency: Urgency,
+            isBlocked: Bool,
+            status: ProviderStatus
+        ) {
+            self.instanceID = instanceID
+            self.vendorId = vendorId
+            self.displayName = displayName
+            self.barLabel = barLabel
+            self.remainingFraction = remainingFraction
+            self.resetsAt = resetsAt
+            self.urgency = urgency
+            self.isBlocked = isBlocked
+            self.status = status
+        }
+
+        /// Convenience for a single-instance vendor.
+        public init(
             vendorId: VendorIdentifier,
             barLabel: String,
             remainingFraction: Double?,
@@ -200,13 +252,17 @@ public enum AggregateBurndownPresentation {
             isBlocked: Bool,
             status: ProviderStatus
         ) {
-            self.vendorId = vendorId
-            self.barLabel = barLabel
-            self.remainingFraction = remainingFraction
-            self.resetsAt = resetsAt
-            self.urgency = urgency
-            self.isBlocked = isBlocked
-            self.status = status
+            self.init(
+                instanceID: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: vendorId.displayName,
+                barLabel: barLabel,
+                remainingFraction: remainingFraction,
+                resetsAt: resetsAt,
+                urgency: urgency,
+                isBlocked: isBlocked,
+                status: status
+            )
         }
     }
 
@@ -245,11 +301,25 @@ public enum AggregateBurndownPresentation {
         return ordered + extra
     }
 
-    /// The label to chart for one vendor: the explicit filter label, or the
-    /// window with the largest `windowLength` among the vendor's latest
+    /// The provider *instances* the filters select, in snapshot order.
+    ///
+    /// A vendor with several instances (OpenCode Go workspaces) contributes one
+    /// entry per instance, so the chart and the headroom strip draw each
+    /// separately instead of collapsing them into one. `filters.vendors` stays
+    /// vendor-keyed — selecting OpenCode selects both of its workspaces.
+    public static func selectedInstances(
+        snapshots: [QuotaSnapshot],
+        filters: WidgetFilters
+    ) -> [QuotaSnapshot] {
+        let available = snapshots.filter { !$0.quotaBars.isEmpty }
+        guard !filters.vendors.isEmpty else { return available }
+        return available.filter { filters.vendors.contains($0.vendorId) }
+    }
+
+    /// The label to chart for one instance: the explicit filter label, or the
+    /// window with the largest `windowLength` among the instance's latest
     /// consumption readings, falling back to the snapshot's longest quota bar.
     static func barLabel(
-        for vendor: VendorIdentifier,
         consumptionReadings: [QuotaHistoryStore.ReadingRecord],
         snapshot: QuotaSnapshot?,
         filters: WidgetFilters
@@ -274,7 +344,7 @@ public enum AggregateBurndownPresentation {
 
     // MARK: - Series
 
-    /// One series per selected vendor, each the window the filters choose.
+    /// One series per selected instance, each the window the filters choose.
     ///
     /// Only consumption readings are used: an elapsed-time-only billing cycle
     /// at 90% is not 90% of quota used. Readings without a fraction break the
@@ -292,40 +362,85 @@ public enum AggregateBurndownPresentation {
             record.measuredAt <= now && (start.map { record.measuredAt >= $0 } ?? true)
         }
 
-        let vendors: [VendorIdentifier]
+        // One reference per instance to draw. A filtered vendor with no current
+        // snapshot still charts its own history under the vendor key, as before.
         if snapshots.isEmpty && filters.vendors.isEmpty {
-            // Nothing polled yet: chart whatever history exists.
-            vendors = Set(inRange.compactMap { VendorIdentifier(rawValue: $0.vendor) })
-                .sorted { $0.rawValue < $1.rawValue }
-        } else {
-            vendors = selectedVendors(snapshots: snapshots, filters: filters)
+            return storedKeys(inRange).compactMap { key in
+                makeSeries(
+                    instanceID: key,
+                    vendorId: OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key),
+                    displayName: nil,
+                    snapshot: nil,
+                    readings: inRange, filters: filters
+                )
+            }
         }
 
-        return vendors.compactMap { vendor in
-            let vendorReadings = inRange.filter { $0.vendor == vendor.rawValue }
-            let snapshot = snapshots.first { $0.vendorId == vendor }
-            guard let label = barLabel(
-                for: vendor,
-                consumptionReadings: vendorReadings,
-                snapshot: snapshot,
-                filters: filters
-            ) else { return nil }
-
-            let windowReadings = vendorReadings.filter { $0.barLabel == label }
-            let segments = HistoryPresentation.segments(from: windowReadings).map { segment in
-                SeriesSegment(points: segment.points.map { point in
-                    let used = min(max(point.fraction, 0), 1)
-                    return SeriesPoint(
-                        timestamp: point.timestamp,
-                        value: filters.metric == .used ? used : 1 - used,
-                        urgency: point.urgency,
-                        isBlocked: point.isBlocked
-                    )
-                })
-            }.filter { !$0.points.isEmpty }
-            guard !segments.isEmpty else { return nil }
-            return VendorSeries(vendorId: vendor, barLabel: label, segments: segments)
+        var refs: [(id: String, vendorId: VendorIdentifier, name: String, snapshot: QuotaSnapshot?)] =
+            selectedInstances(snapshots: snapshots, filters: filters).map {
+                ($0.id, $0.vendorId, $0.displayName, $0)
+            }
+        let covered = Set(refs.map(\.vendorId))
+        for vendor in filters.vendors.subtracting(covered).sorted(by: { $0.rawValue < $1.rawValue }) {
+            refs.append((vendor.rawValue, vendor, vendor.displayName, nil))
         }
+
+        return refs.compactMap { ref in
+            makeSeries(
+                instanceID: ref.id,
+                vendorId: ref.vendorId,
+                displayName: ref.name,
+                snapshot: ref.snapshot,
+                readings: inRange, filters: filters
+            )
+        }
+    }
+
+    /// The stored reading keys present, sorted, for the "nothing polled yet"
+    /// case where a series can only be built from history.
+    private static func storedKeys(_ readings: [QuotaHistoryStore.ReadingRecord]) -> [String] {
+        Set(readings.map(\.vendor)).sorted()
+    }
+
+    /// One instance's series from its own readings. `vendorId` nil means the
+    /// stored key names no vendor FrugalBar knows, so no series is drawn rather
+    /// than one under a guessed colour.
+    private static func makeSeries(
+        instanceID: String,
+        vendorId: VendorIdentifier?,
+        displayName: String?,
+        snapshot: QuotaSnapshot?,
+        readings: [QuotaHistoryStore.ReadingRecord],
+        filters: WidgetFilters
+    ) -> VendorSeries? {
+        guard let vendorId else { return nil }
+        let instanceReadings = readings.filter { $0.vendor == instanceID }
+        guard let label = barLabel(
+            consumptionReadings: instanceReadings,
+            snapshot: snapshot,
+            filters: filters
+        ) else { return nil }
+
+        let windowReadings = instanceReadings.filter { $0.barLabel == label }
+        let segments = HistoryPresentation.segments(from: windowReadings).map { segment in
+            SeriesSegment(points: segment.points.map { point in
+                let used = min(max(point.fraction, 0), 1)
+                return SeriesPoint(
+                    timestamp: point.timestamp,
+                    value: filters.metric == .used ? used : 1 - used,
+                    urgency: point.urgency,
+                    isBlocked: point.isBlocked
+                )
+            })
+        }.filter { !$0.points.isEmpty }
+        guard !segments.isEmpty else { return nil }
+        return VendorSeries(
+            instanceID: instanceID,
+            vendorId: vendorId,
+            displayName: displayName ?? vendorId.displayName,
+            barLabel: label,
+            segments: segments
+        )
     }
 
     // MARK: - Average
@@ -429,15 +544,13 @@ public enum AggregateBurndownPresentation {
 
     // MARK: - Headroom strip
 
-    /// Current headroom for each selected vendor's chosen window. A bar with no
-    /// percentage, or a provider we could not read, keeps a nil fraction.
+    /// Current headroom for each selected instance's chosen window. A bar with
+    /// no percentage, or a provider we could not read, keeps a nil fraction.
     public static func currentHeadroom(
         snapshots: [QuotaSnapshot],
         filters: WidgetFilters
     ) -> [HeadroomItem] {
-        let vendors = selectedVendors(snapshots: snapshots, filters: filters)
-        return vendors.compactMap { vendor in
-            guard let snapshot = snapshots.first(where: { $0.vendorId == vendor }) else { return nil }
+        selectedInstances(snapshots: snapshots, filters: filters).compactMap { snapshot in
             let bar: DualBarMetrics?
             if let label = filters.windowLabel {
                 bar = snapshot.quotaBars.first { $0.label == label }
@@ -448,7 +561,9 @@ public enum AggregateBurndownPresentation {
             let measured = snapshot.status.confidence == .measured
             let remaining = measured ? bar.primaryFraction.map { 1 - min(max($0, 0), 1) } : nil
             return HeadroomItem(
-                vendorId: vendor,
+                instanceID: snapshot.id,
+                vendorId: snapshot.vendorId,
+                displayName: snapshot.displayName,
                 barLabel: bar.label,
                 remainingFraction: remaining,
                 resetsAt: bar.resetsAt,
@@ -466,7 +581,7 @@ public enum AggregateBurndownPresentation {
     /// when it still reports a figure; one with no figure reads "blocked" or
     /// "no reading", never 0.
     public static func headroomAccessibilityLabel(_ item: HeadroomItem, now: Date = Date()) -> String {
-        var label = "\(item.vendorId.displayName) \(item.barLabel) window"
+        var label = "\(item.displayName) \(item.barLabel) window"
         if let fraction = item.remainingFraction {
             label += ", \(Int((fraction * 100).rounded())) percent remaining"
             if item.isBlocked { label += ", blocked" }
@@ -528,7 +643,7 @@ public enum AggregateBurndownPresentation {
         var parts = series.compactMap { s -> String? in
             guard let latest = s.latest else { return nil }
             let percent = Int((latest.value * 100).rounded())
-            return "\(s.vendorId.displayName) \(s.barLabel): latest \(percent) percent \(metricWord)"
+            return "\(s.displayName) \(s.barLabel): latest \(percent) percent \(metricWord)"
         }
         if series.count > 1, let last = average.last {
             let percent = Int((last.value * 100).rounded())

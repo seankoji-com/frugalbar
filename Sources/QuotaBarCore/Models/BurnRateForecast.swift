@@ -22,7 +22,7 @@ public struct BurnRateForecast: Sendable, Equatable {
         case resetsFirst(resetsAt: Date)
     }
 
-    public let vendorId: VendorIdentifier
+    public let instanceID: String
     public let barLabel: String
     /// Share of the window consumed per hour over the lookback.
     public let fractionPerHour: Double
@@ -30,13 +30,13 @@ public struct BurnRateForecast: Sendable, Equatable {
     public let outcome: Outcome
 
     public init(
-        vendorId: VendorIdentifier,
+        instanceID: String,
         barLabel: String,
         fractionPerHour: Double,
         sampleCount: Int,
         outcome: Outcome
     ) {
-        self.vendorId = vendorId
+        self.instanceID = instanceID
         self.barLabel = barLabel
         self.fractionPerHour = fractionPerHour
         self.sampleCount = sampleCount
@@ -59,11 +59,14 @@ public struct BurnRateForecast: Sendable, Equatable {
 
     /// Forecast for one window from its recorded readings.
     ///
-    /// `readings` may include other vendors and labels; they are filtered here.
+    /// `instanceID` is the provider instance's stable key — the vendor raw
+    /// value for a single-instance vendor, a workspace key for OpenCode Go — so
+    /// one workspace's readings are never fit alongside another's.
+    /// `readings` may include other instances and labels; they are filtered here.
     /// Returns nil when there is not enough measured history, or the window is
     /// already spent (there is nothing left to forecast).
     public static func compute(
-        vendorId: VendorIdentifier,
+        instanceID: String,
         barLabel: String,
         readings: [QuotaHistoryStore.ReadingRecord],
         resetsAt: Date?,
@@ -73,7 +76,7 @@ public struct BurnRateForecast: Sendable, Equatable {
         let windowStart = now.addingTimeInterval(-lookback)
         let usable: [(t: Date, f: Double)] = readings
             .filter {
-                $0.vendor == vendorId.rawValue && $0.barLabel == barLabel
+                $0.vendor == instanceID && $0.barLabel == barLabel
                     && $0.confidence == .measured && !$0.elapsedOnly
                     && $0.measuredAt >= windowStart && $0.measuredAt <= now
             }
@@ -121,7 +124,7 @@ public struct BurnRateForecast: Sendable, Equatable {
             }
         }
         return BurnRateForecast(
-            vendorId: vendorId, barLabel: barLabel,
+            instanceID: instanceID, barLabel: barLabel,
             fractionPerHour: perHour, sampleCount: samples.count, outcome: outcome
         )
     }
@@ -139,7 +142,7 @@ public struct BurnRateForecast: Sendable, Equatable {
         let forecasts = snapshot.bars
             .filter { !$0.measuresElapsedTimeOnly }
             .compactMap {
-                compute(vendorId: snapshot.vendorId, barLabel: $0.label, readings: readings,
+                compute(instanceID: snapshot.id, barLabel: $0.label, readings: readings,
                         resetsAt: $0.resetsAt, now: now, lookback: lookback)
             }
         let limited = forecasts.compactMap { f -> (BurnRateForecast, Date)? in

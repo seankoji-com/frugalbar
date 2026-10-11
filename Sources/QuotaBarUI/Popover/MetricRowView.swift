@@ -239,7 +239,7 @@ struct MetricRowView: View {
 
             // Two lines: vendor, then the plan the provider actually reported.
             VStack(alignment: .leading, spacing: 1) {
-                Text(snapshot.shortVendorName)
+                Text(snapshot.rowTitle)
                     .font(Theme.Typography.title)
                     .tracking(Theme.Tracking.title)
                     .foregroundStyle(Theme.onSurface)

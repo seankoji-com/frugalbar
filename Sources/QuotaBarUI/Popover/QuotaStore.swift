@@ -20,9 +20,11 @@ public final class QuotaStore {
     /// True once a poll has completed. Lets the popover tell "still loading"
     /// from "loaded, and every provider is hidden".
     public private(set) var hasLoaded = false
-    /// Recent-pace forecast per provider, from recorded history. Empty when no
-    /// `readingsLoader` was given or history is too thin to fit a trend.
-    public private(set) var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
+    /// Recent-pace forecast per provider instance, from recorded history. Empty
+    /// when no `readingsLoader` was given or history is too thin to fit a trend.
+    /// Keyed by `snapshot.id`, so two OpenCode Go workspaces get their own
+    /// forecast rather than one overwriting the other.
+    public private(set) var forecasts: [String: BurnRateForecast] = [:]
     /// The most recent AI-platform events, newest first, for the popover's
     /// events section. Empty when no `eventsLoader` was given.
     public private(set) var recentEvents: [AIEvent] = []
@@ -163,7 +165,7 @@ public final class QuotaStore {
 
     private var preferenceRefreshPending = false
 
-    private func run(_ fetch: @escaping @Sendable () async -> [VendorIdentifier: QuotaSnapshot]) async {
+    private func run(_ fetch: @escaping @Sendable () async -> [String: QuotaSnapshot]) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -190,9 +192,9 @@ public final class QuotaStore {
         if let readingsLoader {
             let now = Date()
             let readings = await readingsLoader(now.addingTimeInterval(-BurnRateForecast.defaultLookback))
-            var next: [VendorIdentifier: BurnRateForecast] = [:]
+            var next: [String: BurnRateForecast] = [:]
             for snapshot in snaps {
-                next[snapshot.vendorId] = BurnRateForecast.binding(for: snapshot, readings: readings, now: now)
+                next[snapshot.id] = BurnRateForecast.binding(for: snapshot, readings: readings, now: now)
             }
             self.forecasts = next
         }

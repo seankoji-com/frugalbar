@@ -68,7 +68,7 @@ struct ProviderVisibilityTests {
         let results = await m.forceRefresh()
         #expect(counter.count(.grok) == 0)
         #expect(counter.count(.claude) == 1)
-        #expect(results[.grok] == nil)
+        #expect(results[VendorIdentifier.grok.rawValue] == nil)
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude])
     }
 
@@ -85,7 +85,7 @@ struct ProviderVisibilityTests {
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude])
         // ...and out of the urgency summary and the cache after one.
         _ = await m.forceRefresh()
-        #expect(await m.cachedSnapshots()[.grok] == nil)
+        #expect(await m.cachedSnapshots()[VendorIdentifier.grok.rawValue] == nil)
     }
 
     /// Without the purge, a vendor shown again would be served from under
@@ -181,8 +181,8 @@ struct ProviderVisibilityTests {
             displayPreferences: { box.value })
         _ = await m.refresh()
         box.value.hidden = [.grok]
-        #expect(await m.refresh()[.grok] == nil)          // fresh-cache fast path
-        #expect(await m.cachedSnapshots()[.grok] == nil)
+        #expect(await m.refresh()[VendorIdentifier.grok.rawValue] == nil)          // fresh-cache fast path
+        #expect(await m.cachedSnapshots()[VendorIdentifier.grok.rawValue] == nil)
         #expect(await m.worstUrgency() == .none)
     }
 }

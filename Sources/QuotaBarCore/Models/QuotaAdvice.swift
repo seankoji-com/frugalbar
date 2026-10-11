@@ -83,7 +83,7 @@ public struct QuotaAdvice: Sendable, Equatable {
             guard let used = worstBar?.primaryFraction ?? snapshot.consumptionFraction else { return nil }
             return Candidate(
                 vendorId: snapshot.vendorId,
-                name: snapshot.shortVendorName,
+                name: snapshot.rowTitle,
                 used: used,
                 bar: worstBar,
                 isCritical: snapshot.status.urgency == .critical
@@ -245,7 +245,7 @@ public struct QuotaAdvice: Sendable, Equatable {
         let measuredNames = list(candidates.map(\.name))
         let unreadable = snapshots
             .filter { $0.category == .aiSubscriptions && $0.status.confidence == .unavailable }
-            .map(\.shortVendorName)
+            .map(\.rowTitle)
         let caveat = unreadable.isEmpty ? "" : " \(list(unreadable)) could not be read."
         return QuotaAdvice(
             headline: "All Quotas Healthy & Balanced",

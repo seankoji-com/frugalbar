@@ -84,7 +84,7 @@ swift run
    - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
    - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
    - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
-   - **OpenCode**: Configure a token; usage appears once OpenCode has written its own telemetry.
+   - **OpenCode Go**: Configure a token under Preferences → Providers. Add a row per subscription workspace; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The first workspace keeps your existing key and the CLI `auth.json` fallback.
    - **Grok**: Sign in with the Grok CLI (`grok login`); enable CLI discovery and FrugalBar reads `~/.grok/auth.json`.
    - **Kiro**: Sign in with the Kiro CLI or IDE; enable CLI discovery and FrugalBar reads the CLI's own state database.
    - **DevPass**: Paste an `llmgtwy_…` key from the LLM Gateway dashboard.
@@ -123,7 +123,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **OpenAI / ChatGPT** | `GET https://chatgpt.com/backend-api/wham/usage` via the Codex session or CLI Proxy hub | Live 5-hour and weekly subscription windows, each labelled from the window length OpenAI reports. Also the count of banked reset credits (`rate_limit_reset_credits`) when OpenAI reports one; `credits.balance` is not shown because its unit is unverified |
 | **GitHub Copilot** | `GET https://api.github.com/copilot_internal/user` with the GitHub OAuth token | Live gauge: premium-interaction and chat allowances, with reset date. Plans billed by token publish no window and say so |
 | **Google Gemini** | `POST daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (Google OAuth) | Live five-hour and weekly Antigravity windows, plus the paid subscription tier; failures remain unavailable rather than substituting another quota pool |
-| **OpenCode** | `GET https://opencode.ai/zen/go/v1/usage` with the `opencode-go` key | Live gauge: rolling, weekly and monthly Go windows, each with the reset time and whether it is currently blocking |
+| **OpenCode Go** | `GET https://opencode.ai/zen/go/v1/usage` with the `opencode-go` key of each named workspace | Live gauge per workspace: rolling, weekly and monthly Go windows, each with the reset time and whether it is currently blocking |
 | **Anthropic Claude** | OAuth usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`), via CLI Proxy or directly | Live 5-hour and 7-day quota from the active CLI Proxy or Claude Code OAuth session |
 | **Grok** | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI's token | Live gauge: percentage of the plan's credit allowance used, plus the billing period xAI names (weekly or monthly) and its reset. On-demand spend appears as a second bar once enabled |
 | **Kiro** | `POST https://codewhisperer.us-east-1.amazonaws.com/` (`AmazonCodeWhispererService.GetUsageLimits`) with the Kiro CLI's token | Live gauge: plan credits used against the monthly allowance with reset date, plus separate bars for bonus credits (with expiry) and for overage once the account has it switched on |

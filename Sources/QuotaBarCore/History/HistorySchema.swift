@@ -107,9 +107,15 @@ public enum HistorySchema {
     ///   IGNORE` makes that certain rather than assumed.
     /// - Grok's fallback for a period with no type and no length was "CR"
     ///   too; it is now "PLAN", and its readings follow.
+    /// - OpenCode Go readings used to be filed under the bare vendor key
+    ///   `opencode`. They now belong to the legacy workspace's stable instance
+    ///   key, so a workspace-scoped query finds them and a second workspace's
+    ///   rows cannot collide with them. Renaming the key keeps that history one
+    ///   continuous series.
     public static let dataMigrationsSQL = """
     UPDATE OR IGNORE reading SET bar_label = 'MO' WHERE vendor = 'commandcode' AND bar_label = 'CR';
     UPDATE OR IGNORE reading SET bar_label = 'PLAN' WHERE vendor = 'grok' AND bar_label = 'CR';
+    UPDATE OR IGNORE reading SET vendor = 'opencode-go:legacy' WHERE vendor = 'opencode';
     """
 
     /// Drops every table. Used only to reset a development database whose schema

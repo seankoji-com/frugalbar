@@ -141,10 +141,16 @@ public actor QuotaHistoryStore {
 
         var preparedRows: [RowToWrite] = []
         for snapshot in snapshots {
+            // The instance's stable id, not the vendor raw value: two OpenCode
+            // Go workspaces of one vendor record separate series, and their
+            // rows never collide on the (vendor, bar_label, measured_at)
+            // primary key. For every single-instance provider the two are the
+            // same string, so existing series are untouched.
+            let key = snapshot.id
             let bars = snapshot.bars
             if bars.isEmpty {
                 preparedRows.append(RowToWrite(
-                    vendor: snapshot.vendorId.rawValue,
+                    vendor: key,
                     barLabel: "DEFAULT",
                     measuredAt: timestamp,
                     fraction: nil,
@@ -158,7 +164,7 @@ public actor QuotaHistoryStore {
             } else {
                 for bar in bars {
                     preparedRows.append(RowToWrite(
-                        vendor: snapshot.vendorId.rawValue,
+                        vendor: key,
                         barLabel: bar.label,
                         measuredAt: timestamp,
                         fraction: bar.primaryFraction,
@@ -232,23 +238,57 @@ public actor QuotaHistoryStore {
         }
     }
 
+    /// The SQL condition and bind values that select one vendor's stored rows.
+    ///
+    /// One raw-value comparison for a single-instance vendor. OpenCode Go
+    /// additionally matches every workspace instance key by prefix. The prefix
+    /// is the same for a workspace added later or one already removed, so a
+    /// vendor-scoped view sees every instance of the vendor without reading the
+    /// current workspace list — and a removed workspace's history is still
+    /// found rather than silently orphaned.
+    static func vendorClause(for vendor: VendorIdentifier) -> (sql: String, values: [String]) {
+        guard vendor == .opencode else { return ("vendor = ?", [vendor.rawValue]) }
+        // The instance prefix (`opencode-go:`) carries no `%` or `_`, so a bare
+        // LIKE cannot mis-match; a future prefix containing one needs ESCAPE.
+        return (
+            "(vendor = ? OR vendor LIKE ?)",
+            [vendor.rawValue, OpenCodeGoWorkspaceStore.instancePrefix + "%"]
+        )
+    }
+
     /// Fetches persisted readings filtered by vendor, label, or time range.
+    ///
+    /// `vendor` matches every instance that belongs to that vendor — for
+    /// OpenCode Go that is each workspace's own series plus the legacy rows a
+    /// pre-workspace install recorded — so a vendor-scoped view (the History
+    /// window, a workspace's detail modal) sees all of its readings.
+    /// `instanceID` narrows to one provider instance when a caller already
+    /// knows which one it wants.
     public func fetchReadings(
         vendor: VendorIdentifier? = nil,
+        instanceID: String? = nil,
         barLabel: String? = nil,
         since: Date? = nil,
         until: Date? = nil
     ) async throws -> [ReadingRecord] {
         try await ensureOpen()
 
-        let vendorString = vendor?.rawValue
+        let vendorClause: (sql: String, values: [String])? = if let instanceID {
+            ("vendor = ?", [instanceID])
+        } else if let vendor {
+            Self.vendorClause(for: vendor)
+        } else {
+            nil
+        }
         let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
         let untilEpoch = until.map { Int64($0.timeIntervalSince1970) }
 
         return try await database.perform { db -> [ReadingRecord] in
             #if canImport(SQLite3)
             var conditions: [String] = []
-            if vendorString != nil { conditions.append("vendor = ?") }
+            if let vendorClause {
+                conditions.append(vendorClause.sql)
+            }
             if barLabel != nil { conditions.append("bar_label = ?") }
             if sinceEpoch != nil { conditions.append("measured_at >= ?") }
             if untilEpoch != nil { conditions.append("measured_at <= ?") }
@@ -267,9 +307,11 @@ public actor QuotaHistoryStore {
             defer { db.finalize(stmt) }
 
             var bindIdx: Int32 = 1
-            if let vendorString {
-                try db.bindText(stmt, bindIdx, vendorString)
-                bindIdx += 1
+            if let vendorClause {
+                for value in vendorClause.values {
+                    try db.bindText(stmt, bindIdx, value)
+                    bindIdx += 1
+                }
             }
             if let barLabel {
                 try db.bindText(stmt, bindIdx, barLabel)

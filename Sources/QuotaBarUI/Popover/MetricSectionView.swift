@@ -7,7 +7,7 @@ struct MetricSectionView: View {
 
     let category: MetricCategory
     let snapshots: [QuotaSnapshot]
-    var forecasts: [VendorIdentifier: BurnRateForecast] = [:]
+    var forecasts: [String: BurnRateForecast] = [:]
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
 
     /// The column header shows only when a row actually uses the grid.
@@ -24,7 +24,7 @@ struct MetricSectionView: View {
                 MetricRowView(
                     snapshot: snap,
                     onSelect: onSelect,
-                    forecast: forecasts[snap.vendorId],
+                    forecast: forecasts[snap.id],
                     forecastAbove: index == snapshots.count - 1
                 )
 

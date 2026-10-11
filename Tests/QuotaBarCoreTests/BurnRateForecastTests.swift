@@ -33,7 +33,7 @@ struct BurnRateForecastTests {
     @Test("a steady burn projects the limit from the recent slope")
     func steadyBurnProjectsLimit() throws {
         let f = try #require(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: steadyBurn, resetsAt: nil, now: now))
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: steadyBurn, resetsAt: nil, now: now))
         #expect(abs(f.fractionPerHour - 0.2) < 1e-9)
         #expect(f.sampleCount == 3)
         guard case .limitAt(let date) = f.outcome else {
@@ -47,7 +47,7 @@ struct BurnRateForecastTests {
     func resetBeforeLimit() throws {
         let resetsAt = now.addingTimeInterval(3600)
         let f = try #require(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: steadyBurn, resetsAt: resetsAt, now: now))
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: steadyBurn, resetsAt: resetsAt, now: now))
         #expect(f.outcome == .resetsFirst(resetsAt: resetsAt))
         #expect(f.summary(now: now) == "Recent pace: 5H resets before limit")
     }
@@ -58,7 +58,7 @@ struct BurnRateForecastTests {
                         reading(minutesAgo: 15, fraction: 0.4),
                         reading(minutesAgo: 0, fraction: 0.4)]
         let f = try #require(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: readings, resetsAt: nil, now: now))
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: readings, resetsAt: nil, now: now))
         #expect(f.outcome == .notBurning)
         #expect(f.summary(now: now) == nil)
     }
@@ -67,12 +67,12 @@ struct BurnRateForecastTests {
     func insufficientHistory() {
         let two = Array(steadyBurn.dropFirst())
         #expect(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: two, resetsAt: nil, now: now) == nil)
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: two, resetsAt: nil, now: now) == nil)
         let short = [reading(minutesAgo: 4, fraction: 0.40),
                      reading(minutesAgo: 2, fraction: 0.45),
                      reading(minutesAgo: 0, fraction: 0.50)]
         #expect(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: short, resetsAt: nil, now: now) == nil)
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: short, resetsAt: nil, now: now) == nil)
     }
 
     @Test("unmeasured, nil-fraction, elapsed-only and other-window readings are ignored")
@@ -85,7 +85,7 @@ struct BurnRateForecastTests {
         // Only two usable readings for claude/5H: not enough for a trend.
         let readings = noise + [reading(minutesAgo: 30, fraction: 0.4), reading(minutesAgo: 0, fraction: 0.5)]
         #expect(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: readings, resetsAt: nil, now: now) == nil)
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: readings, resetsAt: nil, now: now) == nil)
     }
 
     @Test("readings older than the lookback are excluded")
@@ -94,7 +94,7 @@ struct BurnRateForecastTests {
                    reading(minutesAgo: 90, fraction: 0.2),
                    reading(minutesAgo: 0, fraction: 0.5)]
         #expect(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: old, resetsAt: nil, now: now) == nil)
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: old, resetsAt: nil, now: now) == nil)
     }
 
     @Test("a window reset inside the lookback never reads as negative consumption")
@@ -105,7 +105,7 @@ struct BurnRateForecastTests {
                         reading(minutesAgo: 20, fraction: 0.10),
                         reading(minutesAgo: 0, fraction: 0.20)]
         let f = try #require(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: readings, resetsAt: nil, now: now))
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: readings, resetsAt: nil, now: now))
         #expect(f.sampleCount == 3)
         #expect(abs(f.fractionPerHour - 0.3) < 1e-9)
     }
@@ -116,7 +116,7 @@ struct BurnRateForecastTests {
                         reading(minutesAgo: 15, fraction: 0.95),
                         reading(minutesAgo: 0, fraction: 1.0)]
         #expect(BurnRateForecast.compute(
-            vendorId: .claude, barLabel: "5H", readings: readings, resetsAt: nil, now: now) == nil)
+            instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", readings: readings, resetsAt: nil, now: now) == nil)
     }
 
     private func claudeSnapshot(measured: Bool) -> QuotaSnapshot {

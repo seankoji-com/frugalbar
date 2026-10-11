@@ -103,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // renaming the binary reads as a fresh install.
         CredentialStore.migrateLegacyPreferences()
 
+        // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
+        // the fetch path (`resolved()` reads without writing) so a poll never
+        // writes preferences or posts the refresh such a write triggers.
+        OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
+
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         statusItem.button?.action = #selector(togglePopover)

@@ -6,10 +6,25 @@ public protocol QuotaProvider: Sendable {
     var vendorId: VendorIdentifier { get }
     var displayName: String { get }
     var category: MetricCategory { get }
+    /// Stable identity for this provider *instance*: the cache key, the spawn
+    /// key, and the key its history is recorded under.
+    ///
+    /// A *requirement*, not merely an extension member, and deliberately so:
+    /// `QuotaManager` holds `[any QuotaProvider]`, and a member that exists
+    /// only in an extension is statically dispatched through an existential —
+    /// it would return the default `vendorId.rawValue` for every provider and
+    /// collapse two OpenCode Go workspaces onto one cache key. Declared here,
+    /// a provider that serves several independent subscriptions under one
+    /// vendor — OpenCode Go workspaces — witnesses its own per-workspace key
+    /// and two instances coexist instead of overwriting each other.
+    var instanceID: String { get }
     func fetchSnapshot() async throws -> QuotaSnapshot
 }
 
 extension QuotaProvider {
+    /// One instance per vendor by default; see the requirement above.
+    public var instanceID: String { vendorId.rawValue }
+
     /// Returns the injected credential if there is one, otherwise resolves it
     /// from the credential store off the cooperative thread pool.
     func credential(injected: String?, for vendor: VendorIdentifier) async -> String? {

@@ -394,7 +394,7 @@ struct DesktopWidgetView: View {
                 ForEach(series) { s in
                     HStack(spacing: 4) {
                         Capsule().fill(accent(s.vendorId)).frame(width: 10, height: 3)
-                        Text("\(s.vendorId.displayName) \(s.barLabel)")
+                        Text("\(s.displayName) \(s.barLabel)")
                     }
                 }
                 if !average.isEmpty {

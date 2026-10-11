@@ -12,13 +12,38 @@ import Foundation
 public final class OpenCodeGoProvider: QuotaProvider, Sendable {
 
     public let vendorId: VendorIdentifier = .opencode
-    public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
+
+    /// The named workspace this provider reads, when it is one of several.
+    /// `nil` for the unnamed single-instance provider the rest of the app
+    /// constructs directly (tests, Settings' key verification).
+    public let workspace: OpenCodeGoWorkspace?
 
     private let apiKey: String?
 
+    /// Stable identity for the cache, spawn and history: the workspace's own
+    /// key when there is one, otherwise the vendor raw value. Never the display
+    /// name — renaming a workspace must not move its readings.
+    public var instanceID: String { workspace?.instanceID ?? vendorId.rawValue }
+
+    /// The workspace's name, or the vendor's name when unnamed. The vendor
+    /// identifier is unchanged: both OpenCode workspaces share one vendor, one
+    /// colour and one avatar.
+    public var displayName: String { workspace?.name ?? vendorId.displayName }
+
+    /// A single unnamed OpenCode Go subscription — the shape every existing
+    /// call site and test uses.
     public init(apiKey: String? = nil) {
         self.apiKey = apiKey
+        self.workspace = nil
+    }
+
+    /// One named workspace. Its credential is resolved from its own Keychain
+    /// label, with the CLI `auth.json` fallback only for the legacy workspace
+    /// (a second subscription has no CLI entry to discover).
+    public init(workspace: OpenCodeGoWorkspace) {
+        self.apiKey = nil
+        self.workspace = workspace
     }
 
     /// One window as OpenCode reports it:
@@ -50,8 +75,25 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         let usage: Usage?
     }
 
+    /// Resolves this provider's API key.
+    ///
+    /// The unnamed provider keeps the original vendor-level lookup (Keychain
+    /// label `opencode`, then CLI discovery). A named workspace reads its own
+    /// label; only the legacy workspace may fall back to CLI discovery, because
+    /// that fallback is what preserves the pre-workspace single-subscription
+    /// setup.
+    private func resolveKey() async -> String? {
+        guard let workspace else { return await credential(injected: apiKey, for: .opencode) }
+        if let apiKey { return apiKey.isEmpty ? nil : apiKey }
+        let cliFallback: VendorIdentifier? =
+            workspace.id == OpenCodeGoWorkspaceStore.legacyID ? .opencode : nil
+        let key = await CredentialStore.apiKeyAsync(
+            label: workspace.credentialLabel, cliVendorFallback: cliFallback)
+        return (key?.isEmpty ?? true) ? nil : key
+    }
+
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard let key = await credential(injected: apiKey, for: .opencode) else {
+        guard let key = await resolveKey() else {
             return unavailable(.notConfigured)
         }
 
@@ -78,7 +120,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             guard anyBlocked else {
                 return unavailable(.unsupported("OpenCode reported no usage window"))
             }
-            return Self.blockedSnapshot(usage: usage, now: Date())
+            return Self.blockedSnapshot(usage: usage, now: Date(), instanceID: instanceID, displayName: displayName)
         }
 
         // A blocked window cannot be used at all, whatever its percentage
@@ -89,7 +131,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
 
         let now = Date()
         return QuotaSnapshot(
-            id: vendorId.rawValue,
+            id: instanceID,
             vendorId: vendorId,
             displayName: displayName,
             category: category,
@@ -120,11 +162,13 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
     ///
     /// Reuses `Self.row`, which already draws a blocked window with no percent
     /// as a placeholder instead of dropping it.
-    private static func blockedSnapshot(usage: Response.Usage, now: Date) -> QuotaSnapshot {
+    private static func blockedSnapshot(
+        usage: Response.Usage, now: Date, instanceID: String, displayName: String
+    ) -> QuotaSnapshot {
         QuotaSnapshot(
-            id: VendorIdentifier.opencode.rawValue,
+            id: instanceID,
             vendorId: .opencode,
-            displayName: VendorIdentifier.opencode.displayName,
+            displayName: displayName,
             category: .aiSubscriptions,
             metric: .subscription(tierName: "Go", renewalDate: nil),
             status: .measured(.critical),

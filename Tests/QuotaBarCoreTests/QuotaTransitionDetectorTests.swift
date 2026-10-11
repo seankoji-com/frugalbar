@@ -31,8 +31,8 @@ struct QuotaTransitionDetectorTests {
     @Test("critical to none fires once")
     func criticalToNoneFires() {
         let events = QuotaTransitionDetector.detect(
-            previous: [.claude: measured(.claude, urgency: .critical)],
-            current: [.claude: measured(.claude, urgency: .none)]
+            previous: ["claude": measured(.claude, urgency: .critical)],
+            current: ["claude": measured(.claude, urgency: .none)]
         )
         #expect(events == [QuotaRecoveryEvent(vendorId: .claude, displayName: "Claude")])
     }
@@ -40,8 +40,8 @@ struct QuotaTransitionDetectorTests {
     @Test("critical to warning still counts as regaining headroom")
     func criticalToWarningFires() {
         let events = QuotaTransitionDetector.detect(
-            previous: [.claude: measured(.claude, urgency: .critical)],
-            current: [.claude: measured(.claude, urgency: .warning)]
+            previous: ["claude": measured(.claude, urgency: .critical)],
+            current: ["claude": measured(.claude, urgency: .warning)]
         )
         #expect(events == [QuotaRecoveryEvent(vendorId: .claude, displayName: "Claude")])
     }
@@ -49,8 +49,8 @@ struct QuotaTransitionDetectorTests {
     @Test("critical to critical does not fire")
     func criticalToCriticalDoesNotFire() {
         let events = QuotaTransitionDetector.detect(
-            previous: [.claude: measured(.claude, urgency: .critical)],
-            current: [.claude: measured(.claude, urgency: .critical)]
+            previous: ["claude": measured(.claude, urgency: .critical)],
+            current: ["claude": measured(.claude, urgency: .critical)]
         )
         #expect(events.isEmpty)
     }
@@ -58,8 +58,8 @@ struct QuotaTransitionDetectorTests {
     @Test("critical to unavailable does not fire — a lost reading is not recovery")
     func criticalToUnavailableDoesNotFire() {
         let events = QuotaTransitionDetector.detect(
-            previous: [.claude: measured(.claude, urgency: .critical)],
-            current: [.claude: unavailable(.claude)]
+            previous: ["claude": measured(.claude, urgency: .critical)],
+            current: ["claude": unavailable(.claude)]
         )
         #expect(events.isEmpty)
     }
@@ -67,8 +67,8 @@ struct QuotaTransitionDetectorTests {
     @Test("unavailable to none does not fire — no prior critical reading to recover from")
     func unavailableToNoneDoesNotFire() {
         let events = QuotaTransitionDetector.detect(
-            previous: [.claude: unavailable(.claude)],
-            current: [.claude: measured(.claude, urgency: .none)]
+            previous: ["claude": unavailable(.claude)],
+            current: ["claude": measured(.claude, urgency: .none)]
         )
         #expect(events.isEmpty)
     }
@@ -77,7 +77,7 @@ struct QuotaTransitionDetectorTests {
     func noPriorEntryDoesNotFire() {
         let events = QuotaTransitionDetector.detect(
             previous: [:],
-            current: [.claude: measured(.claude, urgency: .none)]
+            current: ["claude": measured(.claude, urgency: .none)]
         )
         #expect(events.isEmpty)
     }

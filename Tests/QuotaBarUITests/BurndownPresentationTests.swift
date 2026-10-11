@@ -49,7 +49,7 @@ struct BurndownPresentationTests {
 
     @Test("ideal runs exactly from 100% at window start to 0% at reset")
     func idealEndpointsExact() throws {
-        let b = try #require(P.burndown(readings: burning, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         let ideal = try #require(b.ideal)
         #expect(ideal == [
             P.LinePoint(date: resets.addingTimeInterval(-length), remainingFraction: 1),
@@ -71,7 +71,7 @@ struct BurndownPresentationTests {
                 resetsAt: resets, windowLength: nil, elapsedOnly: false
             )
         }
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.ideal == nil)
         #expect(b.windowStart == nil)
         #expect(!P.summaryLine(for: b, now: now).contains("pace"))
@@ -86,7 +86,7 @@ struct BurndownPresentationTests {
                 resetsAt: nil, windowLength: length, elapsedOnly: false
             )
         }
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.ideal == nil)
         #expect(b.resetsAt == nil)
     }
@@ -95,7 +95,7 @@ struct BurndownPresentationTests {
 
     @Test("remaining is one minus used for every point and for now")
     func remainingIsComplement() throws {
-        let b = try #require(P.burndown(readings: burning, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.count == 10)
         for p in b.actual {
             #expect(abs(p.remainingFraction - (1 - p.usedFraction)) < 1e-12)
@@ -111,7 +111,7 @@ struct BurndownPresentationTests {
             reading(minutesAgo: 40, fraction: 0.05),
             reading(minutesAgo: 30, fraction: 0.10),
         ]
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.map(\.usedFraction) == [0.05, 0.10])
     }
 
@@ -121,7 +121,7 @@ struct BurndownPresentationTests {
             reading(minutesAgo: 20, fraction: 0.8, urgency: .warning),
             reading(minutesAgo: 10, fraction: 0.95, isBlocked: true, urgency: .critical),
         ]
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.map(\.isBlocked) == [false, true])
         #expect(b.actual.map(\.urgency) == [.warning, .critical])
         #expect(P.accessibilityDescription(for: b, now: now).contains("blocked"))
@@ -135,7 +135,7 @@ struct BurndownPresentationTests {
             reading(minutesAgo: 20, fraction: 0.3),
             reading(minutesAgo: 10, fraction: nil),
         ]
-        #expect(P.burndown(readings: trailingNil, vendorId: .claude, barLabel: "5H", now: now) == nil)
+        #expect(P.burndown(readings: trailingNil, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now) == nil)
 
         // A nil in the middle breaks the segment; the current window is what
         // follows it.
@@ -144,12 +144,12 @@ struct BurndownPresentationTests {
             reading(minutesAgo: 20, fraction: nil),
             reading(minutesAgo: 10, fraction: 0.4),
         ]
-        let b = try #require(P.burndown(readings: middleNil, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: middleNil, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.map(\.usedFraction) == [0.4])
         #expect(b.nowRemaining.map { abs($0 - 0.6) < 1e-9 } == true)
 
         let none = [reading(minutesAgo: 10, fraction: nil)]
-        #expect(P.burndown(readings: none, vendorId: .claude, barLabel: "5H", now: now) == nil)
+        #expect(P.burndown(readings: none, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now) == nil)
     }
 
     @Test("other vendors, other labels and elapsed-only rows are ignored")
@@ -160,21 +160,21 @@ struct BurndownPresentationTests {
             reading(label: "WK", minutesAgo: 15, fraction: 0.9),
             reading(minutesAgo: 10, fraction: 0.9, elapsedOnly: true),
         ]
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.map(\.usedFraction) == [0.3])
     }
 
     @Test("a window whose reset has passed is not the current one")
     func expiredWindowIsNil() {
         let readings = [reading(minutesAgo: 30, fraction: 0.4, resetsAt: now.addingTimeInterval(-60))]
-        #expect(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now) == nil)
+        #expect(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now) == nil)
     }
 
     // MARK: - Projection
 
     @Test("burning with enough samples projects from the latest reading to exhaustion or reset")
     func projectionWhenBurning() throws {
-        let b = try #require(P.burndown(readings: burning, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         let projection = try #require(b.projection)
         #expect(projection.count == 2)
         #expect(projection[0].date == now)
@@ -192,7 +192,7 @@ struct BurndownPresentationTests {
             reading(minutesAgo: Double(45 - i * 5), fraction: 0.40 + Double(i) * 0.002,
                     resetsAt: now.addingTimeInterval(1800))
         }
-        let b = try #require(P.burndown(readings: slow, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: slow, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         let projection = try #require(b.projection)
         #expect(projection[1].date == now.addingTimeInterval(1800))
         #expect(projection[1].remainingFraction > 0)
@@ -202,21 +202,21 @@ struct BurndownPresentationTests {
     @Test("no projection when usage is flat")
     func projectionAbsentWhenFlat() throws {
         let flat = (0..<10).map { i in reading(minutesAgo: Double(45 - i * 5), fraction: 0.4) }
-        let b = try #require(P.burndown(readings: flat, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: flat, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.projection == nil)
     }
 
     @Test("no projection from fewer than three samples")
     func projectionAbsentTooFewSamples() throws {
         let two = [reading(minutesAgo: 30, fraction: 0.3), reading(minutesAgo: 0, fraction: 0.5)]
-        let b = try #require(P.burndown(readings: two, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: two, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.projection == nil)
     }
 
     @Test("no projection from samples spanning under ten minutes")
     func projectionAbsentShortSpan() throws {
         let quick = (0..<5).map { i in reading(minutesAgo: Double(8 - i * 2), fraction: 0.3 + Double(i) * 0.05) }
-        let b = try #require(P.burndown(readings: quick, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: quick, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.projection == nil)
     }
 
@@ -229,7 +229,7 @@ struct BurndownPresentationTests {
                 resetsAt: nil, windowLength: nil, elapsedOnly: false
             )
         }
-        let b = try #require(P.burndown(readings: readings, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.ideal == nil)
         #expect(b.projection != nil)
     }
@@ -238,7 +238,7 @@ struct BurndownPresentationTests {
 
     @Test("window range is the vendor's window when known")
     func windowRangeKnown() throws {
-        let b = try #require(P.burndown(readings: burning, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(P.windowRange(for: b) == resets.addingTimeInterval(-length)...resets)
     }
 
@@ -247,11 +247,11 @@ struct BurndownPresentationTests {
         let flat = (0..<4).map { i in
             reading(minutesAgo: Double(30 - i * 10), fraction: 0.4, resetsAt: .some(nil), windowLength: .some(nil))
         }
-        let b = try #require(P.burndown(readings: flat, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: flat, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(P.windowRange(for: b) == now.addingTimeInterval(-1800)...now)
 
         let single = [reading(minutesAgo: 5, fraction: 0.4, resetsAt: .some(nil), windowLength: .some(nil))]
-        let one = try #require(P.burndown(readings: single, vendorId: .claude, barLabel: "5H", now: now))
+        let one = try #require(P.burndown(readings: single, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(P.windowRange(for: one) == nil)
     }
 
@@ -267,25 +267,25 @@ struct BurndownPresentationTests {
             reading(label: "WK", minutesAgo: 30, fraction: 0.55, windowLength: .some(7 * 86_400)),
             reading(.openai, minutesAgo: 30, fraction: 0.9),
         ]
-        let day = P.history(readings: readings, vendorId: .claude, range: .last24Hours, now: now)
+        let day = P.history(readings: readings, instanceID: VendorIdentifier.claude.rawValue, range: .last24Hours, now: now)
         #expect(day.map(\.label) == ["WK", "5H"])
         #expect(day.map { $0.points.count } == [2, 2])
 
-        let week = P.history(readings: readings, vendorId: .claude, range: .last7Days, now: now)
+        let week = P.history(readings: readings, instanceID: VendorIdentifier.claude.rawValue, range: .last7Days, now: now)
         // The 3-day-old reading is separated from today's by a gap.
         let fiveHour: [P.Series] = week.filter { $0.label == "5H" }
         let fiveHourPoints: Int = fiveHour.reduce(0) { $0 + $1.points.count }
         #expect(fiveHourPoints == 3)
         #expect(fiveHour.count == 2)
 
-        #expect(P.history(readings: [], vendorId: .claude, range: .last30Days, now: now).isEmpty)
+        #expect(P.history(readings: [], instanceID: VendorIdentifier.claude.rawValue, range: .last30Days, now: now).isEmpty)
     }
 
     // MARK: - Text
 
     @Test("summary line names remaining, reset and pace")
     func summaryLineFull() throws {
-        let b = try #require(P.burndown(readings: burning, vendorId: .claude, barLabel: "5H", now: now))
+        let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         // 58% used with 60% of the window elapsed: on pace.
         #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · on pace · out in 1h 45m")
     }

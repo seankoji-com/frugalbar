@@ -83,8 +83,8 @@ struct QuotaManagerTests {
             }
         )
         let results = await manager.forceRefresh()
-        #expect(results[.claude]?.status == .unavailable(.badResponse))
-        #expect(results[.gemini]?.status == .measured(.none))
+        #expect(results[VendorIdentifier.claude.rawValue]?.status == .unavailable(.badResponse))
+        #expect(results[VendorIdentifier.gemini.rawValue]?.status == .measured(.none))
     }
 
     @Test("a hanging provider is cut off by the per-provider deadline")
@@ -96,7 +96,7 @@ struct QuotaManagerTests {
             }
         )
         let results = await manager.forceRefresh()
-        #expect(results[.claude]?.status == .unavailable(.timedOut))
+        #expect(results[VendorIdentifier.claude.rawValue]?.status == .unavailable(.timedOut))
     }
 
     @Test("a fresh cache short-circuits: two refresh() calls invoke the factory's providers once")
@@ -205,14 +205,14 @@ struct QuotaManagerTests {
             }
         )
         let first = await manager.forceRefresh()
-        #expect(first[.claude]?.status == .measured(.none))
+        #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.none))
         #expect(counter.value == 1)
 
         // cacheTTL is 0, so refresh()/forceRefresh() would normally re-fetch —
         // but the vendor was just fetched well inside the one-hour poll
         // floor, so it must be served from cache rather than re-hit.
         let second = await manager.forceRefresh()
-        #expect(second[.claude]?.status == .measured(.none))
+        #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.none))
         #expect(counter.value == 1)
     }
 
@@ -229,14 +229,14 @@ struct QuotaManagerTests {
             }
         )
         let first = await manager.forceRefresh()
-        #expect(first[.claude]?.status == .unavailable(.notConfigured))
+        #expect(first[VendorIdentifier.claude.rawValue]?.status == .unavailable(.notConfigured))
         #expect(counter.value == 1)
 
         // notConfigured/credentialRejected are the two reasons a Settings
         // change can fix instantly, so they never sit under the floor — a
         // just-saved API key must be retried on the very next forceRefresh.
         let second = await manager.forceRefresh()
-        #expect(second[.claude]?.status == .unavailable(.notConfigured))
+        #expect(second[VendorIdentifier.claude.rawValue]?.status == .unavailable(.notConfigured))
         #expect(counter.value == 2)
     }
 
@@ -255,7 +255,7 @@ struct QuotaManagerTests {
             }
         )
         let first = await manager.forceRefresh()
-        #expect(first[.claude]?.status == expectedStatus)
+        #expect(first[VendorIdentifier.claude.rawValue]?.status == expectedStatus)
         #expect(counter.value == 1)
 
         // rateLimited is the vendor's own signal to back off — mashing
@@ -265,7 +265,7 @@ struct QuotaManagerTests {
         // stop, and the one case where the vendor itself asked to be left
         // alone.
         let second = await manager.forceRefresh()
-        #expect(second[.claude]?.status == expectedStatus)
+        #expect(second[VendorIdentifier.claude.rawValue]?.status == expectedStatus)
         #expect(counter.value == 1)
     }
 
@@ -296,21 +296,21 @@ struct QuotaManagerTests {
             }
         )
         let first = await manager.forceRefresh()
-        #expect(first[.claude]?.status == .measured(.warning))
+        #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
         #expect(fetchCounter.value == 1)
 
         // Let the floor expire before the vendor starts failing.
         try? await Task.sleep(for: .seconds(0.1))
 
         let second = await manager.forceRefresh()
-        #expect(second[.claude]?.status == .measured(.warning)) // stale reading preserved
+        #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.warning)) // stale reading preserved
         #expect(fetchCounter.value == 2)
 
         // Immediately re-refresh, well within a fresh floor window measured
         // from the failed attempt above. Without re-arming fetchedAt on
         // failure, this would incorrectly re-hit the vendor a third time.
         let third = await manager.forceRefresh()
-        #expect(third[.claude]?.status == .measured(.warning))
+        #expect(third[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
         #expect(fetchCounter.value == 2) // still 2 — the floor re-armed on the failed attempt above
     }
 
@@ -329,9 +329,9 @@ struct QuotaManagerTests {
             }
         )
         let first = await manager.forceRefresh()
-        #expect(first[.claude]?.status == .measured(.warning))
+        #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
 
         let second = await manager.forceRefresh()
-        #expect(second[.claude]?.status == .measured(.warning))
+        #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
     }
 }

@@ -32,8 +32,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(-30)
         let new = now.addingTimeInterval(QuotaWindow.fiveHours)
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old, fraction: 0.9)])],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new, fraction: 0.0)])],
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: old, fraction: 0.9)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: new, fraction: 0.0)])],
             now: now)
         #expect(events == [QuotaResetEvent(vendorId: .claude, displayName: "Claude", barLabel: "5H", resetsAt: new)])
     }
@@ -43,8 +43,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(600)
         let new = now.addingTimeInterval(QuotaWindow.fiveHours)
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
             now: now)
         #expect(events.isEmpty)
     }
@@ -54,8 +54,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(3)
         let new = old.addingTimeInterval(QuotaWindow.fiveHours)
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
             now: now)
         #expect(events.count == 1)
     }
@@ -65,8 +65,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(-5)
         let new = old.addingTimeInterval(QuotaResetDetector.minimumAdvance)
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: old)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: new)])],
             now: now)
         #expect(events.isEmpty)
     }
@@ -74,8 +74,8 @@ struct QuotaResetDetectorTests {
     @Test("a fraction drop without a new reset time is not a reset")
     func fractionDropAloneDoesNotFire() {
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: nil, fraction: 0.9)])],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: nil, fraction: 0.0)])],
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: nil, fraction: 0.9)])],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: nil, fraction: 0.0)])],
             now: now)
         #expect(events.isEmpty)
     }
@@ -87,11 +87,11 @@ struct QuotaResetDetectorTests {
         let before = snapshot(.claude, bars: [bar("5H", resetsAt: old)])
         let after = snapshot(.claude, bars: [bar("5H", resetsAt: new)])
         #expect(QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: old)], measured: false)],
-            current: [.claude: after], now: now).isEmpty)
+            previous: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: old)], measured: false)],
+            current: ["claude": after], now: now).isEmpty)
         #expect(QuotaResetDetector.detect(
-            previous: [.claude: before],
-            current: [.claude: snapshot(.claude, bars: [bar("5H", resetsAt: new)], measured: false)],
+            previous: ["claude": before],
+            current: ["claude": snapshot(.claude, bars: [bar("5H", resetsAt: new)], measured: false)],
             now: now).isEmpty)
     }
 
@@ -100,8 +100,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(-30)
         let new = now.addingTimeInterval(30 * 86_400)
         let events = QuotaResetDetector.detect(
-            previous: [.devpass: snapshot(.devpass, bars: [bar("MO", resetsAt: old, elapsedOnly: true)])],
-            current: [.devpass: snapshot(.devpass, bars: [bar("MO", resetsAt: new, elapsedOnly: true)])],
+            previous: ["devpass": snapshot(.devpass, bars: [bar("MO", resetsAt: old, elapsedOnly: true)])],
+            current: ["devpass": snapshot(.devpass, bars: [bar("MO", resetsAt: new, elapsedOnly: true)])],
             now: now)
         #expect(events.isEmpty)
     }
@@ -111,8 +111,8 @@ struct QuotaResetDetectorTests {
         let past = now.addingTimeInterval(-30)
         let week = now.addingTimeInterval(3 * 86_400)
         let events = QuotaResetDetector.detect(
-            previous: [.claude: snapshot(.claude, bars: [bar("WK", resetsAt: week), bar("5H", resetsAt: past)])],
-            current: [.claude: snapshot(.claude, bars: [bar("WK", resetsAt: week), bar("5H", resetsAt: now.addingTimeInterval(18_000))])],
+            previous: ["claude": snapshot(.claude, bars: [bar("WK", resetsAt: week), bar("5H", resetsAt: past)])],
+            current: ["claude": snapshot(.claude, bars: [bar("WK", resetsAt: week), bar("5H", resetsAt: now.addingTimeInterval(18_000))])],
             now: now)
         #expect(events.map(\.barLabel) == ["5H"])
     }

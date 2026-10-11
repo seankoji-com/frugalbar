@@ -9,6 +9,9 @@ import Foundation
 public struct UsageRestoredEvent: Sendable, Equatable {
     public let vendorId: VendorIdentifier
     public let displayName: String
+    /// The provider instance the window belongs to; `nil` for a single-instance
+    /// vendor. Keeps two workspaces' restores distinct events.
+    public let instanceId: String?
     /// The window that was restored, e.g. "5H" or "WK".
     public let barLabel: String
     public let previousFraction: Double
@@ -25,6 +28,7 @@ public struct UsageRestoredEvent: Sendable, Equatable {
     public init(
         vendorId: VendorIdentifier,
         displayName: String,
+        instanceId: String? = nil,
         barLabel: String,
         previousFraction: Double,
         currentFraction: Double,
@@ -33,6 +37,7 @@ public struct UsageRestoredEvent: Sendable, Equatable {
     ) {
         self.vendorId = vendorId
         self.displayName = displayName
+        self.instanceId = instanceId
         self.barLabel = barLabel
         self.previousFraction = previousFraction
         self.currentFraction = currentFraction
@@ -73,13 +78,13 @@ public enum UsageRestoreDetector {
     private static let tolerance: Double = 1e-9
 
     public static func detect(
-        previous: [VendorIdentifier: QuotaSnapshot],
-        current: [VendorIdentifier: QuotaSnapshot],
+        previous: [String: QuotaSnapshot],
+        current: [String: QuotaSnapshot],
         now: Date
     ) -> [UsageRestoredEvent] {
         var events: [UsageRestoredEvent] = []
-        for (vendorId, currentSnapshot) in current {
-            guard let previousSnapshot = previous[vendorId],
+        for (instanceID, currentSnapshot) in current {
+            guard let previousSnapshot = previous[instanceID],
                   previousSnapshot.status.confidence == .measured,
                   currentSnapshot.status.confidence == .measured
             else { continue }
@@ -109,8 +114,9 @@ public enum UsageRestoreDetector {
                 else { continue }
 
                 events.append(UsageRestoredEvent(
-                    vendorId: vendorId,
+                    vendorId: currentSnapshot.vendorId,
                     displayName: currentSnapshot.displayName,
+                    instanceId: currentSnapshot.instanceIdOrNil,
                     barLabel: bar.label,
                     previousFraction: previousFraction,
                     currentFraction: currentFraction,
@@ -120,7 +126,8 @@ public enum UsageRestoreDetector {
             }
         }
         return events.sorted {
-            ($0.vendorId.rawValue, $0.barLabel) < ($1.vendorId.rawValue, $1.barLabel)
+            ($0.vendorId.rawValue, $0.displayName, $0.barLabel)
+                < ($1.vendorId.rawValue, $1.displayName, $1.barLabel)
         }
     }
 }

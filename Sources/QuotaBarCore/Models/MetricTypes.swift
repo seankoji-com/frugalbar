@@ -416,6 +416,14 @@ public struct SpendWindow: Sendable, Equatable {
 }
 
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
+    /// The provider *instance* this reading belongs to.
+    ///
+    /// Equals `vendorId.rawValue` for every single-instance provider. A vendor
+    /// that serves several independent subscriptions under one account —
+    /// OpenCode Go workspaces — gives each its own stable key, so two instances
+    /// coexist in the cache, in history and in the event log instead of
+    /// overwriting one another. It is never derived from a display name, so a
+    /// rename does not move a reading.
     public let id: String
     public let vendorId: VendorIdentifier
     public let displayName: String
@@ -686,6 +694,24 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .clinepass:     return "ClinePass"
         case .githubRest, .githubGraphql: return "GitHub"
         }
+    }
+
+    /// The title a row or tile shows for this reading.
+    ///
+    /// A named multi-instance provider (an OpenCode Go workspace) shows its own
+    /// name, so two rows under one vendor are tellable apart. Every
+    /// single-instance provider keeps `shortVendorName` byte-for-byte: for them
+    /// `id == vendorId.rawValue`, which is the test below.
+    public var rowTitle: String {
+        id == vendorId.rawValue ? shortVendorName : displayName
+    }
+
+    /// The instance key when this vendor serves more than one instance, else
+    /// `nil`. Event ids fold this in (only when non-nil) so a single-instance
+    /// vendor's ids stay byte-identical to what shipped, while two workspaces
+    /// of one vendor get distinct ids.
+    public var instanceIdOrNil: String? {
+        id == vendorId.rawValue ? nil : id
     }
 
     /// The plan subtitle for a compact row, or "" when we do not know it.

@@ -106,7 +106,7 @@ public struct MetricDetailModalView: View {
             .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
             .padding(Theme.edgeMargin)
         }
-        .task(id: snapshot.vendorId) { await load() }
+        .task(id: snapshot.id) { await load() }
     }
 
     private func load() async {
@@ -430,7 +430,7 @@ public struct MetricDetailModalView: View {
     private var burndownContent: some View {
         if let label = activeBurndownLabel,
            let burndown = BurndownPresentation.burndown(
-               readings: readings, vendorId: snapshot.vendorId, barLabel: label, now: now
+               readings: readings, instanceID: snapshot.id, barLabel: label, now: now
            ) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(BurndownPresentation.summaryLine(for: burndown, now: now))
@@ -464,7 +464,7 @@ public struct MetricDetailModalView: View {
     @ViewBuilder
     private var historyContent: some View {
         let series = BurndownPresentation.history(
-            readings: readings, vendorId: snapshot.vendorId, range: historyRange, now: now
+            readings: readings, instanceID: snapshot.id, range: historyRange, now: now
         )
         if series.isEmpty {
             ChartEmptyState(

@@ -164,6 +164,16 @@ public actor AIEventEngine {
 
     // MARK: - Event builders
 
+    /// The id components for an event: the instance key first when this vendor
+    /// serves more than one instance, so two OpenCode Go workspaces sharing a
+    /// bar label and a published reset second still get distinct ids and neither
+    /// hides the other. A single-instance vendor's list is returned verbatim,
+    /// keeping its on-disk ids byte-identical.
+    private static func idComponents(instanceId: String?, _ base: [String]) -> [String] {
+        guard let instanceId else { return base }
+        return [instanceId] + base
+    }
+
     /// nil when the reset carries no reset time: without it the event has no
     /// identity, and keying it on the poll time would re-announce it.
     static func event(for reset: QuotaResetEvent, now: Date) -> AIEvent? {
@@ -171,7 +181,9 @@ public actor AIEventEngine {
         return AIEvent(
             id: AIEvent.makeID(
                 kind: .usageReset, vendorId: reset.vendorId,
-                components: [reset.barLabel, "\(Int(resetsAt.timeIntervalSince1970))"]),
+                components: Self.idComponents(
+                    instanceId: reset.instanceId,
+                    [reset.barLabel, "\(Int(resetsAt.timeIntervalSince1970))"])),
             kind: .usageReset,
             vendorId: reset.vendorId,
             title: "\(reset.displayName) \(reset.barLabel) window reset",
@@ -191,8 +203,10 @@ public actor AIEventEngine {
             // different figure is a different event.
             id: AIEvent.makeID(
                 kind: .usageRestored, vendorId: restore.vendorId,
-                components: [restore.barLabel, "\(Int(restore.resetsAt.timeIntervalSince1970))",
-                             "\(before)", "\(after)"]),
+                components: Self.idComponents(
+                    instanceId: restore.instanceId,
+                    [restore.barLabel, "\(Int(restore.resetsAt.timeIntervalSince1970))",
+                     "\(before)", "\(after)"])),
             kind: .usageRestored,
             vendorId: restore.vendorId,
             title: "\(restore.displayName) \(restore.barLabel) usage restored",
@@ -212,7 +226,9 @@ public actor AIEventEngine {
             // a second grant (after one was redeemed) from a re-derivation.
             id: AIEvent.makeID(
                 kind: .resetCreditGranted, vendorId: grant.vendorId,
-                components: ["\(grant.previousCount ?? 0)", "\(count)", "\(Int(now.timeIntervalSince1970))"]),
+                components: Self.idComponents(
+                    instanceId: grant.instanceId,
+                    ["\(grant.previousCount ?? 0)", "\(count)", "\(Int(now.timeIntervalSince1970))"])),
             kind: .resetCreditGranted,
             vendorId: grant.vendorId,
             title: "\(grant.displayName) granted a usage reset credit",
