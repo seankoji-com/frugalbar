@@ -124,6 +124,18 @@ also drops them on read. A `.custom` order is the user's list verbatim: no
 band, deadline or exhaustion moves a row. Tests inject
 `displayPreferences:` and never touch the real preference store.
 
+**The poll floor has two clocks, and a forced refresh uses the user's.** A
+`CacheEntry` carries both `fetchedAt` (any fetch) and `lastUserFetchAt` (a
+user-initiated one). An automatic poll is measured from `fetchedAt`; a
+`forceRefresh()` is measured from `lastUserFetchAt`. Measuring both from one
+instant made the ⟳ button dead exactly when it gets pressed: opening the
+popover runs a load, that load's fetch armed the floor, and the ⟳ clicked a
+moment later was served from cache with no request issued — the icon spun and
+every number stayed put. A poll nobody asked for must not swallow the click
+somebody did. Mashing is still bounded, because each forced fetch re-arms the
+user clock. The `notConfigured`/`credentialRejected` exemption survives on
+both paths.
+
 **Credentials never reach user-facing or persisted fields.** Send keys in
 headers, never query strings. Never put `error.localizedDescription` in a
 `QuotaSnapshot` — `URLError`'s description carries the request URL. Map errors

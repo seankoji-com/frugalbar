@@ -10,11 +10,19 @@ public struct CachePolicy: Sendable {
     /// Hard wall-clock ceiling for a single provider's entire fetch, including
     /// credential resolution and any multi-request work.
     public let perProviderTimeout: TimeInterval
-    /// Floor between two real network fetches of the *same* vendor. Unlike
-    /// `cacheTTL`, this is enforced even on the forceRefresh path — a vendor
-    /// fetched more recently than this interval is served its cached
-    /// snapshot instead of being re-hit, so mashing the manual refresh
-    /// button can't hammer a paid provider's API. Zero disables the floor.
+    /// Floor between two real network fetches of the *same* vendor. A vendor
+    /// fetched more recently than this interval is served its cached snapshot
+    /// instead of being re-hit, so refresh cannot hammer a paid provider's API
+    /// faster than the floor allows.
+    ///
+    /// What the floor is measured from depends on who is asking, and that
+    /// distinction is load-bearing. An automatic poll measures from the last
+    /// fetch of any kind; a user-initiated `forceRefresh()` measures from the
+    /// last *user-initiated* fetch. Measuring both from the same instant meant
+    /// an automatic fetch — the 2-minute background tick, or the load the
+    /// popover runs as it opens — armed the floor that then swallowed the
+    /// user's click, so pressing ⟳ within the floor issued no request at all
+    /// and the reading never moved. Zero disables the floor.
     public let minPollInterval: TimeInterval
 
     public static let `default` = CachePolicy(
@@ -24,8 +32,9 @@ public struct CachePolicy: Sendable {
         // ceiling has to clear 2 x URLSession's 4s per-request budget or a slow
         // network cancels them mid-second-call and they report nothing.
         perProviderTimeout: 10,
-        // Guards paid provider APIs from repeated manual "force refresh"
-        // clicks; a vendor fetched within the last 30s is served from cache.
+        // Guards paid provider APIs from repeated "force refresh"
+        // clicks; a vendor the user already refreshed within the last 30s is
+        // served from cache. An automatic poll does not arm this floor.
         minPollInterval: 30
     )
 

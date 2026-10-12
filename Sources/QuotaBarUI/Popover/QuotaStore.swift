@@ -154,8 +154,9 @@ public final class QuotaStore {
     }
 
     /// Re-applies Preferences → Providers: a hidden provider is dropped and a
-    /// newly shown one fetched. Vendors polled inside the poll floor are
-    /// served from cache, so changing a toggle cannot hammer a vendor.
+    /// newly shown one fetched. Vendors the user has already refreshed inside
+    /// the poll floor are served from cache, so repeated toggles cannot hammer
+    /// a vendor.
     ///
     /// If a refresh is already running it was planned against the old
     /// preferences (a provider shown meanwhile was left out of that fetch),

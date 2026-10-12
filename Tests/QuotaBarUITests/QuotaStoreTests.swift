@@ -128,6 +128,29 @@ struct QuotaStoreTests {
         #expect(s.isRefreshing == false)
     }
 
+    /// The reported bug, through the store the popover actually drives. Opening
+    /// the popover runs `load()`; the ⟳ the user presses next used to be
+    /// swallowed by the poll floor that load had just armed, so the click was a
+    /// no-op and the popover kept showing the reading it already had.
+    @Test("a ⟳ right after the popover's own load still re-hits the vendor")
+    func manualRefreshAfterPopoverLoadIsNotSwallowed() async {
+        let hits = Hits()
+        // The running app's policy, floor included. The shared helper passes
+        // minPollInterval: 0, which is exactly the setting that hides this bug.
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 30),
+            providerFactory: { [StubProvider(vendorId: .claude, hits: hits)] })
+        let s = QuotaStore(manager: manager)
+
+        await s.load()            // the popover appears: stale cache, so it fetches
+        #expect(hits.count(.claude) == 1)
+
+        await s.forceRefresh()    // the ⟳ clicked a moment later
+        #expect(hits.count(.claude) == 2)
+    }
+
     @Test("every poll hands the history recorder the visible snapshots")
     func recorderReceivesSnapshots() async {
         let recorded = Recorded()
