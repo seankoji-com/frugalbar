@@ -192,7 +192,7 @@ struct QuotaManagerTests {
         #expect(worst == .critical)
     }
 
-    @Test("minPollInterval throttles a vendor even on forceRefresh, serving its cached snapshot")
+    @Test("a second ⟳ inside the poll floor is served from cache, not re-hit")
     func minPollIntervalThrottlesForceRefresh() async {
         let counter = InvocationCounter()
         let manager = QuotaManager(
@@ -208,12 +208,43 @@ struct QuotaManagerTests {
         #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.none))
         #expect(counter.value == 1)
 
-        // cacheTTL is 0, so refresh()/forceRefresh() would normally re-fetch —
-        // but the vendor was just fetched well inside the one-hour poll
-        // floor, so it must be served from cache rather than re-hit.
+        // cacheTTL is 0, so a forced refresh would normally re-fetch — but the
+        // user already forced one well inside the one-hour floor, so mashing
+        // the button re-serves the cache rather than hammering the vendor.
         let second = await manager.forceRefresh()
         #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.none))
         #expect(counter.value == 1)
+    }
+
+    /// The reported bug. Opening the popover runs a load; the user then presses
+    /// ⟳. That click used to be measured against the *automatic* fetch the
+    /// popover had just made, so it sat inside the floor and issued no request
+    /// at all: the icon spun, the rows redrew byte-identical, and the button
+    /// looked dead. A poll the user did not ask for must not swallow the click
+    /// they did — while a second ⟳ of their own still must.
+    @Test("an automatic poll does not throttle the user's own refresh, but two ⟳ in a row do")
+    func automaticPollDoesNotThrottleAForcedRefresh() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 3600
+            ),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .succeed(.none))]
+            }
+        )
+        _ = await manager.refresh()
+        #expect(counter.value == 1)
+
+        // The user asks. Whatever an automatic poll did a moment ago, this is a
+        // fresh request.
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 2)
+
+        // The user asks again immediately: this is the mashing the floor is for.
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 2)
     }
 
     @Test("minPollInterval does not throttle notConfigured/credentialRejected — a just-fixed key must retry immediately")

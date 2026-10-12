@@ -35,7 +35,22 @@ public actor QuotaManager {
 
     private struct CacheEntry: Sendable {
         let snapshot: QuotaSnapshot
+        /// When this provider was last actually fetched, whoever asked for it.
+        /// This is what the *automatic* poll floor is measured from.
         let fetchedAt: Date
+        /// When this provider was last fetched in response to a user-initiated
+        /// refresh (the ⟳ button, or a Preferences change forcing a pass).
+        /// `nil` until the first one, and what the *forced* poll floor is
+        /// measured from.
+        ///
+        /// Kept separate from `fetchedAt` because the two answer different
+        /// questions. Measuring a forced refresh from `fetchedAt` meant an
+        /// automatic fetch — the 2-minute tick, or the load the popover runs
+        /// the moment it opens — armed the floor that then swallowed the user's
+        /// own click: open the popover, press ⟳ within 30s, and no request was
+        /// issued at all, so the reading never moved and the button looked
+        /// dead. A poll nobody asked for must not be able to do that.
+        let lastUserFetchAt: Date?
     }
 
     /// Designated initialiser. `providerFactory` is injectable so tests can
@@ -273,16 +288,27 @@ public actor QuotaManager {
 
         // Per-vendor poll floor: a vendor fetched more recently than
         // minPollInterval is served its cached snapshot instead of being
-        // re-hit. This applies even on the forceRefresh path (force only
-        // bypasses cacheTTL/lastCompleteFetch, not this per-vendor floor),
-        // so mashing the manual refresh button can't hammer a paid
-        // provider's API faster than the floor allows.
+        // re-hit, so mashing refresh can't hammer a paid provider's API faster
+        // than the floor allows.
+        //
+        // Which instant the floor is measured from depends on who is asking.
+        // An automatic poll measures from `fetchedAt` — the last fetch of any
+        // kind — so the 2-minute tick and the load the popover runs when it
+        // opens cannot re-hit a vendor between them. A *forced* refresh
+        // measures from `lastUserFetchAt` instead: the user pressing ⟳ is not
+        // the poll loop, so an automatic fetch a moment earlier must not turn
+        // the button into a silent no-op. Mashing it is still bounded, because
+        // each forced fetch re-arms `lastUserFetchAt` and the next click inside
+        // the floor is served from cache.
         var providersToFetch: [any QuotaProvider] = []
         var throttledOnForce: [String] = []
         for provider in providers {
             let shouldThrottle: Bool
             if let entry = cache[provider.instanceID] {
-                let withinFloor = startNow.timeIntervalSince(entry.fetchedAt) < minPollInterval
+                let measuredFrom = force ? entry.lastUserFetchAt : entry.fetchedAt
+                let withinFloor = measuredFrom.map {
+                    startNow.timeIntervalSince($0) < minPollInterval
+                } ?? false
                 switch entry.snapshot.status {
                 case .unavailable(.notConfigured), .unavailable(.credentialRejected):
                     // These two are the only reasons a Settings change can
@@ -311,10 +337,13 @@ public actor QuotaManager {
         // A forced refresh that ends up issuing no network request at all
         // looks, to the caller, exactly like a plain cache read — so this is
         // logged rather than left silent, unlike the throttled-but-not-forced
-        // case, which is the poll floor working as designed.
+        // case, which is the poll floor working as designed. Reaching here now
+        // means the user asked twice inside the floor, not that an automatic
+        // poll beat them to it.
         if force, !throttledOnForce.isEmpty {
             NSLog("frugalbar: forceRefresh() served \(throttledOnForce.count) provider(s) from cache " +
-                  "(within minPollInterval=\(minPollInterval)s): \(throttledOnForce)")
+                  "(a refresh was already requested within minPollInterval=\(minPollInterval)s): " +
+                  "\(throttledOnForce)")
         }
         var results: [String: QuotaSnapshot] = [:]
         let cycleLookup = self.cycleLookup
@@ -378,7 +407,18 @@ public actor QuotaManager {
                     to: Self.removingStaleCycleRow(from: retained),
                     cycle: cycleLookup(provider.vendorId), now: now)
             }
-            cache[id] = CacheEntry(snapshot: displaySnapshot, fetchedAt: now)
+            // A provider we attempted re-arms the floors it is supposed to:
+            // `fetchedAt` always (so the automatic floor measures from the
+            // attempt, not the outcome), and `lastUserFetchAt` when this pass
+            // was the user's, so a second ⟳ inside the floor is served from
+            // cache rather than re-hitting the vendor. A provider never
+            // fetched this round is not in this loop at all and keeps both
+            // instants.
+            let previous = cache[id]
+            cache[id] = CacheEntry(
+                snapshot: displaySnapshot,
+                fetchedAt: now,
+                lastUserFetchAt: force ? now : previous?.lastUserFetchAt)
         }
         lastCompleteFetch = now
         return visibleCache()
