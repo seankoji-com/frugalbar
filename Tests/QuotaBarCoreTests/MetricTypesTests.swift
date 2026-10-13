@@ -122,6 +122,40 @@ struct ProviderStatusTests {
         #expect(ProviderStatus.unsupported("a") == ProviderStatus.unsupported("a"))
         #expect(ProviderStatus.unsupported("a") != ProviderStatus.unsupported("b"))
     }
+
+    /// A 429 that carries `Retry-After` is the one unavailable state that can
+    /// say *when*, instead of "will retry" with nothing behind it. A window
+    /// already in the past is no promise about the next poll, so it falls back
+    /// to the unquantified wording.
+    @Test("a rateLimited remedy names the vendor's window only when there is one")
+    func rateLimitedRemedyNamesTheWindow() {
+        #expect(UnavailableReason.rateLimited(retryAfter: nil).remedy
+                == "Vendor throttling — will retry")
+        #expect(UnavailableReason.rateLimited(retryAfter: Date().addingTimeInterval(600)).remedy
+                == "Vendor throttling — retry in 10 min")
+        #expect(UnavailableReason.rateLimited(retryAfter: Date().addingTimeInterval(-60)).remedy
+                == "Vendor throttling — will retry")
+        // A window that is real but tiny still reads as a whole minute rather
+        // than "retry in 0 min".
+        #expect(UnavailableReason.rateLimited(retryAfter: Date().addingTimeInterval(5)).remedy
+                == "Vendor throttling — retry in 1 min")
+    }
+
+    @Test("retryAfterDate honours delta-seconds and ignores everything else")
+    func retryAfterDateParsing() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "2377", now: now)
+                == now.addingTimeInterval(2377))
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: " 30 ", now: now)
+                == now.addingTimeInterval(30))
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: nil, now: now) == nil)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "", now: now) == nil)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "0", now: now) == nil)
+        // An HTTP-date is deliberately not parsed: a clock skew turns it into
+        // an instant in the past or the far future, and this value only ever
+        // gates a retry.
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "Wed, 21 Oct 2026 07:28:00 GMT", now: now) == nil)
+    }
 }
 
 @Suite("Dual-bar never-coerced invariant")

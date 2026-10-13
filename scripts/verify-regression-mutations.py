@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove each scheduler/OAuth regression test rejects its defect, then restore.
+"""Prove each scheduler/OAuth/poll-floor regression test rejects its defect, then restore.
 
 Run only in a clean disposable checkout. Every edit is reverted in a finally
 block, and a passing control run follows every rejected mutation. A compiler
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOGS = ROOT / "coverage" / "mutations"
 SCHEDULER = "Sources/QuotaBarCore/Engine/BackgroundScheduler.swift"
 OAUTH = "Sources/QuotaBarCore/Providers/GeminiOAuthLogin.swift"
+QUOTA_MANAGER = "Sources/QuotaBarCore/Engine/QuotaManager.swift"
 CASES = [
     ("overlap-guard", SCHEDULER, "        guard !isRefreshing else { return }\n",
      "BackgroundSchedulerTests/refreshDoesNotOverlap", "an overlapping refresh is skipped and the next cycle still runs"),
@@ -26,6 +27,11 @@ CASES = [
      "GeminiOAuthCallbackOutcomeTests/stateEncodingIsURLSafe", "OAuth state encoding uses URL-safe alphabet and removes both padding lengths"),
     ("base64-padding", OAUTH, '            .replacingOccurrences(of: "=", with: "")\n',
      "GeminiOAuthCallbackOutcomeTests/stateEncodingIsURLSafe", "OAuth state encoding uses URL-safe alphabet and removes both padding lengths"),
+    # A vendor's 429 asked for a window longer than the poll floor; dropping it
+    # from the floor leaves a throttled vendor re-asked every two minutes.
+    ("vendor-retry-after", QUOTA_MANAGER, " || withinVendorBackoff",
+     "QuotaManagerTests/vendorRetryAfterGatesAutomaticPollOnly",
+     "a vendor's Retry-After gates the automatic poll, not the user's ⟳"),
 ]
 
 
@@ -63,7 +69,7 @@ def main():
         run_test(name, "restored", selector, display)
         print(f"PROVED {name}: baseline passed, mutant assertion failed, restored passed", flush=True)
     subprocess.run(["git", "diff", "--exit-code", "HEAD", "--", "Sources", "Tests"], cwd=ROOT, check=True)
-    print("All six independent mutations rejected; production sources restored.")
+    print(f"All {len(CASES)} independent mutations rejected; production sources restored.")
 
 
 if __name__ == "__main__":

@@ -1208,6 +1208,97 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.notConfigured))
     }
 
+    /// The reported bug. Anthropic throttles its usage endpoint per account
+    /// token, and the CLI Proxy's Claude token sat at 429 for a whole day with
+    /// `Retry-After: 2377` while this Mac's own Claude token answered the same
+    /// endpoint 200. The provider returned the proxy's failure as its own
+    /// answer, so the row read "Rate limited" with no bars all day — one
+    /// credential's failure reported against another.
+    @Test("a proxy-side 429 does not mask a working direct Claude token")
+    func claudeProxyRateLimitFallsThroughToDirectToken() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = ClaudeQuotaProvider(
+            cliProxyConfig: config, directCredential: { "direct-claude-token" })
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"""
+                {"files":[{"provider":"claude","auth_index":"claude_idx","disabled":false}]}
+                """#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                // What the proxy relays for a throttled account: the vendor's
+                // own 429 and its Retry-After, inside the wrapper.
+                return canned(body: #"""
+                {"status_code":429,"header":{"Retry-After":["2377"]},
+                 "body":"{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limited. Please try again later.\"}}"}
+                """#)
+            }
+            // The direct token path. This is the request the fix must reach.
+            #expect(request.url?.host == "api.anthropic.com")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer direct-claude-token")
+            return canned(body: #"""
+            {"five_hour":{"utilization":53.0,"resets_at":"2026-10-13T13:40:00+00:00"},
+             "seven_day":{"utilization":8.0,"resets_at":"2026-10-17T23:00:00+00:00"}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(snap.status == .measured(.none))
+        #expect(snap.cliSource == "Claude OAuth usage endpoint")
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 0.53)
+        #expect(snap.row2?.primaryFraction == 0.08)
+    }
+
+    /// The other half of the same rule: when there is no second credential to
+    /// try, the proxy's own reason is the honest one to report — and it now
+    /// carries the vendor's Retry-After instead of an unquantified "will retry".
+    @Test("a proxy-side 429 with no second credential reports the vendor's Retry-After")
+    func claudeProxyRateLimitWithoutDirectToken() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config, directCredential: { nil })
+        let now = Date()
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"claude_idx"}]}"#)
+            }
+            return canned(body: #"""
+            {"status_code":429,"header":{"Retry-After":["2377"]},"body":"{\"error\":{\"type\":\"rate_limit_error\"}}"}
+            """#)
+        }) {
+            try await provider.fetchSnapshot(now: now)
+        }
+
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(2377))))
+    }
+
+    /// A 429 direct from Anthropic carries the same instruction, and it was
+    /// dropped on this path too — the Claude provider is one of the few that
+    /// reads the header at all.
+    @Test("the direct Claude path keeps the Retry-After from a 429")
+    func claudeDirectRateLimitKeepsRetryAfter() async throws {
+        let provider = ClaudeQuotaProvider(apiKey: "oauth-token")
+        let now = Date()
+
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 429, body: #"{"error":{"type":"rate_limit_error"}}"#, headers: ["Retry-After": "90"])
+        }) {
+            try await provider.fetchSnapshot(now: now)
+        }
+
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(90))))
+    }
+
     @Test("OpenAI queries CLIProxyAPI management endpoints and parses live usage")
     func openaiQueriesCLIProxyManagement() async throws {
         let config = CLIProxyConfig(
@@ -1303,5 +1394,40 @@ struct ProviderHTTPTests {
         }
 
         #expect(snap.status == .unavailable(.notConfigured))
+    }
+
+    /// The same shape as the Claude case above: the local Codex session is a
+    /// separate credential from the proxy's, so one being throttled must not
+    /// blank the row when the other can still be read.
+    @Test("a proxy-side 429 does not mask a working direct Codex token")
+    func openaiProxyRateLimitFallsThroughToDirectToken() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = OpenAIQuotaProvider(
+            cliProxyConfig: config, directCredential: { "direct-codex-token" })
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"codex","auth_index":"codex_idx"}]}"#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                return canned(body: #"""
+                {"status_code":429,"header":{"Retry-After":["120"]},"body":"{\"error\":{\"message\":\"rate limited\"}}"}
+                """#)
+            }
+            #expect(request.url?.host == "chatgpt.com")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer direct-codex-token")
+            return canned(body: #"""
+            {"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":85,"reset_at":1787891551}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(snap.status == .measured(.warning))
+        #expect(snap.row1?.primaryFraction == 0.85)
     }
 }

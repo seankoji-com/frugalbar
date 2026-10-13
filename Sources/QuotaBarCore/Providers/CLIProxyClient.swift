@@ -367,16 +367,56 @@ public enum CLIProxyClient {
     private struct APICallWrapper: Decodable {
         let statusCode: Int
         let body: String
+        /// The upstream response's headers, as the proxy relays them.
+        ///
+        /// Only `Retry-After` is read, and it is enrichment: the status code is
+        /// what says a 429 happened, so a header shape we did not anticipate
+        /// must cost the retry time, never the reason. Decoded leniently for
+        /// exactly that reason.
+        let header: [String: HeaderValues]?
 
         enum CodingKeys: String, CodingKey {
             case statusCode = "status_code"
-            case body
+            case body, header
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            statusCode = try c.decode(Int.self, forKey: .statusCode)
+            body = try c.decode(String.self, forKey: .body)
+            header = try? c.decodeIfPresent([String: HeaderValues].self, forKey: .header)
+        }
+
+        /// The vendor's own backoff instruction, relayed verbatim. Header
+        /// names are case-insensitive, so the lookup is too — the proxy
+        /// reproduces the vendor's own casing, which varies.
+        var retryAfterHeader: String? {
+            header?.first { $0.key.lowercased() == "retry-after" }?.value.values.first
         }
     }
 
-    public static func decodeClaudeUsage(from data: Data) throws -> ClaudeOAuthUsageResponse {
+    /// One relayed header. The proxy serialises its `http.Header` map as arrays
+    /// of values; a plain string is accepted too so a proxy that flattens them
+    /// still yields the value instead of an empty list.
+    private struct HeaderValues: Decodable {
+        let values: [String]
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let list = try? container.decode([String].self) {
+                values = list
+            } else if let single = try? container.decode(String.self) {
+                values = [single]
+            } else {
+                values = []
+            }
+        }
+    }
+
+    public static func decodeClaudeUsage(from data: Data, now: Date = Date()) throws -> ClaudeOAuthUsageResponse {
         if let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) {
-            if let reason = QuotaHTTP.failureReason(for: wrapper.statusCode) {
+            if let reason = QuotaHTTP.failureReason(
+                for: wrapper.statusCode, retryAfter: wrapper.retryAfterHeader, now: now) {
                 throw ProviderError(reason)
             }
             guard let innerData = wrapper.body.data(using: .utf8) else {
@@ -387,14 +427,18 @@ public enum CLIProxyClient {
         return try JSONDecoder().decode(ClaudeOAuthUsageResponse.self, from: data)
     }
 
-    public static func fetchClaudeUsage(config: CLIProxyConfig) async throws -> (ClaudeOAuthUsageResponse, CLIProxyAuthFile) {
+    public static func fetchClaudeUsage(
+        config: CLIProxyConfig, now: Date = Date()
+    ) async throws -> (ClaudeOAuthUsageResponse, CLIProxyAuthFile) {
         let authFilesURL = managementURL(path: "auth-files", base: config.url)
         let (authData, authResponse) = try await QuotaHTTP.get(
             url: authFilesURL,
             headers: ["Accept": "application/json"],
             auth: .bearer(config.managementKey)
         )
-        if let reason = QuotaHTTP.failureReason(for: authResponse.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: authResponse.statusCode,
+            retryAfter: authResponse.value(forHTTPHeaderField: "Retry-After"), now: now) {
             throw ProviderError(reason)
         }
 
@@ -422,17 +466,20 @@ public enum CLIProxyClient {
             headers: ["Content-Type": "application/json"],
             auth: .bearer(config.managementKey)
         )
-        if let reason = QuotaHTTP.failureReason(for: apiCallResponse.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: apiCallResponse.statusCode,
+            retryAfter: apiCallResponse.value(forHTTPHeaderField: "Retry-After"), now: now) {
             throw ProviderError(reason)
         }
 
-        let usage = try decodeClaudeUsage(from: apiCallData)
+        let usage = try decodeClaudeUsage(from: apiCallData, now: now)
         return (usage, claudeAccount)
     }
 
-    public static func decodeCodexUsage(from data: Data) throws -> OpenAIQuotaProvider.Response {
+    public static func decodeCodexUsage(from data: Data, now: Date = Date()) throws -> OpenAIQuotaProvider.Response {
         if let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) {
-            if let reason = QuotaHTTP.failureReason(for: wrapper.statusCode) {
+            if let reason = QuotaHTTP.failureReason(
+                for: wrapper.statusCode, retryAfter: wrapper.retryAfterHeader, now: now) {
                 throw ProviderError(reason)
             }
             guard let innerData = wrapper.body.data(using: .utf8) else {
@@ -443,14 +490,18 @@ public enum CLIProxyClient {
         return try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: data)
     }
 
-    public static func fetchCodexUsage(config: CLIProxyConfig) async throws -> (OpenAIQuotaProvider.Response, CLIProxyAuthFile) {
+    public static func fetchCodexUsage(
+        config: CLIProxyConfig, now: Date = Date()
+    ) async throws -> (OpenAIQuotaProvider.Response, CLIProxyAuthFile) {
         let authFilesURL = managementURL(path: "auth-files", base: config.url)
         let (authData, authResponse) = try await QuotaHTTP.get(
             url: authFilesURL,
             headers: ["Accept": "application/json"],
             auth: .bearer(config.managementKey)
         )
-        if let reason = QuotaHTTP.failureReason(for: authResponse.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: authResponse.statusCode,
+            retryAfter: authResponse.value(forHTTPHeaderField: "Retry-After"), now: now) {
             throw ProviderError(reason)
         }
 
@@ -485,11 +536,13 @@ public enum CLIProxyClient {
             headers: ["Content-Type": "application/json"],
             auth: .bearer(config.managementKey)
         )
-        if let reason = QuotaHTTP.failureReason(for: apiCallResponse.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: apiCallResponse.statusCode,
+            retryAfter: apiCallResponse.value(forHTTPHeaderField: "Retry-After"), now: now) {
             throw ProviderError(reason)
         }
 
-        let usage = try decodeCodexUsage(from: apiCallData)
+        let usage = try decodeCodexUsage(from: apiCallData, now: now)
         return (usage, codexAccount)
     }
 }

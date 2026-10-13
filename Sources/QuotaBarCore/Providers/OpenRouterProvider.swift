@@ -259,9 +259,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
 
     private static func retryAfter(from http: HTTPURLResponse) -> Date? {
-        guard let raw = http.value(forHTTPHeaderField: "Retry-After"),
-              let seconds = TimeInterval(raw) else { return nil }
-        return Date().addingTimeInterval(seconds)
+        QuotaHTTP.retryAfterDate(secondsHeader: http.value(forHTTPHeaderField: "Retry-After"))
     }
 
     // MARK: - Model catalog badges
