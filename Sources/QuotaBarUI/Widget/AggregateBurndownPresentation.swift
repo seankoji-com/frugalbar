@@ -457,8 +457,7 @@ public enum AggregateBurndownPresentation {
             filters: filters
         ) else { return nil }
 
-        let windowReadings = instanceReadings.filter { $0.barLabel == label }
-        let segments = HistoryPresentation.segments(from: windowReadings).map { segment in
+        let segments = HistoryPresentation.segments(from: instanceReadings, barLabel: label).map { segment in
             SeriesSegment(points: segment.points.map { point in
                 let used = min(max(point.fraction, 0), 1)
                 return SeriesPoint(

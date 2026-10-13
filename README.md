@@ -84,7 +84,7 @@ swift run
    - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
    - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
    - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
-   - **OpenCode Go**: Configure a token under Preferences → OpenCode Go. Add a row per subscription workspace and arrange them in the order you want them listed; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The first workspace keeps your existing key and the CLI `auth.json` fallback.
+   - **OpenCode Go**: Configure a token under Preferences → OpenCode Go. Add a row per subscription workspace and arrange them in the order you want them listed; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The original workspace keeps your existing key and the CLI `auth.json` fallback, wherever you move it in the list.
    - **Grok**: Sign in with the Grok CLI (`grok login`); enable CLI discovery and FrugalBar reads `~/.grok/auth.json`.
    - **Kiro**: Sign in with the Kiro CLI or IDE; enable CLI discovery and FrugalBar reads the CLI's own state database.
    - **DevPass**: Paste an `llmgtwy_…` key from the LLM Gateway dashboard.

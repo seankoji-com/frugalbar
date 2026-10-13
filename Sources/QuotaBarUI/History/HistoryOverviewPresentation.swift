@@ -160,7 +160,7 @@ public enum HistoryOverviewPresentation {
             cards.append(Card(
                 subject: subject,
                 barLabel: label,
-                segments: HistoryPresentation.segments(from: window, maxGap: maxGap),
+                segments: HistoryPresentation.segments(from: own, barLabel: label, maxGap: maxGap),
                 latest: latest,
                 lastPoll: lastPoll,
                 sampleCount: window.count

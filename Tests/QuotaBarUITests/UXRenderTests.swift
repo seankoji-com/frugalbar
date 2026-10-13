@@ -353,6 +353,54 @@ struct UXRenderTests {
                 name: name, directory: directory)
         }
 
+        // MARK: Attempt-4 states: provider-level failed polls, blocked readout
+        // Measured polls, an offline poll stored under the provider's own
+        // label, then recovery: every line breaks at the outage, and the
+        // inspector opened during it has no current burndown.
+        let outage = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-outage-\(UUID().uuidString).sqlite"))
+        let offlineClaude = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil), status: .unavailable(.offline),
+            resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        func claudeAt(_ week: Double, _ fiveHour: Double) -> QuotaSnapshot {
+            var s = claude
+            s.row1 = bar("WK", week, length: 7 * 86_400, resetsIn: 3.2 * 86_400)
+            s.row2 = bar("5H", fiveHour, length: 5 * 3600, resetsIn: 2.5 * 3600)
+            return s
+        }
+        for i in 0..<8 {
+            try await outage.record([claudeAt(0.50 + Double(i) * 0.01, 0.20 + Double(i) * 0.03)],
+                                    now: now.addingTimeInterval(-Double(16 - i) * 600))
+        }
+        try await outage.record([offlineClaude], now: now.addingTimeInterval(-7 * 600))
+        let duringOutage = try await outage.fetchReadings(vendor: .claude)
+        var failedPollInspector = MetricDetailModalView(
+            snapshot: claude, readingsLoader: { _, _ in duringOutage },
+            eventsLoader: { _, _, _, _, _ in [] }, onClose: {})
+        failedPollInspector.maxBody = 1_000
+        try await save(failedPollInspector.frame(width: 384, height: 1_000).background(Theme.surface),
+                       name: "inspector-failed-poll", directory: directory)
+        for i in 0..<6 {
+            try await outage.record([claudeAt(0.60 + Double(i) * 0.01, 0.45 + Double(i) * 0.03)],
+                                    now: now.addingTimeInterval(-Double(6 - i) * 600))
+        }
+        let acrossOutage = try await outage.fetchReadings(vendor: .claude)
+        let outageSegments = HistoryPresentation.segments(from: HistoryPresentation.consumptionReadings(acrossOutage))
+        #expect(outageSegments.filter { $0.barLabel == "WK" }.count == 2)
+        try await save(
+            QuotaTimelineChart(segments: outageSegments, timeRange: .last24Hours)
+                .padding(14).frame(width: 760, height: 300).background(Theme.card),
+            name: "history-chart-outage", directory: directory)
+
+        // A blocked reading inspected on the chart: the readout wears the
+        // nosign glyph beside "blocked", while the point keeps its square.
+        let blockedSegments = HistoryPresentation.segments(from: blockedWeekly)
+        try await save(
+            QuotaTimelineChart(segments: blockedSegments, timeRange: .last24Hours)
+                .inspecting(blockedWeekly[3].measuredAt)
+                .padding(14).frame(width: 760, height: 300).background(Theme.card),
+            name: "history-chart-blocked-readout", directory: directory)
+
         // MARK: Settings
         let workspacesKey = OpenCodeGoWorkspaceStore.defaultsKey
         let savedWorkspaces = CredentialStore.preferences.data(forKey: workspacesKey)

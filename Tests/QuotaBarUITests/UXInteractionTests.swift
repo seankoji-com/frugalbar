@@ -16,7 +16,7 @@ import Testing
 // exits with status 0 before the next test runs — a short run that looks like
 // a pass. `FRUGALBAR_INTERACTION` names the one test to run:
 //
-//   for t in settings popover chart; do
+//   for t in settings popover chart inspector; do
 //     FRUGALBAR_RENDER_DIR=$PWD/.build/ui-renders FRUGALBAR_INTERACTION=$t \
 //       swift test -c debug --filter UXInteractionTests
 //   done
@@ -204,6 +204,93 @@ struct UXInteractionTests {
         dismiss(window)
     }
 
+    // MARK: - Inspector: a failed marker read, apart from the events read
+
+    @Test("the inspector's History mode says the reset markers could not be read while its readings and events did",
+          .enabled(if: selectedInteraction == "inspector"))
+    func inspectorMarkersUnreadable() async throws {
+        try #require(AXIsProcessTrusted(), "the test runner needs accessibility permission")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let reset = now.addingTimeInterval(3 * 86_400)
+        func claude(_ used: Double) -> QuotaSnapshot {
+            QuotaSnapshot(
+                id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+                metric: .percentage(usedFraction: used, displayDetails: nil), status: .measured(.none),
+                resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
+                row1: DualBarMetrics(primaryFraction: used, label: "WK", resetsAt: reset, windowLength: 7 * 86_400))
+        }
+        // Readings as production writes them, into a throwaway database.
+        let history = QuotaHistoryStore(
+            databaseURL: directory.appendingPathComponent("ix-inspector-\(UUID().uuidString).sqlite"),
+            isTestHost: true)
+        for i in 0..<6 {
+            try await history.record([claude(0.40 + Double(i) * 0.02)], now: now.addingTimeInterval(-Double(6 - i) * 1_800))
+        }
+        let readings = try await history.fetchReadings(vendor: .claude)
+        let resetEvent = AIEvent(
+            id: AIEvent.makeID(kind: .usageReset, vendorId: .claude, components: ["ix-inspector"]),
+            kind: .usageReset, vendorId: .claude, title: "5-hour window reset", detail: nil,
+            occurredAt: now.addingTimeInterval(-9_000), observedAt: now.addingTimeInterval(-9_000), source: .quotaPoll)
+
+        // A blocked window polled without a percentage, for the second
+        // window below. Every await comes before the first window opens: once
+        // the accessibility client is attached, an await after a dismissal
+        // can land on the stopped run loop and end the process.
+        let blockedHistory = QuotaHistoryStore(
+            databaseURL: directory.appendingPathComponent("ix-inspector-blocked-\(UUID().uuidString).sqlite"),
+            isTestHost: true)
+        let blocked = QuotaSnapshot(
+            id: "opencode", vendorId: .opencode, displayName: "OpenCode Go", category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.critical),
+            resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true,
+                                 resetsAt: reset, windowLength: 7 * 86_400))
+        try await blockedHistory.record([blocked], now: now.addingTimeInterval(-60))
+        let blockedReadings = try await blockedHistory.fetchReadings(vendor: .opencode)
+        // The recent-events read (limited) answers; the marker read (no
+        // limit) fails. Only the second may be called a failure.
+        var inspector = MetricDetailModalView(
+            snapshot: claude(0.50), readingsLoader: { _, _ in readings },
+            eventsLoader: { _, _, _, _, limit in limit == nil ? nil : [resetEvent] }, onClose: {})
+        inspector.maxBody = 1_000
+        let (window, host) = try present(inspector.frame(width: 384, height: 1_000).background(Theme.surface))
+        spinMainRunLoop(seconds: 0.5)
+
+        let markerNote: (String) -> Bool = { $0.hasPrefix("Reset markers could not be read") }
+        #expect(axFindText(markerNote) == false, "the burndown mode draws no markers, so it does not mention them")
+        #expect(axPress { $0 == "History" }, "the chart's History segment is pressable")
+        #expect(axFindText(markerNote), "the History chart says its reset markers could not be read")
+        #expect(axFindText { $0 == "Could not read recorded events for this provider." } == false,
+                "the events card read fine and must not claim a failure")
+        #expect(axFindText { $0.hasPrefix("Could not read the recorded history") } == false,
+                "the readings read fine and must not claim a failure")
+        print("UX-INTERACTION inspector History mode marker note shown: \(axFindText(markerNote))")
+        try save(host, name: "interaction-inspector-markers-unreadable")
+        dismiss(window)
+
+        // Both chart modes say the blocked window was polled, and neither
+        // says there are no readings.
+        var blockedInspector = MetricDetailModalView(
+            snapshot: blocked, readingsLoader: { _, _ in blockedReadings },
+            eventsLoader: { _, _, _, _, _ in [] }, onClose: {})
+        blockedInspector.maxBody = 1_000
+        let (blockedWindow, blockedHost) = try present(
+            blockedInspector.frame(width: 384, height: 1_000).background(Theme.surface))
+        spinMainRunLoop(seconds: 0.5)
+        let noReadings: (String) -> Bool = { $0.hasPrefix("No readings") }
+        #expect(axFindText { $0.hasPrefix("The vendor blocked WK and published no figure") },
+                "the burndown says the window was blocked without a figure")
+        #expect(axFindText(noReadings) == false)
+        try save(blockedHost, name: "interaction-inspector-blocked-burndown-absence")
+        #expect(axPress { $0 == "History" })
+        #expect(axFindText { $0.hasPrefix("Polled once in this range, but no poll reported a usage figure") },
+                "the history chart says it was polled without a figure")
+        #expect(axFindText(noReadings) == false)
+        try save(blockedHost, name: "interaction-inspector-blocked-history-absence")
+        dismiss(blockedWindow)
+    }
+
     // MARK: - Accessibility client
 
     /// Runs `work` against this process's accessibility tree. In-process,
@@ -219,6 +306,30 @@ struct UXInteractionTests {
 
     private func axFind(_ match: (String) -> Bool) -> Bool {
         withAXClient { app in Self.element(in: app, where: match) != nil }
+    }
+
+    /// As `axFind`, but also matching a static text's value, which is where
+    /// a `Text` or `Label` puts its words.
+    private func axFindText(_ match: (String) -> Bool) -> Bool {
+        withAXClient { app in
+            var queue = [app]
+            var visited = 0
+            while !queue.isEmpty, visited < 5_000 {
+                let element = queue.removeFirst()
+                visited += 1
+                for attribute in [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute] {
+                    var value: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                       let text = value as? String, match(text) {
+                        return true
+                    }
+                }
+                var children: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+                queue += (children as? [AXUIElement]) ?? []
+            }
+            return false
+        }
     }
 
     private func axPress(_ label: String) -> Bool {

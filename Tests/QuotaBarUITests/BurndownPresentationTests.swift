@@ -154,11 +154,13 @@ struct BurndownPresentationTests {
 
     @Test("other vendors, other labels and elapsed-only rows are ignored")
     func filtersVendorLabelElapsed() throws {
+        // One poll writes every window at the same instant, as
+        // `QuotaHistoryStore.record` does; the other vendor polls on its own.
         let readings = [
             reading(minutesAgo: 20, fraction: 0.3),
             reading(.openai, minutesAgo: 15, fraction: 0.9),
-            reading(label: "WK", minutesAgo: 15, fraction: 0.9),
-            reading(minutesAgo: 10, fraction: 0.9, elapsedOnly: true),
+            reading(label: "WK", minutesAgo: 20, fraction: 0.9),
+            reading(label: "CYCLE", minutesAgo: 20, fraction: 0.9, elapsedOnly: true),
         ]
         let b = try #require(P.burndown(readings: readings, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         #expect(b.actual.map(\.usedFraction) == [0.3])

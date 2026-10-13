@@ -119,6 +119,12 @@ public actor QuotaHistoryStore {
         #endif
     }
 
+    /// The label of the one row a poll writes when its snapshot carries no
+    /// window: a read that failed, or an answer with no usage in it. It is the
+    /// provider's poll, not any window's, so it speaks for every window of the
+    /// same instance at that instant.
+    public static let providerPollLabel = "DEFAULT"
+
     /// Records a snapshot batch and prunes readings older than `retentionInterval`.
     public func record(_ snapshots: [QuotaSnapshot], now: Date = Date()) async throws {
         try await ensureOpen()
@@ -151,7 +157,7 @@ public actor QuotaHistoryStore {
             if bars.isEmpty {
                 preparedRows.append(RowToWrite(
                     vendor: key,
-                    barLabel: "DEFAULT",
+                    barLabel: Self.providerPollLabel,
                     measuredAt: timestamp,
                     fraction: nil,
                     isBlocked: false,

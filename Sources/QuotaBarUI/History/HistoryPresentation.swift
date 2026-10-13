@@ -147,19 +147,56 @@ public enum HistoryPresentation {
     /// that stream as one broke the line at every poll — each window's reading
     /// "mismatched" the previous one — so the History chart drew a scatter of
     /// lone points instead of lines.
+    ///
+    /// A poll that returned no window at all is recorded once, under
+    /// `QuotaHistoryStore.providerPollLabel`, not under each window, so it
+    /// breaks every window of its instance. Splitting by window first left it
+    /// in a group of its own, and a line ran straight across the outage.
+    /// Pass every label an instance recorded and name the window in
+    /// `barLabel`, rather than filtering to the window first, which drops the
+    /// failed polls with the other labels.
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String? = nil,
         maxGap: TimeInterval = 7200
     ) -> [TimelineSegment] {
         let sorted = readings.sorted { $0.measuredAt < $1.measuredAt }
         var keys: [String] = []
         var windows: [String: [QuotaHistoryStore.ReadingRecord]] = [:]
+        var providerPolls: [String: [QuotaHistoryStore.ReadingRecord]] = [:]
         for record in sorted {
+            if record.barLabel == QuotaHistoryStore.providerPollLabel {
+                providerPolls[record.vendor, default: []].append(record)
+                continue
+            }
+            if let barLabel, record.barLabel != barLabel { continue }
             let key = record.vendor + "|" + record.barLabel
             if windows[key] == nil { keys.append(key) }
             windows[key, default: []].append(record)
         }
-        return keys.flatMap { segments(ofOneWindow: windows[$0] ?? [], maxGap: maxGap) }
+        return keys.flatMap { key -> [TimelineSegment] in
+            let window = windows[key] ?? []
+            // A provider poll carries no fraction, so it ends the segment
+            // like any reading that could not be charted.
+            let polls = window.first.flatMap { providerPolls[$0.vendor] } ?? []
+            let merged = (window + polls).sorted { $0.measuredAt < $1.measuredAt }
+            return segments(ofOneWindow: merged, maxGap: maxGap)
+        }
+    }
+
+    /// `barLabel`'s reading from the instance's newest poll, or nil when that
+    /// poll did not report the window: it failed (and was recorded under
+    /// `QuotaHistoryStore.providerPollLabel`), or answered without it.
+    ///
+    /// `readings` is one instance's every label. Anything that presents a
+    /// window as it stands now reads it through this, so a figure from
+    /// before a failed poll is never shown as current.
+    public static func readingAtLatestPoll(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String
+    ) -> QuotaHistoryStore.ReadingRecord? {
+        guard let lastPoll = readings.map(\.measuredAt).max() else { return nil }
+        return readings.first { $0.barLabel == barLabel && $0.measuredAt == lastPoll }
     }
 
     /// One instance's one window, oldest first.
@@ -254,9 +291,7 @@ public enum HistoryPresentation {
         barLabel: String?
     ) -> QuotaHistoryStore.ReadingRecord? {
         guard let barLabel,
-              let lastPoll = readings.map(\.measuredAt).max(),
-              let latest = readings.filter({ $0.barLabel == barLabel }).max(by: { $0.measuredAt < $1.measuredAt }),
-              latest.measuredAt >= lastPoll,
+              let latest = readingAtLatestPoll(readings: readings, barLabel: barLabel),
               latest.fraction != nil, latest.resetsAt != nil
         else { return nil }
         return latest

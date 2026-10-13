@@ -522,15 +522,17 @@ public struct MetricDetailModalView: View {
                         .minimumScaleFactor(0.8)
                 }
             }
-        } else if burndownLabels.isEmpty {
+        } else if let label = activeBurndownLabel {
+            let absence = BurndownPresentation.burndownAbsence(
+                readings: readings, instanceID: snapshot.id, barLabel: label, now: now)
             ChartEmptyState(
-                symbol: "chart.line.downtrend.xyaxis",
-                message: "No consumable window, so there is no burndown to draw"
+                symbol: absence.symbol ?? "chart.line.downtrend.xyaxis",
+                message: absence.message
             )
         } else {
             ChartEmptyState(
                 symbol: "chart.line.downtrend.xyaxis",
-                message: "No readings yet — history accumulates as FrugalBar polls"
+                message: "No consumable window, so there is no burndown to draw"
             )
         }
     }
@@ -541,9 +543,11 @@ public struct MetricDetailModalView: View {
             readings: readings, instanceID: snapshot.id, range: historyRange, now: now
         )
         if series.isEmpty {
+            let absence = BurndownPresentation.historyAbsence(
+                readings: readings, instanceID: snapshot.id, range: historyRange, now: now)
             ChartEmptyState(
-                symbol: "chart.line.uptrend.xyaxis",
-                message: "No readings yet — history accumulates as FrugalBar polls"
+                symbol: absence.symbol ?? "chart.line.uptrend.xyaxis",
+                message: absence.message
             )
         } else {
             VStack(alignment: .leading, spacing: 4) {

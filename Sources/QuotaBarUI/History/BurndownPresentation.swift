@@ -119,26 +119,31 @@ public enum BurndownPresentation {
     /// "Current" is the last unbroken segment under
     /// `HistoryPresentation.segments` semantics — consumption readings only,
     /// broken on a changed reset time, an expired window, a reset-sized drop
-    /// or a long gap. Returns nil when that window has no reading with a
-    /// fraction, or when the vendor's own reset time for it has already
-    /// passed (the readings describe a window that is over).
+    /// or a long gap. Returns nil when the instance's newest poll did not
+    /// report a fraction for that window, or when the vendor's own reset
+    /// time for it has already passed (the readings describe a window that
+    /// is over). `burndownAbsence` says which.
     public static func burndown(
         readings: [QuotaHistoryStore.ReadingRecord],
         instanceID: String,
         barLabel: String,
         now: Date
     ) -> Burndown? {
-        let records = HistoryPresentation.consumptionReadings(readings)
-            .filter { $0.vendor == instanceID && $0.barLabel == barLabel && $0.measuredAt <= now }
+        let instance = readings.filter { $0.vendor == instanceID && $0.measuredAt <= now }
+        let consumption = HistoryPresentation.consumptionReadings(instance)
+        let records = consumption
+            .filter { $0.barLabel == barLabel }
             .sorted { $0.measuredAt < $1.measuredAt }
 
-        // The newest record must itself carry a fraction. Reaching back past
-        // a trailing nil to an older reading would present stale headroom as
-        // current, and project from it — the one thing a chart titled "now"
-        // must never do.
-        guard let segment = HistoryPresentation.segments(from: records).last,
-              let latest = records.last,
+        // The newest poll, of any label, must itself carry this window's
+        // fraction. Reaching back past a trailing nil, or past a failed poll
+        // recorded under the provider's own label, to an older reading would
+        // present stale headroom as current and project from it — the one
+        // thing a chart titled "now" must never do.
+        guard let latest = HistoryPresentation.readingAtLatestPoll(readings: instance, barLabel: barLabel),
+              !latest.elapsedOnly,
               let latestFraction = latest.fraction,
+              let segment = HistoryPresentation.segments(from: consumption, barLabel: barLabel).last,
               segment.points.last?.timestamp == latest.measuredAt
         else { return nil }
         if let resetsAt = latest.resetsAt, resetsAt <= now { return nil }
@@ -161,9 +166,12 @@ public enum BurndownPresentation {
 
         // No projection from a blocked window: "out in 30m" beside a window
         // the vendor has already stopped reads as headroom left to burn.
+        // The pace is taken from the drawn stretch only, so a projection is
+        // never extrapolated from readings on the far side of an outage.
         var projection: [LinePoint]?
+        let stretchStart = segment.points.first?.timestamp ?? latest.measuredAt
         if !latest.isBlocked, let forecast = BurnRateForecast.compute(
-            instanceID: instanceID, barLabel: barLabel, readings: records,
+            instanceID: instanceID, barLabel: barLabel, readings: records.filter { $0.measuredAt >= stretchStart },
             resetsAt: latest.resetsAt, now: now
         ), forecast.fractionPerHour > 0 {
             let origin = LinePoint(date: latest.measuredAt, remainingFraction: nowRemaining)
@@ -221,7 +229,7 @@ public enum BurndownPresentation {
                 && (start.map { record.measuredAt >= $0 } ?? true)
         }
         return labelsLongestFirst(records).flatMap { label in
-            HistoryPresentation.segments(from: records.filter { $0.barLabel == label }).map { segment in
+            HistoryPresentation.segments(from: records, barLabel: label).map { segment in
                 Series(label: label, points: segment.points.map {
                     Point(timestamp: $0.timestamp, usedFraction: $0.fraction, isBlocked: $0.isBlocked, urgency: $0.urgency)
                 })
@@ -237,6 +245,99 @@ public enum BurndownPresentation {
             lengths[record.barLabel] = max(lengths[record.barLabel] ?? -1, record.windowLength ?? -1)
         }
         return lengths.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.map(\.key)
+    }
+
+    // MARK: - Absence
+
+    /// Why an inspector chart has nothing to draw. Each case is something the
+    /// history recorded, so the chart can say why it is empty instead of
+    /// calling every absence "no readings yet": a failed poll or a window
+    /// that was polled without a figure is not an empty history.
+    public enum Absence: Sendable, Equatable {
+        /// Nothing recorded for this instance at all.
+        case noReadings
+        /// Readings exist, but none inside the chosen range.
+        case noneInRange
+        /// The newest poll could not be read.
+        case lastPollFailed
+        /// The newest poll answered without a figure for `label`.
+        /// `isBlocked` when the vendor reported the window blocked.
+        case noFigureAtLastPoll(label: String, isBlocked: Bool)
+        /// The vendor's reset for `label` passed after its newest reading.
+        case windowExpired(label: String)
+        /// `pollCount` polls in range, none with a figure to chart.
+        case polledWithoutFigures(pollCount: Int, lastPollFailed: Bool)
+
+        public var message: String {
+            switch self {
+            case .noReadings:
+                return "No readings yet — history accumulates as FrugalBar polls"
+            case .noneInRange:
+                return "No readings in this range. A longer range shows the earlier ones."
+            case .lastPollFailed:
+                return "The last poll could not be read, so there is no current burndown. Earlier readings are under History."
+            case .noFigureAtLastPoll(let label, true):
+                return "The vendor blocked \(label) and published no figure for it at the last poll, so there is no burndown to draw."
+            case .noFigureAtLastPoll(let label, false):
+                return "The last poll reported no figure for \(label), so there is no current burndown."
+            case .windowExpired(let label):
+                return "\(label) reset after its last reading. Nothing has been recorded for the new window yet."
+            case .polledWithoutFigures(let count, let lastPollFailed):
+                let polls = count == 1 ? "Polled once" : "Polled \(count) times"
+                return "\(polls) in this range, but no poll reported a usage figure to chart."
+                    + (lastPollFailed ? " The last poll could not be read." : "")
+            }
+        }
+
+        /// A failure wears the warning triangle and a blocked window the
+        /// shared nosign glyph; nil leaves the chart's own symbol.
+        public var symbol: String? {
+            switch self {
+            case .lastPollFailed, .polledWithoutFigures(_, true): "exclamationmark.triangle"
+            case .noFigureAtLastPoll(_, true): BlockedGlyph.symbolName
+            default: nil
+            }
+        }
+    }
+
+    /// Why `burndown(readings:instanceID:barLabel:now:)` returned nil.
+    public static func burndownAbsence(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        instanceID: String,
+        barLabel: String,
+        now: Date
+    ) -> Absence {
+        let instance = readings.filter { $0.vendor == instanceID && $0.measuredAt <= now }
+        guard let lastPoll = instance.map(\.measuredAt).max() else { return .noReadings }
+        guard let latest = HistoryPresentation.readingAtLatestPoll(readings: instance, barLabel: barLabel) else {
+            // The newest poll did not mention the window. Every row of it
+            // unread means the read failed; otherwise it answered without it.
+            let failed = instance.allSatisfy { $0.measuredAt != lastPoll || $0.confidence != .measured }
+            return failed ? .lastPollFailed : .noFigureAtLastPoll(label: barLabel, isBlocked: false)
+        }
+        if latest.fraction == nil {
+            return latest.confidence == .measured || latest.isBlocked
+                ? .noFigureAtLastPoll(label: barLabel, isBlocked: latest.isBlocked)
+                : .lastPollFailed
+        }
+        if let resetsAt = latest.resetsAt, resetsAt <= now { return .windowExpired(label: barLabel) }
+        return .noFigureAtLastPoll(label: barLabel, isBlocked: latest.isBlocked)
+    }
+
+    /// Why `history(readings:instanceID:range:now:)` returned no series.
+    public static func historyAbsence(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        instanceID: String,
+        range: HistoryPresentation.TimeRange,
+        now: Date
+    ) -> Absence {
+        let instance = readings.filter { $0.vendor == instanceID && $0.measuredAt <= now }
+        guard !instance.isEmpty else { return .noReadings }
+        let start = range.startDate(from: now)
+        let inRange = instance.filter { record in start.map { record.measuredAt >= $0 } ?? true }
+        guard let lastPoll = inRange.map(\.measuredAt).max() else { return .noneInRange }
+        let failed = inRange.allSatisfy { $0.measuredAt != lastPoll || $0.confidence != .measured }
+        return .polledWithoutFigures(pollCount: Set(inRange.map(\.measuredAt)).count, lastPollFailed: failed)
     }
 
     // MARK: - Inspection

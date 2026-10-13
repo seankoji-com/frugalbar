@@ -49,7 +49,7 @@ struct ReadingReadout: View {
                 .foregroundStyle(Theme.onSurface)
             ForEach(poll.rows, id: \.barLabel) { row in
                 HStack(spacing: 4) {
-                    Image(systemName: Self.symbol(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
+                    Image(systemName: Self.figureSymbol(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Self.color(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
                     Text("\(row.barLabel) \(Self.exactPercentText(row.point.fraction)) used\(row.point.isBlocked ? ", blocked" : "")")
@@ -108,6 +108,14 @@ struct ReadingReadout: View {
         if urgency == .critical { return "triangle.fill" }
         if urgency == .warning { return "diamond.fill" }
         return "circle.fill"
+    }
+
+    /// The symbol beside a figure written out in words. A blocked figure
+    /// wears the shared nosign glyph, as it does everywhere a blocked figure
+    /// is drawn; the chart's square is a point shape, not a word anyone reads
+    /// as "blocked".
+    nonisolated static func figureSymbol(isBlocked: Bool, urgency: Urgency) -> String {
+        isBlocked ? BlockedGlyph.symbolName : symbol(isBlocked: false, urgency: urgency)
     }
 
     static func color(isBlocked: Bool, urgency: Urgency) -> Color {
