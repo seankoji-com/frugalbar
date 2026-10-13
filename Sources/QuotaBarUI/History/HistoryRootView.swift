@@ -18,10 +18,18 @@ public struct HistoryRootView: View {
     @State private var overviewCards: [HistoryOverviewPresentation.Card] = []
     @State private var overviewEmpty: [HistoryOverviewPresentation.Subject] = []
     @State private var overviewFailed = false
-    @State private var overviewKey: OverviewKey?
+    /// Set once the strip has been read at least once, so a reload keeps the
+    /// cards on screen instead of flashing "Reading…".
+    @State private var overviewLoaded = false
     /// Bumped when Preferences changes which providers show, or the
     /// workspace order, so the strip and picker follow without a reopen.
     @State private var preferencesSerial = 0
+    /// Bumped when a poll records new readings, and by the reload button, so
+    /// the page follows the data instead of only the controls.
+    @State private var dataSerial = 0
+    @State private var lastReloadKey: ReloadKey?
+    /// How far local-activity ingestion has got, read before the records.
+    @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
@@ -47,20 +55,26 @@ public struct HistoryRootView: View {
     private let sampleStore: QuotaHistoryStore
     private let tabRequest: HistoryTabRequest?
     private let subjectSource: @MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String])
+    private let activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
-    /// - Parameter subjectSource: the providers to offer and the hidden ones
-    ///   to name. Defaults to the user's preferences; a test passes a fixture
-    ///   so a render never depends on the shared preference file.
+    /// - Parameters:
+    ///   - subjectSource: the providers to offer and the hidden ones to name.
+    ///     Defaults to the user's preferences; a test passes a fixture so a
+    ///     render never depends on the shared preference file.
+    ///   - activityStatus: this process's local-activity ingestion status.
+    ///     Without it the breakdown never claims to be complete.
     public init(
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
         initialTab: HistoryTab = .timeline,
         tabRequest: HistoryTabRequest? = nil,
-        subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil
+        subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil,
+        activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
         self.tabRequest = tabRequest
+        self.activityStatus = activityStatus
         self.subjectSource = subjectSource ?? {
             let prefs = CredentialStore.providerDisplayPreferences
             return (
@@ -90,19 +104,19 @@ public struct HistoryRootView: View {
         let subject: String?
         let sampleMode: Bool
         let preferencesSerial: Int
-    }
+        let dataSerial: Int
 
-    /// What the overview strip depends on. Selecting another card does not
-    /// change it, so it is not re-read on every click.
-    private struct OverviewKey: Hashable {
-        let range: HistoryPresentation.TimeRange
-        let sampleMode: Bool
-        let subjects: [HistoryOverviewPresentation.Subject]
+        /// Only new data arrived: reload in place, without the loading state.
+        func isDataRefresh(of previous: ReloadKey?) -> Bool {
+            guard let previous else { return false }
+            return range == previous.range && subject == previous.subject && sampleMode == previous.sampleMode
+                && preferencesSerial == previous.preferencesSerial && dataSerial != previous.dataSerial
+        }
     }
 
     private var reloadKey: ReloadKey {
         ReloadKey(range: timeRange, subject: selectedSubjectID, sampleMode: isSampleMode,
-                  preferencesSerial: preferencesSerial)
+                  preferencesSerial: preferencesSerial, dataSerial: dataSerial)
     }
 
     public var body: some View {
@@ -152,6 +166,9 @@ public struct HistoryRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in
             preferencesSerial += 1
         }
+        .onReceive(NotificationCenter.default.publisher(for: .frugalbarHistoryDidRecord)) { _ in
+            dataSerial += 1
+        }
     }
 
     // MARK: - Header Bar
@@ -181,6 +198,18 @@ public struct HistoryRootView: View {
                 }
 
                 Spacer()
+
+                Button {
+                    dataSerial += 1
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedTab != .timeline)
+                .accessibilityLabel("Reload history")
+                .help("Read the history again. It also reloads whenever a poll records new readings.")
 
                 Picker("View", selection: $selectedTab) {
                     ForEach(HistoryTab.allCases) { tab in
@@ -416,7 +445,7 @@ public struct HistoryRootView: View {
             }
 
             if !isLoading, loadError == nil, !segments.isEmpty {
-                Text("Hover the chart to read an exact reading and when it was taken.")
+                Text("Hover the chart, or click it and use the arrow keys, to read an exact reading and when it was taken.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.outline)
                     .accessibilityHidden(true)
@@ -449,65 +478,55 @@ public struct HistoryRootView: View {
     private var attributionCard: some View {
         if AttributionEngine.localSourceIdentifiers(for: selectedSubject?.vendor ?? .claude).isEmpty {
             noLocalTelemetryCard
-        } else if let attribution, !attribution.projectAttributions.isEmpty {
+        } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Project Activity Breakdown")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Theme.onSurface)
-                        Text(attributionSubtitle(attribution))
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                        if let attribution {
+                            Text(attributionSubtitle(attribution))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                        }
                     }
 
                     Spacer()
 
-                    Text(formatTokenCount(attribution.totalObservedTokens) + " observed tokens")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.primary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Theme.primary.opacity(0.12))
-                        .clipShape(Capsule())
-                }
-
-                VStack(spacing: 8) {
-                    ForEach(attribution.projectAttributions) { project in
-                        VStack(spacing: 4) {
-                            HStack {
-                                Text(project.displayName)
-                                    .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(Theme.onSurface)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-
-                                Spacer()
-
-                                Text("\(formatTokenCount(project.tokenCount)) (\(Int(round(project.tokenShare * 100)))%)")
-                                    .font(.system(size: 11))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Theme.onSurfaceVariant)
-                            }
-
-                            GeometryReader { proxy in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Theme.surfaceContainerHigh)
-                                    Capsule()
-                                        .fill(Theme.primary)
-                                        .frame(width: max(0, proxy.size.width * CGFloat(min(1.0, max(0.0, project.tokenShare)))))
-                                }
-                            }
-                            .frame(height: 5)
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(project.displayName), \(formatTokenCount(project.tokenCount)) tokens, \(Int(round(project.tokenShare * 100))) percent of observed tokens, \(project.sessionCount) sessions")
+                    if let attribution, !attribution.projectAttributions.isEmpty {
+                        Text(formatTokenCount(attribution.totalObservedTokens) + " observed tokens")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.primary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Theme.primary.opacity(0.12))
+                            .clipShape(Capsule())
                     }
                 }
 
-                caveatList(attribution.caveats)
+                if let subject = selectedSubject,
+                   let scope = HistoryPresentation.activityScopeNote(vendor: subject.vendor, subjectName: subject.name) {
+                    activityNote(symbol: "person.2", text: scope)
+                }
+
+                if let attribution, !attribution.projectAttributions.isEmpty {
+                    if let note = HistoryPresentation.activityProgressNote(activityProgress) {
+                        activityNote(symbol: activityProgress == .indexing ? "hourglass" : "exclamationmark.triangle",
+                                     text: note)
+                    }
+                    projectBars(attribution)
+                    caveatList(attribution.caveats)
+                } else {
+                    activityNote(
+                        symbol: activityProgress == .complete ? "tray" : "hourglass",
+                        text: HistoryPresentation.activityEmptyMessage(
+                            activityProgress,
+                            vendorName: selectedSubject?.vendor.displayName ?? "",
+                            recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0))
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -516,6 +535,55 @@ public struct HistoryRootView: View {
                     .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
             )
         }
+    }
+
+    private func projectBars(_ attribution: AttributionSummary) -> some View {
+        VStack(spacing: 8) {
+            ForEach(attribution.projectAttributions) { project in
+                VStack(spacing: 4) {
+                    HStack {
+                        Text(project.displayName)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(Theme.onSurface)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        Spacer()
+
+                        Text("\(formatTokenCount(project.tokenCount)) (\(Int(round(project.tokenShare * 100)))%)")
+                            .font(.system(size: 11))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                    }
+
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Theme.surfaceContainerHigh)
+                            Capsule()
+                                .fill(Theme.primary)
+                                .frame(width: max(0, proxy.size.width * CGFloat(min(1.0, max(0.0, project.tokenShare)))))
+                        }
+                    }
+                    .frame(height: 5)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(project.displayName), \(formatTokenCount(project.tokenCount)) tokens, \(Int(round(project.tokenShare * 100))) percent of observed tokens, \(project.sessionCount) sessions")
+            }
+        }
+    }
+
+    private func activityNote(symbol: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.onSurfaceVariant)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// Shown for a vendor with no local activity adapter. Rendering another
@@ -654,7 +722,7 @@ public struct HistoryRootView: View {
                 overviewNote(
                     symbol: "exclamationmark.triangle",
                     text: "The overview could not be read. This is a failure to read, not an absence of data.")
-            } else if overviewKey == nil {
+            } else if !overviewLoaded {
                 overviewNote(symbol: "hourglass", text: "Reading recorded history…")
             } else if overviewCards.isEmpty {
                 overviewNote(
@@ -713,7 +781,11 @@ public struct HistoryRootView: View {
     // MARK: - Data Reload
 
     private func reloadData() async {
-        isLoading = true
+        let key = reloadKey
+        // New readings reload in place; anything the user changed shows the
+        // loading state, so a stale chart is never mistaken for the new pick.
+        if !key.isDataRefresh(of: lastReloadKey) { isLoading = true }
+        lastReloadKey = key
         defer { isLoading = false }
 
         loadError = nil
@@ -793,6 +865,12 @@ public struct HistoryRootView: View {
             // the selected vendor. Showing Codex and OpenCode tokens beneath a
             // "Claude" heading asserted an attribution nothing measured.
             let sources = AttributionEngine.localSourceIdentifiers(for: subject.vendor)
+            // The status first: records read before it could be from a pass
+            // that finished after it, and would then be vouched for wrongly.
+            // The sample fixture is written whole before it is read.
+            activityProgress = isSampleMode
+                ? .complete
+                : TokenUsagePresentation.IngestionProgress(await activityStatus?())
             let allActivities = try await activeStore.fetchActivities(since: since, until: now)
             let activities = allActivities.filter { sources.contains($0.source) }
 
@@ -822,21 +900,23 @@ public struct HistoryRootView: View {
         }
     }
 
-    /// Re-reads the strip only when its range, data source or subjects
-    /// changed, through the thinned query so a 30-day strip of every provider
-    /// stays a few thousand rows.
+    /// Re-reads the strip on every reload — a new range, source, subject or
+    /// poll — through the thinned query, so a 30-day strip of every provider
+    /// stays a few thousand rows. It is never served from a cache: a cached
+    /// strip kept showing readings older than the chart beneath it, and kept
+    /// a failed read failed.
     private func reloadOverview() async {
-        let key = OverviewKey(range: timeRange, sampleMode: isSampleMode, subjects: subjects)
-        guard key != overviewKey else { return }
         let now = Date()
         let store = activeStore
         let retention = await store.retentionInterval
+        let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention)
         do {
             let sampled = try await store.fetchSampledReadings(
                 since: timeRange.startDate(from: now),
                 until: now,
-                bucketSeconds: HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention))
-            let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: sampled)
+                bucketSeconds: bucket)
+            let overview = HistoryOverviewPresentation.overview(
+                subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards
             overviewEmpty = overview.empty
             overviewFailed = false
@@ -846,7 +926,7 @@ public struct HistoryRootView: View {
             overviewEmpty = []
             overviewFailed = true
         }
-        overviewKey = key
+        overviewLoaded = true
     }
 
     /// Reset markers for the timeline, from the live store only.

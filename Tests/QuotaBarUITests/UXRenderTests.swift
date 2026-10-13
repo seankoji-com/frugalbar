@@ -162,7 +162,7 @@ struct UXRenderTests {
         // MARK: Readings for the inspector and the History window
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-fixture-\(UUID().uuidString).sqlite"))
         var readings: [QuotaHistoryStore.ReadingRecord] = []
-        for step in stride(from: 6 * 86_400.0, through: 0, by: -1800) {
+        for step in stride(from: 6 * 86_400.0, through: 1800, by: -1800) {
             let at = now.addingTimeInterval(-step)
             let t = 1 - step / (6 * 86_400)
             let wobble = 0.03 * sin(step / 7_000)
@@ -185,6 +185,13 @@ struct UXRenderTests {
                                                       resetsAt: goAlpha.row1?.resetsAt, windowLength: 30 * 86_400)]))
             try await history.record(polled, now: at)
         }
+        // Go Beta's newest poll failed: its History card must say so rather
+        // than lead with the figure from the poll before.
+        try await history.record([QuotaSnapshot(
+            id: beta.instanceID, vendorId: .opencode, displayName: beta.name, category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil), status: .unavailable(.offline),
+            resetsAt: nil, lastUpdated: now.addingTimeInterval(-60), auxiliaryInfo: nil)],
+            now: now.addingTimeInterval(-60))
         readings = try await history.fetchReadings(vendor: .claude)
         let resetEvent = AIEvent(
             id: AIEvent.makeID(kind: .usageReset, vendorId: .claude, components: ["render"]),
@@ -208,6 +215,13 @@ struct UXRenderTests {
         unreadable.maxBody = 800
         try await save(unreadable.frame(width: 384, height: 760).background(Theme.surface),
                        name: "inspector-unreadable", directory: directory)
+        // The history database could not be read: said as a failed read, not
+        // as zero readings or "no events".
+        var failedRead = MetricDetailModalView(
+            snapshot: claude, readingsLoader: { _, _ in nil }, eventsLoader: { _, _, _, _, _ in nil }, onClose: {})
+        failedRead.maxBody = 1_000
+        try await save(failedRead.frame(width: 384, height: 1_000).background(Theme.surface),
+                       name: "inspector-history-unreadable", directory: directory)
 
         // MARK: History
         let subjects = HistoryOverviewPresentation.subjects(
@@ -224,6 +238,38 @@ struct UXRenderTests {
                 .inspecting(now.addingTimeInterval(-6 * 3600))
                 .padding(14).frame(width: 760, height: 300).background(Theme.card),
             name: "history-chart-readout", directory: directory)
+        // Long-range sparklines, thinned exactly as the window thins them.
+        for range in [HistoryPresentation.TimeRange.last30Days, .allTime] {
+            let bucket = HistoryOverviewPresentation.sampleBucketSeconds(
+                range: range, retention: await history.retentionInterval)
+            let sampled = try await history.fetchSampledReadings(
+                since: range.startDate(from: now), until: now, bucketSeconds: bucket)
+            let cards = HistoryOverviewPresentation.overview(
+                subjects: subjects, readings: sampled, bucketSeconds: bucket).cards
+            #expect(cards.allSatisfy { $0.segments.count == 1 })
+            try await save(
+                HStack(spacing: 10) {
+                    ForEach(cards) { HistoryOverviewCardView(card: $0, isSelected: false, onSelect: {}) }
+                }
+                .padding(14).frame(width: 640).background(Theme.card),
+                name: "history-\(range == .allTime ? "all" : "30d")-sparkline", directory: directory)
+        }
+
+        // A real key press: the chart takes focus and the right arrow selects
+        // the newest poll, with no pointer involved.
+        try await saveAfterKeys(
+            QuotaTimelineChart(segments: segments, timeRange: .last24Hours)
+                .padding(14).frame(width: 760, height: 300).background(Theme.card),
+            keys: [(48, "\t"), (124, "\u{F703}")],
+            name: "history-chart-keyboard", directory: directory)
+        // The control: focus alone selects nothing, so the readout above is
+        // the arrow key's doing.
+        try await saveAfterKeys(
+            QuotaTimelineChart(segments: segments, timeRange: .last24Hours)
+                .padding(14).frame(width: 760, height: 300).background(Theme.card),
+            keys: [(48, "\t")],
+            name: "history-chart-focus-only", directory: directory)
+
         let emptyHistory = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-empty-\(UUID().uuidString).sqlite"))
         try await save(
             HistoryRootView(liveStore: emptyHistory, sampleStore: emptyHistory,
@@ -256,6 +302,39 @@ struct UXRenderTests {
                 name: "settings-\(pane.rawValue)", directory: directory)
         }
         _ = snapshots
+    }
+
+    /// Hosts `view` in a key window, delivers `keys` (virtual key code and
+    /// characters) as real key-down events, then renders it.
+    private func saveAfterKeys<V: View>(
+        _ view: V, keys: [(UInt16, String)], name: String, directory: URL
+    ) async throws {
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.frame.size = host.fittingSize
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(host)
+        try await Task.sleep(for: .milliseconds(300))
+        for (code, characters) in keys {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = try #require(NSEvent.keyEvent(
+                    with: type, location: .zero, modifierFlags: code == 124 ? [.numericPad, .function] : [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                    isARepeat: false, keyCode: code))
+                window.sendEvent(event)
+            }
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let data = try #require(bitmap.representation(using: .png, properties: [:]))
+        try data.write(to: directory.appendingPathComponent("\(name).png"))
+        window.close()
     }
 
     private func save<V: View>(_ view: V, name: String, directory: URL) async throws {

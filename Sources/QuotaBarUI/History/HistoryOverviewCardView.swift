@@ -10,12 +10,6 @@ struct HistoryOverviewCardView: View {
     let isSelected: Bool
     let onSelect: () -> Void
 
-    private var latestRow: ReadingReadout.Row? {
-        card.latest.fraction.map {
-            ReadingReadout.Row(label: card.barLabel, usedFraction: $0,
-                               isBlocked: card.latest.isBlocked, urgency: card.latest.urgency)
-        }
-    }
 
     var body: some View {
         Button(action: onSelect) {
@@ -36,10 +30,11 @@ struct HistoryOverviewCardView: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if let row = latestRow, let percent = card.latestPercent {
-                        Image(systemName: ReadingReadout.symbol(for: row))
+                    if let percent = card.latestPercent {
+                        Image(systemName: ReadingReadout.symbol(isBlocked: card.latest.isBlocked,
+                                                                urgency: card.latest.urgency))
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(ReadingReadout.color(for: row))
+                            .foregroundStyle(latestColor)
                         Text("\(percent)%")
                             .font(.system(size: 18, weight: .semibold).monospacedDigit())
                             .foregroundStyle(Theme.onSurface)
@@ -47,11 +42,17 @@ struct HistoryOverviewCardView: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                     } else {
-                        // The newest poll got no figure; an older one is not
-                        // promoted to "latest".
-                        Text("No figure at the last reading")
+                        // The newest poll got no figure — it could not be
+                        // read, or did not report this window — and an older
+                        // one is not promoted to "latest".
+                        Image(systemName: card.latestIsCurrent ? "minus.circle" : "exclamationmark.triangle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.outline)
+                        Text(card.noFigureText ?? "")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.outline)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
                 }
@@ -59,12 +60,15 @@ struct HistoryOverviewCardView: View {
                 sparkline
                     .frame(height: 30)
 
-                Text("\(card.readingCount) reading\(card.readingCount == 1 ? "" : "s") · last \(ReadingReadout.timestampText(card.latest.measuredAt, showsDate: true))")
-                    .font(.system(size: 9.5))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.outline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(card.sampleCount) sampled reading\(card.sampleCount == 1 ? "" : "s")")
+                    Text("Last poll \(ReadingReadout.timestampText(card.lastPoll.measuredAt, showsDate: true))")
+                }
+                .font(.system(size: 9.5))
+                .monospacedDigit()
+                .foregroundStyle(Theme.outline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,10 +104,10 @@ struct HistoryOverviewCardView: View {
                     .lineStyle(StrokeStyle(lineWidth: 1.4))
                 }
             }
-            if let row = latestRow, let last = card.segments.last?.points.last,
+            if card.latestPercent != nil, let last = card.segments.last?.points.last,
                last.timestamp == card.latest.measuredAt {
                 PointMark(x: .value("Time", last.timestamp), y: .value("Used %", last.fraction * 100))
-                    .foregroundStyle(ReadingReadout.color(for: row))
+                    .foregroundStyle(latestColor)
                     .symbolSize(22)
             }
         }
@@ -113,16 +117,20 @@ struct HistoryOverviewCardView: View {
         .accessibilityHidden(true)
     }
 
+    private var latestColor: Color {
+        ReadingReadout.color(isBlocked: card.latest.isBlocked, urgency: card.latest.urgency)
+    }
+
     private var accessibilityLabel: String {
         let window = WindowColumn.column(forLabel: card.barLabel)?.spokenName ?? card.barLabel
         var parts = [card.subject.name, "\(window) window"]
         if let percent = card.latestPercent {
             parts.append("latest \(percent) percent used")
             if card.latest.isBlocked { parts.append("blocked") }
-        } else {
-            parts.append("no figure at the last reading")
+        } else if let text = card.noFigureText {
+            parts.append(text.lowercased())
         }
-        parts.append("\(card.readingCount) readings in range")
+        parts.append("\(card.sampleCount) sampled readings in range")
         if isSelected { parts.append("selected") }
         return parts.joined(separator: ", ")
     }

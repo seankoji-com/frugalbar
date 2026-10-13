@@ -42,8 +42,8 @@ public final class QuotaStore {
     private let manager: QuotaManager
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
-    private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])?
-    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])?
+    private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord]?)?
+    private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent]?)?
     private let tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)?
     private let activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
@@ -52,10 +52,12 @@ public final class QuotaStore {
     ///     recent-pace forecast computed on each reload.
     ///   - vendorReadingsLoader: one vendor's readings, for the detail
     ///     inspector's history and burndown charts. Fetched on demand, never
-    ///     on the refresh path.
+    ///     on the refresh path. Returns nil when the history could not be
+    ///     read, which the inspector says rather than counting zero readings.
     ///   - eventsLoader: recorded AI-platform events, newest first, optionally
     ///     narrowed to one vendor and one instance. Used both for
     ///     `recentEvents` on each reload and on demand by the inspector.
+    ///     Returns nil when the events could not be read.
     ///   - tokenUsageLoader: raw token consumption per source per time bucket,
     ///     for the desktop widget's Tokens layout. Returns nil when the
     ///     history could not be read, which the widget says rather than
@@ -67,8 +69,8 @@ public final class QuotaStore {
         manager: QuotaManager = .shared,
         historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)? = nil,
         readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
-        vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord])? = nil,
-        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent])? = nil,
+        vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord]?)? = nil,
+        eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent]?)? = nil,
         tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil,
         activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
     ) {
@@ -82,8 +84,9 @@ public final class QuotaStore {
     }
 
     /// One vendor's recorded readings since `since` (all of them when nil).
-    /// Empty when no loader was injected.
-    public func readings(for vendor: VendorIdentifier, since: Date?) async -> [QuotaHistoryStore.ReadingRecord] {
+    /// Empty when no loader was injected; nil when the history could not be
+    /// read — a failure to read, not an absence of readings.
+    public func readings(for vendor: VendorIdentifier, since: Date?) async -> [QuotaHistoryStore.ReadingRecord]? {
         guard let vendorReadingsLoader else { return [] }
         return await vendorReadingsLoader(vendor, since)
     }
@@ -106,7 +109,8 @@ public final class QuotaStore {
     }
 
     /// Recorded events, newest first, optionally scoped to one vendor and one
-    /// of its instances. Empty when no loader was injected.
+    /// of its instances. Empty when no loader was injected; nil when the
+    /// events could not be read.
     ///
     /// `instanceId` keeps two OpenCode Go workspaces from reading each other's
     /// resets and restores; the vendor's own events (no instance) are returned
@@ -117,7 +121,7 @@ public final class QuotaStore {
         kinds: Set<AIEventKind>? = nil,
         since: Date?,
         limit: Int?
-    ) async -> [AIEvent] {
+    ) async -> [AIEvent]? {
         guard let eventsLoader else { return [] }
         return await eventsLoader(vendor, instanceId, kinds, since, limit)
     }
@@ -140,7 +144,7 @@ public final class QuotaStore {
     /// records new events, so the popover section is never a poll behind.
     public func reloadRecentEvents() async {
         guard let eventsLoader else { return }
-        recentEvents = await eventsLoader(nil, nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
+        recentEvents = await eventsLoader(nil, nil, Self.recentEventKinds, nil, Self.recentEventsLimit) ?? []
     }
 
     /// Loads from cache when fresh, otherwise fetches.

@@ -24,6 +24,8 @@ The summary line under the chart is built from the same facts and omits any clau
 
 Points carry urgency as a shape (circle, diamond, triangle, square for blocked), not colour alone.
 
+Hover a chart, or click it and press the left and right arrow keys (VoiceOver: adjust), to read one poll: its timestamp to the second and each window's recorded share to two decimals. A readout only groups windows recorded by the same poll. Escape clears it. If the history database cannot be read, the chart, the events list and the History row say so instead of showing zero.
+
 ## Recent events
 
 The vendor's five newest [events](events.md) of the kinds FrugalBar surfaces (resets, outages, newly selectable models), each with its source caption. Scheduled window rollovers are left out here; they are markers on the chart. Status-page and reset-tracker history is backfilled on the first poll, so these usually fill at once; an empty list means nothing has been recorded, not that nothing happened.
@@ -50,6 +52,6 @@ The footer's **Copy JSON** puts a pretty-printed export (`InspectorExport`, sort
 | `plan`, `latencyMs`, `lastUpdated` | As shown in the diagnostics block |
 | `resetCreditsAvailable`, `resetCreditsApplicable` | The reset-credit figures, when published |
 | `bars[]` | Per window: `label`, `usedFraction` (null when unread), `isBlocked`, `measuresElapsedTimeOnly`, `resetsAt`, `windowLengthSeconds` |
-| `readingsCount` | How many stored readings the inspector loaded |
+| `readingsCount` | How many stored readings the inspector loaded; omitted when they were not, or could not be, read |
 
 Code: `Sources/QuotaBarUI/Components/MetricDetailModalView.swift`, `MetricDetailCharts.swift`, `Sources/QuotaBarUI/History/BurndownPresentation.swift` (pure presentation; tested in `BurndownPresentationTests`).

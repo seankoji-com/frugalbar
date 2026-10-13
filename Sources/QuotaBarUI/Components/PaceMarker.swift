@@ -30,8 +30,19 @@ extension DualBarMetrics {
     /// wears the vendor's blocked colour rather than amber and says "blocked"
     /// instead; a spent one has no marker and is red.
     var isMeaningfullyAheadOfPace: Bool {
-        guard !isBlocked, let used = primaryFraction, let pace = paceMarker else { return false }
-        return used - pace > Self.aheadOfPaceMargin
+        paceStanding == .ahead
+    }
+
+    /// Where usage stands against an even pace, or nil whenever no tick is
+    /// drawn. The inspector's verdict and History's pace card both read this,
+    /// so the two cannot call one reading "ahead" and "on pace" with
+    /// different margins (History once used ten points, the bar four).
+    var paceStanding: PaceStanding? {
+        guard !isBlocked, let used = primaryFraction, let pace = paceMarker else { return nil }
+        let delta = used - pace
+        if delta > Self.aheadOfPaceMargin { return .ahead }
+        if delta < -Self.aheadOfPaceMargin { return .behind }
+        return .even
     }
 
     /// Where the pace tick is drawn, or nil when none is: no published pace,
@@ -45,4 +56,9 @@ extension DualBarMetrics {
         if let used = primaryFraction, used >= QuotaSnapshot.exhaustionThreshold { return nil }
         return pace
     }
+}
+
+/// Usage against an even pace, past `DualBarMetrics.aheadOfPaceMargin`.
+enum PaceStanding: Sendable, Equatable {
+    case ahead, even, behind
 }

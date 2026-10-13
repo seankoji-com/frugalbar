@@ -2,8 +2,9 @@ import SwiftUI
 import Charts
 import QuotaBarCore
 
-// Shared pieces that let a chart be interrogated: hover a point and read the
-// exact recorded figure and when it was taken. Used by the History timeline,
+// Shared pieces that let a chart be interrogated: hover a point, or step to
+// it with the keyboard or VoiceOver, and read the exact recorded figure and
+// when it was taken. Used by the History timeline,
 // the History overview and the inspector's charts, so each says a reading the
 // same way.
 
@@ -32,35 +33,26 @@ struct ChartHoverCatcher: View {
     }
 }
 
-/// The figure under the pointer: when it was recorded, and each window's
-/// share used at that poll. Shape and words carry the state, never colour
-/// alone.
+/// The poll under the pointer or the keyboard selection: when it was
+/// recorded, to the second, and each window's share used at that poll as the
+/// store holds it — unrounded past two decimals and unclamped, because this is
+/// the layer that promises the exact figure. Shape and words carry the state,
+/// never colour alone.
 struct ReadingReadout: View {
-    struct Row: Identifiable {
-        var id: String { label }
-        let label: String
-        let usedFraction: Double
-        let isBlocked: Bool
-        let urgency: Urgency
-    }
-
-    let timestamp: Date
-    let rows: [Row]
-    /// Include the day as well as the time: a range longer than a day.
-    let showsDate: Bool
+    let poll: HistoryOverviewPresentation.InspectedPoll
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(Self.timestampText(timestamp, showsDate: showsDate))
+            Text(Self.exactTimestampText(poll.timestamp))
                 .font(.system(size: 10, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(Theme.onSurface)
-            ForEach(rows) { row in
+            ForEach(poll.rows, id: \.barLabel) { row in
                 HStack(spacing: 4) {
-                    Image(systemName: Self.symbol(for: row))
+                    Image(systemName: Self.symbol(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Self.color(for: row))
-                    Text("\(row.label) \(Int((min(max(row.usedFraction, 0), 1) * 100).rounded()))% used\(row.isBlocked ? ", blocked" : "")")
+                        .foregroundStyle(Self.color(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
+                    Text("\(row.barLabel) \(Self.exactPercentText(row.point.fraction)) used\(row.point.isBlocked ? ", blocked" : "")")
                         .font(.system(size: 10, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.onSurfaceVariant)
@@ -73,37 +65,107 @@ struct ReadingReadout: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.outlineVariant.opacity(0.6), lineWidth: 0.5))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.spoken(timestamp: timestamp, rows: rows, showsDate: showsDate))
+        .accessibilityLabel(Self.spoken(poll))
     }
 
-    /// "Tue 14 Oct, 14:05" for a multi-day span, "14:05" within a day.
-    static func timestampText(_ date: Date, showsDate: Bool) -> String {
+    /// "Tue 14 Oct 2026, 14:05:32": the day, the year and the second, so a
+    /// reading is never ambiguous about which poll it was.
+    nonisolated static func exactTimestampText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM yyyy, HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    /// "Tue 14 Oct, 14:05" for a multi-day span, "14:05" within a day. For
+    /// captions, not for the inspected reading.
+    nonisolated static func timestampText(_ date: Date, showsDate: Bool) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = showsDate ? "EEE d MMM, HH:mm" : "HH:mm"
         return formatter.string(from: date)
     }
 
-    static func spoken(timestamp: Date, rows: [Row], showsDate: Bool) -> String {
-        let figures = rows.map { row -> String in
-            let percent = Int((min(max(row.usedFraction, 0), 1) * 100).rounded())
-            return "\(WindowColumn.column(forLabel: row.label)?.spokenName ?? row.label) \(percent) percent used"
-                + (row.isBlocked ? ", blocked" : "")
+    /// The recorded fraction as a percentage to two decimals, trailing zeros
+    /// dropped: 0.62 is "62%", 0.62345 is "62.35%", and 1.03 stays "103%".
+    nonisolated static func exactPercentText(_ fraction: Double) -> String {
+        var text = String(format: "%.2f", fraction * 100)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text + "%"
+    }
+
+    nonisolated static func spoken(_ poll: HistoryOverviewPresentation.InspectedPoll) -> String {
+        let figures = poll.rows.map { row -> String in
+            "\(WindowColumn.column(forLabel: row.barLabel)?.spokenName ?? row.barLabel) "
+                + "\(exactPercentText(row.point.fraction).dropLast()) percent used"
+                + (row.point.isBlocked ? ", blocked" : "")
         }
-        return (["Reading at \(timestampText(timestamp, showsDate: showsDate))"] + figures).joined(separator: ", ")
+        return (["Reading at \(exactTimestampText(poll.timestamp))"] + figures).joined(separator: ", ")
     }
 
     /// The point-shape vocabulary of the charts, as symbols.
-    static func symbol(for row: Row) -> String {
-        if row.isBlocked { return "square.fill" }
-        if row.urgency == .critical { return "triangle.fill" }
-        if row.urgency == .warning { return "diamond.fill" }
+    nonisolated static func symbol(isBlocked: Bool, urgency: Urgency) -> String {
+        if isBlocked { return "square.fill" }
+        if urgency == .critical { return "triangle.fill" }
+        if urgency == .warning { return "diamond.fill" }
         return "circle.fill"
     }
 
-    static func color(for row: Row) -> Color {
-        if row.isBlocked || row.urgency == .critical { return Theme.error }
-        if row.urgency == .warning { return Theme.tertiary }
+    static func color(isBlocked: Bool, urgency: Urgency) -> Color {
+        if isBlocked || urgency == .critical { return Theme.error }
+        if urgency == .warning { return Theme.tertiary }
         return Theme.healthy
+    }
+}
+
+/// Makes a chart interrogable without a pointer. The chart takes keyboard
+/// focus; the left and right arrow keys step from poll to poll (the first
+/// press lands on the newest), Escape clears the selection, and VoiceOver's
+/// adjust action does the same stepping and reads the selected reading as the
+/// chart's value. Hover and the keyboard share one selection, so the readout
+/// is the same whichever drove it.
+struct ReadingInspection: ViewModifier {
+    let segments: [HistoryPresentation.TimelineSegment]
+    @Binding var selection: Date?
+    let tolerance: TimeInterval
+    let label: String
+    let summary: String
+
+    private var selected: HistoryOverviewPresentation.InspectedPoll? {
+        selection.flatMap {
+            HistoryOverviewPresentation.nearestPoll(to: $0, in: segments, tolerance: tolerance)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .onKeyPress(.leftArrow) { step(-1) }
+            .onKeyPress(.rightArrow) { step(1) }
+            .onKeyPress(.escape) {
+                guard selection != nil else { return .ignored }
+                selection = nil
+                return .handled
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityValue(selected.map(ReadingReadout.spoken) ?? summary)
+            .accessibilityHint("Arrow keys or adjust step through the recorded readings.")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: _ = step(1)
+                case .decrement: _ = step(-1)
+                @unknown default: break
+                }
+            }
+    }
+
+    private func step(_ offset: Int) -> KeyPress.Result {
+        let current = selected?.timestamp ?? selection
+        guard let next = HistoryOverviewPresentation.steppedPoll(from: current, by: offset, in: segments) else {
+            return .ignored
+        }
+        selection = next
+        return .handled
     }
 }
 

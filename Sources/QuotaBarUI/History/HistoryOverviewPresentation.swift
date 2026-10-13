@@ -75,48 +75,82 @@ public enum HistoryOverviewPresentation {
         /// The window's readings in range, oldest first. Gaps and resets
         /// break the line exactly as on the main chart.
         public let segments: [HistoryPresentation.TimelineSegment]
-        /// The newest reading for the window, whatever it said. Its fraction
-        /// is nil when that poll got no figure, and the card then shows none
-        /// rather than an older one.
+        /// The newest reading for the window, whatever it said.
         public let latest: QuotaHistoryStore.ReadingRecord
-        public let readingCount: Int
+        /// The subject's newest poll of any kind, the failed ones included: a
+        /// poll that could not be read is recorded under `DEFAULT`, not under
+        /// the window, so `latest` alone would keep showing the figure from
+        /// before it.
+        public let lastPoll: QuotaHistoryStore.ReadingRecord
+        /// How many readings the thinned query kept for the window: one per
+        /// time bucket, not every reading recorded in range.
+        public let sampleCount: Int
+
+        /// The last poll reported this window. When it did not — the provider
+        /// could not be read, or stopped publishing the window — the card
+        /// leads with that rather than an older figure.
+        public var latestIsCurrent: Bool { lastPoll.measuredAt <= latest.measuredAt }
 
         /// The figure the card leads with, or nil when the latest poll had
         /// none.
         public var latestPercent: Int? {
-            latest.fraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
+            guard latestIsCurrent else { return nil }
+            return latest.fraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
+        }
+
+        /// Why there is no figure, when there is none.
+        public var noFigureText: String? {
+            guard latestPercent == nil else { return nil }
+            if !latestIsCurrent, lastPoll.confidence != .measured { return "Could not be read at the last poll" }
+            return "No \(barLabel) figure at the last poll"
         }
     }
 
     /// Cards for the subjects that have a consumption reading in `readings`,
     /// in subject order; `empty` names the ones that have none.
+    ///
+    /// `bucketSeconds` is the width the readings were thinned to. Points that
+    /// far apart are neighbours, not an outage, so the line breaks only on a
+    /// gap of more than two and a half buckets (and never under the main
+    /// chart's two hours), or on a reset.
     public static func overview(
         subjects: [Subject],
-        readings: [QuotaHistoryStore.ReadingRecord]
+        readings: [QuotaHistoryStore.ReadingRecord],
+        bucketSeconds: Int = 0
     ) -> (cards: [Card], empty: [Subject]) {
         let consumption = HistoryPresentation.consumptionReadings(readings)
+        let maxGap = sparklineMaxGap(bucketSeconds: bucketSeconds)
         var cards: [Card] = []
         var empty: [Subject] = []
         for subject in subjects {
+            let all = readings.filter { subject.keys.contains($0.vendor) }
             let own = consumption.filter { subject.keys.contains($0.vendor) }
             guard let label = longestMeasuredLabel(own) else {
                 empty.append(subject)
                 continue
             }
             let window = own.filter { $0.barLabel == label }.sorted { $0.measuredAt < $1.measuredAt }
-            guard let latest = window.last else {
+            guard let latest = window.last,
+                  let lastPoll = all.max(by: { $0.measuredAt < $1.measuredAt }) else {
                 empty.append(subject)
                 continue
             }
             cards.append(Card(
                 subject: subject,
                 barLabel: label,
-                segments: HistoryPresentation.segments(from: window),
+                segments: HistoryPresentation.segments(from: window, maxGap: maxGap),
                 latest: latest,
-                readingCount: window.count
+                lastPoll: lastPoll,
+                sampleCount: window.count
             ))
         }
         return (cards, empty)
+    }
+
+    /// The longest silence a sparkline bridges, for readings thinned to
+    /// `bucketSeconds`.
+    static func sparklineMaxGap(bucketSeconds: Int) -> TimeInterval {
+        max(7200, Double(bucketSeconds) * 2.5)
     }
 
     /// The longest window that has at least one measured reading; ties and
@@ -157,30 +191,69 @@ public enum HistoryOverviewPresentation {
 
     // MARK: - Inspecting a point
 
-    /// The reading nearest to `date` on each segment's window, for the chart's
-    /// hover readout. One per window label, nearest first; nil when nothing
-    /// was recorded within `tolerance` of `date`, so the readout never names a
+    /// One poll as a chart readout shows it: the instant it was recorded and
+    /// each window's reading from that same poll.
+    public struct InspectedPoll: Equatable, Sendable {
+        public struct Row: Equatable, Sendable {
+            public let barLabel: String
+            public let point: HistoryPresentation.TimelinePoint
+        }
+        public let timestamp: Date
+        public let rows: [Row]
+    }
+
+    /// The poll nearest to `date`, for the chart's hover readout; nil when
+    /// nothing was recorded within `tolerance`, so the readout never names a
     /// reading from hours away as "this point".
-    public static func nearestPoints(
+    ///
+    /// Windows are grouped only when they came from the same poll, which
+    /// writes every window at one instant. Picking each window's nearest
+    /// reading separately put a 5H figure under a WK reading's timestamp when
+    /// the two were five minutes apart.
+    public static func nearestPoll(
         to date: Date,
         in segments: [HistoryPresentation.TimelineSegment],
         tolerance: TimeInterval
-    ) -> [(barLabel: String, point: HistoryPresentation.TimelinePoint)] {
-        var best: [String: HistoryPresentation.TimelinePoint] = [:]
-        var order: [String] = []
-        for segment in segments {
-            for point in segment.points {
-                let distance = abs(point.timestamp.timeIntervalSince(date))
-                guard distance <= tolerance else { continue }
-                if let current = best[segment.barLabel] {
-                    if distance < abs(current.timestamp.timeIntervalSince(date)) { best[segment.barLabel] = point }
-                } else {
-                    best[segment.barLabel] = point
-                    order.append(segment.barLabel)
-                }
+    ) -> InspectedPoll? {
+        let nearest = segments.lazy.flatMap(\.points)
+            .map(\.timestamp)
+            .filter { abs($0.timeIntervalSince(date)) <= tolerance }
+            .min { abs($0.timeIntervalSince(date)) < abs($1.timeIntervalSince(date)) }
+        return nearest.flatMap { poll(at: $0, in: segments) }
+    }
+
+    /// Every window's reading recorded at exactly `timestamp`.
+    public static func poll(
+        at timestamp: Date,
+        in segments: [HistoryPresentation.TimelineSegment]
+    ) -> InspectedPoll? {
+        var rows: [InspectedPoll.Row] = []
+        for segment in segments where !rows.contains(where: { $0.barLabel == segment.barLabel }) {
+            if let point = segment.points.first(where: { $0.timestamp == timestamp }) {
+                rows.append(InspectedPoll.Row(barLabel: segment.barLabel, point: point))
             }
         }
-        return order.compactMap { label in best[label].map { (label, $0) } }
+        return rows.isEmpty ? nil : InspectedPoll(timestamp: timestamp, rows: rows)
+    }
+
+    /// The poll `offset` steps from `current`, for stepping through a chart
+    /// with the arrow keys or VoiceOver's adjust action. With nothing selected
+    /// the first step lands on the newest poll, the one most worth reading;
+    /// stepping stops at either end rather than wrapping.
+    public static func steppedPoll(
+        from current: Date?,
+        by offset: Int,
+        in segments: [HistoryPresentation.TimelineSegment]
+    ) -> Date? {
+        let instants = Array(Set(segments.flatMap { $0.points.map(\.timestamp) })).sorted()
+        guard let last = instants.indices.last else { return nil }
+        guard let current else { return instants[last] }
+        // Between two polls (the pointer left it there), a step goes to the
+        // neighbour on that side.
+        let index = instants.firstIndex { $0 >= current } ?? instants.count
+        let onPoll = index < instants.count && instants[index] == current
+        let at = onPoll ? index + offset : (offset < 0 ? index - 1 : index)
+        return instants[min(max(at, 0), last)]
     }
 
     /// How close the pointer must be to a reading for the readout to claim

@@ -41,6 +41,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         public let paceVerdict: String?
         /// What to do about an unreadable provider.
         public let remedy: String?
+        /// The vendor blocked the focus window. The hero figure then wears a
+        /// `BlockedGlyph`, as the bar's percentage does everywhere else.
+        public var focusIsBlocked: Bool { state == .blocked }
         public let accessibilityLabel: String
     }
 
@@ -69,12 +72,21 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     public let windows: [WindowLine]
     public let provenance: [ProvenanceRow]
 
-    public init(snapshot: QuotaSnapshot, readingsRecorded: Int? = nil, now: Date) {
+    /// What the inspector knows about this instance's recorded readings.
+    public enum RecordedHistory: Equatable, Sendable {
+        /// Not read yet: the row is left out rather than guessed.
+        case loading
+        /// The read failed. Said as such, never as zero readings.
+        case unreadable
+        case counted(Int)
+    }
+
+    public init(snapshot: QuotaSnapshot, history: RecordedHistory = .loading, now: Date) {
         self.summary = Self.summary(for: snapshot, now: now)
         self.windows = snapshot.status.confidence == .measured
             ? snapshot.displayBars.map { Self.windowLine($0, now: now) }
             : []
-        self.provenance = Self.provenance(for: snapshot, readingsRecorded: readingsRecorded, now: now)
+        self.provenance = Self.provenance(for: snapshot, history: history, now: now)
     }
 
     // MARK: - Summary
@@ -98,8 +110,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
 
         let row = MetricRowPresentation(snapshot: snapshot, now: now)
+        let focus = focusBar(of: snapshot)
         let state: State
-        if snapshot.isFullyBlockedWithoutReading {
+        // The focus is a blocked window whenever the vendor blocked one, with
+        // or without a percentage: a 97% the vendor has cut off is not "low",
+        // it is unusable, and the glance must say which.
+        if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading {
             state = .blocked
         } else if row.isExhausted {
             state = .exhausted
@@ -111,7 +127,6 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             }
         }
 
-        let focus = focusBar(of: snapshot)
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
         let reset = focus?.resetsAt.map { ResetCountdownBadge.description($0, now: now) }
             ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.description($0, now: now) } : nil)
@@ -156,16 +171,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// A verdict against an even pace, or nil whenever the bar would draw no
     /// pace tick: the claim and the geometry must agree.
     static func paceVerdict(for bar: DualBarMetrics) -> String? {
-        guard let pace = bar.paceMarker, let used = bar.primaryFraction, !bar.isBlocked else { return nil }
+        guard let standing = bar.paceStanding, let pace = bar.paceMarker else { return nil }
         let elapsed = Int((pace * 100).rounded())
-        let delta = used - pace
-        if delta > DualBarMetrics.aheadOfPaceMargin {
-            return "Ahead of even pace (\(elapsed)% of the window elapsed)"
+        switch standing {
+        case .ahead: return "Ahead of even pace (\(elapsed)% of the window elapsed)"
+        case .behind: return "Behind even pace (\(elapsed)% of the window elapsed)"
+        case .even: return "On even pace (\(elapsed)% of the window elapsed)"
         }
-        if delta < -DualBarMetrics.aheadOfPaceMargin {
-            return "Behind even pace (\(elapsed)% of the window elapsed)"
-        }
-        return "On even pace (\(elapsed)% of the window elapsed)"
     }
 
     // MARK: - Windows
@@ -189,7 +201,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
            bar.paceMarker != nil, let rate = bar.burnRateMultiplier {
             parts.append("burning \(String(format: "%.1f", rate))× even pace")
         }
-        if !bar.measuresElapsedTimeOnly, bar.paceMarker != nil, let date = bar.projectedExhaustionDate, date > now {
+        // Never for a blocked window: "runs out in 4h" beside "blocked" reads
+        // as headroom the vendor has already withdrawn.
+        if !bar.measuresElapsedTimeOnly, !bar.isBlocked, bar.paceMarker != nil,
+           let date = bar.projectedExhaustionDate, date > now {
             parts.append("runs out \(ResetCountdownBadge.description(date, now: now).replacingOccurrences(of: "Resets ", with: ""))")
         }
         if bar.isBlocked, percent != nil { parts.insert("Blocked by the vendor", at: 0) }
@@ -211,7 +226,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     // MARK: - Provenance
 
-    static func provenance(for snapshot: QuotaSnapshot, readingsRecorded: Int?, now: Date) -> [ProvenanceRow] {
+    static func provenance(for snapshot: QuotaSnapshot, history: RecordedHistory, now: Date) -> [ProvenanceRow] {
         var rows: [ProvenanceRow] = [
             ProvenanceRow(label: "Source", value: snapshot.cliSource),
             ProvenanceRow(label: "Last fetched", value: lastFetchedText(snapshot.lastUpdated, now: now)),
@@ -230,9 +245,14 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             available: snapshot.resetCreditsAvailable, applicable: snapshot.resetCreditsApplicable) {
             rows.append(ProvenanceRow(label: "Reset credits", value: credits))
         }
-        if let readingsRecorded {
+        switch history {
+        case .loading:
+            break
+        case .unreadable:
+            rows.append(ProvenanceRow(label: "History", value: "Could not be read"))
+        case .counted(let count):
             rows.append(ProvenanceRow(
-                label: "History", value: "\(readingsRecorded) reading\(readingsRecorded == 1 ? "" : "s") recorded, last 30 days"))
+                label: "History", value: "\(count) reading\(count == 1 ? "" : "s") recorded, last 30 days"))
         }
         return rows
     }

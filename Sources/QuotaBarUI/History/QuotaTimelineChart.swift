@@ -21,7 +21,8 @@ public struct QuotaTimelineChart: View {
     /// Why there is nothing to draw, when there is nothing. Defaults to the
     /// generic explanation.
     public let emptyMessage: String?
-    /// Where the pointer is over the plot, as a date. Drives the readout.
+    /// The inspected instant: where the pointer is over the plot, or the poll
+    /// the keyboard stepped to. Drives the readout.
     @State private var hoverDate: Date?
 
     public init(
@@ -65,14 +66,14 @@ public struct QuotaTimelineChart: View {
         return out
     }
 
-    private var inspected: [(barLabel: String, point: HistoryPresentation.TimelinePoint)] {
-        guard let hoverDate else { return [] }
-        let now = Date()
-        return HistoryOverviewPresentation.nearestPoints(
-            to: hoverDate, in: segments,
-            tolerance: HistoryOverviewPresentation.inspectionTolerance(
-                range: timeRange, now: now,
-                earliest: segments.compactMap { $0.points.first?.timestamp }.min()))
+    private var tolerance: TimeInterval {
+        HistoryOverviewPresentation.inspectionTolerance(
+            range: timeRange, now: segments.compactMap { $0.points.last?.timestamp }.max() ?? Date(),
+            earliest: segments.compactMap { $0.points.first?.timestamp }.min())
+    }
+
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap { HistoryOverviewPresentation.nearestPoll(to: $0, in: segments, tolerance: tolerance) }
     }
 
     /// Shape is the non-colour channel: colour alone fails WCAG 1.4.1, and
@@ -143,19 +144,13 @@ public struct QuotaTimelineChart: View {
                     }
             }
 
-            if let first = inspected.first {
-                RuleMark(x: .value("Inspected", first.point.timestamp))
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(position: .top, alignment: .center, spacing: 2,
                                 overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                        ReadingReadout(
-                            timestamp: first.point.timestamp,
-                            rows: inspected.map {
-                                ReadingReadout.Row(label: $0.barLabel, usedFraction: $0.point.fraction,
-                                                   isBlocked: $0.point.isBlocked, urgency: $0.point.urgency)
-                            },
-                            showsDate: timeRange != .last24Hours)
+                        ReadingReadout(poll: poll)
                     }
             }
         }
@@ -195,13 +190,12 @@ public struct QuotaTimelineChart: View {
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Quota timeline, \(timeRange.title)")
-        .accessibilityValue(
-            (segments.map(accessibilityDescription(for:))
-             + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
-            .joined(separator: ". ")
-        )
+        .modifier(ReadingInspection(
+            segments: segments, selection: $hoverDate, tolerance: tolerance,
+            label: "Quota timeline, \(timeRange.title)",
+            summary: (segments.map(accessibilityDescription(for:))
+                      + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+                .joined(separator: ". ")))
     }
 
     private var emptyState: some View {

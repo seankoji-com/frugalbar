@@ -642,3 +642,10 @@ public actor QuotaHistoryStore {
         }
     }
 }
+
+extension Notification.Name {
+    /// Posted on the main thread after a poll's readings are written, so a
+    /// window showing history reloads instead of drawing the history it had
+    /// when it opened.
+    public static let frugalbarHistoryDidRecord = Notification.Name("FrugalBarHistoryDidRecord")
+}

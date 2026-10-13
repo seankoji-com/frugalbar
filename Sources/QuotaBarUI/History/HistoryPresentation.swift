@@ -247,6 +247,12 @@ public enum HistoryPresentation {
     /// Returns `nil` for a window that only measures elapsed time: its fraction
     /// *is* the elapsed fraction, so the comparison would be a quantity against
     /// itself — permanently "on pace", under a label that says "consumed".
+    ///
+    /// The verdict is `DualBarMetrics.paceStanding`, the one the bar's tick and
+    /// the inspector read, so it is nil wherever the bar draws no tick (a
+    /// blocked or spent window, a window that has only just started) and uses
+    /// the bar's margin. A ten-point margin here once called 62% used at 54%
+    /// elapsed "On Pace" while the inspector said "Ahead of even pace".
     public static func computePace(
         reading: QuotaHistoryStore.ReadingRecord,
         now: Date = Date()
@@ -265,13 +271,16 @@ public enum HistoryPresentation {
         let consumedFraction = min(1.0, max(0.0, fraction))
         let delta = consumedFraction - elapsedFraction
 
-        let status: PaceStatus
-        if delta > 0.10 {
-            status = .aheadOfPace
-        } else if delta < -0.10 {
-            status = .underPace
-        } else {
-            status = .onPace
+        let metrics = DualBarMetrics(
+            primaryFraction: fraction, expectedPaceFraction: elapsedFraction,
+            label: reading.barLabel, isBlocked: reading.isBlocked,
+            resetsAt: resetsAt, windowLength: windowLength)
+        guard let standing = metrics.paceStanding else { return nil }
+
+        let status: PaceStatus = switch standing {
+        case .ahead: .aheadOfPace
+        case .behind: .underPace
+        case .even: .onPace
         }
 
         let consumedPercent = Int(round(consumedFraction * 100))
@@ -297,5 +306,53 @@ public enum HistoryPresentation {
             status: status,
             headline: headline
         )
+    }
+}
+
+// MARK: - Local activity
+
+extension HistoryPresentation {
+
+    /// What the project breakdown may claim, read from the ingestion status
+    /// before the records: the activity table is empty on a first run, stale
+    /// after a restart until a pass finishes, and short while an input cannot
+    /// be read (AGENTS.md, "An empty activity table is not an empty week").
+    ///
+    /// nil when the breakdown can be read as it stands.
+    public static func activityProgressNote(_ progress: TokenUsagePresentation.IngestionProgress) -> String? {
+        switch progress {
+        case .complete: nil
+        case .indexing: "Still reading local activity, so this breakdown may be short until that finishes."
+        case .incomplete: "Some local activity could not be read, so sessions may be missing from this breakdown."
+        }
+    }
+
+    /// Said instead of an empty breakdown. Only a finished, clean pass may
+    /// say there was no activity.
+    public static func activityEmptyMessage(
+        _ progress: TokenUsagePresentation.IngestionProgress,
+        vendorName: String,
+        recordsWithoutTokenTotals: Int
+    ) -> String {
+        switch progress {
+        case .indexing:
+            return "Still reading local activity. Nothing is shown until that pass finishes."
+        case .incomplete:
+            return "Local activity could not be read in full, so an empty breakdown here is not evidence of no activity."
+        case .complete:
+            guard recordsWithoutTokenTotals == 0 else {
+                return "\(recordsWithoutTokenTotals) session record\(recordsWithoutTokenTotals == 1 ? "" : "s") in this range carried no token total, so nothing can be shared out."
+            }
+            return "No local \(vendorName) activity recorded in this range."
+        }
+    }
+
+    /// Local activity is recorded per tool, not per subscription: an OpenCode
+    /// session does not say which OpenCode Go workspace it billed. Charting a
+    /// workspace's readings above every OpenCode session would attribute
+    /// activity nothing measured, so the breakdown says whose it is.
+    public static func activityScopeNote(vendor: VendorIdentifier, subjectName: String) -> String? {
+        guard vendor == .opencode else { return nil }
+        return "Sessions from every OpenCode account on this Mac. Which workspace a session used is not recorded, so this is not \(subjectName)'s activity alone."
     }
 }

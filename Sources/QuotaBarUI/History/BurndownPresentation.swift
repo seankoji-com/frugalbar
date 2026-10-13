@@ -330,10 +330,12 @@ public struct InspectorExport: Codable, Equatable, Sendable {
     public let resetCreditsAvailable: Int?
     public let resetCreditsApplicable: Int?
     public let lastUpdated: Date
-    public let readingsCount: Int
+    /// nil when the history was not read, or could not be: an export must
+    /// not record a failed read as zero readings.
+    public let readingsCount: Int?
     public let bars: [Bar]
 
-    public init(snapshot: QuotaSnapshot, readingsCount: Int) {
+    public init(snapshot: QuotaSnapshot, readingsCount: Int?) {
         vendor = snapshot.vendorId.rawValue
         displayName = snapshot.displayName
         category = snapshot.category.rawValue

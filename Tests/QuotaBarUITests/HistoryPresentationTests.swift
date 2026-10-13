@@ -214,3 +214,42 @@ struct HistoryPresentationTests {
         #expect(start7 == now.addingTimeInterval(-7 * 86_400))
     }
 }
+
+@Suite("History activity breakdown wording")
+struct HistoryActivityWordingTests {
+
+    @Test("only a finished, clean pass may say there was no activity")
+    func emptyNeedsACleanPass() {
+        let reading = HistoryPresentation.activityEmptyMessage(.indexing, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        let short = HistoryPresentation.activityEmptyMessage(.incomplete, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        let clean = HistoryPresentation.activityEmptyMessage(.complete, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        #expect(reading.hasPrefix("Still reading"))
+        #expect(short.contains("could not be read"))
+        #expect(!reading.contains("No local") && !short.contains("No local"))
+        #expect(clean == "No local Claude activity recorded in this range.")
+        // An unknown status is never complete.
+        #expect(TokenUsagePresentation.IngestionProgress(nil) == .indexing)
+    }
+
+    @Test("records with no token total are named, not counted as zero")
+    func uncountedRecords() {
+        let text = HistoryPresentation.activityEmptyMessage(.complete, vendorName: "Codex", recordsWithoutTokenTotals: 3)
+        #expect(text.hasPrefix("3 session records"))
+        #expect(!text.contains("No local"))
+    }
+
+    @Test("a breakdown that is still filling or short says so above its figures")
+    func progressNotes() {
+        #expect(HistoryPresentation.activityProgressNote(.complete) == nil)
+        #expect(HistoryPresentation.activityProgressNote(.indexing) != nil)
+        #expect(HistoryPresentation.activityProgressNote(.incomplete) != nil)
+    }
+
+    @Test("OpenCode activity is never presented as one workspace's own")
+    func workspaceScope() throws {
+        let note = try #require(HistoryPresentation.activityScopeNote(vendor: .opencode, subjectName: "Go Beta"))
+        #expect(note.contains("every OpenCode account"))
+        #expect(note.contains("Go Beta"))
+        #expect(HistoryPresentation.activityScopeNote(vendor: .claude, subjectName: "Claude") == nil)
+    }
+}

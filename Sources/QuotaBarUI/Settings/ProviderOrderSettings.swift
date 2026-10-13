@@ -55,7 +55,9 @@ struct ProviderOrderSettings: View {
                        The provider whose longest window turns over soonest comes \
                        first and a spent one goes last. The list below only breaks \
                        ties. OpenCode Go workspaces always stay together, in the \
-                       order you give them.
+                       order you give them, placed by whichever of them is most \
+                       usable, so a spent workspace stays with the others until \
+                       every one of them is spent.
                        """
                      : "Providers and workspaces appear exactly in the order below.")
                     .font(.caption)

@@ -98,7 +98,7 @@ struct DesktopWidgetView: View {
 
         var readings: [QuotaHistoryStore.ReadingRecord] = []
         for vendor in vendors {
-            readings += await store.readings(for: vendor, since: since)
+            readings += await store.readings(for: vendor, since: since) ?? []
             if Task.isCancelled { return }
         }
 

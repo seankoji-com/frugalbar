@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // writes looked exactly like one with nothing to record.
                 do {
                     try await hStore.record(snapshots)
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .frugalbarHistoryDidRecord, object: nil)
+                    }
                 } catch {
                     NSLog("frugalbar: failed to record quota history: \(error)")
                 }
@@ -58,12 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return []
                 }
             },
+            // nil, not empty, on a failed read: the inspector says it could
+            // not read the history rather than "0 readings" or "no events".
             vendorReadingsLoader: { vendor, since in
                 do {
                     return try await hStore.fetchReadings(vendor: vendor, since: since)
                 } catch {
                     NSLog("frugalbar: failed to read quota history for \(vendor.rawValue): \(error)")
-                    return []
+                    return nil
                 }
             },
             eventsLoader: { vendor, instanceId, kinds, since, limit in
@@ -72,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         vendor: vendor, instanceID: instanceId, kinds: kinds, since: since, limit: limit)
                 } catch {
                     NSLog("frugalbar: failed to read AI events: \(error)")
-                    return []
+                    return nil
                 }
             },
             tokenUsageLoader: { since, until, bucketSeconds, anchor in
@@ -98,6 +103,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
         // produces a bare executable, so set the accessory policy explicitly too.
         NSApp.setActivationPolicy(.accessory)
+
+        let activity = activityEngine
+        HistoryWindow.activityStatusLoader = { await activity.status() }
 
         // Adopt a choice made under an older, process-name-keyed preference
         // domain before deciding whether this is a first launch — otherwise

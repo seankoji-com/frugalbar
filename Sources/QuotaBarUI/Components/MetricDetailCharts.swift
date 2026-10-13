@@ -41,16 +41,28 @@ struct BurndownChartView: View {
     let now: Date
     @State private var hoverDate: Date?
 
-    /// The recorded reading under the pointer, if one is close enough to
-    /// claim. Projections and the pace line are never inspected: they are
-    /// not readings.
-    private var inspected: BurndownPresentation.Point? {
-        guard let hoverDate else { return nil }
-        let span = range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 86_400
-        let tolerance = max(300, span / 50)
-        return burndown.actual
-            .filter { abs($0.timestamp.timeIntervalSince(hoverDate)) <= tolerance }
-            .min { abs($0.timestamp.timeIntervalSince(hoverDate)) < abs($1.timestamp.timeIntervalSince(hoverDate)) }
+    /// The recorded readings as one inspectable series. Projections and the
+    /// pace line are never inspected: they are not readings.
+    private var readingSegments: [HistoryPresentation.TimelineSegment] {
+        [HistoryPresentation.TimelineSegment(
+            vendor: "", barLabel: burndown.barLabel, resetsAt: nil,
+            points: burndown.actual.map {
+                HistoryPresentation.TimelinePoint(
+                    timestamp: $0.timestamp, fraction: $0.usedFraction, isBlocked: $0.isBlocked,
+                    confidence: .measured, urgency: $0.urgency)
+            })]
+    }
+
+    private var tolerance: TimeInterval {
+        max(300, (range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 86_400) / 50)
+    }
+
+    /// The recorded reading under the pointer or keyboard selection, if one
+    /// is close enough to claim.
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap {
+            HistoryOverviewPresentation.nearestPoll(to: $0, in: readingSegments, tolerance: tolerance)
+        }
     }
 
     private var range: ClosedRange<Date>? { BurndownPresentation.windowRange(for: burndown) }
@@ -94,9 +106,10 @@ struct BurndownChartView: View {
                     }
                 }
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(burndown.barLabel) burndown, remaining quota")
-            .accessibilityValue(BurndownPresentation.accessibilityDescription(for: burndown, now: now))
+            .modifier(ReadingInspection(
+                segments: readingSegments, selection: $hoverDate, tolerance: tolerance,
+                label: "\(burndown.barLabel) burndown, remaining quota",
+                summary: BurndownPresentation.accessibilityDescription(for: burndown, now: now)))
     }
 
     @ViewBuilder
@@ -156,17 +169,13 @@ struct BurndownChartView: View {
                     }
             }
 
-            if let point = inspected {
-                RuleMark(x: .value("Inspected", point.timestamp))
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(position: .top, alignment: .center, spacing: 2,
                                 overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                        ReadingReadout(
-                            timestamp: point.timestamp,
-                            rows: [ReadingReadout.Row(label: burndown.barLabel, usedFraction: point.usedFraction,
-                                                      isBlocked: point.isBlocked, urgency: point.urgency)],
-                            showsDate: (range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 0) > 36 * 3600)
+                        ReadingReadout(poll: poll)
                     }
             }
         }
@@ -202,9 +211,8 @@ struct UsageHistoryChartView: View {
         WindowDashLegend.dash(for: label, in: labels)
     }
 
-    private var inspected: [(barLabel: String, point: HistoryPresentation.TimelinePoint)] {
-        guard let hoverDate else { return [] }
-        let segments = series.map { s in
+    private var readingSegments: [HistoryPresentation.TimelineSegment] {
+        series.map { s in
             HistoryPresentation.TimelineSegment(
                 vendor: "", barLabel: s.label, resetsAt: nil,
                 points: s.points.map {
@@ -213,9 +221,16 @@ struct UsageHistoryChartView: View {
                         confidence: .measured, urgency: $0.urgency)
                 })
         }
-        return HistoryOverviewPresentation.nearestPoints(
-            to: hoverDate, in: segments,
-            tolerance: HistoryOverviewPresentation.inspectionTolerance(range: range, now: now, earliest: nil))
+    }
+
+    private var tolerance: TimeInterval {
+        HistoryOverviewPresentation.inspectionTolerance(range: range, now: now, earliest: nil)
+    }
+
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap {
+            HistoryOverviewPresentation.nearestPoll(to: $0, in: readingSegments, tolerance: tolerance)
+        }
     }
 
     private var axisFormat: String {
@@ -269,19 +284,13 @@ struct UsageHistoryChartView: View {
                     }
             }
 
-            if let first = inspected.first {
-                RuleMark(x: .value("Inspected", first.point.timestamp))
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(position: .top, alignment: .center, spacing: 2,
                                 overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                        ReadingReadout(
-                            timestamp: first.point.timestamp,
-                            rows: inspected.map {
-                                ReadingReadout.Row(label: $0.barLabel, usedFraction: $0.point.fraction,
-                                                   isBlocked: $0.point.isBlocked, urgency: $0.point.urgency)
-                            },
-                            showsDate: range != .last24Hours)
+                        ReadingReadout(poll: poll)
                     }
             }
         }
@@ -318,13 +327,12 @@ struct UsageHistoryChartView: View {
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Usage history, \(range.title)")
-        .accessibilityValue(
-            ([BurndownPresentation.historyAccessibilityDescription(series: series, range: range)]
-             + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
-            .joined(separator: ". ")
-        )
+        .modifier(ReadingInspection(
+            segments: readingSegments, selection: $hoverDate, tolerance: tolerance,
+            label: "Usage history, \(range.title)",
+            summary: ([BurndownPresentation.historyAccessibilityDescription(series: series, range: range)]
+                      + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+                .joined(separator: ". ")))
     }
 }
 

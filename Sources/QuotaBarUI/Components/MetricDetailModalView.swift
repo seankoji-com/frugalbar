@@ -14,8 +14,8 @@ import QuotaBarCore
 public struct MetricDetailModalView: View {
 
     let snapshot: QuotaSnapshot
-    let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]
-    let eventsLoader: (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]
+    let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]?
+    let eventsLoader: (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]?
     let onClose: () -> Void
 
     @State private var copied = false
@@ -26,6 +26,10 @@ public struct MetricDetailModalView: View {
     @State private var recentEvents: [AIEvent] = []
     @State private var markerEvents: [AIEvent] = []
     @State private var isLoading = true
+    /// The readings or events could not be read. Each is then said as a
+    /// failure to read, never as "no readings" or "no events".
+    @State private var readingsFailed = false
+    @State private var eventsFailed = false
     /// Fixed when the data loads, so every derived figure on screen agrees
     /// on one instant instead of each calling `Date()`.
     @State private var now = Date()
@@ -48,18 +52,19 @@ public struct MetricDetailModalView: View {
     static let maxBodyHeight: CGFloat = 480
 
     /// - Parameters:
-    ///   - readingsLoader: one vendor's recorded readings since a date.
+    ///   - readingsLoader: one vendor's recorded readings since a date; nil
+    ///     when the history could not be read.
     ///   - eventsLoader: one vendor's and instance's recorded events of the
     ///     given kinds (nil: every kind) since a date, newest first, at most
-    ///     `limit`. The instance keeps a sibling workspace's events out; the
-    ///     vendor's own still come through.
+    ///     `limit`; nil when they could not be read. The instance keeps a
+    ///     sibling workspace's events out; the vendor's own still come through.
     ///
     /// Both run once per vendor when the modal appears, never on the refresh
     /// path.
     public init(
         snapshot: QuotaSnapshot,
-        readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord],
-        eventsLoader: @escaping (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent],
+        readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]?,
+        eventsLoader: @escaping (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]?,
         onClose: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -147,9 +152,13 @@ public struct MetricDetailModalView: View {
         let m = await eventsLoader(
             vendor, snapshot.id, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
-        readings = r
-        recentEvents = e
-        markerEvents = m
+        readings = r ?? []
+        readingsFailed = r == nil
+        recentEvents = e ?? []
+        eventsFailed = e == nil
+        // Markers are a decoration on the chart; the events card already
+        // says when events could not be read.
+        markerEvents = m ?? []
         now = loadTime
         isLoading = false
     }
@@ -233,7 +242,9 @@ public struct MetricDetailModalView: View {
     private var presentation: MetricDetailPresentation {
         MetricDetailPresentation(
             snapshot: snapshot,
-            readingsRecorded: isLoading ? nil : readings.filter { $0.vendor == snapshot.id }.count,
+            history: isLoading ? .loading
+                : readingsFailed ? .unreadable
+                : .counted(readings.filter { $0.vendor == snapshot.id }.count),
             now: now)
     }
 
@@ -268,6 +279,11 @@ public struct MetricDetailModalView: View {
                     Spacer(minLength: 4)
                     if let percent = summary.percentUsed, let label = summary.focusLabel {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            // A blocked window's figure is not headroom: the
+                            // glyph sits beside it here as on every bar.
+                            if summary.focusIsBlocked {
+                                BlockedGlyph(color: summaryColor, size: 14)
+                            }
                             Text("\(percent)%")
                                 .font(.system(size: 24, weight: .semibold).monospacedDigit())
                                 .foregroundStyle(Theme.onSurface)
@@ -275,6 +291,9 @@ public struct MetricDetailModalView: View {
                                 .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                         }
+                        // The headline wraps instead; a figure split across
+                        // lines ("97" over "%") cannot be read at a glance.
+                        .fixedSize()
                     } else if let figure = summary.figure {
                         Text(figure)
                             .font(Theme.Typography.numeric)
@@ -440,6 +459,11 @@ public struct MetricDetailModalView: View {
                         .controlSize(.small)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .accessibilityLabel("Loading readings")
+                } else if readingsFailed {
+                    ChartEmptyState(
+                        symbol: "exclamationmark.triangle",
+                        message: "Could not read the recorded history. This is a failure to read, not an absence of readings."
+                    )
                 } else {
                     switch chartMode {
                     case .burndown: burndownContent
@@ -527,6 +551,11 @@ public struct MetricDetailModalView: View {
                 Text("Loading…")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.outline)
+            } else if eventsFailed {
+                Label("Could not read recorded events for this provider.", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.outline)
+                    .fixedSize(horizontal: false, vertical: true)
             } else if recentEvents.isEmpty {
                 Text("No resets, outages or new models recorded for this provider.")
                     .font(.system(size: 11))
@@ -624,7 +653,7 @@ public struct MetricDetailModalView: View {
     }
 
     private func copyJson() {
-        guard let json = InspectorExport(snapshot: snapshot, readingsCount: readings.count).jsonString() else { return }
+        guard let json = InspectorExport(snapshot: snapshot, readingsCount: isLoading || readingsFailed ? nil : readings.count).jsonString() else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
         copied = true

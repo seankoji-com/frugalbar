@@ -86,7 +86,7 @@ public struct SettingsView: View {
                   + "or OpenCode auth.json when CLI discovery is on."),
         // OpenCode Go is not a single slot: it is one row per named workspace,
         // each with its own key, managed in the "OpenCode Go workspaces"
-        // section below. The first workspace keeps the legacy `opencode`
+        // section below. The original workspace keeps the legacy `opencode`
         // Keychain label, so a key entered before workspaces existed is still
         // the one that is used and never has to be re-entered.
         .init(id: .grok, label: "Grok",
@@ -480,10 +480,11 @@ public struct SettingsView: View {
                  own API key, monitored and shown as its own reading. Drag a row \
                  or use its arrows to set the order the popover, History and the \
                  desktop widget list them in; renaming or reordering never moves \
-                 a key or its history. The first workspace keeps your existing \
-                 OpenCode key and the CLI auth.json fallback; later ones are read \
-                 from their own Keychain entry only. A key is written to the \
-                 Keychain and never shown again.
+                 a key or its history. The original workspace, marked below \
+                 its key field, keeps your existing OpenCode key and the CLI \
+                 auth.json fallback wherever it sits in the list; every other \
+                 workspace is read from its own Keychain entry only. A key is \
+                 written to the Keychain and never shown again.
                  """)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -552,6 +553,15 @@ public struct SettingsView: View {
                 Button("Save") { Task { await saveWorkspaceKey(workspace) } }
                     .disabled((workspaceKeys[instanceID] ?? "")
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            // Credential ownership follows the workspace, not its position:
+            // this one inherited the pre-workspace key wherever it is moved.
+            if workspace.id == OpenCodeGoWorkspaceStore.legacyID {
+                Label("Original workspace: uses your existing OpenCode key and the CLI login",
+                      systemImage: "key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if let status = workspaceStatus[instanceID] {

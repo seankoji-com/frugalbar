@@ -94,6 +94,82 @@ struct MetricDetailPresentationTests {
         #expect(p.windows.first?.noFigureText == "Blocked")
     }
 
+    @Test("a blocked window that still reports a percentage leads as blocked, not as low")
+    func blockedWithReading() {
+        let blocked = weekly(used: 0.97, elapsed: 0.5, isBlocked: true)
+        let p = MetricDetailPresentation(snapshot: snapshot(status: .measured(.critical), bars: [blocked]), now: now)
+        #expect(p.summary.state == .blocked)
+        #expect(p.summary.focusIsBlocked)
+        #expect(p.summary.headline != "Critically low")
+        #expect(p.summary.symbol == BlockedGlyph.symbolName)
+        #expect(p.summary.percentUsed == 97)
+        #expect(p.summary.accessibilityLabel.lowercased().contains("blocked"))
+        #expect(p.summary.paceVerdict == nil)
+    }
+
+    @Test("with one window blocked and another measured, the blocked one is the focus")
+    func mixedBlockedAndMeasured() {
+        let five = DualBarMetrics(primaryFraction: 0.3, label: "5H", resetsAt: now.addingTimeInterval(3600),
+                                  windowLength: 5 * 3600)
+        let p = MetricDetailPresentation(
+            snapshot: snapshot(status: .measured(.critical), bars: [five, weekly(used: 0.5, elapsed: 0.5, isBlocked: true)]),
+            now: now)
+        #expect(p.summary.state == .blocked)
+        #expect(p.summary.focusLabel == "WK")
+        #expect(p.summary.percentUsed == 50)
+    }
+
+    @Test("a blocked window is never given a projected run-out time")
+    func noExhaustionForecastWhenBlocked() throws {
+        // Twice an even pace: an unblocked window would run out before reset.
+        let open = MetricDetailPresentation.windowLine(weekly(used: 0.6, elapsed: 0.3), now: now)
+        #expect(open.detail.contains("runs out"))
+        let blocked = MetricDetailPresentation.windowLine(weekly(used: 0.6, elapsed: 0.3, isBlocked: true), now: now)
+        #expect(blocked.detail.contains("Blocked by the vendor"))
+        #expect(!blocked.detail.contains("runs out"))
+        #expect(!blocked.accessibilityLabel.contains("runs out"))
+    }
+
+    @Test("the inspector and History's pace card give one reading the same verdict")
+    func paceAgreesWithHistory() throws {
+        // The fixture the review found contradicting itself: 62% used, 54% elapsed.
+        let length = 7 * 86_400.0
+        let reset = now.addingTimeInterval(length * 0.46)
+        let bar = DualBarMetrics(primaryFraction: 0.62, expectedPaceFraction: 0.54, label: "WK",
+                                 resetsAt: reset, windowLength: length)
+        let reading = QuotaHistoryStore.ReadingRecord(
+            vendor: "claude", barLabel: "WK", measuredAt: now, fraction: 0.62, isBlocked: false,
+            confidence: .measured, urgency: .none, resetsAt: reset, windowLength: length, elapsedOnly: false)
+
+        #expect(MetricDetailPresentation.paceVerdict(for: bar)?.hasPrefix("Ahead of even pace") == true)
+        #expect(try #require(HistoryPresentation.computePace(reading: reading, now: now)).status == .aheadOfPace)
+
+        // And within the margin, both say even.
+        let even = QuotaHistoryStore.ReadingRecord(
+            vendor: "claude", barLabel: "WK", measuredAt: now, fraction: 0.56, isBlocked: false,
+            confidence: .measured, urgency: .none, resetsAt: reset, windowLength: length, elapsedOnly: false)
+        var evenBar = bar
+        evenBar.primaryFraction = 0.56
+        #expect(MetricDetailPresentation.paceVerdict(for: evenBar)?.hasPrefix("On even pace") == true)
+        #expect(try #require(HistoryPresentation.computePace(reading: even, now: now)).status == .onPace)
+
+        // A blocked reading gets no verdict on either surface.
+        let blocked = QuotaHistoryStore.ReadingRecord(
+            vendor: "claude", barLabel: "WK", measuredAt: now, fraction: 0.62, isBlocked: true,
+            confidence: .measured, urgency: .critical, resetsAt: reset, windowLength: length, elapsedOnly: false)
+        #expect(HistoryPresentation.computePace(reading: blocked, now: now) == nil)
+    }
+
+    @Test("a history that could not be read is said as such, never as zero readings")
+    func unreadableHistory() {
+        let failed = MetricDetailPresentation(snapshot: snapshot(bars: [weekly(used: 0.4, elapsed: 0.5)]),
+                                              history: .unreadable, now: now)
+        let rows = Dictionary(uniqueKeysWithValues: failed.provenance.map { ($0.label, $0.value) })
+        #expect(rows["History"] == "Could not be read")
+        let loading = MetricDetailPresentation(snapshot: snapshot(bars: [weekly(used: 0.4, elapsed: 0.5)]), now: now)
+        #expect(!loading.provenance.contains { $0.label == "History" })
+    }
+
     @Test("a provider with no window leads with its measured figure, and a tier is not a figure")
     func noWindowFigure() {
         let money = MetricDetailPresentation(
@@ -110,7 +186,7 @@ struct MetricDetailPresentationTests {
     func provenance() {
         let p = MetricDetailPresentation(
             snapshot: snapshot(metric: .count(remaining: 600, limit: 1000, unitName: "points")),
-            readingsRecorded: 12, now: now)
+            history: .counted(12), now: now)
         let rows = Dictionary(uniqueKeysWithValues: p.provenance.map { ($0.label, $0.value) })
         #expect(rows["Plan"] == .some(nil))
         #expect(rows["Source"] == .some(nil))

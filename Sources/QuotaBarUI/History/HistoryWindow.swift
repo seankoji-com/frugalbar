@@ -40,6 +40,10 @@ public enum HistoryWindow {
 
     private static var window: NSWindow?
     private static let tabRequest = HistoryTabRequest()
+    /// This process's local-activity ingestion status, set once at launch so
+    /// the activity breakdown can say whether it is complete. Unset, the
+    /// window never claims it is.
+    public static var activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
     /// Shows the History window.
     ///
@@ -58,7 +62,8 @@ public enum HistoryWindow {
             return
         }
 
-        let rootView = HistoryRootView(initialTab: tab, tabRequest: tabRequest)
+        let rootView = HistoryRootView(initialTab: tab, tabRequest: tabRequest,
+                                       activityStatus: activityStatusLoader)
         let hosting = NSHostingController(rootView: rootView)
         let created = NSWindow(contentViewController: hosting)
         created.title = "FrugalBar — History & Attribution"
