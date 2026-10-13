@@ -419,6 +419,12 @@ struct MenuBarPresentationTests {
         #expect(MenuBarPresentation.formatTimeLeft("42m") == "42m")
         #expect(MenuBarPresentation.formatTimeLeft("4d 6h") == "4d 6h")
         #expect(MenuBarPresentation.formatTimeLeft("167h 25m") == "167h 25m")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3 hours") == "3h")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 42 minutes") == "42m")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 4 days") == "4d")
+        #expect(MenuBarPresentation.formatTimeLeft("3 hrs 29 mins") == "3h 29m")
+        #expect(MenuBarPresentation.formatTimeLeft("3 models") == nil)
+        #expect(MenuBarPresentation.formatTimeLeft("1.5 hours") == nil)
         #expect(MenuBarPresentation.formatTimeLeft(nil) == nil)
         #expect(MenuBarPresentation.formatTimeLeft("Not reported") == nil)
     }

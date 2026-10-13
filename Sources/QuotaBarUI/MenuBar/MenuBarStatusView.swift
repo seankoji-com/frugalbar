@@ -137,9 +137,14 @@ public enum MenuBarPresentation {
         guard let text, !text.isEmpty else { return nil }
         let lower = text.lowercased()
         // Keep the published duration in hours/minutes instead of decimal hours.
-        let pattern = #"(?<![\d.])\d+\s*(?:d(?:\s*\d+\s*h)?|h(?:\s*\d+\s*m)?|m)(?![a-z])"#
+        let pattern = #"(?<![\d.])\d+\s*(?:d(?:ays?)?(?:\s*\d+\s*h(?:ours?|rs?)?)?|h(?:ours?|rs?)?(?:\s*\d+\s*m(?:in(?:ute)?s?)?)?|m(?:in(?:ute)?s?)?)(?![a-z])"#
         guard let range = lower.range(of: pattern, options: .regularExpression) else { return nil }
-        return lower[range].split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // RelativeDateTimeFormatter emits full units; compact only those units.
+        let duration = String(lower[range])
+            .replacingOccurrences(of: #"\s*d(?:ays?)?\b"#, with: "d", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*h(?:ours?|rs?)?\b"#, with: "h", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*m(?:in(?:ute)?s?)?\b"#, with: "m", options: .regularExpression)
+        return duration.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     public static func symbolName(for summary: SystemHealthSummary) -> String {
