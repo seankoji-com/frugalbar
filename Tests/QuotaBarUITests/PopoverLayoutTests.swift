@@ -5,6 +5,18 @@ import Testing
 @Suite("Popover layout")
 @MainActor
 struct PopoverLayoutTests {
+    @Test("an inspector reserves space even when the provider list is short")
+    func inspectorReservesHeight() {
+        #expect(PopoverRootView.minimumHeight(isInspecting: true, availableHeight: 800) == 640)
+        #expect(PopoverRootView.minimumHeight(isInspecting: false, availableHeight: 800) == 0)
+    }
+
+    @Test("inspector height remains within a short screen")
+    func inspectorMinimumFitsScreen() {
+        #expect(PopoverRootView.minimumHeight(isInspecting: true, availableHeight: 450) == 438)
+        #expect(PopoverRootView.minimumHeight(isInspecting: true, availableHeight: 8) == 0)
+    }
+
     @Test("content height is preserved when it fits")
     func contentFits() {
         #expect(PopoverRootView.scrollHeight(contentHeight: 420, availableHeight: 800, footerHeight: 44) == 420)

@@ -598,7 +598,6 @@ public struct MetricDetailModalView: View {
                 .clipShape(Capsule())
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close details")
-                .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, 10)

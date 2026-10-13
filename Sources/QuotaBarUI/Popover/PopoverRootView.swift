@@ -79,6 +79,7 @@ public struct PopoverRootView: View {
             }
         }
         .frame(width: Self.popoverWidth)
+        .frame(minHeight: Self.minimumHeight(isInspecting: selectedSnapshot != nil, availableHeight: availableHeight))
         .background(Theme.surface)
         .allowsHitTesting(selectedSnapshot == nil)
         .accessibilityHidden(selectedSnapshot != nil)
@@ -118,6 +119,11 @@ public struct PopoverRootView: View {
     private var scrollHeight: CGFloat {
         // Leave room for the footer and popover chrome below the menu bar.
         Self.scrollHeight(contentHeight: contentHeight, availableHeight: availableHeight, footerHeight: footerHeight)
+    }
+
+    /// A short provider list must not squeeze the inspector's chart to a sliver.
+    static func minimumHeight(isInspecting: Bool, availableHeight: CGFloat) -> CGFloat {
+        isInspecting ? min(popoverHeight, max(0, availableHeight - 12)) : 0
     }
 
     static func scrollHeight(contentHeight: CGFloat, availableHeight: CGFloat, footerHeight: CGFloat) -> CGFloat {

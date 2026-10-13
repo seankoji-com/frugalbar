@@ -577,7 +577,7 @@ public struct HistoryRootView: View {
                 try await SampleDataGenerator.ensureSampleData(in: sampleStore)
             } catch {
                 NSLog("frugalbar: sample history failed: %@", error.localizedDescription)
-                loadError = HistoryPresentation.failureMessage(for: error)
+                loadError = "Could not prepare the sample data. Try again or reopen FrugalBar."
                 segments = []
                 pace = nil
                 attribution = nil
