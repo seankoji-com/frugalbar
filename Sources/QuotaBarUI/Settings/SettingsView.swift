@@ -173,7 +173,7 @@ public struct SettingsView: View {
                     slotRow(slot)
                 }
             } header: {
-                Text("Providers")
+                Text("Credentials")
             } footer: {
                 Text("""
                      These fill themselves in from your CLI logins. Expand a \

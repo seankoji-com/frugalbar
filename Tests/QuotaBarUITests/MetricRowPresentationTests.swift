@@ -293,8 +293,11 @@ struct MenuBarPresentationTests {
 
         #expect(details.vendorId == .gemini)
         #expect(details.remainingPctText == "41%")
-        #expect(details.timeLeftText == "3.48hr")
-        #expect(details.displayText == "41% 3.48hr")
+        #expect(details.timeLeftText == "3h 29m")
+        #expect(details.displayText == "41% 3h 29m")
+        let spoken = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: details)
+        #expect(spoken.contains("Gemini 41% remaining"))
+        #expect(spoken.contains("resets in 3h 29m"))
     }
 
     @Test("recommendationDetails picks the healthy measured vendor over one merely first in order")
@@ -411,10 +414,13 @@ struct MenuBarPresentationTests {
 
     @Test("formatTimeLeft parses various duration formats")
     func formatTimeLeftParsesDurations() {
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3.48hr")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 2h 10m") == "2.17hr")
-        #expect(MenuBarPresentation.formatTimeLeft("42m") == "0.70hr")
-        #expect(MenuBarPresentation.formatTimeLeft("4d 6h") == "4.2d")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3h 29m")
+        #expect(MenuBarPresentation.formatTimeLeft("Resets in 2h 10m") == "2h 10m")
+        #expect(MenuBarPresentation.formatTimeLeft("42m") == "42m")
+        #expect(MenuBarPresentation.formatTimeLeft("4d 6h") == "4d 6h")
+        #expect(MenuBarPresentation.formatTimeLeft("167h 25m") == "167h 25m")
+        #expect(MenuBarPresentation.formatTimeLeft(nil) == nil)
+        #expect(MenuBarPresentation.formatTimeLeft("Not reported") == nil)
     }
 }
 

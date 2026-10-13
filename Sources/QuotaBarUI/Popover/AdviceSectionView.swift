@@ -19,7 +19,17 @@ public struct AdviceSectionView: View {
         Color(hexString: advice.iconColorHex) ?? Theme.secondary
     }
 
+    @ViewBuilder
     public var body: some View {
+        if let onActionTap {
+            Button(action: onActionTap) { cardContent }
+                .buttonStyle(.plain)
+        } else {
+            cardContent
+        }
+    }
+
+    private var cardContent: some View {
         HStack(alignment: .top, spacing: 12) {
 
                 // Vendor brand logo, or a glowing status icon when the advice
@@ -77,9 +87,7 @@ public struct AdviceSectionView: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
-        .onTapGesture { onActionTap?() }
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(isActionable ? .isButton : [])
         .accessibilityLabel(advice.suggestedAction.map { "\(advice.headline). \(advice.message) \($0)" }
                             ?? "\(advice.headline). \(advice.message)")
     }

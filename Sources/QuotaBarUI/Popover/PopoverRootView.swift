@@ -47,44 +47,42 @@ public struct PopoverRootView: View {
     }
 
     public var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                ScrollView(.vertical) {
-                    sections
-                        .frame(maxWidth: .infinity)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                            contentHeight = $0
-                        }
-                }
-                // Measure the content, not the viewport. Fixing the scroll
-                // view at its intrinsic height clipped both ends when capped.
-                .frame(idealHeight: scrollHeight, maxHeight: scrollHeight, alignment: .top)
-                .scrollBounceBehavior(.basedOnSize)
-
-                FooterActionsView(
-                    summary: store.summary,
-                    isRefreshing: store.isRefreshing,
-                    onOpenSettings: {
-                        if let onOpenSettings {
-                            onOpenSettings()
-                        } else {
-                            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                        }
-                    },
-                    onQuit: { NSApp.terminate(nil) },
-                    onRefresh: { Task { await store.forceRefresh() } }
-                )
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                    footerHeight = $0
-                }
+        VStack(spacing: 0) {
+            ScrollView(.vertical) {
+                sections
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        contentHeight = $0
+                    }
             }
-            .frame(width: Self.popoverWidth)
-            .background(Theme.surface)
+            // Measure the content, not the viewport. Fixing the scroll
+            // view at its intrinsic height clipped both ends when capped.
+            .frame(idealHeight: scrollHeight, maxHeight: scrollHeight, alignment: .top)
+            .scrollBounceBehavior(.basedOnSize)
 
-
-
-
+            FooterActionsView(
+                summary: store.summary,
+                isRefreshing: store.isRefreshing,
+                onOpenSettings: {
+                    if let onOpenSettings {
+                        onOpenSettings()
+                    } else {
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
+                },
+                onQuit: { NSApp.terminate(nil) },
+                onRefresh: { Task { await store.forceRefresh() } }
+            )
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                footerHeight = $0
+            }
+        }
+        .frame(width: Self.popoverWidth)
+        .background(Theme.surface)
+        .allowsHitTesting(selectedSnapshot == nil)
+        .accessibilityHidden(selectedSnapshot != nil)
+        .overlay {
             if let snap = selectedSnapshot {
                 MetricDetailModalView(
                     snapshot: snap,

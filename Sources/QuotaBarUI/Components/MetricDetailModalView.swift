@@ -28,6 +28,8 @@ public struct MetricDetailModalView: View {
     /// on one instant instead of each calling `Date()`.
     @State private var now = Date()
     @State private var bodyHeight: CGFloat = 0
+    @State private var headerHeight: CGFloat = 70
+    @State private var footerHeight: CGFloat = 48
 
     enum ChartMode: String, CaseIterable, Identifiable {
         case burndown = "Burndown"
@@ -78,37 +80,50 @@ public struct MetricDetailModalView: View {
     }
 
     public var body: some View {
-        ZStack {
-            // Semi-transparent backdrop
-            Color.black.opacity(0.65)
-                .ignoresSafeArea()
-                .onTapGesture { onClose() }
+        GeometryReader { geometry in
+            ZStack {
+                // Semi-transparent backdrop
+                Color.black.opacity(0.65)
+                    .ignoresSafeArea()
+                    .onTapGesture { onClose() }
 
-            // Modal card
-            VStack(spacing: 0) {
-                header
-                ScrollView(.vertical) {
-                    content
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                            bodyHeight = $0
-                        }
+                // Modal card
+                VStack(spacing: 0) {
+                    header
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+                    ScrollView(.vertical) {
+                        content
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                bodyHeight = $0
+                            }
+                    }
+                    .frame(height: Self.scrollHeight(contentHeight: bodyHeight,
+                        availableHeight: geometry.size.height, headerHeight: headerHeight, footerHeight: footerHeight))
+                    .scrollBounceBehavior(.basedOnSize)
+                    footer
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
                 }
-                .frame(height: min(bodyHeight > 0 ? bodyHeight : Self.maxBodyHeight, Self.maxBodyHeight))
-                .scrollBounceBehavior(.basedOnSize)
-                footer
+                .frame(width: 348)
+                .background(Theme.card)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                        .stroke(Theme.outlineVariant.opacity(0.4), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
+                .padding(Theme.edgeMargin)
             }
-            .frame(width: 348)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                    .stroke(Theme.outlineVariant.opacity(0.4), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
-            .padding(Theme.edgeMargin)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: snapshot.id) { await load() }
+        .onExitCommand(perform: onClose)
+    }
+
+    static func scrollHeight(contentHeight: CGFloat, availableHeight: CGFloat,
+                             headerHeight: CGFloat, footerHeight: CGFloat) -> CGFloat {
+        min(contentHeight > 0 ? contentHeight : maxBodyHeight, maxBodyHeight,
+            max(0, availableHeight - headerHeight - footerHeight - 2 * Theme.edgeMargin))
     }
 
     private func load() async {
@@ -156,6 +171,7 @@ public struct MetricDetailModalView: View {
                         .font(Theme.Typography.title)
                         .tracking(Theme.Tracking.title)
                         .foregroundStyle(Theme.onSurface)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if let badge = snapshot.badgeText {
                         Text(badge)
@@ -175,6 +191,7 @@ public struct MetricDetailModalView: View {
             }
 
             Spacer()
+                .frame(minWidth: 0)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -186,6 +203,7 @@ public struct MetricDetailModalView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close \(snapshot.displayName) details")
+            .help("Close details (Esc)")
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, 12)
@@ -250,7 +268,7 @@ public struct MetricDetailModalView: View {
                         title: "\(displayBars[0].label) Window Usage",
                         icon: "clock",
                         primaryValue: displayBars[0].usedText ?? "—",
-                        secondaryValue: displayBars[0].resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0) } ?? "—",
+                        secondaryValue: displayBars[0].resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0, now: now) } ?? "—",
                         bar: displayBars[0]
                     )
 
@@ -580,6 +598,7 @@ public struct MetricDetailModalView: View {
                 .clipShape(Capsule())
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close details")
+                .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, Theme.cardPadding)
         .padding(.vertical, 10)

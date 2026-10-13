@@ -355,8 +355,11 @@ public enum CredentialStore {
 
     /// Returns the API key for a vendor: Keychain first, then — only when the
     /// user has opted in — known CLI config locations.
-    public static func apiKey(for vendor: VendorIdentifier) -> String? {
-        if let kc = try? KeychainManager.shared.get(label: vendor.rawValue), !kc.isEmpty {
+    public static func apiKey(
+        for vendor: VendorIdentifier,
+        readKeychain: (String) -> String? = { try? KeychainManager.shared.get(label: $0) }
+    ) -> String? {
+        if let kc = readKeychain(vendor.rawValue), !kc.isEmpty {
             return kc
         }
         guard isCLIDiscoveryEnabled else { return nil }

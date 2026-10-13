@@ -270,7 +270,8 @@ struct EventsListView: View {
         } catch {
             events = []
             storeIsEmpty = false
-            loadError = error.localizedDescription
+            NSLog("frugalbar: event history read failed: %@", error.localizedDescription)
+            loadError = HistoryPresentation.failureMessage(for: error)
         }
     }
 }

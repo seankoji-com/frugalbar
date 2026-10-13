@@ -57,7 +57,7 @@ public struct AboutView: View {
 
             Text(AppInfo.copyright)
                 .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                .foregroundStyle(Theme.outline)
                 .padding(.top, 16)
                 .padding(.bottom, 20)
         }
