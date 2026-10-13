@@ -55,6 +55,11 @@ public struct SettingsView: View {
               placeholder: "Cline API key or account token",
               note: "Discovered from ~/.cline/data/settings/providers.json when CLI discovery is on. "
                   + "Run `cline auth` (or sign in in the Cline extension) to create it."),
+        .init(id: .muse, label: "Muse",
+              placeholder: "Muse OAuth access token",
+              note: "Discovered from the Muse CLI login in the macOS Keychain when CLI discovery is on. "
+                  + "Paste the OAuth access token — the minted api_key is rejected. "
+                  + "Run `muse login` if the row stops reading."),
     ]
 
     @State private var selectedTab: Tab = .keys
@@ -597,7 +602,7 @@ public struct SettingsView: View {
     /// renewal date is just as useful for a vendor it cannot read at all.
     private static let cycleVendors: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode, .openrouter,
-        .deepseek, .grok, .kiro,
+        .deepseek, .grok, .kiro, .muse,
     ]
 
     private var generalTab: some View {
@@ -613,7 +618,8 @@ public struct SettingsView: View {
                      ~/.commandcode/auth.json, or \
                      ~/.cline/data/settings/providers.json; read the \
                      OPENROUTER_API_KEY environment variable; or read the \
-                     Claude Code login Keychain item — if the Keychain has no \
+                     Claude Code or Muse Code login Keychain item — if the \
+                     Keychain has no \
                      entry for a provider. Off by default: this reads \
                      credentials you have not explicitly given the app.
                      """)
@@ -869,6 +875,7 @@ public struct SettingsView: View {
         case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
         case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
         case .clinepass:   provider = ClinePassQuotaProvider(apiKey: key)
+        case .muse:        provider = MuseQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 

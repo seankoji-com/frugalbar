@@ -35,6 +35,7 @@ public enum CLILauncher {
         case .devpass:                      "opencode"
         case .commandcode:                  "command-code"
         case .clinepass:                    "cline"
+        case .muse:                         "muse"
         case .githubRest, .githubGraphql:   nil
         }
     }
