@@ -31,16 +31,25 @@ struct HistoryOverviewCardView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if let percent = card.latestPercent {
-                        Image(systemName: ReadingReadout.symbol(isBlocked: card.latest.isBlocked,
-                                                                urgency: card.latest.urgency))
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(latestColor)
+                        // A blocked figure wears the shared nosign glyph and
+                        // says "blocked", as it does everywhere else it is
+                        // drawn; the chart's square is a point shape, not a
+                        // word anyone reads as "blocked".
+                        if card.latest.isBlocked {
+                            BlockedGlyph(color: latestColor, size: 10)
+                        } else {
+                            Image(systemName: ReadingReadout.symbol(isBlocked: false,
+                                                                    urgency: card.latest.urgency))
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(latestColor)
+                        }
                         Text("\(percent)%")
                             .font(.system(size: 18, weight: .semibold).monospacedDigit())
                             .foregroundStyle(Theme.onSurface)
-                        Text("\(card.barLabel) used")
+                        Text(card.latest.isBlocked ? "\(card.barLabel) used · blocked" : "\(card.barLabel) used")
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                            .lineLimit(1)
                     } else {
                         // The newest poll got no figure — it could not be
                         // read, or did not report this window — and an older

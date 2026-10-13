@@ -241,6 +241,27 @@ public enum HistoryPresentation {
         readings.filter { !$0.elapsedOnly }
     }
 
+    /// The reading the pace card may compare, or nil when the subject's
+    /// newest poll did not report one.
+    ///
+    /// `readings` is everything the subject recorded, every label included:
+    /// a poll that could not be read is stored under `DEFAULT`, not under the
+    /// window, so reaching back to the window's last reading with a fraction
+    /// put a current-looking pace card under an overview that said the last
+    /// poll could not be read.
+    public static func currentPaceReading(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String?
+    ) -> QuotaHistoryStore.ReadingRecord? {
+        guard let barLabel,
+              let lastPoll = readings.map(\.measuredAt).max(),
+              let latest = readings.filter({ $0.barLabel == barLabel }).max(by: { $0.measuredAt < $1.measuredAt }),
+              latest.measuredAt >= lastPoll,
+              latest.fraction != nil, latest.resetsAt != nil
+        else { return nil }
+        return latest
+    }
+
     /// Evaluates burn pace for an active sliding or fixed window.
     ///
     /// Compares fraction of quota consumed against fraction of window elapsed.

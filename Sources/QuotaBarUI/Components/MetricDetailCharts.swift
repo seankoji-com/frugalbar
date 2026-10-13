@@ -44,13 +44,7 @@ struct BurndownChartView: View {
     /// The recorded readings as one inspectable series. Projections and the
     /// pace line are never inspected: they are not readings.
     private var readingSegments: [HistoryPresentation.TimelineSegment] {
-        [HistoryPresentation.TimelineSegment(
-            vendor: "", barLabel: burndown.barLabel, resetsAt: nil,
-            points: burndown.actual.map {
-                HistoryPresentation.TimelinePoint(
-                    timestamp: $0.timestamp, fraction: $0.usedFraction, isBlocked: $0.isBlocked,
-                    confidence: .measured, urgency: $0.urgency)
-            })]
+        BurndownPresentation.inspectionSegments(for: burndown)
     }
 
     private var tolerance: TimeInterval {
@@ -212,15 +206,7 @@ struct UsageHistoryChartView: View {
     }
 
     private var readingSegments: [HistoryPresentation.TimelineSegment] {
-        series.map { s in
-            HistoryPresentation.TimelineSegment(
-                vendor: "", barLabel: s.label, resetsAt: nil,
-                points: s.points.map {
-                    HistoryPresentation.TimelinePoint(
-                        timestamp: $0.timestamp, fraction: $0.usedFraction, isBlocked: $0.isBlocked,
-                        confidence: .measured, urgency: $0.urgency)
-                })
-        }
+        BurndownPresentation.inspectionSegments(for: series)
     }
 
     private var tolerance: TimeInterval {

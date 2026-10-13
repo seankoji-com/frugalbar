@@ -78,7 +78,33 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case loading
         /// The read failed. Said as such, never as zero readings.
         case unreadable
-        case counted(Int)
+        /// This instance's readings recorded since `since`, the instant the
+        /// read started from.
+        case counted(Int, since: Date)
+
+        /// The figure the provenance shows and Copy JSON exports, from one
+        /// read: this instance's readings only, since the instant the read
+        /// started from. The vendor-wide read also returns every sibling
+        /// OpenCode Go workspace, and the inspector's own lookback reaches
+        /// past 30 days to the start of a longer published window.
+        public static func of(
+            readings: [QuotaHistoryStore.ReadingRecord]?, instanceID: String, since: Date
+        ) -> RecordedHistory {
+            guard let readings else { return .unreadable }
+            return .counted(readings.filter { $0.vendor == instanceID }.count, since: since)
+        }
+
+        /// The count, when there is one to report.
+        public var count: Int? {
+            if case .counted(let count, _) = self { return count }
+            return nil
+        }
+
+        /// Where the counted read started, when there is a count.
+        public var since: Date? {
+            if case .counted(_, let since) = self { return since }
+            return nil
+        }
     }
 
     public init(snapshot: QuotaSnapshot, history: RecordedHistory = .loading, now: Date) {
@@ -250,11 +276,21 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             break
         case .unreadable:
             rows.append(ProvenanceRow(label: "History", value: "Could not be read"))
-        case .counted(let count):
+        case .counted(let count, let since):
             rows.append(ProvenanceRow(
-                label: "History", value: "\(count) reading\(count == 1 ? "" : "s") recorded, last 30 days"))
+                label: "History",
+                value: "\(count) reading\(count == 1 ? "" : "s") recorded since \(sinceText(since, now: now))"))
         }
         return rows
+    }
+
+    /// "14 Sep", or "14 Sep 2025" when the year differs from now's.
+    static func sinceText(_ date: Date, now: Date) -> String {
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
+        formatter.dateFormat = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+            ? "d MMM" : "d MMM yyyy"
+        return formatter.string(from: date)
     }
 
     /// "14:05 (3 min ago)" — the instant this snapshot was taken.

@@ -327,7 +327,7 @@ public actor QuotaHistoryStore {
             }
 
             var results: [ReadingRecord] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try db.step(stmt) {
                 if let record = Self.readingRecord(from: stmt) { results.append(record) }
             }
             return results
@@ -510,7 +510,7 @@ public actor QuotaHistoryStore {
             }
 
             var results: [ActivityRecord] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try db.step(stmt) {
                 guard let sourceText = sqlite3_column_text(stmt, 0),
                       let recordIdText = sqlite3_column_text(stmt, 1),
                       let sessionIdText = sqlite3_column_text(stmt, 2) else {

@@ -277,6 +277,82 @@ struct UXRenderTests {
                 .frame(width: 880, height: 760),
             name: "history-empty-reasons", directory: directory)
 
+        // MARK: Attempt-3 states: blocked burndown, failed polls, widget reads
+        // A blocked window still reporting a percentage: no "out in", and its
+        // figure is "reported remaining", not headroom.
+        let blockedWeekly = (0..<6).map { i in
+            QuotaHistoryStore.ReadingRecord(
+                vendor: alpha.instanceID, barLabel: "WK", measuredAt: now.addingTimeInterval(-Double(6 - i) * 600),
+                fraction: 0.91 + Double(i) * 0.01, isBlocked: true, confidence: .measured, urgency: .critical,
+                resetsAt: goAlpha.row2?.resetsAt, windowLength: 7 * 86_400, elapsedOnly: false)
+        }
+        var blockedFirst = goAlpha
+        blockedFirst.row1 = goAlpha.row2
+        blockedFirst.row2 = nil
+        var blockedBurndown = MetricDetailModalView(
+            snapshot: blockedFirst, readingsLoader: { _, _ in blockedWeekly },
+            eventsLoader: { _, _, _, _, _ in [] }, onClose: {})
+        blockedBurndown.maxBody = 1_000
+        try await save(blockedBurndown.frame(width: 384, height: 1_000).background(Theme.surface),
+                       name: "inspector-blocked-burndown", directory: directory)
+
+        // Claude's newest poll failed: the card says so and no pace card
+        // compares the figure from before it.
+        let failedLatest = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-failed-latest-\(UUID().uuidString).sqlite"))
+        try await failedLatest.record([claude], now: now.addingTimeInterval(-1_200))
+        try await failedLatest.record([QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil), status: .unavailable(.offline),
+            resetsAt: nil, lastUpdated: now.addingTimeInterval(-60), auxiliaryInfo: nil)],
+            now: now.addingTimeInterval(-60))
+        let claudeOnly = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        try await save(
+            HistoryRootView(liveStore: failedLatest, sampleStore: failedLatest, subjectSource: { (claudeOnly, []) })
+                .frame(width: 880, height: 900),
+            name: "history-failed-latest", directory: directory)
+
+        // Every poll in range failed: said as failed polls, not "no readings".
+        let onlyFailed = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-only-failed-\(UUID().uuidString).sqlite"))
+        try await onlyFailed.record([QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil), status: .unavailable(.offline),
+            resetsAt: nil, lastUpdated: now.addingTimeInterval(-60), auxiliaryInfo: nil)],
+            now: now.addingTimeInterval(-60))
+        try await save(
+            HistoryRootView(liveStore: onlyFailed, sampleStore: onlyFailed,
+                            subjectSource: { (HistoryOverviewPresentation.subjects(
+                                order: [.claude, .grok], hidden: [], workspaces: []), []) })
+                .frame(width: 880, height: 760),
+            name: "history-only-failed", directory: directory)
+
+        // A blocked figure on an overview card wears the nosign glyph.
+        let blockedCard = try #require(HistoryOverviewPresentation.overview(
+            subjects: HistoryOverviewPresentation.subjects(order: [.opencode], hidden: [], workspaces: [alpha]),
+            readings: blockedWeekly).cards.first)
+        try await save(
+            HistoryOverviewCardView(card: blockedCard, isSelected: false, onSelect: {})
+                .padding(14).frame(width: 260).background(Theme.card),
+            name: "history-card-blocked", directory: directory)
+
+        // The widget's Chart layout when history reads fail: wholly, then for
+        // one of two vendors.
+        let widgetFixtures = [claude, goBeta].map { FixtureProvider(snapshot: $0) }
+        for (name, failing) in [("widget-chart-read-failed", Set<VendorIdentifier>([.claude, .opencode])),
+                                ("widget-chart-read-partial", Set<VendorIdentifier>([.opencode]))] {
+            let widgetStore = QuotaStore(
+                manager: QuotaManager(
+                    providerFactory: { widgetFixtures },
+                    displayPreferences: { ProviderDisplayPreferences(ordering: .automatic) }),
+                vendorReadingsLoader: { [readings] vendor, _ in
+                    failing.contains(vendor) ? nil : readings.filter { $0.vendor == vendor.rawValue }
+                })
+            await widgetStore.load()
+            try await save(
+                DesktopWidgetView(store: widgetStore, filters: WidgetFilters(layout: .chart))
+                    .frame(width: 420, height: 320).background(Theme.surface),
+                name: name, directory: directory)
+        }
+
         // MARK: Settings
         let workspacesKey = OpenCodeGoWorkspaceStore.defaultsKey
         let savedWorkspaces = CredentialStore.preferences.data(forKey: workspacesKey)

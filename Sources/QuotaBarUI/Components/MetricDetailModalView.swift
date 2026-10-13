@@ -30,6 +30,11 @@ public struct MetricDetailModalView: View {
     /// failure to read, never as "no readings" or "no events".
     @State private var readingsFailed = false
     @State private var eventsFailed = false
+    /// The chart-marker read failed: resets may be missing from the chart.
+    /// Tracked apart from `eventsFailed`, whose query is a different one.
+    @State private var markersFailed = false
+    /// Where the readings read started, for the provenance's history count.
+    @State private var historySince: Date?
     /// Fixed when the data loads, so every derived figure on screen agrees
     /// on one instant instead of each calling `Date()`.
     @State private var now = Date()
@@ -154,11 +159,11 @@ public struct MetricDetailModalView: View {
         guard !Task.isCancelled else { return }
         readings = r ?? []
         readingsFailed = r == nil
+        historySince = since
         recentEvents = e ?? []
         eventsFailed = e == nil
-        // Markers are a decoration on the chart; the events card already
-        // says when events could not be read.
         markerEvents = m ?? []
+        markersFailed = m == nil
         now = loadTime
         isLoading = false
     }
@@ -242,10 +247,14 @@ public struct MetricDetailModalView: View {
     private var presentation: MetricDetailPresentation {
         MetricDetailPresentation(
             snapshot: snapshot,
-            history: isLoading ? .loading
-                : readingsFailed ? .unreadable
-                : .counted(readings.filter { $0.vendor == snapshot.id }.count),
+            history: recordedHistory,
             now: now)
+    }
+
+    /// One scoped count for the provenance row and Copy JSON alike.
+    private var recordedHistory: MetricDetailPresentation.RecordedHistory {
+        isLoading ? .loading : .of(
+            readings: readingsFailed ? nil : readings, instanceID: snapshot.id, since: historySince ?? now)
     }
 
     private var summaryColor: Color {
@@ -490,12 +499,20 @@ public struct MetricDetailModalView: View {
                readings: readings, instanceID: snapshot.id, barLabel: label, now: now
            ) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(BurndownPresentation.summaryLine(for: burndown, now: now))
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .accessibilityHidden(true)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if burndown.isBlocked {
+                        BlockedGlyph(color: Theme.onSurfaceVariant, size: 10)
+                    }
+                    // A blocked caption carries an extra clause; it wraps
+                    // rather than cutting off the reset time.
+                    Text(BurndownPresentation.summaryLine(for: burndown, now: now))
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .lineLimit(burndown.isBlocked ? 2 : 1)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityHidden(true)
                 BurndownChartView(burndown: burndown, now: now)
                 if burndown.ideal == nil {
                     Text("No window length published, so no pace line can be drawn")
@@ -529,14 +546,23 @@ public struct MetricDetailModalView: View {
                 message: "No readings yet — history accumulates as FrugalBar polls"
             )
         } else {
-            UsageHistoryChartView(
-                series: series,
-                range: historyRange,
-                markers: EventsPresentation.markerEvents(
-                    markerEvents, vendor: snapshot.vendorId, range: historyRange, now: now
-                ),
-                now: now
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                UsageHistoryChartView(
+                    series: series,
+                    range: historyRange,
+                    markers: EventsPresentation.markerEvents(
+                        markerEvents, vendor: snapshot.vendorId, range: historyRange, now: now
+                    ),
+                    now: now
+                )
+                if markersFailed {
+                    Label("Reset markers could not be read, so resets may be missing from this chart.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.outline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -653,7 +679,8 @@ public struct MetricDetailModalView: View {
     }
 
     private func copyJson() {
-        guard let json = InspectorExport(snapshot: snapshot, readingsCount: isLoading || readingsFailed ? nil : readings.count).jsonString() else { return }
+        guard let json = InspectorExport(
+            snapshot: snapshot, readingsCount: recordedHistory.count, readingsSince: recordedHistory.since).jsonString() else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
         copied = true

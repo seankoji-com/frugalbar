@@ -106,8 +106,25 @@ public enum HistoryOverviewPresentation {
         }
     }
 
+    /// A subject that was polled in range but never returned a figure to
+    /// draw. It is not "no readings": the polls happened and failed, and the
+    /// strip says so instead of explaining an absence.
+    public struct Unread: Identifiable, Sendable, Equatable {
+        public var id: String { subject.id }
+        public let subject: Subject
+        /// The subject's newest poll in range.
+        public let lastPoll: QuotaHistoryStore.ReadingRecord
+
+        public var explanation: String { HistoryOverviewPresentation.polledWithoutFigureText(lastPoll: lastPoll) }
+
+        /// A warning only when the last poll failed; a provider that answered
+        /// without a usage window has nothing wrong with it.
+        public var symbol: String { lastPoll.confidence == .measured ? "minus.circle" : "exclamationmark.triangle" }
+    }
+
     /// Cards for the subjects that have a consumption reading in `readings`,
-    /// in subject order; `empty` names the ones that have none.
+    /// in subject order; `unread` names the ones that were polled but returned
+    /// no figure, and `empty` the ones with no poll recorded at all.
     ///
     /// `bucketSeconds` is the width the readings were thinned to. Points that
     /// far apart are neighbours, not an outage, so the line breaks only on a
@@ -117,16 +134,21 @@ public enum HistoryOverviewPresentation {
         subjects: [Subject],
         readings: [QuotaHistoryStore.ReadingRecord],
         bucketSeconds: Int = 0
-    ) -> (cards: [Card], empty: [Subject]) {
+    ) -> (cards: [Card], unread: [Unread], empty: [Subject]) {
         let consumption = HistoryPresentation.consumptionReadings(readings)
         let maxGap = sparklineMaxGap(bucketSeconds: bucketSeconds)
         var cards: [Card] = []
+        var unread: [Unread] = []
         var empty: [Subject] = []
         for subject in subjects {
             let all = readings.filter { subject.keys.contains($0.vendor) }
             let own = consumption.filter { subject.keys.contains($0.vendor) }
             guard let label = longestMeasuredLabel(own) else {
-                empty.append(subject)
+                if let lastPoll = all.max(by: { $0.measuredAt < $1.measuredAt }) {
+                    unread.append(Unread(subject: subject, lastPoll: lastPoll))
+                } else {
+                    empty.append(subject)
+                }
                 continue
             }
             let window = own.filter { $0.barLabel == label }.sorted { $0.measuredAt < $1.measuredAt }
@@ -144,7 +166,7 @@ public enum HistoryOverviewPresentation {
                 sampleCount: window.count
             ))
         }
-        return (cards, empty)
+        return (cards, unread, empty)
     }
 
     /// The longest silence a sparkline bridges, for readings thinned to
@@ -176,6 +198,29 @@ public enum HistoryOverviewPresentation {
         case .allTime: retention
         }
         return max(120, Int(span / 120))
+    }
+
+    /// Why polls that happened left nothing to draw. `lastPoll` is the
+    /// subject's newest recorded poll of any kind.
+    public static func polledWithoutFigureText(lastPoll: QuotaHistoryStore.ReadingRecord) -> String {
+        lastPoll.confidence == .measured
+            ? "Polled in this range, but no poll reported a usage figure to chart."
+            : "Polled in this range, but no poll returned a figure. The last poll could not be read."
+    }
+
+    /// What the timeline says when it has nothing to draw. `readings` is
+    /// everything the subject recorded in range, every label included: a
+    /// failed poll recorded under `DEFAULT` is not an absence of data, so
+    /// neither the title nor the detail may call it one.
+    public static func timelineEmptyState(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        isSampleMode: Bool,
+        range: HistoryPresentation.TimeRange
+    ) -> (title: String, detail: String) {
+        if let lastPoll = readings.max(by: { $0.measuredAt < $1.measuredAt }) {
+            return ("Nothing to chart in this time range", polledWithoutFigureText(lastPoll: lastPoll))
+        }
+        return ("No readings recorded in this time range", emptyExplanation(isSampleMode: isSampleMode, range: range))
     }
 
     /// Why a subject has no card, in words: the window is being asked to

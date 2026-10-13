@@ -337,4 +337,99 @@ struct BurndownPresentationTests {
         #expect(!json.contains("latencyMs"))
         #expect(decoded.bars.first { $0.label == "WK" }?.usedFraction == nil)
     }
+
+    // MARK: - Blocked windows
+
+    @Test("a blocked window is not projected, and its percentage is not called headroom")
+    func blockedWindowIsNotForecast() throws {
+        let blocked = (0..<10).map { i in
+            reading(minutesAgo: Double(45 - i * 5), fraction: 0.80 + Double(i) * 0.02, isBlocked: true, urgency: .critical)
+        }
+        let b = try #require(P.burndown(readings: blocked, instanceID: "claude", barLabel: "5H", now: now))
+        #expect(b.isBlocked)
+        #expect(b.projection == nil)
+        #expect(b.projectedExhaustion == nil)
+
+        let line = P.summaryLine(for: b, now: now)
+        #expect(line.hasPrefix("Blocked by the vendor"))
+        #expect(line.contains("2% reported remaining"))
+        #expect(!line.contains("% left"))
+        #expect(!line.contains("out in"))
+        let spoken = P.accessibilityDescription(for: b, now: now)
+        #expect(spoken.contains("blocked by the vendor"))
+        #expect(!spoken.contains("runs out"))
+
+        // The same readings unblocked still forecast, so the guard is the block.
+        let open = blocked.map {
+            QuotaHistoryStore.ReadingRecord(
+                vendor: $0.vendor, barLabel: $0.barLabel, measuredAt: $0.measuredAt, fraction: $0.fraction,
+                isBlocked: false, confidence: $0.confidence, urgency: $0.urgency, resetsAt: $0.resetsAt,
+                windowLength: $0.windowLength, elapsedOnly: $0.elapsedOnly)
+        }
+        let unblocked = try #require(P.burndown(readings: open, instanceID: "claude", barLabel: "5H", now: now))
+        #expect(unblocked.projection != nil)
+        #expect(P.summaryLine(for: unblocked, now: now).hasPrefix("2% left"))
+    }
+
+    // MARK: - Inspection keeps the recorded figure
+
+    @Test("both detail charts inspect the recorded figure, not the bounded one they draw")
+    func inspectionIsUnclamped() throws {
+        let over = [
+            reading(minutesAgo: 10, fraction: 0.98),
+            reading(minutesAgo: 5, fraction: 1.03),
+        ]
+        let b = try #require(P.burndown(readings: over, instanceID: "claude", barLabel: "5H", now: now))
+        // Geometry stays on the 0...100 axis.
+        #expect(b.actual.last?.usedFraction == 1)
+        #expect(b.actual.last?.remainingFraction == 0)
+        #expect(b.actual.last?.recordedFraction == 1.03)
+
+        let at = now.addingTimeInterval(-300)
+        let burndownPoll = try #require(HistoryOverviewPresentation.nearestPoll(
+            to: at, in: P.inspectionSegments(for: b), tolerance: 60))
+        #expect(burndownPoll.rows.first?.point.fraction == 1.03)
+
+        let series = P.history(readings: over, instanceID: "claude", range: .last24Hours, now: now)
+        let historyPoll = try #require(HistoryOverviewPresentation.nearestPoll(
+            to: at, in: P.inspectionSegments(for: series), tolerance: 60))
+        #expect(historyPoll.rows.first?.point.fraction == 1.03)
+        #expect(ReadingReadout.exactPercentText(1.03).hasPrefix("103"))
+        #expect(P.historyAccessibilityDescription(series: series, range: .last24Hours).contains("latest 103 percent"))
+    }
+
+    @Test("the export carries the same scoped count and where it was counted from")
+    func exportCountScope() throws {
+        let snapshot = QuotaSnapshot(
+            id: "opencode-go:alpha", vendorId: .opencode, displayName: "Alpha", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0, displayDetails: nil), status: .measured(.none),
+            resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.3, label: "WK", resetsAt: resets, windowLength: length))
+        let since = now.addingTimeInterval(-40 * 86_400)
+        let readings = [
+            QuotaHistoryStore.ReadingRecord(
+                vendor: "opencode-go:alpha", barLabel: "WK", measuredAt: now, fraction: 0.3, isBlocked: false,
+                confidence: .measured, urgency: .none, resetsAt: resets, windowLength: length, elapsedOnly: false),
+            // A sibling workspace, returned by the vendor-wide read.
+            QuotaHistoryStore.ReadingRecord(
+                vendor: "opencode-go:beta", barLabel: "WK", measuredAt: now, fraction: 0.6, isBlocked: false,
+                confidence: .measured, urgency: .none, resetsAt: resets, windowLength: length, elapsedOnly: false),
+        ]
+        let history = MetricDetailPresentation.RecordedHistory.of(
+            readings: readings, instanceID: snapshot.id, since: since)
+        #expect(history == .counted(1, since: since))
+        #expect(MetricDetailPresentation.RecordedHistory.of(readings: nil, instanceID: snapshot.id, since: since)
+            == .unreadable)
+
+        let rows = Dictionary(uniqueKeysWithValues: MetricDetailPresentation(
+            snapshot: snapshot, history: history, now: now).provenance.map { ($0.label, $0.value) })
+        let row = try #require(rows["History"] ?? nil)
+        #expect(row.hasPrefix("1 reading recorded since "))
+        #expect(!row.contains("30 days"))
+
+        let export = InspectorExport(snapshot: snapshot, readingsCount: history.count, readingsSince: history.since)
+        #expect(export.readingsCount == 1)
+        #expect(export.readingsSince == since)
+        #expect(InspectorExport(snapshot: snapshot, readingsCount: nil, readingsSince: since).readingsSince == nil)
+    }
 }

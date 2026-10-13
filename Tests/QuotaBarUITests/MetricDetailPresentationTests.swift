@@ -186,12 +186,12 @@ struct MetricDetailPresentationTests {
     func provenance() {
         let p = MetricDetailPresentation(
             snapshot: snapshot(metric: .count(remaining: 600, limit: 1000, unitName: "points")),
-            history: .counted(12), now: now)
+            history: .counted(12, since: now.addingTimeInterval(-3 * 86_400)), now: now)
         let rows = Dictionary(uniqueKeysWithValues: p.provenance.map { ($0.label, $0.value) })
         #expect(rows["Plan"] == .some(nil))
         #expect(rows["Source"] == .some(nil))
         #expect(rows["Raw figure"] == "600 of 1,000 points remaining")
-        #expect(rows["History"] == "12 readings recorded, last 30 days")
+        #expect(rows["History"]??.hasPrefix("12 readings recorded since ") == true)
         #expect(rows["Last fetched"]??.contains("3 min ago") == true)
     }
 

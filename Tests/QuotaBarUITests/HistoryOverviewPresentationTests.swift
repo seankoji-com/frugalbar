@@ -71,7 +71,11 @@ struct HistoryOverviewPresentationTests {
             subjects: subjects,
             readings: [record("claude", "CYCLE", at: 0, 0.9, windowLength: 30 * 86_400, elapsedOnly: true)])
         #expect(overview.cards.isEmpty)
-        #expect(overview.empty.map(\.id) == ["claude"])
+        // Polled, so not "no readings"; but nothing that measures usage.
+        #expect(overview.empty.isEmpty)
+        #expect(overview.unread.map(\.subject.id) == ["claude"])
+        #expect(overview.unread.first?.explanation == "Polled in this range, but no poll reported a usage figure to chart.")
+        #expect(overview.unread.first?.symbol == "minus.circle")
     }
 
     @Test("sparkline buckets hold about 120 points and never go below a poll")
@@ -235,5 +239,75 @@ struct HistoryOverviewPresentationTests {
         #expect(spoken.contains("62.34 percent used"))
         #expect(spoken.contains("blocked"))
         #expect(spoken.contains("14:05:32"))
+    }
+
+    // MARK: - Polled, but never read
+
+    private func claudeWeekly(used: Double?, resetsAt: Date, at now: Date) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: used ?? 0, displayDetails: nil),
+            status: .measured(.none), resetsAt: resetsAt, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: used, label: "WK", resetsAt: resetsAt, windowLength: 7 * 86_400))
+    }
+
+    @Test("a subject whose polls all failed is named as unread, not as having no readings")
+    func failedPollsAreNotAnAbsence() async throws {
+        let store = makeStore()
+        try await store.record([claude(used: nil, status: .unavailable(.offline), at: base)], now: base)
+        let since = base.addingTimeInterval(-3_600), until = base.addingTimeInterval(3_600)
+        let sampled = try await store.fetchSampledReadings(since: since, until: until, bucketSeconds: 720)
+
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude, .grok], hidden: [], workspaces: [])
+        let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: sampled, bucketSeconds: 720)
+        #expect(overview.cards.isEmpty)
+        #expect(overview.unread.map(\.subject.id) == ["claude"])
+        #expect(overview.empty.map(\.id) == ["grok"])
+        #expect(overview.unread.first?.explanation
+            == "Polled in this range, but no poll returned a figure. The last poll could not be read.")
+        #expect(overview.unread.first?.symbol == "exclamationmark.triangle")
+
+        // The timeline below says the same, from the full read.
+        let readings = try await store.fetchReadings(vendor: .claude, since: since)
+        let state = HistoryOverviewPresentation.timelineEmptyState(
+            readings: readings, isSampleMode: false, range: .last24Hours)
+        #expect(state.detail.contains("could not be read"))
+        #expect(!state.title.contains("No readings") && !state.detail.contains("No readings"))
+        // With nothing recorded at all, it is the plain absence.
+        let absent = HistoryOverviewPresentation.timelineEmptyState(
+            readings: [], isSampleMode: false, range: .last24Hours)
+        #expect(absent.title == "No readings recorded in this time range")
+        #expect(absent.detail.hasPrefix("No readings in the last 24 hours"))
+    }
+
+    // MARK: - The last poll gates the pace card
+
+    @Test("the pace card compares only the newest poll's window, never one from before a failed poll")
+    func paceFollowsTheLastPoll() async throws {
+        let store = makeStore()
+        let reset = base.addingTimeInterval(7 * 86_400 * 0.46)
+        try await store.record([claudeWeekly(used: 0.62, resetsAt: reset, at: base)], now: base)
+        var readings = try await store.fetchReadings(vendor: .claude, since: base.addingTimeInterval(-3_600))
+        let current = try #require(HistoryPresentation.currentPaceReading(readings: readings, barLabel: "WK"))
+        #expect(current.fraction == 0.62)
+        #expect(HistoryPresentation.computePace(reading: current, now: base) != nil)
+
+        // A failed poll, recorded under DEFAULT: the 62% is no longer current.
+        try await store.record([claude(used: nil, status: .unavailable(.offline), at: base)],
+                               now: base.addingTimeInterval(600))
+        readings = try await store.fetchReadings(vendor: .claude, since: base.addingTimeInterval(-3_600))
+        #expect(HistoryPresentation.currentPaceReading(readings: readings, barLabel: "WK") == nil)
+
+        // A poll that answered but had no weekly figure is no better.
+        try await store.record([claudeWeekly(used: nil, resetsAt: reset, at: base)],
+                               now: base.addingTimeInterval(1_200))
+        readings = try await store.fetchReadings(vendor: .claude, since: base.addingTimeInterval(-3_600))
+        #expect(HistoryPresentation.currentPaceReading(readings: readings, barLabel: "WK") == nil)
+
+        // Once it answers again the card comes back, from the new reading.
+        try await store.record([claudeWeekly(used: 0.64, resetsAt: reset, at: base)],
+                               now: base.addingTimeInterval(1_800))
+        readings = try await store.fetchReadings(vendor: .claude, since: base.addingTimeInterval(-3_600))
+        #expect(HistoryPresentation.currentPaceReading(readings: readings, barLabel: "WK")?.fraction == 0.64)
     }
 }

@@ -11,9 +11,15 @@ import QuotaBarCore
 public enum BurndownPresentation {
 
     /// One recorded reading, as both used and remaining share of the window.
+    ///
+    /// `usedFraction` and `remainingFraction` are bounded to 0...1 for chart
+    /// geometry; `recordedFraction` is the figure as stored, for anything that
+    /// reports the reading. A vendor that bills past its allowance records
+    /// 1.03, and the readout must say 103%, not the 100% the line is drawn at.
     public struct Point: Identifiable, Sendable, Equatable {
         public var id: String { "\(timestamp.timeIntervalSince1970)" }
         public let timestamp: Date
+        public let recordedFraction: Double
         public let usedFraction: Double
         public let remainingFraction: Double
         public let isBlocked: Bool
@@ -22,6 +28,7 @@ public enum BurndownPresentation {
         public init(timestamp: Date, usedFraction: Double, isBlocked: Bool, urgency: Urgency) {
             let used = min(max(usedFraction, 0), 1)
             self.timestamp = timestamp
+            self.recordedFraction = usedFraction
             self.usedFraction = used
             self.remainingFraction = 1 - used
             self.isBlocked = isBlocked
@@ -90,6 +97,11 @@ public enum BurndownPresentation {
             self.latestReading = latestReading
         }
 
+        /// True when the vendor blocked the window at the latest reading. Its
+        /// remaining share is then a figure the vendor reported, not capacity
+        /// the user can spend.
+        public var isBlocked: Bool { latestReading?.isBlocked == true }
+
         /// True when a projection runs out before the window resets.
         public var projectedExhaustion: Date? {
             guard let last = projection?.last, last.remainingFraction <= 0 else { return nil }
@@ -147,8 +159,10 @@ public enum BurndownPresentation {
             ]
         }
 
+        // No projection from a blocked window: "out in 30m" beside a window
+        // the vendor has already stopped reads as headroom left to burn.
         var projection: [LinePoint]?
-        if let forecast = BurnRateForecast.compute(
+        if !latest.isBlocked, let forecast = BurnRateForecast.compute(
             instanceID: instanceID, barLabel: barLabel, readings: records,
             resetsAt: latest.resetsAt, now: now
         ), forecast.fractionPerHour > 0 {
@@ -225,6 +239,30 @@ public enum BurndownPresentation {
         return lengths.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.map(\.key)
     }
 
+    // MARK: - Inspection
+
+    /// The burndown's recorded readings as one inspectable segment, carrying
+    /// each reading's recorded figure. The ideal and projection lines are
+    /// never inspected: they are not readings.
+    public static func inspectionSegments(for burndown: Burndown) -> [HistoryPresentation.TimelineSegment] {
+        [inspectionSegment(label: burndown.barLabel, points: burndown.actual)]
+    }
+
+    /// The history chart's series as inspectable segments.
+    public static func inspectionSegments(for series: [Series]) -> [HistoryPresentation.TimelineSegment] {
+        series.map { inspectionSegment(label: $0.label, points: $0.points) }
+    }
+
+    private static func inspectionSegment(label: String, points: [Point]) -> HistoryPresentation.TimelineSegment {
+        HistoryPresentation.TimelineSegment(
+            vendor: "", barLabel: label, resetsAt: nil,
+            points: points.map {
+                HistoryPresentation.TimelinePoint(
+                    timestamp: $0.timestamp, fraction: $0.recordedFraction, isBlocked: $0.isBlocked,
+                    confidence: .measured, urgency: $0.urgency)
+            })
+    }
+
     // MARK: - Text
 
     /// e.g. "27% left · 21h 0m to reset · out in 3h 10m". Each clause
@@ -235,9 +273,18 @@ public enum BurndownPresentation {
     /// This line used to add one from `HistoryPresentation.computePace`, whose
     /// margin is wider, so one card could say "ahead of even pace" above a
     /// chart captioned "on pace".
+    ///
+    /// A blocked window leads with the block and calls its figure "reported":
+    /// OpenCode Go still publishes a percentage for a window it has stopped,
+    /// and "4% left" under it would promise capacity that is not usable.
     public static func summaryLine(for burndown: Burndown, now: Date) -> String {
         var parts: [String] = []
-        if let remaining = burndown.nowRemaining {
+        if burndown.isBlocked {
+            parts.append("Blocked by the vendor")
+            if let remaining = burndown.nowRemaining {
+                parts.append("\(percent(remaining))% reported remaining")
+            }
+        } else if let remaining = burndown.nowRemaining {
             parts.append("\(percent(remaining))% left")
         }
         if let resetsAt = burndown.resetsAt, resetsAt > now {
@@ -252,7 +299,12 @@ public enum BurndownPresentation {
     /// Spoken description of the burndown chart.
     public static func accessibilityDescription(for burndown: Burndown, now: Date) -> String {
         var parts = ["\(burndown.barLabel) window"]
-        if let remaining = burndown.nowRemaining {
+        if burndown.isBlocked {
+            parts.append("blocked by the vendor")
+            if let remaining = burndown.nowRemaining {
+                parts.append("\(percent(remaining)) percent reported remaining")
+            }
+        } else if let remaining = burndown.nowRemaining {
             parts.append("\(percent(remaining)) percent remaining")
         }
         if let resetsAt = burndown.resetsAt, resetsAt > now {
@@ -284,9 +336,9 @@ public enum BurndownPresentation {
         return labels.compactMap { label -> String? in
             let points = series.filter { $0.label == label }.flatMap(\.points)
             guard let latest = points.max(by: { $0.timestamp < $1.timestamp }),
-                  let peak = points.max(by: { $0.usedFraction < $1.usedFraction })
+                  let peak = points.max(by: { $0.recordedFraction < $1.recordedFraction })
             else { return nil }
-            return "\(label): latest \(percent(latest.usedFraction)) percent used, peak \(percent(peak.usedFraction)) percent, \(points.count) readings"
+            return "\(label): latest \(percent(latest.recordedFraction)) percent used, peak \(percent(peak.recordedFraction)) percent, \(points.count) readings"
         }.joined(separator: ". ")
     }
 
@@ -333,9 +385,11 @@ public struct InspectorExport: Codable, Equatable, Sendable {
     /// nil when the history was not read, or could not be: an export must
     /// not record a failed read as zero readings.
     public let readingsCount: Int?
+    /// Where `readingsCount` was counted from; nil with no count.
+    public let readingsSince: Date?
     public let bars: [Bar]
 
-    public init(snapshot: QuotaSnapshot, readingsCount: Int?) {
+    public init(snapshot: QuotaSnapshot, readingsCount: Int?, readingsSince: Date? = nil) {
         vendor = snapshot.vendorId.rawValue
         displayName = snapshot.displayName
         category = snapshot.category.rawValue
@@ -356,6 +410,7 @@ public struct InspectorExport: Codable, Equatable, Sendable {
         resetCreditsApplicable = snapshot.resetCreditsApplicable
         lastUpdated = snapshot.lastUpdated
         self.readingsCount = readingsCount
+        self.readingsSince = readingsCount == nil ? nil : readingsSince
         bars = snapshot.bars.map {
             Bar(
                 label: $0.label,

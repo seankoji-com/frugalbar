@@ -111,7 +111,7 @@ A WidgetKit widget must ship as a signed `.appex` inside a `.app`. FrugalBar shi
 
 - It exists only while FrugalBar is running. It does not appear in the macOS widget gallery or Notification Centre.
 - It reads the live in-process store and the same history database as the History window, so it needs no extra request to any vendor.
-- Empty states say why: "No subscription windows yet" (no provider with a usage window), "No readings in this range" (history still accumulating).
+- Empty states say why: "No subscription windows yet" (no provider with a usage window), "No readings in this range" (history still accumulating), "Could not read quota history" (a failed read, never drawn as no readings). When only some vendors' history could not be read, the chart names them under the legend and draws no average: a mean of the windows that happened to read is not the mean of the windows selected.
 
 ## Accessibility
 

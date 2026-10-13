@@ -20,6 +20,12 @@ struct DesktopWidgetView: View {
     @State private var chartNow = Date()
     /// Bumped whenever the store's snapshots change, to re-query history.
     @State private var generation = 0
+    /// Selected vendors whose quota history could not be read. Their lines
+    /// are missing and the average is withheld, and the chart says so rather
+    /// than drawing "no readings" or a mean of the rest.
+    @State private var unreadVendors: [VendorIdentifier] = []
+    /// Every selected vendor's read failed.
+    @State private var chartLoadFailed = false
     /// The Tokens layout's chart, nil until loaded.
     @State private var tokenChart: TokenUsagePresentation.Chart?
     /// The history could not be read: said, never drawn as "no activity".
@@ -97,8 +103,13 @@ struct DesktopWidgetView: View {
         let vendors = AggregateBurndownPresentation.selectedVendors(snapshots: snapshots, filters: filters)
 
         var readings: [QuotaHistoryStore.ReadingRecord] = []
+        var unread: [VendorIdentifier] = []
         for vendor in vendors {
-            readings += await store.readings(for: vendor, since: since) ?? []
+            if let vendorReadings = await store.readings(for: vendor, since: since) {
+                readings += vendorReadings
+            } else {
+                unread.append(vendor)
+            }
             if Task.isCancelled { return }
         }
 
@@ -107,11 +118,12 @@ struct DesktopWidgetView: View {
         // the popover.
         let input = readings
         let filtersNow = filters
+        let anyUnread = !unread.isEmpty
         let (computed, avg) = await Task.detached(priority: .utility) {
             let computed = AggregateBurndownPresentation.series(
                 readings: input, snapshots: snapshots, filters: filtersNow, now: now
             )
-            let avg = computed.count > 1
+            let avg = computed.count > 1 && !anyUnread
                 ? AggregateBurndownPresentation.average(
                     of: computed,
                     bucket: AggregateBurndownPresentation.bucketInterval(for: filtersNow.range),
@@ -123,6 +135,8 @@ struct DesktopWidgetView: View {
         guard !Task.isCancelled else { return }
         series = computed
         average = avg
+        unreadVendors = unread
+        chartLoadFailed = !vendors.isEmpty && unread.count == vendors.count
         chartNow = now
         hasLoaded = true
     }
@@ -241,16 +255,29 @@ struct DesktopWidgetView: View {
                 title: "No subscription windows yet",
                 detail: "Add a provider with a usage window in Settings."
             )
+        } else if chartLoadFailed {
+            placeholder(
+                symbol: "exclamationmark.triangle",
+                title: "Could not read quota history",
+                detail: "This is a failure to read, not an absence of readings."
+            )
         } else if series.isEmpty {
             placeholder(
-                symbol: "chart.line.downtrend.xyaxis",
+                symbol: unreadVendors.isEmpty ? "chart.line.downtrend.xyaxis" : "exclamationmark.triangle",
                 title: "No readings in this range",
-                detail: "Readings accumulate as FrugalBar polls your providers."
+                detail: AggregateBurndownPresentation.unreadNote(unreadVendors)
+                    ?? "Readings accumulate as FrugalBar polls your providers."
             )
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 chart
                 legend
+                if let note = AggregateBurndownPresentation.unreadNote(unreadVendors) {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .lineLimit(2)
+                }
             }
         }
     }

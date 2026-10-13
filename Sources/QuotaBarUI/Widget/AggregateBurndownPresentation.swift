@@ -293,6 +293,16 @@ public enum AggregateBurndownPresentation {
 
     /// The vendors the filters select. Empty filter means every vendor with a
     /// consumable window.
+    /// Names the selected vendors whose history could not be read, for the
+    /// Chart layout. Nil when every read succeeded. The average is withheld
+    /// meanwhile: a mean of the windows that happened to read is not the
+    /// mean of the windows the user selected.
+    public static func unreadNote(_ unread: [VendorIdentifier]) -> String? {
+        guard !unread.isEmpty else { return nil }
+        let names = unread.map(\.displayName).joined(separator: ", ")
+        return "Could not read history for \(names), so \(unread.count == 1 ? "it is" : "they are") missing and no average is drawn."
+    }
+
     public static func selectedVendors(snapshots: [QuotaSnapshot], filters: WidgetFilters) -> [VendorIdentifier] {
         let available = availableVendors(snapshots: snapshots)
         guard !filters.vendors.isEmpty else { return available }

@@ -503,6 +503,16 @@ struct AggregateBurndownPresentationTests {
         #expect(thinned.id == series.id)
         #expect(thinned.allPoints.count < points.count)
     }
+
+    @Test("a vendor whose history could not be read is named, and the average is said to be withheld")
+    func unreadNote() {
+        #expect(AggregateBurndownPresentation.unreadNote([]) == nil)
+        let one = AggregateBurndownPresentation.unreadNote([.openai])
+        #expect(one == "Could not read history for \(VendorIdentifier.openai.displayName), so it is missing and no average is drawn.")
+        let two = AggregateBurndownPresentation.unreadNote([.claude, .openai])
+        #expect(two?.contains("\(VendorIdentifier.claude.displayName), \(VendorIdentifier.openai.displayName)") == true)
+        #expect(two?.contains("they are missing") == true)
+    }
 }
 
 @Suite("Widget series order before the first poll")

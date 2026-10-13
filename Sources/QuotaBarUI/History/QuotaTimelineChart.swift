@@ -21,6 +21,9 @@ public struct QuotaTimelineChart: View {
     /// Why there is nothing to draw, when there is nothing. Defaults to the
     /// generic explanation.
     public let emptyMessage: String?
+    /// Overrides the empty state's title, for polls that happened but left
+    /// nothing to draw.
+    public let emptyTitle: String?
     /// The inspected instant: where the pointer is over the plot, or the poll
     /// the keyboard stepped to. Drives the readout.
     @State private var hoverDate: Date?
@@ -29,12 +32,14 @@ public struct QuotaTimelineChart: View {
         segments: [HistoryPresentation.TimelineSegment],
         timeRange: HistoryPresentation.TimeRange,
         markers: [AIEvent] = [],
-        emptyMessage: String? = nil
+        emptyMessage: String? = nil,
+        emptyTitle: String? = nil
     ) {
         self.segments = segments
         self.timeRange = timeRange
         self.markers = markers
         self.emptyMessage = emptyMessage
+        self.emptyTitle = emptyTitle
     }
 
     public var body: some View {
@@ -204,7 +209,7 @@ public struct QuotaTimelineChart: View {
                 .font(.system(size: 28))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.4))
 
-            Text("No readings recorded in this time range")
+            Text(emptyTitle ?? "No readings recorded in this time range")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
 

@@ -16,6 +16,7 @@ public struct HistoryRootView: View {
     @State private var subjects: [HistoryOverviewPresentation.Subject] = []
     @State private var hiddenNames: [String] = []
     @State private var overviewCards: [HistoryOverviewPresentation.Card] = []
+    @State private var overviewUnread: [HistoryOverviewPresentation.Unread] = []
     @State private var overviewEmpty: [HistoryOverviewPresentation.Subject] = []
     @State private var overviewFailed = false
     /// Set once the strip has been read at least once, so a reload keeps the
@@ -31,6 +32,9 @@ public struct HistoryRootView: View {
     /// How far local-activity ingestion has got, read before the records.
     @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
+    /// What the timeline says when `segments` is empty: no polls recorded,
+    /// or polls that returned no figure.
+    @State private var timelineEmpty: (title: String, detail: String)?
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
     @State private var isSampleMode: Bool = CredentialStore.isSampleModeEnabled
@@ -425,8 +429,9 @@ public struct HistoryRootView: View {
                 } else {
                     QuotaTimelineChart(
                         segments: segments, timeRange: timeRange, markers: markers,
-                        emptyMessage: HistoryOverviewPresentation.emptyExplanation(
-                            isSampleMode: isSampleMode, range: timeRange))
+                        emptyMessage: timelineEmpty?.detail ?? HistoryOverviewPresentation.emptyExplanation(
+                            isSampleMode: isSampleMode, range: timeRange),
+                        emptyTitle: timelineEmpty?.title)
                 }
             }
             .frame(height: 240)
@@ -724,11 +729,11 @@ public struct HistoryRootView: View {
                     text: "The overview could not be read. This is a failure to read, not an absence of data.")
             } else if !overviewLoaded {
                 overviewNote(symbol: "hourglass", text: "Reading recorded history…")
-            } else if overviewCards.isEmpty {
+            } else if overviewCards.isEmpty, overviewUnread.isEmpty {
                 overviewNote(
                     symbol: "chart.line.uptrend.xyaxis",
                     text: HistoryOverviewPresentation.emptyExplanation(isSampleMode: isSampleMode, range: timeRange))
-            } else {
+            } else if !overviewCards.isEmpty {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
                     ForEach(overviewCards) { card in
                         HistoryOverviewCardView(
@@ -739,7 +744,16 @@ public struct HistoryRootView: View {
                 }
             }
 
-            if !overviewEmpty.isEmpty, !overviewCards.isEmpty {
+            // Polled but nothing to draw: explained, never called an absence.
+            if overviewLoaded, !overviewFailed {
+                ForEach(overviewUnread) { unread in
+                    overviewNote(
+                        symbol: unread.symbol,
+                        text: "\(unread.subject.name): \(unread.explanation)")
+                }
+            }
+
+            if !overviewEmpty.isEmpty, !(overviewCards.isEmpty && overviewUnread.isEmpty) {
                 overviewNote(
                     symbol: "circle.dashed",
                     text: "No readings in this range: \(overviewEmpty.map(\.name).joined(separator: ", ")).")
@@ -790,6 +804,7 @@ public struct HistoryRootView: View {
 
         loadError = nil
         hasOnlyElapsedReadings = false
+        timelineEmpty = nil
 
         let source = subjectSource()
         subjects = source.subjects
@@ -852,14 +867,13 @@ public struct HistoryRootView: View {
             // fraction from another's.
             let barLabel = AttributionEngine.preferredBarLabel(readings: readings)
             self.segments = HistoryPresentation.segments(from: readings)
+            self.timelineEmpty = HistoryOverviewPresentation.timelineEmptyState(
+                readings: allReadings, isSampleMode: isSampleMode, range: timeRange)
 
-            let scoped = barLabel.map { label in readings.filter { $0.barLabel == label } } ?? []
-
-            if let latest = scoped.last(where: { $0.fraction != nil && $0.resetsAt != nil }) {
-                self.pace = HistoryPresentation.computePace(reading: latest, now: now)
-            } else {
-                self.pace = nil
-            }
+            // Only when the newest poll reported this window: an older
+            // comparison under a "could not be read" overview reads as current.
+            self.pace = HistoryPresentation.currentPaceReading(readings: allReadings, barLabel: barLabel)
+                .flatMap { HistoryPresentation.computePace(reading: $0, now: now) }
 
             // Activity is restricted to the sources that can actually speak for
             // the selected vendor. Showing Codex and OpenCode tokens beneath a
@@ -918,11 +932,13 @@ public struct HistoryRootView: View {
             let overview = HistoryOverviewPresentation.overview(
                 subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards
+            overviewUnread = overview.unread
             overviewEmpty = overview.empty
             overviewFailed = false
         } catch {
             NSLog("frugalbar: history overview read failed: %@", error.localizedDescription)
             overviewCards = []
+            overviewUnread = []
             overviewEmpty = []
             overviewFailed = true
         }
