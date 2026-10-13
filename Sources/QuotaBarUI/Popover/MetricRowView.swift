@@ -69,7 +69,21 @@ struct MetricRowView: View {
         !hasOpenRouterBadges
     }
 
+    @ViewBuilder
     var body: some View {
+        if let onSelect {
+            Button { onSelect(snapshot) } label: { rowContent }
+                .buttonStyle(.plain)
+                .accessibilityHint("Open usage details")
+                .zIndex(isHovered ? 1 : 0)
+        } else {
+            rowContent
+                .zIndex(isHovered ? 1 : 0)
+        }
+    }
+
+    @ViewBuilder
+    private var rowContent: some View {
         // The windows actually drawn, placed in their columns. The
         // exhausted-window collapse lives on the model
         // (`QuotaSnapshot.displayBars`) so the popover and the inspector agree
@@ -112,10 +126,6 @@ struct MetricRowView: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: isHovered)
-        .zIndex(isHovered ? 1 : 0)
-        .onTapGesture {
-            onSelect?(snapshot)
-        }
         .help(label)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
@@ -243,7 +253,8 @@ struct MetricRowView: View {
                     .font(Theme.Typography.title)
                     .tracking(Theme.Tracking.title)
                     .foregroundStyle(Theme.onSurface)
-                    .lineLimit(1)
+                    .lineLimit(snapshot.instanceIdOrNil == nil ? 1 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
                     .minimumScaleFactor(0.85)
 
                 if !subtitle.isEmpty {

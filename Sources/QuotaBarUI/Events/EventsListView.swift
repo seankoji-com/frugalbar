@@ -91,6 +91,14 @@ struct EventsListView: View {
             // Wraps onto a second line in a narrow window rather than clipping.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 6) { kindChips }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        ForEach(EventsPresentation.listKinds.prefix(4)) { kindChip($0) }
+                    }
+                    HStack(spacing: 6) {
+                        ForEach(EventsPresentation.listKinds.dropFirst(4)) { kindChip($0) }
+                    }
+                }
                 VStack(alignment: .leading, spacing: 6) { kindChips }
             }
         }
@@ -187,7 +195,7 @@ struct EventsListView: View {
             if storeIsEmpty {
                 Text("Events accumulate as FrugalBar polls your providers and tracks model catalogs and vendor feeds.")
                     .font(.system(size: 11))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                    .foregroundStyle(Theme.outline)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -270,7 +278,8 @@ struct EventsListView: View {
         } catch {
             events = []
             storeIsEmpty = false
-            loadError = error.localizedDescription
+            NSLog("frugalbar: event history read failed: %@", error.localizedDescription)
+            loadError = HistoryPresentation.failureMessage(for: error)
         }
     }
 }

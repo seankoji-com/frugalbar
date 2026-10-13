@@ -349,7 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageLeft
         } else {
             let symbol = MenuBarPresentation.symbolName(for: summary)
-            let description = MenuBarPresentation.accessibilityDescription(for: summary)
+            let description = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: rec)
             let image: NSImage?
             if let tint = MenuBarPresentation.tint(for: summary) {
                 let config = NSImage.SymbolConfiguration(paletteColors: [tint])
@@ -389,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.attributedTitle = NSAttributedString(string: "")
         }
 
-        let description = MenuBarPresentation.accessibilityDescription(for: summary)
+        let description = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: rec)
         button.toolTip = "\(description)\nRecommended: \(advice.headline)"
         button.setAccessibilityLabel(description)
     }

@@ -134,50 +134,28 @@ public enum MenuBarPresentation {
     }
 
     public static func formatTimeLeft(_ text: String?) -> String? {
-        guard let text = text, !text.isEmpty else { return nil }
+        guard let text, !text.isEmpty else { return nil }
         let lower = text.lowercased()
-
-        // 1. Look for days and hours: e.g. "4d 22h", "4d 6h", "13d"
-        if let range = lower.range(of: #"(\d+)\s*d(\s*(\d+)\s*h)?"#, options: .regularExpression) {
-            let match = String(lower[range])
-            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
-            if let d = Double(parts.first ?? "") {
-                if parts.count > 1, let h = Double(parts[1]), h > 0 {
-                    let totalD = d + (h / 24.0)
-                    return String(format: "%.1fd", totalD)
-                } else {
-                    return String(format: "%.0fd", d)
-                }
-            }
+        // Match and compact from the same spellings, keeping months distinct
+        // from minutes and preserving the vendor's reported unit.
+        let units = [
+            (pattern: #"mo(?:nths?)?"#, compact: "mo"),
+            (pattern: #"w(?:eeks?)?"#, compact: "w"),
+            (pattern: #"d(?:ays?)?"#, compact: "d"),
+            (pattern: #"h(?:ours?|rs?)?"#, compact: "h"),
+            (pattern: #"m(?:in(?:ute)?s?)?"#, compact: "m")
+        ]
+        let unitPattern = units.map(\.pattern).joined(separator: "|")
+        let part = #"\d+\s*(?:\#(unitPattern))(?![a-z])"#
+        let pattern = #"(?<![\d.])\#(part)(?:\s*\#(part))*"#
+        guard let range = lower.range(of: pattern, options: .regularExpression) else { return nil }
+        // RelativeDateTimeFormatter emits full units; compact only those units.
+        let duration = units.reduce(String(lower[range])) { result, unit in
+            result.replacingOccurrences(of: #"\s*\#(unit.pattern)\b"#,
+                with: unit.compact, options: .regularExpression)
         }
-
-        // 2. Look for hours and minutes: e.g. "3h 29m", "167h 25m", "1h 05m", "2h 10m"
-        if let range = lower.range(of: #"(\d+)\s*h(\s*(\d+)\s*m)?"#, options: .regularExpression) {
-            let match = String(lower[range])
-            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
-            if let h = Double(parts.first ?? "") {
-                if parts.count > 1, let m = Double(parts[1]), m > 0 {
-                    let totalH = h + (m / 60.0)
-                    return String(format: "%.2fhr", totalH)
-                } else {
-                    return String(format: "%.0fhr", h)
-                }
-            }
-        }
-
-        // 3. Look for minutes only: e.g. "42m"
-        if let range = lower.range(of: #"(\d+)\s*m"#, options: .regularExpression) {
-            let match = String(lower[range])
-            let parts = match.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
-            if let m = Double(parts.first ?? "") {
-                let totalH = m / 60.0
-                return String(format: "%.2fhr", totalH)
-            }
-        }
-
-        return nil
+        return duration.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
-
 
     public static func symbolName(for summary: SystemHealthSummary) -> String {
         guard summary.hasAnyReading else { return "gauge.with.dots.needle.bottom.0percent" }
@@ -213,7 +191,9 @@ public enum MenuBarPresentation {
         summary.unavailableCount > 0
     }
 
-    public static func accessibilityDescription(for summary: SystemHealthSummary) -> String {
+    public static func accessibilityDescription(
+        for summary: SystemHealthSummary, recommendation: RecommendationDetails? = nil
+    ) -> String {
         var parts: [String] = ["FrugalBar"]
         if summary.hasAnyReading {
             switch summary.worstUrgency {
@@ -226,6 +206,14 @@ public enum MenuBarPresentation {
         }
         if summary.unavailableCount > 0 {
             parts.append("\(summary.unavailableCount) provider not readable")
+        }
+        if let recommendation {
+            if let percentage = recommendation.remainingPctText {
+                parts.append("\(recommendation.vendorId?.displayName ?? "Recommended provider") \(percentage) remaining")
+            }
+            if let reset = recommendation.timeLeftText {
+                parts.append("resets in \(reset)")
+            }
         }
         return parts.joined(separator: ", ")
     }

@@ -30,6 +30,11 @@ struct DesktopWidgetView: View {
         let generation: Int
     }
 
+    init(store: QuotaStore, filters: WidgetFilters? = nil) {
+        self.store = store
+        _filters = State(initialValue: filters ?? WidgetFilters.decode(CredentialStore.desktopWidgetFiltersData))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
@@ -261,7 +266,7 @@ struct DesktopWidgetView: View {
             if let detail {
                 Text(detail)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                    .foregroundStyle(Theme.outline)
                     .multilineTextAlignment(.center)
             }
         }
@@ -443,7 +448,8 @@ struct DesktopWidgetView: View {
                     Text(tile.name)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Theme.onSurface)
-                        .lineLimit(1)
+                        .lineLimit(tile.instanceID == tile.vendorId.rawValue ? 1 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let plan = tile.planName {
                         Text(plan)
                             .font(.system(size: 9.5))
@@ -459,13 +465,13 @@ struct DesktopWidgetView: View {
                 if let remedy = tile.unavailableRemedy {
                     Text(remedy)
                         .font(.system(size: 9.5))
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                        .foregroundStyle(Theme.outline)
                         .lineLimit(2)
                 }
             } else if tile.windows.isEmpty {
                 Text("No usage windows")
                     .font(.system(size: 10))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                    .foregroundStyle(Theme.outline)
             } else {
                 ForEach(tile.windows) { window in
                     overviewWindow(window, now: now)
@@ -481,35 +487,29 @@ struct DesktopWidgetView: View {
 
     private func overviewWindow(_ window: OverviewPresentation.WindowCell, now: Date) -> some View {
         let color = DualBarProgressView.stateColor(for: window.metrics)
-        return HStack(spacing: 5) {
-            Text(window.label)
-                .font(Theme.Typography.token)
-                .tracking(Theme.Tracking.token)
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(width: 30, alignment: .leading)
-            // The bar always fills with what is *remaining*, matching the
-            // headroom strip; the figure beside it follows the metric.
-            MicroProgressBar(
-                fraction: window.fraction.map {
-                    window.measuresElapsedTimeOnly || filters.metric == .remaining ? $0 : 1 - $0
-                },
-                statusColor: color
-            )
-            .frame(maxWidth: .infinity)
-            if let fraction = window.fraction {
-                if window.showsBlockedGlyph {
-                    BlockedGlyph(color: color, size: 8)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(window.label)
+                    .font(Theme.Typography.token)
+                    .tracking(Theme.Tracking.token)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let fraction = window.fraction {
+                    if window.showsBlockedGlyph { BlockedGlyph(color: color, size: 8) }
+                    Text("\(Int((fraction * 100).rounded()))% \(window.measuresElapsedTimeOnly ? "elapsed" : metricWord)")
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.onSurface)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                } else {
+                    Text(window.isBlocked ? "blocked" : "—")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
                 }
-                Text("\(Int((fraction * 100).rounded()))%\(window.measuresElapsedTimeOnly ? " elapsed" : "")")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.onSurface)
-            } else {
-                Text(window.isBlocked ? "blocked" : "—")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
             }
+            // Fill and caption follow the same selected metric.
+            MicroProgressBar(fraction: window.fraction, statusColor: color)
         }
         .help(OverviewPresentation.helpText(for: window, now: now))
     }
@@ -544,7 +544,8 @@ struct DesktopWidgetView: View {
                 .font(Theme.Typography.token)
                 .tracking(Theme.Tracking.token)
                 .foregroundStyle(Theme.onSurfaceVariant)
-                .frame(width: 26, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: WindowColumn.column(forLabel: item.barLabel) == nil ? 50 : 26, alignment: .leading)
             MicroProgressBar(fraction: item.remainingFraction, statusColor: headroomColor(item))
                 .frame(maxWidth: .infinity)
             if let percentText {

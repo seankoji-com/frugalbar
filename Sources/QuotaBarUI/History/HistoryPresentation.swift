@@ -7,6 +7,18 @@ import QuotaBarCore
 /// testability without UI lifecycle or database side effects.
 public enum HistoryPresentation {
 
+    /// UI copy excludes paths, SQL and SQLite diagnostics. Callers log the error separately.
+    static func failureMessage(for error: Error) -> String {
+        switch error as? HistoryDatabaseError {
+        case .cannotOpen, .databaseNotOpen:
+            return "Could not open the local history database. Try reopening FrugalBar."
+        case .unsupportedPlatform:
+            return "History is unavailable on this platform."
+        default:
+            return "Could not read the local history database. Try again or reopen FrugalBar."
+        }
+    }
+
     public enum TimeRange: String, CaseIterable, Identifiable, Sendable {
         case last24Hours = "24h"
         case last7Days = "7d"

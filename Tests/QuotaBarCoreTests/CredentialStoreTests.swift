@@ -98,22 +98,32 @@ struct CredentialStoreTests {
 
     @Test("apiKey with no keychain entry and CLI discovery off returns nil")
     func apiKeyNotFoundWhenCLIDiscoveryOff() {
-        // Ensure discovery is off
         CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        // For a vendor that has no keychain entry and no env var, this returns nil.
-        let key = CredentialStore.apiKey(for: .claude)
-        #expect(key == nil)
+        let key = CredentialStore.apiKey(for: .claude, readKeychain: { _ in nil })
+        let isMissing = key == nil
+        #expect(isMissing)
     }
 
     @Test("apiKey(for:) with CLI discovery off returns nil for uncached vendors")
     func apiKeyReturnsNilWhenNotConfigured() {
         CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        #expect(CredentialStore.apiKey(for: .copilot) == nil)
-        #expect(CredentialStore.apiKey(for: .openrouter) == nil)
-        #expect(CredentialStore.apiKey(for: .gemini) == nil)
-        #expect(CredentialStore.apiKey(for: .githubRest) == nil)
-        #expect(CredentialStore.apiKey(for: .githubGraphql) == nil)
-        #expect(CredentialStore.apiKey(for: .opencode) == nil)
+        for vendor in VendorIdentifier.allCases {
+            let isMissing = CredentialStore.apiKey(for: vendor, readKeychain: { _ in nil }) == nil
+            #expect(isMissing)
+        }
+    }
+
+    @Test("stored keys resolve with CLI discovery off using the requested vendor label")
+    func storedKeyResolvesWithoutDiscovery() {
+        CredentialStore.preferences.set(false, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        var labels: [String] = []
+        let result = CredentialStore.apiKey(for: .opencode, readKeychain: { label in
+            labels.append(label)
+            return "test-fixture-key"
+        })
+        #expect(labels == [VendorIdentifier.opencode.rawValue])
+        let matchesFixture = result == "test-fixture-key"
+        #expect(matchesFixture)
     }
 
     // MARK: - CLI discovery flag

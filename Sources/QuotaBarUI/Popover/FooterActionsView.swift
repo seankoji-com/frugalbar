@@ -26,7 +26,7 @@ struct FooterActionsView: View {
                 // carries the long form the About window shows.
                 Text(AppInfo.compactVersion)
                     .font(Theme.Typography.footerMeta)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                    .foregroundStyle(Theme.outline)
                     .help(AppInfo.versionDisplay)
 
                 // A shape, not colour alone, carries the status (WCAG 1.4.1) —
@@ -74,6 +74,7 @@ struct FooterActionsView: View {
             .disabled(isRefreshing)
             .onHover { isRefreshHovered = $0 }
             .accessibilityLabel(isRefreshing ? "Refreshing" : "Refresh now")
+            .help(isRefreshing ? "Refreshing readings…" : "Refresh readings (⌘R)")
 
             // Standard macOS Gear Menu
             Menu {
@@ -90,6 +91,7 @@ struct FooterActionsView: View {
                     Label("Refresh Now", systemImage: "arrow.clockwise")
                 }
                 .keyboardShortcut("r", modifiers: .command)
+                .disabled(isRefreshing)
 
                 Button {
                     HistoryWindow.show()
@@ -134,6 +136,8 @@ struct FooterActionsView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .onHover { isGearHovered = $0 }
+            .accessibilityLabel("FrugalBar menu")
+            .help("Settings, history and desktop widget")
         }
         .padding(.horizontal, Theme.edgeMargin + 4)
         .frame(height: 44)

@@ -10,7 +10,7 @@ public struct HistoryRootView: View {
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
     @State private var isSampleMode: Bool = CredentialStore.isSampleModeEnabled
-    @State private var isLoading: Bool = false
+    @State private var isLoading: Bool = true
     /// Non-nil when the history could not be read at all. Distinct from an empty
     /// history, which is a fact about the user's data rather than about us.
     @State private var loadError: String?
@@ -78,13 +78,13 @@ public struct HistoryRootView: View {
                             failureCard(loadError)
                         }
 
-                        if let pace {
+                        if !isLoading, let pace {
                             paceCard(pace)
                         }
 
                         chartCard
 
-                        attributionCard
+                        if !isLoading { attributionCard }
 
                         telemetryCard
                     }
@@ -107,75 +107,86 @@ public struct HistoryRootView: View {
     // MARK: - Header Bar
 
     private var headerBar: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Text("Allowance History")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.onSurface)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text("Allowance History")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.onSurface)
 
-                    if isSampleMode {
-                        Text("SAMPLE DATA")
-                            .font(.system(size: 9, weight: .bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Theme.tertiary.opacity(0.2))
-                            .foregroundStyle(Theme.tertiary)
-                            .clipShape(Capsule())
+                        if isSampleMode {
+                            Text("SAMPLE DATA")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.tertiary.opacity(0.2))
+                                .foregroundStyle(Theme.tertiary)
+                                .clipShape(Capsule())
+                        }
                     }
+                    Text("Track quota consumption over time and monitor burn rate.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                 }
-                Text("Track quota consumption over time and monitor burn rate.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-            }
 
-            Spacer()
+                Spacer()
 
-            Picker("View", selection: $selectedTab) {
-                ForEach(HistoryTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .fixedSize()
-            .accessibilityLabel("History view")
-
-            // The events tab has its own filter bar; these drive the timeline.
-            if selectedTab == .timeline {
-                // Vendor Picker
-                Picker("", selection: $selectedVendor) {
-                    ForEach(VendorIdentifier.allCases, id: \.self) { vendor in
-                        Text(vendor.displayName).tag(vendor)
+                Picker("View", selection: $selectedTab) {
+                    ForEach(HistoryTab.allCases) { tab in
+                        Text(tab.title).tag(tab)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 140)
-
-                // Time Range Picker
-                Picker("", selection: $timeRange) {
-                    ForEach(HistoryPresentation.TimeRange.allCases) { range in
-                        Text(range.title).tag(range)
-                    }
-                }
                 .pickerStyle(.segmented)
-                .frame(width: 220)
-            }
+                .fixedSize()
+                .accessibilityLabel("History view")
 
-            // Sample Mode Toggle Button
-            Button {
-                let next = !isSampleMode
-                isSampleMode = next
-                CredentialStore.isSampleModeEnabled = next
-            } label: {
-                Image(systemName: isSampleMode ? "flask.fill" : "flask")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isSampleMode ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.7))
+                // Sample Mode Toggle Button
+                Button {
+                    let next = !isSampleMode
+                    isSampleMode = next
+                    CredentialStore.isSampleModeEnabled = next
+                } label: {
+                    Image(systemName: isSampleMode ? "flask.fill" : "flask")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isSampleMode ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isSampleMode ? "Exit sample data mode" : "View sample data")
+                .help(isSampleMode ? "Exit sample data mode" : "Switch to sample data mode")
+                .padding(.horizontal, 4)
             }
-            .buttonStyle(.plain)
-            .help(isSampleMode ? "Exit sample data mode" : "Switch to sample data mode")
-            .padding(.horizontal, 4)
+            // The events tab has its own filter bar.
+            if selectedTab == .timeline {
+                HStack(spacing: 12) {
+                    // Vendor Picker
+                    Picker("Provider", selection: $selectedVendor) {
+                        ForEach(VendorIdentifier.allCases, id: \.self) { vendor in
+                            Text(vendor.displayName).tag(vendor)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 200)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("History provider")
+
+                    // Time Range Picker
+                    Picker("Time range", selection: $timeRange) {
+                        ForEach(HistoryPresentation.TimeRange.allCases) { range in
+                            Text(range.title).tag(range)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("History time range")
+                    Spacer(minLength: 0)
+                }
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Theme.card)
@@ -216,7 +227,10 @@ public struct HistoryRootView: View {
     private func paceCard(_ pace: HistoryPresentation.PaceComparison) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Window Pace: \(pace.vendor) (\(pace.barLabel))")
+                let name = OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
+                    ?? OpenCodeGoWorkspaceStore.vendor(forInstanceKey: pace.vendor)?.displayName
+                    ?? selectedVendor.displayName
+                Text("Window Pace: \(name) (\(pace.barLabel))")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.onSurface)
 
@@ -312,8 +326,21 @@ public struct HistoryRootView: View {
                 }
             }
 
-            QuotaTimelineChart(segments: segments, timeRange: timeRange, markers: markers)
-                .frame(height: 240)
+            Group {
+                if isLoading {
+                    Text("Loading readings…")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if loadError != nil {
+                    Label("Timeline unavailable", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(Theme.tertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    QuotaTimelineChart(segments: segments, timeRange: timeRange, markers: markers)
+                }
+            }
+            .frame(height: 240)
 
             if markerLoadFailed {
                 HStack(alignment: .top, spacing: 6) {
@@ -549,7 +576,8 @@ public struct HistoryRootView: View {
             do {
                 try await SampleDataGenerator.ensureSampleData(in: sampleStore)
             } catch {
-                loadError = "Could not prepare the sample fixture: \(error.localizedDescription)"
+                NSLog("frugalbar: sample history failed: %@", error.localizedDescription)
+                loadError = "Could not prepare the sample data. Try again or reopen FrugalBar."
                 segments = []
                 pace = nil
                 attribution = nil
@@ -611,7 +639,8 @@ public struct HistoryRootView: View {
             )
         } catch {
             // A failed read must never render as "you have no history".
-            loadError = error.localizedDescription
+            NSLog("frugalbar: history read failed: %@", error.localizedDescription)
+            loadError = HistoryPresentation.failureMessage(for: error)
             segments = []
             pace = nil
             attribution = nil

@@ -145,10 +145,9 @@ struct TokenUsageChartView: View {
     private var notes: some View {
         let lines = TokenUsagePresentation.notes(for: chart)
         if !lines.isEmpty {
-            Text(lines.joined(separator: " "))
+            Text(lines.joined(separator: "\n"))
                 .font(.system(size: 9.5))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
-                .lineLimit(3)
+                .foregroundStyle(Theme.onSurfaceVariant)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)   // spoken in the chart's value
         }

@@ -69,11 +69,8 @@ public enum HistoryWindow {
         created.appearance = NSAppearance(named: .darkAqua)
         created.backgroundColor = NSColor(red: 0x0a / 255.0, green: 0x0a / 255.0, blue: 0x0b / 255.0, alpha: 1.0)
         created.isReleasedWhenClosed = false
-        // The header (title, tab picker, vendor picker, range picker) needs
-        // the full 880pt; a narrower minimum let it truncate the title.
-        created.minSize = NSSize(width: 880, height: 480)
-        // Wide enough for the header's tab picker beside the timeline's
-        // vendor and range pickers without truncating the title.
+        // Filters have their own row, so compact windows keep every control.
+        created.minSize = NSSize(width: 640, height: 480)
         created.setContentSize(NSSize(width: 880, height: 560))
         created.center()
 
