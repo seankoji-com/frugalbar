@@ -154,13 +154,34 @@ public enum QuotaHTTP {
     }
 
     /// Maps an HTTP status to a failure reason, or nil when the response is OK.
-    public static func failureReason(for status: Int) -> UnavailableReason? {
+    ///
+    /// `retryAfter` is the raw `Retry-After` header, when the caller has one.
+    /// Without it a 429 reads as "will retry" with no idea *when* the vendor
+    /// said to come back, which is exactly the instruction a client that keeps
+    /// polling every 2 minutes most needs to hear.
+    public static func failureReason(
+        for status: Int, retryAfter: String? = nil, now: Date = Date()
+    ) -> UnavailableReason? {
         switch status {
         case 200...299: nil
         case 401, 403:  .credentialRejected
-        case 429:       .rateLimited(retryAfter: nil)
+        case 429:       .rateLimited(retryAfter: retryAfterDate(secondsHeader: retryAfter, now: now))
         default:        .badResponse
         }
+    }
+
+    /// The vendor's requested backoff as an absolute instant, or nil when it
+    /// asked for none.
+    ///
+    /// Only the delta-seconds form (`Retry-After: 2377`) is honoured. The
+    /// HTTP-date form is ignored rather than parsed: this figure gates the
+    /// next automatic poll, and a clock skew between here and the vendor turns
+    /// a date into "retry now" or "retry tomorrow" — a wrong instant is worse
+    /// than no instant, as everywhere else in this codebase. A non-positive
+    /// delta is no instruction at all.
+    public static func retryAfterDate(secondsHeader raw: String?, now: Date = Date()) -> Date? {
+        guard let raw, let seconds = TimeInterval(raw.trimmed), seconds > 0 else { return nil }
+        return now.addingTimeInterval(seconds)
     }
 }
 

@@ -300,6 +300,64 @@ struct QuotaManagerTests {
         #expect(counter.value == 1)
     }
 
+    /// A 429 that carries `Retry-After` is an instruction, and the poll loop is
+    /// the thing it is addressed to. Anthropic answers the usage endpoint with
+    /// `Retry-After: 2377`, so a 2-minute automatic poll spends the next 40
+    /// minutes re-asking a vendor that already said no — on a budget the
+    /// account shares with Claude Code itself. The user's ⟳ is exempt: a
+    /// person asking is not the poll loop.
+    @Test("a vendor's Retry-After gates the automatic poll, not the user's ⟳")
+    func vendorRetryAfterGatesAutomaticPollOnly() async {
+        let counter = InvocationCounter()
+        let retryAt = Date().addingTimeInterval(600)
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 0
+            ),
+            providerFactory: {
+                [StubProvider(
+                    vendorId: .claude, counter: counter,
+                    behavior: .throwError(ProviderError(.rateLimited(retryAfter: retryAt))))]
+            }
+        )
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 1)
+
+        // minPollInterval is 0 here on purpose: the vendor's own window is what
+        // holds the poll back, not the floor.
+        _ = await manager.refresh()
+        #expect(counter.value == 1)
+
+        // The user asks anyway, and is answered by the vendor rather than by
+        // the cache — the dead ⟳ of #90 stays dead-free.
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 2)
+    }
+
+    /// The gate is the vendor's window, not a permanent mute: once the instant
+    /// it named has passed, automatic polling resumes.
+    @Test("an elapsed Retry-After does not hold the automatic poll back")
+    func elapsedVendorRetryAfterDoesNotThrottle() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
+                minPollInterval: 0
+            ),
+            providerFactory: {
+                [StubProvider(
+                    vendorId: .claude, counter: counter,
+                    behavior: .throwError(ProviderError(
+                        .rateLimited(retryAfter: Date().addingTimeInterval(-1)))))]
+            }
+        )
+        _ = await manager.refresh()
+        #expect(counter.value == 1)
+        _ = await manager.refresh()
+        #expect(counter.value == 2)
+    }
+
     @Test("minPollInterval re-arms during an outage instead of re-hitting a failing vendor every cycle")
     func minPollIntervalReArmsDuringOutage() async {
         // Two independent counters: `factoryCallCount` only decides which

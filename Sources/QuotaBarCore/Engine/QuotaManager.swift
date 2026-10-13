@@ -51,6 +51,14 @@ public actor QuotaManager {
         /// issued at all, so the reading never moved and the button looked
         /// dead. A poll nobody asked for must not be able to do that.
         let lastUserFetchAt: Date?
+        /// The instant the vendor asked us to come back, when its last answer
+        /// to this provider was a 429 carrying a `Retry-After`.
+        ///
+        /// Held here rather than read off `snapshot`, because the snapshot
+        /// often does not carry the 429 at all: a provider with a previous
+        /// reading keeps showing it, so the reason — and with it the vendor's
+        /// backoff instruction — would be dropped on the floor.
+        let vendorRetryAfter: Date?
     }
 
     /// Designated initialiser. `providerFactory` is injectable so tests can
@@ -309,6 +317,17 @@ public actor QuotaManager {
                 let withinFloor = measuredFrom.map {
                     startNow.timeIntervalSince($0) < minPollInterval
                 } ?? false
+                // The vendor's own backoff, which outranks the floor because it
+                // is longer and means more: Anthropic answers a 429 on its usage
+                // endpoint with `Retry-After: 2377`, and re-asking every 120s for
+                // the next 40 minutes spends a budget the account shares with
+                // every other client on it — Claude Code included. Polling
+                // through the window cannot produce a reading; it can only keep
+                // the account throttled. Only an *automatic* poll waits: the
+                // user's own ⟳ is a person asking, not the poll loop, and
+                // swallowing their click is the dead-button bug #90 fixed.
+                let withinVendorBackoff = !force
+                    && (entry.vendorRetryAfter.map { startNow < $0 } ?? false)
                 switch entry.snapshot.status {
                 case .unavailable(.notConfigured), .unavailable(.credentialRejected):
                     // These two are the only reasons a Settings change can
@@ -323,7 +342,7 @@ public actor QuotaManager {
                     // refresh must not re-hit a throttling or ailing vendor
                     // every cycle just because its last result wasn't a
                     // successful measurement.
-                    shouldThrottle = withinFloor
+                    shouldThrottle = withinFloor || withinVendorBackoff
                 }
             } else {
                 shouldThrottle = false
@@ -418,7 +437,8 @@ public actor QuotaManager {
             cache[id] = CacheEntry(
                 snapshot: displaySnapshot,
                 fetchedAt: now,
-                lastUserFetchAt: force ? now : previous?.lastUserFetchAt)
+                lastUserFetchAt: force ? now : previous?.lastUserFetchAt,
+                vendorRetryAfter: Self.vendorRetryAfter(from: snap.status))
         }
         lastCompleteFetch = now
         return visibleCache()
@@ -569,6 +589,13 @@ public actor QuotaManager {
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         return rebuilt
+    }
+
+    /// The backoff a vendor attached to its 429, if this attempt was one. Any
+    /// other outcome clears it, so a recovered vendor is polled normally.
+    private static func vendorRetryAfter(from status: ProviderStatus) -> Date? {
+        if case .unavailable(.rateLimited(let retryAfter)) = status { return retryAfter }
+        return nil
     }
 
     /// Builds the placeholder shown when a provider could not be read.

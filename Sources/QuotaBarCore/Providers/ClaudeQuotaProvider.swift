@@ -9,10 +9,22 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
     private let apiKey: String?
     private let cliProxyConfig: CLIProxyConfig?
+    /// Resolves the *direct* Claude Code OAuth token — the one this Mac's own
+    /// `claude` login holds, as opposed to whatever the proxy holds.
+    private let directCredential: @Sendable () async -> String?
 
-    public init(apiKey: String? = nil, cliProxyConfig: CLIProxyConfig? = nil) {
+    public init(
+        apiKey: String? = nil,
+        cliProxyConfig: CLIProxyConfig? = nil,
+        // Injectable so a test can drive the proxy-failure fall-through below
+        // without reading the developer's own Claude login out of the Keychain.
+        // Nil means the production path: this Mac's Claude Code credential.
+        directCredential: (@Sendable () async -> String?)? = nil
+    ) {
         self.apiKey = apiKey
         self.cliProxyConfig = cliProxyConfig
+        self.directCredential = directCredential
+            ?? { await CredentialStore.apiKeyAsync(for: .claude) }
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
@@ -30,26 +42,52 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
 
         // Check CLI Proxy: explicit config, or discovered from ~/.t3/userdata
         let proxyConfig = cliProxyConfig ?? (TestHost.isActive ? nil : CLIProxyClient.discoverConfig())
+        // Why the proxy failed, when it did — reported below only if the direct
+        // token cannot answer either, because a proxy-side failure says nothing
+        // about a different credential.
+        var proxyFailure: UnavailableReason?
         if let proxyConfig {
             do {
                 return try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
             } catch let error as ProviderError {
-                if error.reason == .credentialRejected || error.reason == .rateLimited(retryAfter: nil) {
-                    return unavailable(error.reason)
-                }
+                proxyFailure = error.reason
             } catch {
-                // If proxy call failed with transport or connection error, fall through to direct token.
+                // Transport or connection failure: nothing about either
+                // credential has been established, so fall through to the
+                // direct token with nothing to report yet.
             }
         }
 
-        guard let token = await credential(injected: nil, for: .claude) else {
-            return unavailable(.notConfigured)
+        // The direct Claude Code token is an independent credential, so the
+        // proxy failing is not evidence about it. A proxy-side 429 is the case
+        // that matters: Anthropic throttles the usage endpoint per account
+        // token for ~40 minutes at a time (the proxy's own token spent a whole
+        // day 429 while this Mac's token answered the same endpoint 200), and
+        // treating that as this provider's final answer left the Claude row
+        // reading "Rate limited" with no bars until the process restarted.
+        guard let token = await directCredential().flatMap({ $0.isEmpty ? nil : $0 }) else {
+            // Nothing else to try, and the proxy's own reason is the honest
+            // one: "Not configured" would send the user looking for a
+            // credential that is right there.
+            return unavailable(proxyFailure ?? .notConfigured)
         }
-        return try await fetchSnapshotDirect(token: token, now: now)
+        let direct: QuotaSnapshot
+        do {
+            direct = try await fetchSnapshotDirect(token: token, now: now)
+        } catch let error as ProviderError {
+            return unavailable(proxyFailure ?? error.reason)
+        }
+        // A transport failure from the direct call propagates to the engine,
+        // which maps it to its own reason — inventing one here would lose that
+        // mapping for no gain.
+        guard direct.status.confidence == .measured else {
+            return unavailable(proxyFailure ?? direct.status.unavailableReason ?? .badResponse)
+        }
+        return direct
     }
 
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
-        let (usage, _) = try await CLIProxyClient.fetchClaudeUsage(config: config)
+        let (usage, _) = try await CLIProxyClient.fetchClaudeUsage(config: config, now: now)
         let host = config.url.host ?? "proxy"
         return try makeSnapshot(
             usage: usage,
@@ -68,7 +106,9 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
             auth: .bearer(token)
         )
-        if let reason = QuotaHTTP.failureReason(for: response.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: response.statusCode,
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After"), now: now) {
             NSLog("frugalbar: Claude OAuth usage request returned %ld (%@)",
                   response.statusCode, String(describing: reason))
             return unavailable(reason)

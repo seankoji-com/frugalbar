@@ -205,6 +205,56 @@ struct CLIProxyClientTests {
         }
     }
 
+    /// A 429 relayed through the proxy carries the vendor's own `Retry-After`
+    /// in the wrapper's header map. Dropping it left every throttled provider
+    /// saying "will retry" with no idea when, and left the poll floor with
+    /// nothing to back off against.
+    @Test("a relayed 429 keeps the vendor's Retry-After in the reason")
+    func decodeClaudeUsageRateLimitCarriesRetryAfter() throws {
+        let wrapped = #"""
+        {
+          "status_code": 429,
+          "header": {"Retry-After": ["2377"], "Content-Type": ["application/json"]},
+          "body": "{\"error\":{\"type\":\"rate_limit_error\"}}"
+        }
+        """#
+        let now = Date()
+        do {
+            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(wrapped.utf8), now: now)
+            Issue.record("expected a rateLimited ProviderError")
+        } catch let error as ProviderError {
+            #expect(error.reason == .rateLimited(retryAfter: now.addingTimeInterval(2377)))
+        }
+    }
+
+    @Test("a single-string header value decodes too, and a missing header only costs the retry time")
+    func decodeClaudeUsageTolerantHeaderShapes() throws {
+        let flattened = #"""
+        {"status_code": 429, "header": {"retry-after": "300"}, "body": "{}"}
+        """#
+        let now = Date()
+        do {
+            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(flattened.utf8), now: now)
+            Issue.record("expected a rateLimited ProviderError")
+        } catch let error as ProviderError {
+            // Header names are case-insensitive, and a plain string is the same
+            // instruction as a one-element array.
+            #expect(error.reason == .rateLimited(retryAfter: now.addingTimeInterval(300)))
+        }
+
+        // An unexpected header shape costs the retry time, never the status:
+        // the 429 is still reported.
+        let unreadable = #"""
+        {"status_code": 429, "header": {"Retry-After": {"seconds": 60}}, "body": "{}"}
+        """#
+        do {
+            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(unreadable.utf8))
+            Issue.record("expected a rateLimited ProviderError")
+        } catch let error as ProviderError {
+            #expect(error.reason == .rateLimited(retryAfter: nil))
+        }
+    }
+
     @Test("decodeCodexUsage decodes API-call wrapper body string and raw JSON")
     func decodeCodexUsageShapes() throws {
         let wrapped = #"""

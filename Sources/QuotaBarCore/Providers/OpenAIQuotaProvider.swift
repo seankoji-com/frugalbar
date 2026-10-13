@@ -12,11 +12,24 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     private let accessToken: String?
     private let accountID: String?
     private let cliProxyConfig: CLIProxyConfig?
+    /// Resolves the *direct* Codex session token (~/.codex/auth.json), as
+    /// opposed to whatever the proxy holds.
+    private let directCredential: @Sendable () async -> String?
 
-    public init(accessToken: String? = nil, accountID: String? = nil, cliProxyConfig: CLIProxyConfig? = nil) {
+    public init(
+        accessToken: String? = nil,
+        accountID: String? = nil,
+        cliProxyConfig: CLIProxyConfig? = nil,
+        // Injectable so a test can drive the proxy-failure fall-through below
+        // without depending on whether this Mac happens to be signed in to
+        // Codex. Nil means the production path.
+        directCredential: (@Sendable () async -> String?)? = nil
+    ) {
         self.accessToken = accessToken
         self.accountID = accountID
         self.cliProxyConfig = cliProxyConfig
+        self.directCredential = directCredential
+            ?? { await CredentialStore.apiKeyAsync(for: .openai) }
     }
 
     public struct Response: Decodable, Sendable, Equatable {
@@ -136,26 +149,39 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         }
 
         let proxyConfig = cliProxyConfig ?? (TestHost.isActive ? nil : CLIProxyClient.discoverConfig())
+        // See `ClaudeQuotaProvider.fetchSnapshot(now:)` for why a proxy failure
+        // is not this provider's answer: the local Codex session is a separate
+        // credential, and a 429 on the proxy's account token must not hide a
+        // reading the local one can supply.
+        var proxyFailure: UnavailableReason?
         if let proxyConfig {
             do {
                 return try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
             } catch let error as ProviderError {
-                if error.reason == .credentialRejected || error.reason == .rateLimited(retryAfter: nil) {
-                    return unavailable(error.reason)
-                }
+                proxyFailure = error.reason
             } catch {
-                // Fall through to direct credential check
+                // Transport or connection failure: fall through to the direct
+                // token with nothing to report yet.
             }
         }
 
-        guard let token = await credential(injected: nil, for: .openai) else {
-            return unavailable(.notConfigured)
+        guard let token = await directCredential().flatMap({ $0.isEmpty ? nil : $0 }) else {
+            return unavailable(proxyFailure ?? .notConfigured)
         }
-        return try await fetchSnapshotDirect(token: token, now: now)
+        let direct: QuotaSnapshot
+        do {
+            direct = try await fetchSnapshotDirect(token: token, now: now)
+        } catch let error as ProviderError {
+            return unavailable(proxyFailure ?? error.reason)
+        }
+        guard direct.status.confidence == .measured else {
+            return unavailable(proxyFailure ?? direct.status.unavailableReason ?? .badResponse)
+        }
+        return direct
     }
 
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
-        let (response, account) = try await CLIProxyClient.fetchCodexUsage(config: config)
+        let (response, account) = try await CLIProxyClient.fetchCodexUsage(config: config, now: now)
         let host = config.url.host ?? "proxy"
         let accountPlan = account.idToken?.chatgptPlanType ?? account.idToken?.planType
         return makeSnapshot(
@@ -177,7 +203,9 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             headers: headers,
             auth: .bearer(token)
         )
-        if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
+        if let reason = QuotaHTTP.failureReason(
+            for: http.statusCode,
+            retryAfter: http.value(forHTTPHeaderField: "Retry-After")) {
             return unavailable(reason)
         }
 

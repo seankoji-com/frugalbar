@@ -35,6 +35,18 @@ the menu bar icon.
 decoding, and treat a decode failure as `.badResponse`. A 404 that renders as a
 full green bar is the specific bug this codebase shipped once already.
 
+**One credential's failure is not another's verdict, and a vendor's `Retry-After`
+is an instruction.** Claude and Codex each read two independent credentials: the
+CLI Proxy's account token and this Mac's own (Claude Code / `~/.codex`) token.
+A failure through the proxy — 429 included — goes to the direct token before the
+row gives up, because Anthropic throttles the usage endpoint per account token
+and the proxy's could sit at 429 for a day while the local one answered 200; the
+row read "Rate limited" for that whole day. Report the proxy's reason only when
+the direct token cannot answer either. A 429 that carried `Retry-After` keeps it
+(`QuotaHTTP.retryAfterDate`), names the window in `remedy`, and holds back the
+*automatic* poll for that long (`CacheEntry.vendorRetryAfter`) while the user's ⟳
+still goes out — swallowing their click is the dead-button bug #90 fixed.
+
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
 

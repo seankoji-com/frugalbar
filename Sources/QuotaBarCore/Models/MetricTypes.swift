@@ -140,15 +140,28 @@ public enum UnavailableReason: Sendable, Equatable {
     }
 
     /// Short, actionable next step shown beneath the row.
+    ///
+    /// `rateLimited` is the one case that can say something more useful than
+    /// "later": the vendor's own `Retry-After` was published with the 429, so
+    /// when we have it the remedy names the window instead of leaving the user
+    /// to guess whether the row is waiting or stuck.
     public var remedy: String {
         switch self {
-        case .notConfigured:      "Add a key in Settings"
-        case .credentialRejected: "Check the key in Settings"
-        case .unsupported(let d): d
-        case .offline:            "Check your connection"
-        case .timedOut:           "Vendor slow — will retry"
-        case .badResponse:        "Vendor returned unexpected data"
-        case .rateLimited:        "Vendor throttling — will retry"
+        case .notConfigured:      return "Add a key in Settings"
+        case .credentialRejected: return "Check the key in Settings"
+        case .unsupported(let d): return d
+        case .offline:            return "Check your connection"
+        case .timedOut:           return "Vendor slow — will retry"
+        case .badResponse:        return "Vendor returned unexpected data"
+        case .rateLimited(let retryAfter):
+            // A retry instant already in the past says nothing about the next
+            // poll, so it falls back to the unquantified wording rather than
+            // promising a retry that is not scheduled.
+            guard let retryAfter, retryAfter.timeIntervalSinceNow > 0 else {
+                return "Vendor throttling — will retry"
+            }
+            let minutes = max(1, Int((retryAfter.timeIntervalSinceNow / 60).rounded(.up)))
+            return "Vendor throttling — retry in \(minutes) min"
         }
     }
 }
