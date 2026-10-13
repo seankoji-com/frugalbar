@@ -266,7 +266,7 @@ struct DesktopWidgetView: View {
             if let detail {
                 Text(detail)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                    .foregroundStyle(Theme.outline)
                     .multilineTextAlignment(.center)
             }
         }
@@ -465,13 +465,13 @@ struct DesktopWidgetView: View {
                 if let remedy = tile.unavailableRemedy {
                     Text(remedy)
                         .font(.system(size: 9.5))
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                        .foregroundStyle(Theme.outline)
                         .lineLimit(2)
                 }
             } else if tile.windows.isEmpty {
                 Text("No usage windows")
                     .font(.system(size: 10))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.6))
+                    .foregroundStyle(Theme.outline)
             } else {
                 ForEach(tile.windows) { window in
                     overviewWindow(window, now: now)

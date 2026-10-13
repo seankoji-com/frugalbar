@@ -136,14 +136,24 @@ public enum MenuBarPresentation {
     public static func formatTimeLeft(_ text: String?) -> String? {
         guard let text, !text.isEmpty else { return nil }
         let lower = text.lowercased()
-        // Keep the published duration in hours/minutes instead of decimal hours.
-        let pattern = #"(?<![\d.])\d+\s*(?:d(?:ays?)?(?:\s*\d+\s*h(?:ours?|rs?)?)?|h(?:ours?|rs?)?(?:\s*\d+\s*m(?:in(?:ute)?s?)?)?|m(?:in(?:ute)?s?)?)(?![a-z])"#
+        // Match and compact from the same spellings, keeping months distinct
+        // from minutes and preserving the vendor's reported unit.
+        let units = [
+            (pattern: #"mo(?:nths?)?"#, compact: "mo"),
+            (pattern: #"w(?:eeks?)?"#, compact: "w"),
+            (pattern: #"d(?:ays?)?"#, compact: "d"),
+            (pattern: #"h(?:ours?|rs?)?"#, compact: "h"),
+            (pattern: #"m(?:in(?:ute)?s?)?"#, compact: "m")
+        ]
+        let unitPattern = units.map(\.pattern).joined(separator: "|")
+        let part = #"\d+\s*(?:\#(unitPattern))(?![a-z])"#
+        let pattern = #"(?<![\d.])\#(part)(?:\s*\#(part))*"#
         guard let range = lower.range(of: pattern, options: .regularExpression) else { return nil }
         // RelativeDateTimeFormatter emits full units; compact only those units.
-        let duration = String(lower[range])
-            .replacingOccurrences(of: #"\s*d(?:ays?)?\b"#, with: "d", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*h(?:ours?|rs?)?\b"#, with: "h", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*m(?:in(?:ute)?s?)?\b"#, with: "m", options: .regularExpression)
+        let duration = units.reduce(String(lower[range])) { result, unit in
+            result.replacingOccurrences(of: #"\s*\#(unit.pattern)\b"#,
+                with: unit.compact, options: .regularExpression)
+        }
         return duration.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 

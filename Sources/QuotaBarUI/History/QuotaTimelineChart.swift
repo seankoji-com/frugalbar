@@ -159,7 +159,7 @@ public struct QuotaTimelineChart: View {
 
             Text("Readings accumulate automatically as FrugalBar polls your providers.")
                 .font(.system(size: 11))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.55))
+                .foregroundStyle(Theme.outline)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

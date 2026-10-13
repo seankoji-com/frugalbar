@@ -34,18 +34,24 @@ struct UXRenderTests {
         }
         let snapshots = [snapshot(.claude, "Claude", 0.65), snapshot(.opencode, "OpenCode Go · Gamma workspace", 0.45),
                          snapshot(.commandcode, "Command Code", 0.9)]
-        try save(VStack(spacing: 12) {
+        try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             AdviceSectionView(advice: .evaluate(from: snapshots), onActionTap: {})
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots, onSelect: { _ in })
             FooterActionsView(summary: .compute(from: snapshots), isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
         }.padding(12).frame(width: 384).background(Theme.surface), name: "popover", directory: directory)
-        try save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
+        try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("fixture.sqlite"))
-        try save(HistoryRootView(liveStore: history, sampleStore: history).frame(width: 640, height: 460),
+        try await save(QuotaTimelineChart(segments: [], timeRange: .last7Days)
+            .frame(width: 640, height: 240).background(Theme.card),
+            name: "history-empty", directory: directory)
+        try await save(EventsListView(store: history, isSampleMode: false)
+            .frame(width: 640, height: 320).background(Theme.surface),
+            name: "events-empty", directory: directory)
+        try await save(HistoryRootView(liveStore: history, sampleStore: history).frame(width: 640, height: 460),
                  name: "history-minimum", directory: directory)
         let graphQL = QuotaSnapshot(id: "github_graphql", vendorId: .githubGraphql, displayName: "GitHub GraphQL",
             category: .developerLimits, metric: .count(remaining: 600, limit: 1000, unitName: "points"),
@@ -54,22 +60,31 @@ struct UXRenderTests {
         let providers = (snapshots + [graphQL]).map { FixtureProvider(snapshot: $0) }
         let store = QuotaStore(manager: QuotaManager(providerFactory: { providers }, displayPreferences: { .default }))
         await store.load()
-        try save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .used, layout: .overview))
+        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .used, layout: .overview))
             .frame(width: 320, height: 300), name: "widget-used", directory: directory)
-        try save(DesktopWidgetView(store: store, filters: WidgetFilters(vendors: [.githubGraphql], metric: .remaining, layout: .overview))
+        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(vendors: [.githubGraphql], metric: .remaining, layout: .overview))
             .frame(width: 320, height: 240), name: "widget-graphql", directory: directory)
-        try save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .remaining, layout: .overview))
+        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .remaining, layout: .overview))
             .frame(width: 360, height: 300), name: "widget-two-columns", directory: directory)
+        let unreadable = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .unavailable(.offline), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        let unreadableStore = QuotaStore(manager: QuotaManager(
+            providerFactory: { [FixtureProvider(snapshot: unreadable)] }, displayPreferences: { .default }))
+        await unreadableStore.load()
+        try await save(DesktopWidgetView(store: unreadableStore, filters: WidgetFilters(layout: .overview))
+            .frame(width: 320, height: 240).background(Theme.surface),
+            name: "widget-unreadable", directory: directory)
         let tokenChart = TokenUsagePresentation.chart(usage: .init(buckets: [
             .init(source: "codex", start: TokenUsagePresentation.window(range: .last24Hours, now: now).since.addingTimeInterval(7200),
                   tokens: 1234, records: 1)
         ], uncountedRecords: ["claude_code": 3]), filters: WidgetFilters(layout: .tokens), hidden: [],
             configured: [.claude, .openai, .gemini, .grok, .kiro], ingestion: .incomplete, now: now)
-        try save(TokenUsageChartView(chart: tokenChart, range: .last24Hours).padding(14)
+        try await save(TokenUsageChartView(chart: tokenChart, range: .last24Hours).padding(14)
             .frame(width: 320, height: 240).background(Theme.surface), name: "token-caveats", directory: directory)
     }
 
-    private func save<V: View>(_ view: V, name: String, directory: URL) throws {
+    private func save<V: View>(_ view: V, name: String, directory: URL) async throws {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame.size = host.fittingSize
@@ -77,7 +92,7 @@ struct UXRenderTests {
         window.isReleasedWhenClosed = false
         window.contentView = host
         host.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        try await Task.sleep(for: .milliseconds(300))
         host.layoutSubtreeIfNeeded()
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
