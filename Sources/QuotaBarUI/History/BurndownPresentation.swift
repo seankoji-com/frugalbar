@@ -227,8 +227,14 @@ public enum BurndownPresentation {
 
     // MARK: - Text
 
-    /// e.g. "27% left · 21h 0m to reset · ahead of pace · out in 3h 10m".
-    /// Each clause appears only when its input was measured.
+    /// e.g. "27% left · 21h 0m to reset · out in 3h 10m". Each clause
+    /// appears only when its input was measured.
+    ///
+    /// No pace clause: the inspector's summary and window lines state the
+    /// pace from `DualBarMetrics.paceMarker`, the popover's own definition.
+    /// This line used to add one from `HistoryPresentation.computePace`, whose
+    /// margin is wider, so one card could say "ahead of even pace" above a
+    /// chart captioned "on pace".
     public static func summaryLine(for burndown: Burndown, now: Date) -> String {
         var parts: [String] = []
         if let remaining = burndown.nowRemaining {
@@ -237,26 +243,10 @@ public enum BurndownPresentation {
         if let resetsAt = burndown.resetsAt, resetsAt > now {
             parts.append("\(BurnRateForecast.formatDuration(resetsAt.timeIntervalSince(now))) to reset")
         }
-        if let pace = paceWords(for: burndown, now: now) {
-            parts.append(pace)
-        }
         if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
             parts.append("out in \(BurnRateForecast.formatDuration(exhaustion.timeIntervalSince(now)))")
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
-    }
-
-    /// "ahead of pace" / "on pace" / "under pace", from
-    /// `HistoryPresentation.computePace` — nil without a window length.
-    static func paceWords(for burndown: Burndown, now: Date) -> String? {
-        guard let reading = burndown.latestReading,
-              let pace = HistoryPresentation.computePace(reading: reading, now: now)
-        else { return nil }
-        switch pace.status {
-        case .aheadOfPace: return "ahead of pace"
-        case .onPace: return "on pace"
-        case .underPace: return "under pace"
-        }
     }
 
     /// Spoken description of the burndown chart.
@@ -267,9 +257,6 @@ public enum BurndownPresentation {
         }
         if let resetsAt = burndown.resetsAt, resetsAt > now {
             parts.append("resets in \(BurnRateForecast.formatDuration(resetsAt.timeIntervalSince(now)))")
-        }
-        if let pace = paceWords(for: burndown, now: now) {
-            parts.append(pace)
         }
         if burndown.actual.contains(where: \.isBlocked) {
             parts.append("blocked during this window")

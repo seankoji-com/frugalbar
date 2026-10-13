@@ -39,6 +39,19 @@ enum DetailChartStyle {
 struct BurndownChartView: View {
     let burndown: BurndownPresentation.Burndown
     let now: Date
+    @State private var hoverDate: Date?
+
+    /// The recorded reading under the pointer, if one is close enough to
+    /// claim. Projections and the pace line are never inspected: they are
+    /// not readings.
+    private var inspected: BurndownPresentation.Point? {
+        guard let hoverDate else { return nil }
+        let span = range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 86_400
+        let tolerance = max(300, span / 50)
+        return burndown.actual
+            .filter { abs($0.timestamp.timeIntervalSince(hoverDate)) <= tolerance }
+            .min { abs($0.timestamp.timeIntervalSince(hoverDate)) < abs($1.timestamp.timeIntervalSince(hoverDate)) }
+    }
 
     private var range: ClosedRange<Date>? { BurndownPresentation.windowRange(for: burndown) }
 
@@ -142,6 +155,23 @@ struct BurndownChartView: View {
                             .foregroundStyle(Theme.primary.opacity(0.8))
                     }
             }
+
+            if let point = inspected {
+                RuleMark(x: .value("Inspected", point.timestamp))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, alignment: .center, spacing: 2,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        ReadingReadout(
+                            timestamp: point.timestamp,
+                            rows: [ReadingReadout.Row(label: burndown.barLabel, usedFraction: point.usedFraction,
+                                                      isBlocked: point.isBlocked, urgency: point.urgency)],
+                            showsDate: (range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 0) > 36 * 3600)
+                    }
+            }
+        }
+        .chartOverlay { proxy in
+            ChartHoverCatcher(proxy: proxy) { hoverDate = $0 }
         }
         if let range {
             base.chartXScale(domain: range)
@@ -160,17 +190,32 @@ struct UsageHistoryChartView: View {
     let markers: [AIEvent]
     let now: Date
 
+    @State private var hoverDate: Date?
+
     private var labels: [String] {
         var out: [String] = []
         for s in series where !out.contains(s.label) { out.append(s.label) }
         return out
     }
 
-    private static let dashes: [[CGFloat]] = [[], [5, 3], [1.5, 2.5]]
-
     private func dash(for label: String) -> [CGFloat] {
-        let index = labels.firstIndex(of: label) ?? 0
-        return Self.dashes[index % Self.dashes.count]
+        WindowDashLegend.dash(for: label, in: labels)
+    }
+
+    private var inspected: [(barLabel: String, point: HistoryPresentation.TimelinePoint)] {
+        guard let hoverDate else { return [] }
+        let segments = series.map { s in
+            HistoryPresentation.TimelineSegment(
+                vendor: "", barLabel: s.label, resetsAt: nil,
+                points: s.points.map {
+                    HistoryPresentation.TimelinePoint(
+                        timestamp: $0.timestamp, fraction: $0.usedFraction, isBlocked: $0.isBlocked,
+                        confidence: .measured, urgency: $0.urgency)
+                })
+        }
+        return HistoryOverviewPresentation.nearestPoints(
+            to: hoverDate, in: segments,
+            tolerance: HistoryOverviewPresentation.inspectionTolerance(range: range, now: now, earliest: nil))
     }
 
     private var axisFormat: String {
@@ -184,22 +229,7 @@ struct UsageHistoryChartView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if labels.count > 1 {
-                HStack(spacing: 10) {
-                    ForEach(labels, id: \.self) { label in
-                        HStack(spacing: 4) {
-                            Path { p in
-                                p.move(to: CGPoint(x: 0, y: 4))
-                                p.addLine(to: CGPoint(x: 16, y: 4))
-                            }
-                            .stroke(Theme.onSurfaceVariant, style: StrokeStyle(lineWidth: 1.5, dash: dash(for: label)))
-                            .frame(width: 16, height: 8)
-                            Text(label)
-                                .font(Theme.Typography.token)
-                                .foregroundStyle(Theme.onSurfaceVariant)
-                        }
-                    }
-                }
-                .accessibilityHidden(true)
+                WindowDashLegend(labels: labels)
             }
             chart
         }
@@ -238,6 +268,25 @@ struct UsageHistoryChartView: View {
                             .foregroundStyle(EventsPresentation.kindTint(event.kind))
                     }
             }
+
+            if let first = inspected.first {
+                RuleMark(x: .value("Inspected", first.point.timestamp))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, alignment: .center, spacing: 2,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        ReadingReadout(
+                            timestamp: first.point.timestamp,
+                            rows: inspected.map {
+                                ReadingReadout.Row(label: $0.barLabel, usedFraction: $0.point.fraction,
+                                                   isBlocked: $0.point.isBlocked, urgency: $0.point.urgency)
+                            },
+                            showsDate: range != .last24Hours)
+                    }
+            }
+        }
+        .chartOverlay { proxy in
+            ChartHoverCatcher(proxy: proxy) { hoverDate = $0 }
         }
         .chartYScale(domain: 0...100)
         .chartXScale(domain: (range.startDate(from: now) ?? now.addingTimeInterval(-86_400))...now)

@@ -283,11 +283,13 @@ struct BurndownPresentationTests {
 
     // MARK: - Text
 
-    @Test("summary line names remaining, reset and pace")
+    @Test("summary line names remaining, reset and run-out, and leaves pace to the summary card")
     func summaryLineFull() throws {
         let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
-        // 58% used with 60% of the window elapsed: on pace.
-        #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · on pace · out in 1h 45m")
+        // No pace clause: the inspector states pace once, from the bar's own
+        // pace marker, so a second verdict on a different margin cannot
+        // contradict it.
+        #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · out in 1h 45m")
     }
 
     @Test("summary line omits every clause whose input is missing")

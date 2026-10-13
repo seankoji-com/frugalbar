@@ -158,53 +158,72 @@ public actor QuotaManager {
     ///   3. Exhausted — last regardless of reset, because a spent vendor is
     ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
-        let prefs = displayPreferences()
+        Self.arrange(
+            cache.values.map(\.snapshot),
+            preferences: displayPreferences(),
+            instanceOrder: instanceOrder
+        )
+    }
+
+    /// The display order for a set of snapshots: pure, so it can be tested
+    /// without a fetch.
+    ///
+    /// Several instances of one vendor (OpenCode Go workspaces) always stay
+    /// together, in `instanceOrder` — the order the user arranged them in
+    /// Preferences, which is the order the providers are built in. The
+    /// automatic sort moves the vendor as a block, placed by its most
+    /// actionable instance. It used to sort every instance on its own
+    /// deadline, so the workspaces were shuffled by whichever monthly window
+    /// turned over first and the up/down arrows in Preferences appeared to do
+    /// nothing at all.
+    ///
+    /// A hidden vendor is dropped here as well as purged at fetch time, so
+    /// hiding one takes effect on the very next read, before any poll.
+    static func arrange(
+        _ snapshots: [QuotaSnapshot],
+        preferences prefs: ProviderDisplayPreferences,
+        instanceOrder: [String]
+    ) -> [QuotaSnapshot] {
         let rank = Dictionary(
-            uniqueKeysWithValues: prefs.order.enumerated().map { ($0.element, $0.offset) })
-        // Every cached instance of a visible vendor, grouped by vendor so the
-        // user's vendor order is preserved and several instances of one vendor
-        // stay together. A hidden vendor is dropped here as well as purged at
-        // fetch time, so hiding one takes effect on the very next read, before
-        // any poll.
+            prefs.order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
         var byVendor: [VendorIdentifier: [QuotaSnapshot]] = [:]
-        for entry in cache.values where !prefs.hidden.contains(entry.snapshot.vendorId) {
-            byVendor[entry.snapshot.vendorId, default: []].append(entry.snapshot)
+        for snapshot in snapshots where !prefs.hidden.contains(snapshot.vendorId) {
+            byVendor[snapshot.vendorId, default: []].append(snapshot)
         }
         let position = Dictionary(
-            uniqueKeysWithValues: instanceOrder.enumerated().map { ($0.element, $0.offset) })
+            instanceOrder.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
         func instanceRank(_ snapshot: QuotaSnapshot) -> Int {
             position[snapshot.id] ?? Int.max
         }
         for vendor in byVendor.keys {
-            // The order the providers were built in — the user's workspace
-            // order for OpenCode Go — with the id as a deterministic fallback
-            // for an instance the last fetch did not name.
+            // The id is a deterministic fallback for an instance the last
+            // fetch did not name.
             byVendor[vendor]?.sort {
                 let a = instanceRank($0), b = instanceRank($1)
                 return a != b ? a < b : $0.id < $1.id
             }
         }
-        let snapshots = prefs.visibleOrder.flatMap { byVendor[$0] ?? [] }
+        let groups = prefs.visibleOrder.compactMap { byVendor[$0] }
 
         // A custom order is the user's, verbatim: no band or deadline moves a row.
-        if prefs.ordering == .custom { return snapshots }
+        if prefs.ordering == .custom { return groups.flatMap { $0 } }
 
-        return snapshots.sorted { a, b in
-            let bandA = Self.sortBand(a), bandB = Self.sortBand(b)
-            if bandA != bandB { return bandA < bandB }
-
-            if bandA == 0, let resetA = a.longestWindowReset, let resetB = b.longestWindowReset,
-               resetA != resetB
-            {
+        // A group's place is its best instance's: the lowest band, and within
+        // band 0 the soonest reset. For a single-instance vendor that is
+        // exactly its own band and reset, as before.
+        func key(_ group: [QuotaSnapshot]) -> (band: Int, reset: Date?) {
+            let band = group.map(Self.sortBand).min() ?? 1
+            let reset = group.filter { Self.sortBand($0) == band }.compactMap(\.longestWindowReset).min()
+            return (band, reset)
+        }
+        return groups.sorted { a, b in
+            let keyA = key(a), keyB = key(b)
+            if keyA.band != keyB.band { return keyA.band < keyB.band }
+            if keyA.band == 0, let resetA = keyA.reset, let resetB = keyB.reset, resetA != resetB {
                 return resetA < resetB
             }
-            // Tie-break by the user's vendor order and then by the instance's
-            // own position, so two workspaces of one vendor keep a stable,
-            // user-chosen order rather than an arbitrary one.
-            let rankA = rank[a.vendorId] ?? .max, rankB = rank[b.vendorId] ?? .max
-            if rankA != rankB { return rankA < rankB }
-            return instanceRank(a) < instanceRank(b)
-        }
+            return (rank[a[0].vendorId] ?? .max) < (rank[b[0].vendorId] ?? .max)
+        }.flatMap { $0 }
     }
 
     static func sortBand(_ snapshot: QuotaSnapshot) -> Int {

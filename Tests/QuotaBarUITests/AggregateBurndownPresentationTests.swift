@@ -504,3 +504,24 @@ struct AggregateBurndownPresentationTests {
         #expect(thinned.allPoints.count < points.count)
     }
 }
+
+@Suite("Widget series order before the first poll")
+struct WidgetStoredKeyOrderTests {
+
+    private func reading(_ key: String) -> QuotaHistoryStore.ReadingRecord {
+        QuotaHistoryStore.ReadingRecord(
+            vendor: key, barLabel: "WK", measuredAt: Date(timeIntervalSince1970: 1_791_848_000), fraction: 0.3,
+            isBlocked: false, confidence: .measured, urgency: .none, resetsAt: nil,
+            windowLength: 7 * 86_400, elapsedOnly: false)
+    }
+
+    @Test("workspace keys keep the user's order among themselves; other keys stay in key order")
+    func workspaceKeysFollowUserOrder() {
+        // Key order would put "…aaa" before "…zzz"; the user put zzz first.
+        let positions = ["opencode-go:zzz": 0, "opencode-go:aaa": 1]
+        let keys = AggregateBurndownPresentation.storedKeys(
+            ["claude", "opencode-go:aaa", "opencode-go:zzz", "openai"].map(reading),
+            position: { positions[$0] })
+        #expect(keys == ["claude", "openai", "opencode-go:zzz", "opencode-go:aaa"])
+    }
+}

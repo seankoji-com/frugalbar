@@ -115,6 +115,39 @@ struct HistoryPresentationTests {
         #expect(segments[1].points.count == 1)
     }
 
+    @Test("interleaved windows each form one line instead of breaking at every poll")
+    func interleavedWindowsFormOneSegmentEach() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        // What the store returns for one vendor: every window, interleaved by
+        // time. Segmenting that stream as one broke the line at each reading.
+        var readings: [QuotaHistoryStore.ReadingRecord] = []
+        for poll in 0..<4 {
+            let at = base.addingTimeInterval(Double(poll) * 300)
+            readings.append(makeRecord(barLabel: "5H", measuredAt: at, fraction: 0.1 + Double(poll) * 0.05))
+            readings.append(makeRecord(barLabel: "WK", measuredAt: at, fraction: 0.4 + Double(poll) * 0.01,
+                                       windowLength: 7 * 86_400))
+        }
+
+        let segments = HistoryPresentation.segments(from: readings)
+        #expect(segments.count == 2)
+        #expect(segments.map(\.barLabel) == ["5H", "WK"])
+        #expect(segments.allSatisfy { $0.points.count == 4 })
+    }
+
+    @Test("two instances of one vendor never join into one line")
+    func instancesSegmentSeparately() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let readings = [
+            makeRecord(vendor: "opencode-go:alpha", measuredAt: base, fraction: 0.1),
+            makeRecord(vendor: "opencode-go:beta", measuredAt: base, fraction: 0.9),
+            makeRecord(vendor: "opencode-go:alpha", measuredAt: base.addingTimeInterval(300), fraction: 0.2),
+            makeRecord(vendor: "opencode-go:beta", measuredAt: base.addingTimeInterval(300), fraction: 0.95),
+        ]
+        let segments = HistoryPresentation.segments(from: readings)
+        #expect(segments.map(\.vendor) == ["opencode-go:alpha", "opencode-go:beta"])
+        #expect(segments.map { $0.points.map(\.fraction) } == [[0.1, 0.2], [0.9, 0.95]])
+    }
+
     // MARK: - Pace Comparison Tests
 
     @Test("ahead of pace detected when consumed significantly exceeds elapsed")

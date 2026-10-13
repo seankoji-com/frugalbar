@@ -3,9 +3,25 @@ import AppKit
 import QuotaBarCore
 
 /// Main view for the History and Allowance Attribution window.
+///
+/// Reads top to bottom: an at-a-glance strip of every visible provider's
+/// recent readings, then the selected provider's pace, an inspectable
+/// timeline, and the local activity behind it.
 public struct HistoryRootView: View {
     @State private var timeRange: HistoryPresentation.TimeRange = .last24Hours
-    @State private var selectedVendor: VendorIdentifier = .claude
+    /// The selected provider or OpenCode Go workspace, by instance key.
+    @State private var selectedSubjectID: String?
+    /// Set once the user picks a subject, so a reload never moves them off it.
+    @State private var userChoseSubject = false
+    @State private var subjects: [HistoryOverviewPresentation.Subject] = []
+    @State private var hiddenNames: [String] = []
+    @State private var overviewCards: [HistoryOverviewPresentation.Card] = []
+    @State private var overviewEmpty: [HistoryOverviewPresentation.Subject] = []
+    @State private var overviewFailed = false
+    @State private var overviewKey: OverviewKey?
+    /// Bumped when Preferences changes which providers show, or the
+    /// workspace order, so the strip and picker follow without a reopen.
+    @State private var preferencesSerial = 0
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
@@ -18,7 +34,7 @@ public struct HistoryRootView: View {
     /// row, say), so there is nothing legitimate to plot on a "Used %" axis.
     @State private var hasOnlyElapsedReadings: Bool = false
     @State private var selectedTab: HistoryTab
-    /// Reset-type events for the selected vendor, drawn on the timeline.
+    /// Reset-type events for the selected subject, drawn on the timeline.
     /// Always from the live store: the sample fixture records no events, and
     /// live markers over synthetic readings would assert a correlation that
     /// never happened.
@@ -30,21 +46,38 @@ public struct HistoryRootView: View {
     private let liveStore: QuotaHistoryStore
     private let sampleStore: QuotaHistoryStore
     private let tabRequest: HistoryTabRequest?
+    private let subjectSource: @MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String])
 
+    /// - Parameter subjectSource: the providers to offer and the hidden ones
+    ///   to name. Defaults to the user's preferences; a test passes a fixture
+    ///   so a render never depends on the shared preference file.
     public init(
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
         initialTab: HistoryTab = .timeline,
-        tabRequest: HistoryTabRequest? = nil
+        tabRequest: HistoryTabRequest? = nil,
+        subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
         self.tabRequest = tabRequest
+        self.subjectSource = subjectSource ?? {
+            let prefs = CredentialStore.providerDisplayPreferences
+            return (
+                HistoryOverviewPresentation.subjects(
+                    order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved()),
+                HistoryOverviewPresentation.hiddenNames(order: prefs.order, hidden: prefs.hidden)
+            )
+        }
         _selectedTab = State(initialValue: initialTab)
     }
 
     private var activeStore: QuotaHistoryStore {
         isSampleMode ? sampleStore : liveStore
+    }
+
+    private var selectedSubject: HistoryOverviewPresentation.Subject? {
+        subjects.first { $0.id == selectedSubjectID } ?? subjects.first
     }
 
     /// One identity for everything a reload depends on.
@@ -54,12 +87,22 @@ public struct HistoryRootView: View {
     /// generations, and `isLoading` flapping between them.
     private struct ReloadKey: Hashable {
         let range: HistoryPresentation.TimeRange
-        let vendor: VendorIdentifier
+        let subject: String?
         let sampleMode: Bool
+        let preferencesSerial: Int
+    }
+
+    /// What the overview strip depends on. Selecting another card does not
+    /// change it, so it is not re-read on every click.
+    private struct OverviewKey: Hashable {
+        let range: HistoryPresentation.TimeRange
+        let sampleMode: Bool
+        let subjects: [HistoryOverviewPresentation.Subject]
     }
 
     private var reloadKey: ReloadKey {
-        ReloadKey(range: timeRange, vendor: selectedVendor, sampleMode: isSampleMode)
+        ReloadKey(range: timeRange, subject: selectedSubjectID, sampleMode: isSampleMode,
+                  preferencesSerial: preferencesSerial)
     }
 
     public var body: some View {
@@ -78,15 +121,19 @@ public struct HistoryRootView: View {
                             failureCard(loadError)
                         }
 
-                        if !isLoading, let pace {
-                            paceCard(pace)
+                        overviewSection
+
+                        if selectedSubject != nil {
+                            if !isLoading, let pace {
+                                paceCard(pace)
+                            }
+
+                            chartCard
+
+                            if !isLoading { attributionCard }
+
+                            telemetryCard
                         }
-
-                        chartCard
-
-                        if !isLoading { attributionCard }
-
-                        telemetryCard
                     }
                     .padding(16)
                 }
@@ -101,6 +148,9 @@ public struct HistoryRootView: View {
         }
         .onChange(of: tabRequest?.serial) {
             if let tabRequest { selectedTab = tabRequest.tab }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in
+            preferencesSerial += 1
         }
     }
 
@@ -160,19 +210,8 @@ public struct HistoryRootView: View {
             // The events tab has its own filter bar.
             if selectedTab == .timeline {
                 HStack(spacing: 12) {
-                    // Vendor Picker
-                    Picker("Provider", selection: $selectedVendor) {
-                        ForEach(VendorIdentifier.allCases, id: \.self) { vendor in
-                            Text(vendor.displayName).tag(vendor)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 200)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("History provider")
-
-                    // Time Range Picker
+                    // Time range first: it applies to the whole page, the
+                    // overview included.
                     Picker("Time range", selection: $timeRange) {
                         ForEach(HistoryPresentation.TimeRange.allCases) { range in
                             Text(range.title).tag(range)
@@ -182,6 +221,23 @@ public struct HistoryRootView: View {
                     .labelsHidden()
                     .fixedSize()
                     .accessibilityLabel("History time range")
+
+                    // Providers and workspaces in the popover's order. Hidden
+                    // ones are absent: they are not polled.
+                    Picker("Provider", selection: Binding(
+                        get: { selectedSubject?.id ?? "" },
+                        set: { select($0) }
+                    )) {
+                        ForEach(subjects) { subject in
+                            Text(subject.name).tag(subject.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 200)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .disabled(subjects.isEmpty)
+                    .accessibilityLabel("History provider")
                     Spacer(minLength: 0)
                 }
             }
@@ -227,9 +283,10 @@ public struct HistoryRootView: View {
     private func paceCard(_ pace: HistoryPresentation.PaceComparison) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                let name = OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
+                let name = selectedSubject?.name
+                    ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.vendor(forInstanceKey: pace.vendor)?.displayName
-                    ?? selectedVendor.displayName
+                    ?? pace.vendor
                 Text("Window Pace: \(name) (\(pace.barLabel))")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.onSurface)
@@ -314,7 +371,7 @@ public struct HistoryRootView: View {
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("\(selectedVendor.displayName) Quota Timeline")
+                Text("\(selectedSubject?.name ?? "") Quota Timeline")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.onSurface)
 
@@ -337,7 +394,10 @@ public struct HistoryRootView: View {
                         .foregroundStyle(Theme.tertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    QuotaTimelineChart(segments: segments, timeRange: timeRange, markers: markers)
+                    QuotaTimelineChart(
+                        segments: segments, timeRange: timeRange, markers: markers,
+                        emptyMessage: HistoryOverviewPresentation.emptyExplanation(
+                            isSampleMode: isSampleMode, range: timeRange))
                 }
             }
             .frame(height: 240)
@@ -353,6 +413,13 @@ public struct HistoryRootView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
+            }
+
+            if !isLoading, loadError == nil, !segments.isEmpty {
+                Text("Hover the chart to read an exact reading and when it was taken.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.outline)
+                    .accessibilityHidden(true)
             }
 
             if hasOnlyElapsedReadings {
@@ -380,7 +447,7 @@ public struct HistoryRootView: View {
 
     @ViewBuilder
     private var attributionCard: some View {
-        if AttributionEngine.localSourceIdentifiers(for: selectedVendor).isEmpty {
+        if AttributionEngine.localSourceIdentifiers(for: selectedSubject?.vendor ?? .claude).isEmpty {
             noLocalTelemetryCard
         } else if let attribution, !attribution.projectAttributions.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
@@ -463,7 +530,7 @@ public struct HistoryRootView: View {
                 Image(systemName: "questionmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant)
-                Text("FrugalBar has no local activity adapter for \(selectedVendor.displayName), so no project breakdown can be attributed to its allowance.")
+                Text("FrugalBar has no local activity adapter for \(selectedSubject?.vendor.displayName ?? "this provider"), so no project breakdown can be attributed to its allowance.")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
@@ -562,6 +629,87 @@ public struct HistoryRootView: View {
             .joined(separator: ", ")
     }
 
+    // MARK: - Overview
+
+    /// Small multiples: one card per visible provider or workspace, each its
+    /// own longest window. Nothing here sums or averages across cards.
+    private var overviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("At a glance")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.onSurface)
+                    .accessibilityAddTraits(.isHeader)
+                Text("· \(timeRange.title.lowercased()), each provider's longest window")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                Spacer()
+            }
+
+            if subjects.isEmpty {
+                overviewNote(
+                    symbol: "eye.slash",
+                    text: "Every provider is hidden in Preferences → Providers, so there is nothing to chart.")
+            } else if overviewFailed {
+                overviewNote(
+                    symbol: "exclamationmark.triangle",
+                    text: "The overview could not be read. This is a failure to read, not an absence of data.")
+            } else if overviewKey == nil {
+                overviewNote(symbol: "hourglass", text: "Reading recorded history…")
+            } else if overviewCards.isEmpty {
+                overviewNote(
+                    symbol: "chart.line.uptrend.xyaxis",
+                    text: HistoryOverviewPresentation.emptyExplanation(isSampleMode: isSampleMode, range: timeRange))
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
+                    ForEach(overviewCards) { card in
+                        HistoryOverviewCardView(
+                            card: card,
+                            isSelected: card.subject.id == selectedSubject?.id,
+                            onSelect: { select(card.subject.id) })
+                    }
+                }
+            }
+
+            if !overviewEmpty.isEmpty, !overviewCards.isEmpty {
+                overviewNote(
+                    symbol: "circle.dashed",
+                    text: "No readings in this range: \(overviewEmpty.map(\.name).joined(separator: ", ")).")
+            }
+            if !hiddenNames.isEmpty {
+                overviewNote(
+                    symbol: "eye.slash",
+                    text: "Hidden in Preferences, so not polled or shown: \(hiddenNames.joined(separator: ", ")).")
+            }
+        }
+        .padding(14)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+
+    private func overviewNote(symbol: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.onSurfaceVariant)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func select(_ id: String) {
+        guard subjects.contains(where: { $0.id == id }) else { return }
+        userChoseSubject = true
+        selectedSubjectID = id
+    }
+
     // MARK: - Data Reload
 
     private func reloadData() async {
@@ -570,7 +718,14 @@ public struct HistoryRootView: View {
 
         loadError = nil
         hasOnlyElapsedReadings = false
-        await reloadMarkers()
+
+        let source = subjectSource()
+        subjects = source.subjects
+        hiddenNames = source.hidden
+        if !subjects.contains(where: { $0.id == selectedSubjectID }) {
+            selectedSubjectID = subjects.first?.id
+            userChoseSubject = false
+        }
 
         if isSampleMode {
             do {
@@ -585,14 +740,34 @@ public struct HistoryRootView: View {
             }
         }
 
+        await reloadOverview()
+        // Until the user picks one, lead with the first provider that has
+        // something to show rather than an empty chart.
+        if !userChoseSubject, let first = overviewCards.first,
+           !overviewCards.contains(where: { $0.subject.id == selectedSubjectID }) {
+            selectedSubjectID = first.subject.id
+        }
+        guard let subject = selectedSubject else {
+            segments = []
+            pace = nil
+            attribution = nil
+            markers = []
+            return
+        }
+
+        await reloadMarkers(for: subject)
+
         let since = timeRange.startDate()
         let now = Date()
 
         do {
+            // Every key the subject owns, and no sibling's: the vendor-wide
+            // read returns each OpenCode Go workspace, which must not be drawn
+            // or paced as one.
             let allReadings = try await activeStore.fetchReadings(
-                vendor: selectedVendor,
+                vendor: subject.vendor,
                 since: since
-            )
+            ).filter { subject.keys.contains($0.vendor) }
 
             // Only consumption belongs on a "Used %" axis. A window that measures
             // elapsed time would otherwise be drawn — and paced — as quota spent.
@@ -617,7 +792,7 @@ public struct HistoryRootView: View {
             // Activity is restricted to the sources that can actually speak for
             // the selected vendor. Showing Codex and OpenCode tokens beneath a
             // "Claude" heading asserted an attribution nothing measured.
-            let sources = AttributionEngine.localSourceIdentifiers(for: selectedVendor)
+            let sources = AttributionEngine.localSourceIdentifiers(for: subject.vendor)
             let allActivities = try await activeStore.fetchActivities(since: since, until: now)
             let activities = allActivities.filter { sources.contains($0.source) }
 
@@ -635,7 +810,7 @@ public struct HistoryRootView: View {
                 startConsumptionFraction: endpoints.start,
                 endConsumptionFraction: endpoints.end,
                 activities: activities,
-                configuredVendors: [selectedVendor]
+                configuredVendors: [subject.vendor]
             )
         } catch {
             // A failed read must never render as "you have no history".
@@ -647,8 +822,35 @@ public struct HistoryRootView: View {
         }
     }
 
+    /// Re-reads the strip only when its range, data source or subjects
+    /// changed, through the thinned query so a 30-day strip of every provider
+    /// stays a few thousand rows.
+    private func reloadOverview() async {
+        let key = OverviewKey(range: timeRange, sampleMode: isSampleMode, subjects: subjects)
+        guard key != overviewKey else { return }
+        let now = Date()
+        let store = activeStore
+        let retention = await store.retentionInterval
+        do {
+            let sampled = try await store.fetchSampledReadings(
+                since: timeRange.startDate(from: now),
+                until: now,
+                bucketSeconds: HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention))
+            let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: sampled)
+            overviewCards = overview.cards
+            overviewEmpty = overview.empty
+            overviewFailed = false
+        } catch {
+            NSLog("frugalbar: history overview read failed: %@", error.localizedDescription)
+            overviewCards = []
+            overviewEmpty = []
+            overviewFailed = true
+        }
+        overviewKey = key
+    }
+
     /// Reset markers for the timeline, from the live store only.
-    private func reloadMarkers() async {
+    private func reloadMarkers(for subject: HistoryOverviewPresentation.Subject) async {
         markerLoadFailed = false
         guard !isSampleMode else {
             markers = []
@@ -657,11 +859,12 @@ public struct HistoryRootView: View {
         let now = Date()
         do {
             let events = try await liveStore.fetchEvents(
-                vendor: selectedVendor,
+                vendor: subject.vendor,
+                instanceID: subject.id,
                 kinds: EventsPresentation.markerKinds,
                 since: timeRange.startDate(from: now)
             )
-            markers = EventsPresentation.markerEvents(events, vendor: selectedVendor, range: timeRange, now: now)
+            markers = EventsPresentation.markerEvents(events, vendor: subject.vendor, range: timeRange, now: now)
         } catch {
             markers = []
             markerLoadFailed = true

@@ -85,7 +85,7 @@ Vendors meter different things over different windows, so FrugalBar never combin
 
 ## Pinned or floating
 
-**Preferences → General → Desktop widget → Position**:
+**Preferences → Display → Desktop widget → Position**:
 
 | Mode | Behaviour |
 |---|---|

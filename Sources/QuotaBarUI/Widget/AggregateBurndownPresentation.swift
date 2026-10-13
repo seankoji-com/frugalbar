@@ -352,15 +352,17 @@ public enum AggregateBurndownPresentation {
     /// `HistoryPresentation.segments`, so a reset never connects to the
     /// previous window's line.
     ///
-    /// `instanceName` names a stored key whose snapshot is gone. It defaults to
-    /// the workspace list; a test injects a literal table so the widget's
-    /// labels never depend on the shared preference file.
+    /// `instanceName` names a stored key whose snapshot is gone, and
+    /// `instancePosition` places it in the user's workspace order. Both
+    /// default to the workspace list; a test injects literal tables so the
+    /// widget never depends on the shared preference file.
     public static func series(
         readings: [QuotaHistoryStore.ReadingRecord],
         snapshots: [QuotaSnapshot],
         filters: WidgetFilters,
         now: Date,
-        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:)
+        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:),
+        instancePosition: (String) -> Int? = { OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0) }
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let inRange = HistoryPresentation.consumptionReadings(readings).filter { record in
@@ -370,7 +372,7 @@ public enum AggregateBurndownPresentation {
         // One reference per instance to draw. A filtered vendor with no current
         // snapshot still charts its own history under the vendor key, as before.
         if snapshots.isEmpty && filters.vendors.isEmpty {
-            return storedKeys(inRange).compactMap { key in
+            return storedKeys(inRange, position: instancePosition).compactMap { key in
                 makeSeries(
                     instanceID: key,
                     vendorId: OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key),
@@ -405,10 +407,25 @@ public enum AggregateBurndownPresentation {
         }
     }
 
-    /// The stored reading keys present, sorted, for the "nothing polled yet"
-    /// case where a series can only be built from history.
-    private static func storedKeys(_ readings: [QuotaHistoryStore.ReadingRecord]) -> [String] {
-        Set(readings.map(\.vendor)).sorted()
+    /// The stored reading keys present, for the "nothing polled yet" case
+    /// where a series can only be built from history. Sorted by key, except
+    /// that keys the workspace list places keep the user's workspace order
+    /// among themselves: a workspace key is a UUID, so key order is no order
+    /// the user chose.
+    static func storedKeys(
+        _ readings: [QuotaHistoryStore.ReadingRecord],
+        position: (String) -> Int?
+    ) -> [String] {
+        let keys = Set(readings.map(\.vendor)).sorted()
+        let placed = keys.filter { position($0) != nil }
+            .sorted { (position($0) ?? 0) < (position($1) ?? 0) }
+        var queue = placed[...]
+        // Placed keys fill the slots placed keys held in key order, so they
+        // move only among themselves.
+        return keys.map { key in
+            guard position(key) != nil else { return key }
+            return queue.popFirst() ?? key
+        }
     }
 
     /// One instance's series from its own readings. `vendorId` nil means the

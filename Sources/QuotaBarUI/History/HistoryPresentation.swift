@@ -141,12 +141,32 @@ public enum HistoryPresentation {
     /// the description claimed: polling runs far more often than that, so a
     /// two-hour hole is a genuine ingestion outage. Anything shorter would break
     /// the line on an idle afternoon and imply a reset that never happened.
+    ///
+    /// Readings are split by instance and window before segmenting. The store
+    /// returns every window of a vendor interleaved by time, and segmenting
+    /// that stream as one broke the line at every poll — each window's reading
+    /// "mismatched" the previous one — so the History chart drew a scatter of
+    /// lone points instead of lines.
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
         maxGap: TimeInterval = 7200
     ) -> [TimelineSegment] {
-        // Sort by timestamp
         let sorted = readings.sorted { $0.measuredAt < $1.measuredAt }
+        var keys: [String] = []
+        var windows: [String: [QuotaHistoryStore.ReadingRecord]] = [:]
+        for record in sorted {
+            let key = record.vendor + "|" + record.barLabel
+            if windows[key] == nil { keys.append(key) }
+            windows[key, default: []].append(record)
+        }
+        return keys.flatMap { segments(ofOneWindow: windows[$0] ?? [], maxGap: maxGap) }
+    }
+
+    /// One instance's one window, oldest first.
+    private static func segments(
+        ofOneWindow sorted: [QuotaHistoryStore.ReadingRecord],
+        maxGap: TimeInterval
+    ) -> [TimelineSegment] {
 
         var result: [TimelineSegment] = []
         var currentPoints: [TimelinePoint] = []
@@ -184,13 +204,12 @@ public enum HistoryPresentation {
             )
 
             if let prev = lastRecord {
-                let isVendorOrLabelMismatch = prev.vendor != record.vendor || prev.barLabel != record.barLabel
                 let isGap = record.measuredAt.timeIntervalSince(prev.measuredAt) > maxGap
                 let resetsAtChanged = prev.resetsAt != nil && record.resetsAt != nil && prev.resetsAt != record.resetsAt
                 let windowExpired = prev.resetsAt.map { record.measuredAt >= $0 } ?? false
                 let negativeResetJump = (prev.fraction != nil) && (fraction < prev.fraction! - 0.15)
 
-                if isVendorOrLabelMismatch || isGap || resetsAtChanged || windowExpired || negativeResetJump {
+                if isGap || resetsAtChanged || windowExpired || negativeResetJump {
                     finalizeSegment()
                     currentVendor = record.vendor
                     currentLabel = record.barLabel

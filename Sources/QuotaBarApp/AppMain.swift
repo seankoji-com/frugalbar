@@ -313,9 +313,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Sized by the view: SettingsView is 540x520 plus padding, which a
-        // fixed 480x380 content rect used to clip.
-        let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
+        // Sized by the view, which fixes its own frame; a fixed content rect
+        // used to clip it. The store lets each provider show what the last
+        // poll made of it.
+        let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.title = "FrugalBar Preferences"
         window.center()

@@ -2,8 +2,10 @@ import SwiftUI
 import AppKit
 import QuotaBarCore
 
-/// Inspector modal: the provider's windows, a burndown or usage-history
-/// chart from recorded readings, its recent events, and diagnostics.
+/// Inspector modal, in three layers: a summary to read at a glance; the
+/// windows, a burndown or usage-history chart from recorded readings (hover a
+/// point for the exact reading) and recent events to interrogate it with; and
+/// the provenance of every figure.
 ///
 /// Carried a "Test Quota Simulation" slider that wrote a made-up fraction into
 /// the live snapshot — which then drove the advice engine and the menu bar
@@ -70,15 +72,6 @@ public struct MetricDetailModalView: View {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
     }
 
-    /// The two longest consumable windows, longest first — `snapshot.displayBars`
-    /// with elapsed-time-only cycle rows removed, which have no burn rate or
-    /// exhaustion projection to show here. Carries the exhausted-window
-    /// collapse with it, so the inspector never shows a healthy short window
-    /// beside a spent longer one that has already made it moot.
-    private var displayBars: [DualBarMetrics] {
-        Array(snapshot.displayBars.filter { !$0.measuresElapsedTimeOnly }.prefix(2))
-    }
-
     public var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -99,7 +92,8 @@ public struct MetricDetailModalView: View {
                             }
                     }
                     .frame(height: Self.scrollHeight(contentHeight: bodyHeight,
-                        availableHeight: geometry.size.height, headerHeight: headerHeight, footerHeight: footerHeight))
+                        availableHeight: geometry.size.height, headerHeight: headerHeight, footerHeight: footerHeight,
+                        maxBody: maxBody))
                     .scrollBounceBehavior(.basedOnSize)
                     footer
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
@@ -121,10 +115,15 @@ public struct MetricDetailModalView: View {
     }
 
     static func scrollHeight(contentHeight: CGFloat, availableHeight: CGFloat,
-                             headerHeight: CGFloat, footerHeight: CGFloat) -> CGFloat {
-        min(contentHeight > 0 ? contentHeight : maxBodyHeight, maxBodyHeight,
+                             headerHeight: CGFloat, footerHeight: CGFloat,
+                             maxBody: CGFloat = maxBodyHeight) -> CGFloat {
+        min(contentHeight > 0 ? contentHeight : maxBody, maxBody,
             max(0, availableHeight - headerHeight - footerHeight - 2 * Theme.edgeMargin))
     }
+
+    /// The body's height cap. Only the render harness raises it, to draw
+    /// every layer in one image instead of the first screenful.
+    var maxBody: CGFloat = maxBodyHeight
 
     private func load() async {
         isLoading = true
@@ -215,160 +214,170 @@ public struct MetricDetailModalView: View {
 
     // MARK: - Content
 
+    /// Layered so the answer comes first: the summary a glance needs, then
+    /// the windows, chart and events to interrogate it with, then where the
+    /// figures came from.
     private var content: some View {
         VStack(spacing: 12) {
-            // Status alert banner
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: statusBannerIcon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(statusBannerColor)
-                    .padding(.top, 1)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(statusBannerHeadline)
-                        .font(Theme.Typography.cardBody.weight(.semibold))
-                        .foregroundStyle(statusBannerColor)
-
-                    if let note = snapshot.auxiliaryInfo {
-                        Text(note)
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+            summaryCard
+            if !presentation.windows.isEmpty {
+                windowsCard
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(statusBannerColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(statusBannerColor.opacity(0.3), lineWidth: 0.5)
-            )
-            .accessibilityElement(children: .combine)
-
-            // Quick metrics grid — the two longest consumable windows, in the
-            // vendor's own order. Hardcoded "5H"/"Weekly" titles assumed every
-            // vendor shaped its rows the way Claude does; Kiro's row1 is a
-            // monthly credit pool and row2 is a bonus-credit bar, so those
-            // titles rendered the wrong window's data under the wrong label.
-            // `quotaBars`, not `bars`: burn rate and exhaustion projection
-            // below are consumption metrics that don't apply to a
-            // hand-entered cycle countdown.
-            //
-            // Only real windows get a card. A provider that meters money and
-            // publishes no window (an account-credit balance, a spend cap) has
-            // an empty `displayBars`, and drawing the cards anyway put two empty
-            // "Window Usage" gauges where there is no window at all; a
-            // single-window vendor (e.g. GitHub's own rate buckets) got a second
-            // phantom card the same way.
-            if !displayBars.isEmpty {
-                HStack(spacing: 8) {
-                    metricCard(
-                        title: "\(displayBars[0].label) Window Usage",
-                        icon: "clock",
-                        primaryValue: displayBars[0].usedText ?? "—",
-                        secondaryValue: displayBars[0].resetText ?? snapshot.resetsAt.map { ResetCountdownBadge.format($0, now: now) } ?? "—",
-                        bar: displayBars[0]
-                    )
-
-                    if displayBars.count > 1 {
-                        metricCard(
-                            title: "\(displayBars[1].label) Window Usage",
-                            icon: "cpu",
-                            primaryValue: displayBars[1].usedText ?? "—",
-                            secondaryValue: displayBars[1].resetText ?? "—",
-                            bar: displayBars[1]
-                        )
-                    }
-                }
-            }
-
             chartCard
-
-            if !recentEvents.isEmpty {
-                recentEventsCard
-            }
-
-            // Technical diagnostics. Every value here is either measured or
-            // absent: a plausible placeholder in a diagnostics panel is read
-            // as fact.
-            VStack(spacing: 5) {
-                diagRow(label: "Latency", value: snapshot.latencyMs.map { "\($0)ms" } ?? "—", valueColor: Theme.secondary)
-                diagRow(label: "Source", value: snapshot.cliSource ?? "—")
-                // Only a real `planName` labels the Plan row. `badgeText` used
-                // to stand in here, which put a money provider's balance under
-                // a "Plan" label ("$110.00 credit") — a plan nobody measured.
-                diagRow(label: "Plan", value: snapshot.planName ?? "—", valueColor: Theme.primary)
-                if let key = snapshot.keyMasked {
-                    diagRow(label: "Key", value: key)
-                }
-                if let credits = BurndownPresentation.resetCreditsText(
-                    available: snapshot.resetCreditsAvailable,
-                    applicable: snapshot.resetCreditsApplicable
-                ) {
-                    diagRow(label: "Reset credits", value: credits, valueColor: Theme.healthy)
-                }
-            }
-            .padding(10)
-            .background(Theme.surfaceContainerLowest.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
-            )
+            recentEventsCard
+            provenanceCard
         }
         .padding(Theme.cardPadding)
     }
 
-    private func metricCard(title: String, icon: String, primaryValue: String, secondaryValue: String, bar: DualBarMetrics?) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                Text(title)
-                    .font(Theme.Typography.subtitle)
-            }
-            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+    private var presentation: MetricDetailPresentation {
+        MetricDetailPresentation(
+            snapshot: snapshot,
+            readingsRecorded: isLoading ? nil : readings.filter { $0.vendor == snapshot.id }.count,
+            now: now)
+    }
 
-            Text(primaryValue)
-                .font(Theme.Typography.numeric)
-                .tracking(Theme.Tracking.numeric)
-                .foregroundStyle(Theme.onSurface)
-                .padding(.top, 1)
+    private var summaryColor: Color {
+        switch presentation.summary.state {
+        case .unavailable: Theme.outline
+        case .healthy: Theme.secondary
+        case .runningLow: Theme.tertiary
+        case .critical, .exhausted, .blocked: Theme.error
+        }
+    }
 
-            Text(secondaryValue)
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.primary.opacity(0.85))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+    // MARK: Summary
 
-            if let burnText = burnRateText(bar) {
-                Text(burnText)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(burnRateColor(bar))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.top, 2)
-            }
+    /// The glance: state in words and shape, the most pressing window's share
+    /// used, when it resets, and a pace verdict only where the bar draws a
+    /// pace tick.
+    private var summaryCard: some View {
+        let summary = presentation.summary
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: summary.symbol)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(summaryColor)
+                .frame(width: 24)
+                .padding(.top, 2)
 
-            if let exhaustionText = exhaustionText(bar) {
-                Text(exhaustionText)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.error)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(summary.headline)
+                        .font(Theme.Typography.cardBody.weight(.semibold))
+                        .foregroundStyle(summaryColor)
+                    Spacer(minLength: 4)
+                    if let percent = summary.percentUsed, let label = summary.focusLabel {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(percent)%")
+                                .font(.system(size: 24, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(Theme.onSurface)
+                            Text("\(label) used")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                        }
+                    } else if let figure = summary.figure {
+                        Text(figure)
+                            .font(Theme.Typography.numeric)
+                            .foregroundStyle(Theme.onSurface)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+
+                if let reset = summary.resetText {
+                    Label(reset, systemImage: "clock")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.primary.opacity(0.9))
+                }
+                if let pace = summary.paceVerdict {
+                    Label(pace, systemImage: "gauge.with.needle")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let remedy = summary.remedy {
+                    Text(remedy)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = snapshot.auxiliaryInfo {
+                    Text(note)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .padding(9)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surfaceContainerLowest.opacity(0.8))
+        .background(summaryColor.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(summaryColor.opacity(0.3), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(summary.accessibilityLabel)
+    }
+
+    // MARK: Windows
+
+    /// Every window the vendor published, one line each, in the vendor's own
+    /// order (longest first). The same bar as the popover — one fill, one pace
+    /// tick — so the two can never disagree.
+    private var windowsCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Windows")
+            ForEach(presentation.windows) { line in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(line.label)
+                            .font(Theme.Typography.token)
+                            .tracking(Theme.Tracking.token)
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .frame(width: 44, alignment: .leading)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        DualBarProgressView(metrics: line.metrics, showsLabel: false)
+                        HStack(spacing: 3) {
+                            if line.metrics.isBlocked, line.percentText != nil {
+                                BlockedGlyph(color: DualBarProgressView.stateColor(for: line.metrics))
+                            }
+                            Text(line.percentText ?? line.noFigureText ?? "")
+                                .font(Theme.Typography.gridPercent)
+                                .foregroundStyle(line.percentText == nil
+                                                 ? Theme.outline : DualBarProgressView.stateColor(for: line.metrics))
+                        }
+                        .frame(width: 62, alignment: .trailing)
+                    }
+                    if !line.detail.isEmpty {
+                        Text(line.detail)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                            .padding(.leading, 52)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(line.accessibilityLabel)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surfaceContainerLowest.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
-        .accessibilityElement(children: .combine)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(Theme.Typography.subtitle.weight(.semibold))
+            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+            .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: - Chart card
@@ -509,14 +518,24 @@ public struct MetricDetailModalView: View {
 
     // MARK: - Recent events
 
+    /// This instance's resets, outages and new models. Said when there are
+    /// none, so an empty card is not mistaken for one that failed to load.
     private var recentEventsCard: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Recent events")
-                .font(Theme.Typography.subtitle.weight(.semibold))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                .accessibilityAddTraits(.isHeader)
-            ForEach(recentEvents) { event in
-                EventRowView(event: event, now: now, compact: true)
+            sectionTitle("Recent events")
+            if isLoading {
+                Text("Loading…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.outline)
+            } else if recentEvents.isEmpty {
+                Text("No resets, outages or new models recorded for this provider.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.outline)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(recentEvents) { event in
+                    EventRowView(event: event, now: now, compact: true)
+                }
             }
         }
         .padding(10)
@@ -529,46 +548,43 @@ public struct MetricDetailModalView: View {
         )
     }
 
-    /// "Burning 1.8x pace" or "0.6x pace" — how fast the window is being
-    /// spent relative to how fast it is elapsing. Nil whenever the bar has no
-    /// pace to compare against (a fresh window, or a vendor with no reset
-    /// time), rather than a rate computed against nothing.
-    private func burnRateText(_ bar: DualBarMetrics?) -> String? {
-        guard let bar, bar.primaryFractionOrUnmeasured < MetricRowPresentation.exhaustionThreshold,
-              let rate = bar.burnRateMultiplier
-        else { return nil }
-        return "Burning \(String(format: "%.1f", rate))× pace"
+    // MARK: - Provenance
+
+    /// Where the figures came from. Every value is measured or says it was
+    /// not reported: a plausible placeholder in a diagnostics panel is read
+    /// as fact.
+    private var provenanceCard: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            sectionTitle("Source")
+            ForEach(presentation.provenance) { row in
+                diagRow(label: row.label, value: row.value)
+            }
+        }
+        .padding(10)
+        .background(Theme.surfaceContainerLowest.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
     }
 
-    private func burnRateColor(_ bar: DualBarMetrics?) -> Color {
-        guard let rate = bar?.burnRateMultiplier else { return Theme.onSurfaceVariant.opacity(0.75) }
-        if rate > 1.04 { return Theme.tertiary }
-        if rate < 0.96 { return Theme.healthy }
-        return Theme.onSurfaceVariant.opacity(0.75)
-    }
-
-    /// Only rendered when the current burn rate would actually exhaust the
-    /// window before it resets — a real projection from a real reset date and
-    /// window length, never a guess dressed up as one.
-    private func exhaustionText(_ bar: DualBarMetrics?) -> String? {
-        guard let date = bar?.projectedExhaustionDate else { return nil }
-        let relative = RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)
-        return "Exhausts \(relative)"
-    }
-
-    private func diagRow(label: String, value: String, valueColor: Color = Theme.onSurface) -> some View {
-        HStack {
+    private func diagRow(label: String, value: String?) -> some View {
+        HStack(alignment: .firstTextBaseline) {
             Text(label)
                 .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-            Spacer()
-            Text(value)
+            Spacer(minLength: 8)
+            Text(value ?? "Not reported")
                 .font(Theme.Typography.subtitle.monospaced())
-                .foregroundStyle(valueColor)
-                .lineLimit(1)
+                .foregroundStyle(value == nil ? Theme.outline : Theme.onSurface)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+                .textSelection(.enabled)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label): \(value == "—" ? "not reported" : value)")
+        .accessibilityLabel("\(label): \(value ?? "not reported")")
     }
 
     // MARK: - Footer
@@ -614,60 +630,6 @@ public struct MetricDetailModalView: View {
         copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             copied = false
-        }
-    }
-
-    /// Confidence gates urgency here, same as StatusIndicatorDot: an
-    /// unreadable provider must never render as "All Systems Healthy" just
-    /// because its unread urgency defaults to .none. Named once so
-    /// `statusBannerIcon`/`Color`/`Headline` can't drift into checking that
-    /// gate three different ways (two used to test `confidence ==
-    /// .unavailable`, one tested `unavailableReason != nil` — the same fact,
-    /// asserted through two different predicates).
-    private enum BannerState {
-        case unavailable(UnavailableReason)
-        case measured(Urgency)
-    }
-
-    private var bannerState: BannerState {
-        if let reason = snapshot.status.unavailableReason {
-            return .unavailable(reason)
-        }
-        return .measured(snapshot.status.urgency)
-    }
-
-    private var statusBannerIcon: String {
-        switch bannerState {
-        case .unavailable: return "minus.circle"
-        case .measured(.none):     return "checkmark.circle.fill"
-        case .measured(.warning):  return "exclamationmark.circle.fill"
-        case .measured(.critical): return "exclamationmark.octagon.fill"
-        }
-    }
-
-    private var statusBannerColor: Color {
-        switch bannerState {
-        case .unavailable: return Theme.outline
-        case .measured(.none):     return Theme.secondary
-        case .measured(.warning):  return Theme.tertiary
-        case .measured(.critical): return Theme.error
-        }
-    }
-
-    private var statusBannerHeadline: String {
-        switch bannerState {
-        case .unavailable(let reason): return reason.headline
-        case .measured(.none):     return "All Systems Healthy"
-        case .measured(.warning):  return "Quota Warning (Elevated Burn)"
-        case .measured(.critical):
-            // A fully rate-limited account is already cut off, not merely
-            // "approaching" its limit — the vendor's own word is "blocked",
-            // so say that rather than fusing "may hit the cap soon" with
-            // "you can't use it right now".
-            if snapshot.isFullyBlockedWithoutReading {
-                return "Rate Limited — No Usage Available"
-            }
-            return "Critical Limits Approaching"
         }
     }
 }
