@@ -248,6 +248,7 @@ public struct MetricDetailModalView: View {
         MetricDetailPresentation(
             snapshot: snapshot,
             history: recordedHistory,
+            readings: isLoading || readingsFailed ? nil : readings,
             now: now)
     }
 
@@ -259,7 +260,7 @@ public struct MetricDetailModalView: View {
 
     private var summaryColor: Color {
         switch presentation.summary.state {
-        case .unavailable: Theme.outline
+        case .unavailable, .lastPollFailed: Theme.outline
         case .healthy: Theme.secondary
         case .runningLow: Theme.tertiary
         case .critical, .exhausted, .blocked: Theme.error
@@ -355,8 +356,13 @@ public struct MetricDetailModalView: View {
     /// order (longest first). The same bar as the popover — one fill, one pace
     /// tick — so the two can never disagree.
     private var windowsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("Windows")
+        let asOf = presentation.windowsAsOf
+        return VStack(alignment: .leading, spacing: 8) {
+            // Superseded figures say when they are from, and are dimmed, so
+            // they do not read as the provider's state now.
+            sectionTitle(asOf.map {
+                "Windows at \(MetricDetailPresentation.clockText($0, now: now)), before the failed poll"
+            } ?? "Windows")
             ForEach(presentation.windows) { line in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -387,8 +393,11 @@ public struct MetricDetailModalView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                .opacity(asOf == nil ? 1 : 0.55)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(line.accessibilityLabel)
+                .accessibilityLabel(asOf.map {
+                    "\(line.accessibilityLabel), as of \(MetricDetailPresentation.clockText($0, now: now))"
+                } ?? line.accessibilityLabel)
             }
         }
         .padding(10)

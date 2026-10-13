@@ -308,11 +308,11 @@ public enum BurndownPresentation {
         now: Date
     ) -> Absence {
         let instance = readings.filter { $0.vendor == instanceID && $0.measuredAt <= now }
-        guard let lastPoll = instance.map(\.measuredAt).max() else { return .noReadings }
+        guard !instance.isEmpty else { return .noReadings }
         guard let latest = HistoryPresentation.readingAtLatestPoll(readings: instance, barLabel: barLabel) else {
             // The newest poll did not mention the window. Every row of it
             // unread means the read failed; otherwise it answered without it.
-            let failed = instance.allSatisfy { $0.measuredAt != lastPoll || $0.confidence != .measured }
+            let failed = HistoryPresentation.failedLatestPoll(readings: instance, instanceID: instanceID) != nil
             return failed ? .lastPollFailed : .noFigureAtLastPoll(label: barLabel, isBlocked: false)
         }
         if latest.fraction == nil {

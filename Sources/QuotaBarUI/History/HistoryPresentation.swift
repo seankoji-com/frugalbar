@@ -199,6 +199,21 @@ public enum HistoryPresentation {
         return readings.first { $0.barLabel == barLabel && $0.measuredAt == lastPoll }
     }
 
+    /// The instant of the instance's newest recorded poll when that poll
+    /// could not be read — every row it wrote, a window's or
+    /// `QuotaHistoryStore.providerPollLabel`'s, is unread — or nil when it
+    /// was read or nothing is recorded. A poll that answered without a
+    /// window was read, and is not a failure.
+    public static func failedLatestPoll(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        instanceID: String
+    ) -> Date? {
+        let instance = readings.filter { $0.vendor == instanceID }
+        guard let lastPoll = instance.map(\.measuredAt).max() else { return nil }
+        let failed = instance.allSatisfy { $0.measuredAt != lastPoll || $0.confidence != .measured }
+        return failed ? lastPoll : nil
+    }
+
     /// One instance's one window, oldest first.
     private static func segments(
         ofOneWindow sorted: [QuotaHistoryStore.ReadingRecord],

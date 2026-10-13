@@ -16,6 +16,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// defaults to `.none`.
     public enum State: Equatable, Sendable {
         case unavailable(UnavailableReason)
+        /// A poll recorded after the snapshot could not be read. The
+        /// snapshot's figures are from before it, and the summary does not
+        /// present them as the provider's state now.
+        case lastPollFailed(at: Date)
         case healthy
         case runningLow
         case critical
@@ -39,7 +43,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         public let resetText: String?
         /// "Ahead of even pace" and its kin, only when the pace tick is drawn.
         public let paceVerdict: String?
-        /// What to do about an unreadable provider.
+        /// What to do about an unreadable provider, or why the figures below
+        /// are not current.
         public let remedy: String?
         /// The vendor blocked the focus window. The hero figure then wears a
         /// `BlockedGlyph`, as the bar's percentage does everywhere else.
@@ -70,6 +75,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     public let summary: Summary
     public let windows: [WindowLine]
+    /// When the windows are from a snapshot that a later failed poll
+    /// superseded: the instant they were fetched, which the card then names.
+    /// Nil while they are the newest thing recorded.
+    public let windowsAsOf: Date?
     public let provenance: [ProvenanceRow]
 
     /// What the inspector knows about this instance's recorded readings.
@@ -107,12 +116,34 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
     }
 
-    public init(snapshot: QuotaSnapshot, history: RecordedHistory = .loading, now: Date) {
-        self.summary = Self.summary(for: snapshot, now: now)
+    /// - Parameter readings: this vendor's recorded readings, when they were
+    ///   read. A failed poll among them newer than the snapshot outranks it:
+    ///   the inspector holds the snapshot it was opened with, and a provider
+    ///   that has failed since must not keep reading "Healthy". A snapshot
+    ///   newer than the failure is the provider's state, and stands.
+    public init(
+        snapshot: QuotaSnapshot,
+        history: RecordedHistory = .loading,
+        readings: [QuotaHistoryStore.ReadingRecord]? = nil,
+        now: Date
+    ) {
+        let failedPoll = Self.failedPollAfter(snapshot, readings: readings)
+        self.summary = Self.summary(for: snapshot, failedPollAt: failedPoll, now: now)
         self.windows = snapshot.status.confidence == .measured
-            ? snapshot.displayBars.map { Self.windowLine($0, now: now) }
+            ? snapshot.displayBars.map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
             : []
-        self.provenance = Self.provenance(for: snapshot, history: history, now: now)
+        self.windowsAsOf = failedPoll == nil || windows.isEmpty ? nil : snapshot.lastUpdated
+        self.provenance = Self.provenance(for: snapshot, history: history, failedPollAt: failedPoll, now: now)
+    }
+
+    /// The instance's newest recorded poll, when it failed after `snapshot`
+    /// was fetched. The same rule the burndown and History read a window's
+    /// current state by (`HistoryPresentation.failedLatestPoll`).
+    static func failedPollAfter(_ snapshot: QuotaSnapshot, readings: [QuotaHistoryStore.ReadingRecord]?) -> Date? {
+        guard let readings,
+              let failed = HistoryPresentation.failedLatestPoll(readings: readings, instanceID: snapshot.id),
+              failed > snapshot.lastUpdated else { return nil }
+        return failed
     }
 
     // MARK: - Summary
@@ -126,13 +157,27 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
     }
 
-    static func summary(for snapshot: QuotaSnapshot, now: Date) -> Summary {
+    static func summary(for snapshot: QuotaSnapshot, failedPollAt: Date? = nil, now: Date) -> Summary {
         if let reason = snapshot.status.unavailableReason {
             return Summary(
                 state: .unavailable(reason), headline: reason.headline, symbol: "minus.circle",
                 focusLabel: nil, percentUsed: nil, figure: nil, resetText: nil, paceVerdict: nil,
                 remedy: reason.remedy,
                 accessibilityLabel: "\(snapshot.displayName), \(reason.headline), \(reason.remedy)")
+        }
+        // No hero figure, reset or pace: each would read as the provider's
+        // state now, and the newest poll says nothing about that.
+        if let failedPollAt {
+            let headline = "The last poll could not be read"
+            let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading. "
+                + "The figures below are from \(clockText(snapshot.lastUpdated, now: now)), before it, "
+                + "and may be out of date."
+            return Summary(
+                state: .lastPollFailed(at: failedPollAt), headline: headline,
+                symbol: "exclamationmark.triangle.fill",
+                focusLabel: nil, percentUsed: nil, figure: nil, resetText: nil, paceVerdict: nil,
+                remedy: note,
+                accessibilityLabel: "\(snapshot.displayName), \(headline), \(note)")
         }
 
         let row = MetricRowPresentation(snapshot: snapshot, now: now)
@@ -174,7 +219,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case .critical:   (headline, symbol) = ("Critically low", "exclamationmark.octagon.fill")
         case .exhausted:  (headline, symbol) = ("Exhausted", "xmark.octagon.fill")
         case .blocked:    (headline, symbol) = ("Blocked by the vendor", BlockedGlyph.symbolName)
-        case .unavailable: (headline, symbol) = ("", "minus.circle")
+        case .unavailable, .lastPollFailed: (headline, symbol) = ("", "minus.circle")
         }
 
         var spoken = [snapshot.displayName, headline]
@@ -208,7 +253,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     // MARK: - Windows
 
-    static func windowLine(_ bar: DualBarMetrics, now: Date) -> WindowLine {
+    /// `isCurrent` false for a window a later failed poll superseded: its
+    /// figure is kept, as of when it was fetched, but its burn rate and
+    /// run-out are forecasts from it, and are left out.
+    static func windowLine(_ bar: DualBarMetrics, isCurrent: Bool = true, now: Date) -> WindowLine {
         let percent = bar.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
         let percentText = percent.map { "\($0)%" }
         let noFigure: String? = percent != nil ? nil : (bar.isBlocked ? "Blocked" : "No figure")
@@ -222,14 +270,14 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         } else if let text = bar.resetText {
             parts.append(text)
         }
-        if !bar.measuresElapsedTimeOnly, !bar.isBlocked,
+        if isCurrent, !bar.measuresElapsedTimeOnly, !bar.isBlocked,
            (bar.primaryFraction ?? 0) < QuotaSnapshot.exhaustionThreshold,
            bar.paceMarker != nil, let rate = bar.burnRateMultiplier {
             parts.append("burning \(String(format: "%.1f", rate))× even pace")
         }
         // Never for a blocked window: "runs out in 4h" beside "blocked" reads
         // as headroom the vendor has already withdrawn.
-        if !bar.measuresElapsedTimeOnly, !bar.isBlocked, bar.paceMarker != nil,
+        if isCurrent, !bar.measuresElapsedTimeOnly, !bar.isBlocked, bar.paceMarker != nil,
            let date = bar.projectedExhaustionDate, date > now {
             parts.append("runs out \(ResetCountdownBadge.description(date, now: now).replacingOccurrences(of: "Resets ", with: ""))")
         }
@@ -252,7 +300,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     // MARK: - Provenance
 
-    static func provenance(for snapshot: QuotaSnapshot, history: RecordedHistory, now: Date) -> [ProvenanceRow] {
+    static func provenance(
+        for snapshot: QuotaSnapshot, history: RecordedHistory, failedPollAt: Date? = nil, now: Date
+    ) -> [ProvenanceRow] {
         var rows: [ProvenanceRow] = [
             ProvenanceRow(label: "Source", value: snapshot.cliSource),
             ProvenanceRow(label: "Last fetched", value: lastFetchedText(snapshot.lastUpdated, now: now)),
@@ -263,6 +313,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         ]
         if snapshot.status.confidence == .measured {
             rows.append(ProvenanceRow(label: "Raw figure", value: rawFigure(snapshot)))
+        }
+        if let failedPollAt {
+            rows.append(ProvenanceRow(
+                label: "Last poll", value: "Could not be read, \(lastFetchedText(failedPollAt, now: now))"))
         }
         if let key = snapshot.keyMasked {
             rows.append(ProvenanceRow(label: "Key", value: key))
@@ -295,11 +349,16 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     /// "14:05 (3 min ago)" — the instant this snapshot was taken.
     static func lastFetchedText(_ date: Date, now: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = Calendar.current.isDate(date, inSameDayAs: now) ? "HH:mm" : "d MMM, HH:mm"
         let minutes = Int(max(0, now.timeIntervalSince(date)) / 60)
         let ago = minutes < 1 ? "just now" : minutes < 60 ? "\(minutes) min ago" : "\(minutes / 60) h ago"
-        return "\(formatter.string(from: date)) (\(ago))"
+        return "\(clockText(date, now: now)) (\(ago))"
+    }
+
+    /// "14:05", or "14 Sep, 14:05" on another day than now's.
+    static func clockText(_ date: Date, now: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = Calendar.current.isDate(date, inSameDayAs: now) ? "HH:mm" : "d MMM, HH:mm"
+        return formatter.string(from: date)
     }
 
     /// The metric as the vendor reported it, unrounded where it matters.

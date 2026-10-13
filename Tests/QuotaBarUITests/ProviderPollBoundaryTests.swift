@@ -145,6 +145,159 @@ struct ProviderPollBoundaryTests {
             .allSatisfy { $0.barLabel != QuotaHistoryStore.providerPollLabel })
     }
 
+    // MARK: - The inspector's summary
+
+    /// A healthy weekly window with a published pace, fetched at `fetched`.
+    private func inspected(fetchedAt fetched: Date) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.42, displayDetails: nil),
+            status: .measured(.none), resetsAt: weekReset, lastUpdated: fetched, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.42, expectedPaceFraction: 0.30, label: "WK",
+                                 resetsAt: weekReset, windowLength: 7 * 86_400))
+    }
+
+    /// Regression: the inspector's summary and windows read only the
+    /// snapshot it was opened with, so a provider whose newer poll failed
+    /// still led with a green "Healthy", "42% WK used" and a pace verdict,
+    /// above a burndown saying the last poll could not be read. Proven red by
+    /// returning nil from `MetricDetailPresentation.failedPollAfter`.
+    @Test("a failed poll newer than the inspector's snapshot supersedes its summary")
+    func newerFailureSupersedesInspectorSummary() async throws {
+        let store = makeStore()
+        let shown = inspected(fetchedAt: minutes(0))
+        try await store.record([shown], now: minutes(0))
+        let now = minutes(15)
+
+        // Until something fails, the snapshot is the provider's state.
+        let before = MetricDetailPresentation(
+            snapshot: shown, readings: try await store.fetchReadings(vendor: .claude, since: nil), now: now)
+        #expect(before.summary.state == .healthy)
+        #expect(before.summary.paceVerdict != nil)
+        #expect(before.windowsAsOf == nil)
+
+        try await store.record([offline], now: minutes(5))
+        let readings = try await store.fetchReadings(vendor: .claude, since: nil)
+        let after = MetricDetailPresentation(snapshot: shown, readings: readings, now: now)
+        #expect(after.summary.state == .lastPollFailed(at: minutes(5)))
+        #expect(after.summary.headline == "The last poll could not be read")
+        #expect(after.summary.percentUsed == nil)
+        #expect(after.summary.resetText == nil)
+        #expect(after.summary.paceVerdict == nil)
+        #expect(after.summary.remedy?.contains("from \(MetricDetailPresentation.clockText(minutes(0), now: now))") == true)
+        #expect(!after.summary.accessibilityLabel.contains("Healthy"))
+        // The figures stay, named as of when they were fetched, with no
+        // forecast drawn from them.
+        #expect(after.windowsAsOf == minutes(0))
+        #expect(after.windows.map(\.percentText) == ["42%"])
+        #expect(after.windows.allSatisfy { !$0.detail.contains("burning") && !$0.detail.contains("runs out") })
+        #expect(after.provenance.contains { $0.label == "Last poll" && $0.value?.hasPrefix("Could not be read") == true })
+        // The burndown under it says the same thing.
+        #expect(BurndownPresentation.burndownAbsence(
+            readings: readings, instanceID: "claude", barLabel: "WK", now: now) == .lastPollFailed)
+    }
+
+    @Test("a snapshot newer than the recorded failure is the provider's state")
+    func newerSnapshotOutranksOlderFailure() async throws {
+        let store = makeStore()
+        try await store.record([offline], now: minutes(5))
+        let now = minutes(15)
+
+        // Fetched after the failure, and not recorded yet.
+        let unrecorded = inspected(fetchedAt: minutes(6))
+        let live = MetricDetailPresentation(
+            snapshot: unrecorded, readings: try await store.fetchReadings(vendor: .claude, since: nil), now: now)
+        #expect(live.summary.state == .healthy)
+        #expect(live.summary.percentUsed == 42)
+        #expect(live.summary.paceVerdict != nil)
+        #expect(live.windowsAsOf == nil)
+        #expect(!live.provenance.contains { $0.label == "Last poll" })
+
+        // Fetched after the failure, and recorded.
+        let recorded = inspected(fetchedAt: minutes(10))
+        try await store.record([recorded], now: minutes(10))
+        let stands = MetricDetailPresentation(
+            snapshot: recorded, readings: try await store.fetchReadings(vendor: .claude, since: nil), now: now)
+        #expect(stands.summary.state == .healthy)
+        #expect(stands.windowsAsOf == nil)
+    }
+
+    // MARK: - The overview's thinned read
+
+    private func week(_ used: Double?) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: used ?? 0, displayDetails: nil),
+            status: .measured(.none), resetsAt: weekReset, lastUpdated: base, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: used, label: "WK",
+                                 resetsAt: weekReset, windowLength: 7 * 86_400))
+    }
+
+    /// The overview card's line breaks, from the full read and the thinned
+    /// one, for every range the History window offers.
+    private func overviewBreaks(
+        record: (QuotaHistoryStore, Date) async throws -> Void
+    ) async throws -> [(range: HistoryPresentation.TimeRange, full: [[Date]], sampled: [[Date]])] {
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        var results: [(HistoryPresentation.TimeRange, [[Date]], [[Date]])] = []
+        for range in HistoryPresentation.TimeRange.allCases {
+            let store = makeStore()
+            let bucket = HistoryOverviewPresentation.sampleBucketSeconds(
+                range: range, retention: await store.retentionInterval)
+            // A bucket boundary, so every failure below shares one bucket.
+            let boundary = Date(timeIntervalSince1970:
+                (base.timeIntervalSince1970 / Double(bucket)).rounded(.up) * Double(bucket))
+            try await record(store, boundary)
+            let until = boundary.addingTimeInterval(600)
+            let full = try await store.fetchReadings(vendor: .claude, since: nil)
+            let sampled = try await store.fetchSampledReadings(
+                since: nil, until: until, bucketSeconds: bucket)
+            func lines(_ readings: [QuotaHistoryStore.ReadingRecord]) throws -> [[Date]] {
+                let card = try #require(HistoryOverviewPresentation.overview(
+                    subjects: subjects, readings: readings, bucketSeconds: bucket).cards.first)
+                return card.segments.map { $0.points.map(\.timestamp) }
+            }
+            results.append((range, try lines(full), try lines(sampled)))
+        }
+        return results
+    }
+
+    /// Regression: the thinned read kept only the latest row per window and
+    /// bucket, so a WK poll without a figure followed by a recovered one in
+    /// the same bucket was dropped, and the sparkline ran across the outage
+    /// the full read broke. Proven red by removing the two failure SELECTs
+    /// from `fetchSampledReadings`.
+    @Test("a window's failed poll survives thinning when the window recovers in the same bucket")
+    func sampledKeepsWindowFailure() async throws {
+        let results = try await overviewBreaks { store, boundary in
+            try await store.record([week(0.40)], now: boundary.addingTimeInterval(-300))
+            try await store.record([week(nil)], now: boundary.addingTimeInterval(60))
+            try await store.record([week(0.50)], now: boundary.addingTimeInterval(120))
+        }
+        for (range, full, sampled) in results {
+            #expect(full.count == 2, "\(range)")
+            #expect(sampled == full, "\(range)")
+        }
+    }
+
+    /// Regression: a failed poll is stored under `DEFAULT`, and with two in
+    /// one bucket only the later survived thinning, so the earlier outage —
+    /// the one between two WK readings — no longer broke the line. Proven
+    /// red by removing the `MIN` failure SELECT from `fetchSampledReadings`.
+    @Test("the earlier of two failed provider polls in a bucket still breaks the sparkline")
+    func sampledKeepsEarlierProviderFailure() async throws {
+        let results = try await overviewBreaks { store, boundary in
+            try await store.record([week(0.40)], now: boundary.addingTimeInterval(-300))
+            try await store.record([offline], now: boundary.addingTimeInterval(60))
+            try await store.record([week(0.50)], now: boundary.addingTimeInterval(120))
+            try await store.record([offline], now: boundary.addingTimeInterval(180))
+        }
+        for (range, full, sampled) in results {
+            #expect(full.count == 2, "\(range)")
+            #expect(sampled == full, "\(range)")
+        }
+    }
+
     // MARK: - Why a chart is empty
 
     @Test("a blocked window polled without a figure says so, in both chart modes")

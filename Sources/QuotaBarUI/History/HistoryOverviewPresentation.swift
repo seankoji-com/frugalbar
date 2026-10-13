@@ -82,8 +82,10 @@ public enum HistoryOverviewPresentation {
         /// the window, so `latest` alone would keep showing the figure from
         /// before it.
         public let lastPoll: QuotaHistoryStore.ReadingRecord
-        /// How many readings the thinned query kept for the window: one per
-        /// time bucket, not every reading recorded in range.
+        /// How many readings with a figure the thinned query kept for the
+        /// window: at most one per time bucket, not every reading recorded in
+        /// range. The failed polls it also keeps, to break the line, are not
+        /// counted as readings.
         public let sampleCount: Int
 
         /// The last poll reported this window. When it did not — the provider
@@ -163,7 +165,7 @@ public enum HistoryOverviewPresentation {
                 segments: HistoryPresentation.segments(from: own, barLabel: label, maxGap: maxGap),
                 latest: latest,
                 lastPoll: lastPoll,
-                sampleCount: window.count
+                sampleCount: window.filter { $0.fraction != nil }.count
             ))
         }
         return (cards, unread, empty)

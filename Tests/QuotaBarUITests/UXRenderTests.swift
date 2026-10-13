@@ -380,6 +380,71 @@ struct UXRenderTests {
         failedPollInspector.maxBody = 1_000
         try await save(failedPollInspector.frame(width: 384, height: 1_000).background(Theme.surface),
                        name: "inspector-failed-poll", directory: directory)
+        // MARK: Attempt-5 states: a snapshot a later failed poll superseded,
+        // and outages inside one overview bucket.
+        // The inspector opened on a snapshot fetched 15 minutes ago, with an
+        // offline poll recorded 10 minutes ago: the summary says the last
+        // poll failed and the windows say when they are from.
+        let superseded = QuotaHistoryStore(
+            databaseURL: directory.appendingPathComponent("rework-superseded-\(UUID().uuidString).sqlite"))
+        var stale = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.42, displayDetails: nil), status: .measured(.none),
+            resetsAt: claude.resetsAt, lastUpdated: now.addingTimeInterval(-900), auxiliaryInfo: nil,
+            row1: bar("WK", 0.42, length: 7 * 86_400, resetsIn: 3.2 * 86_400),
+            row2: bar("5H", 0.18, length: 5 * 3600, resetsIn: 2.5 * 3600))
+        stale.cliSource = "Review fixture"
+        for i in 0..<4 {
+            try await superseded.record([stale], now: now.addingTimeInterval(-Double(4 - i) * 300 - 600))
+        }
+        try await superseded.record([offlineClaude], now: now.addingTimeInterval(-600))
+        let supersededReadings = try await superseded.fetchReadings(vendor: .claude)
+        #expect(MetricDetailPresentation(snapshot: stale, readings: supersededReadings, now: now)
+            .summary.state == .lastPollFailed(at: Date(timeIntervalSince1970:
+                now.addingTimeInterval(-600).timeIntervalSince1970.rounded(.down))))
+        var supersededInspector = MetricDetailModalView(
+            snapshot: stale, readingsLoader: { _, _ in supersededReadings },
+            eventsLoader: { _, _, _, _, _ in [] }, onClose: {})
+        supersededInspector.maxBody = 1_000
+        try await save(supersededInspector.frame(width: 384, height: 1_000).background(Theme.surface),
+                       name: "inspector-superseded-by-failed-poll", directory: directory)
+
+        // A day of polls with two outages inside 12-minute buckets of the
+        // 24-hour overview: two offline polls either side of a reading, then
+        // a poll with no WK figure followed by a recovery. The thinned
+        // sparkline breaks where the full read does.
+        let bucketed = QuotaHistoryStore(
+            databaseURL: directory.appendingPathComponent("rework-bucketed-\(UUID().uuidString).sqlite"))
+        let bucket24 = HistoryOverviewPresentation.sampleBucketSeconds(
+            range: .last24Hours, retention: await bucketed.retentionInterval)
+        let start = (now.timeIntervalSince1970 / Double(bucket24)).rounded(.down) * Double(bucket24) - 20 * 3600
+        var noWeekFigure = claude
+        noWeekFigure.row1 = bar("WK", nil, length: 7 * 86_400, resetsIn: 3.2 * 86_400)
+        for i in 0..<240 {
+            let at = Date(timeIntervalSince1970: start + Double(i) * 300)
+            let poll = i == 84 || i == 86 ? offlineClaude
+                : i == 168 ? noWeekFigure
+                : claudeAt(0.30 + Double(i) * 0.001, 0.2)
+            try await bucketed.record([poll], now: at)
+        }
+        let bucketedFull = try await bucketed.fetchReadings(vendor: .claude)
+        let bucketedSampled = try await bucketed.fetchSampledReadings(
+            since: now.addingTimeInterval(-86_400), until: now, bucketSeconds: bucket24)
+        let bucketedCards = HistoryOverviewPresentation.overview(
+            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: []),
+            readings: bucketedSampled, bucketSeconds: bucket24).cards
+        let fullCards = HistoryOverviewPresentation.overview(
+            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: []),
+            readings: bucketedFull, bucketSeconds: bucket24).cards
+        #expect(fullCards.first?.segments.count == 4)
+        #expect(bucketedCards.first?.segments.count == 4)
+        try await save(
+            HStack(spacing: 10) {
+                ForEach(bucketedCards) { HistoryOverviewCardView(card: $0, isSelected: false, onSelect: {}) }
+            }
+            .padding(14).frame(width: 320).background(Theme.card),
+            name: "history-sparkline-outages-in-bucket", directory: directory)
+
         for i in 0..<6 {
             try await outage.record([claudeAt(0.60 + Double(i) * 0.01, 0.45 + Double(i) * 0.03)],
                                     now: now.addingTimeInterval(-Double(6 - i) * 600))

@@ -59,7 +59,8 @@ struct HistoryOverviewPresentationTests {
         let card = try #require(overview.cards.first)
         #expect(card.barLabel == "WK")
         #expect(card.latestPercent == nil)
-        #expect(card.sampleCount == 3)
+        // The poll without a figure breaks the line; it is not a reading drawn.
+        #expect(card.sampleCount == 2)
         #expect(card.segments.flatMap(\.points).map(\.fraction) == [0.4, 0.45])
         #expect(overview.empty.map(\.id) == [beta.instanceID])
     }

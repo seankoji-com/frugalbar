@@ -7,9 +7,25 @@ import Testing
 
 // Opt-in, one test per process: these host production views in a real
 // window and drive them through the macOS accessibility client API — the path
-// VoiceOver and Voice Control take — and real key events, which needs a window
-// server and an accessibility-trusted runner. Fixtures never enter a live
-// store; preferences go to the test-host suite only and are restored after.
+// VoiceOver and Voice Control take — and real key events. Fixtures never
+// enter a live store; preferences go to the test-host suite only and are
+// restored after.
+//
+// What a run needs, each checked before the test touches a control, so a
+// missing one ends the test with a single "accessibility not available to
+// this process: <reason>" instead of a cascade of controls not found:
+//
+// - The runner trusted for Accessibility (`AXIsProcessTrusted()`). Trust
+//   belongs to the app that launched `swift test` — the terminal or agent
+//   host — and is granted in System Settings › Privacy & Security ›
+//   Accessibility. This harness never changes it.
+// - An unlocked console session with the display awake. While the screen is
+//   locked the hosted window is never on screen, SwiftUI builds no
+//   accessibility tree for it, and every query answers with an unlabelled
+//   element whose one child is another of the same — the "repeating
+//   accessibility-tree response" an unattended run reports, with the runner
+//   trusted. `cacheDisplay` still draws, so the PNGs alone prove nothing here.
+// - The hosted window's tree exposing at least one labelled element.
 //
 // One test per process because, once the accessibility client is attached,
 // AppKit stops the main run loop between tests, and the async test main then
@@ -21,7 +37,12 @@ import Testing
 //       swift test -c debug --filter UXInteractionTests
 //   done
 //
-// and each run must end with its "Test run with" summary line.
+// and each run must end with its "Test run with" summary line. To see which
+// requirement a run lacks before running one:
+//
+//   swift test -c debug --filter UXInteractionTests   # skipped without the variables
+//   FRUGALBAR_RENDER_DIR=$PWD/.build/ui-renders FRUGALBAR_INTERACTION=settings \
+//     swift test -c debug --filter UXInteractionTests 2>&1 | grep -E "not available|Test run with"
 private let selectedInteraction = ProcessInfo.processInfo.environment["FRUGALBAR_INTERACTION"]
 
 @Suite("UX interactions", .serialized,
@@ -59,7 +80,7 @@ struct UXInteractionTests {
     @Test("pressing the real move buttons reorders the workspaces, and a separate process reads the new order",
           .enabled(if: selectedInteraction == "settings"))
     func settingsMoveButtonsPersist() async throws {
-        try #require(AXIsProcessTrusted(), "the test runner needs accessibility permission")
+        try requireAccessibilityClient()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let defaults = CredentialStore.preferences
         #expect(defaults !== UserDefaults.standard)
@@ -112,7 +133,7 @@ struct UXInteractionTests {
     @Test("a popover row is a button that opens its detail, and its close button closes it",
           .enabled(if: selectedInteraction == "popover"))
     func popoverRowAndEscape() async throws {
-        try #require(AXIsProcessTrusted(), "the test runner needs accessibility permission")
+        try requireAccessibilityClient()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = Date()
         let reset = now.addingTimeInterval(3 * 86_400)
@@ -159,7 +180,7 @@ struct UXInteractionTests {
     @Test("the chart's adjust action selects a reading, and its value reads it with the second it was taken",
           .enabled(if: selectedInteraction == "chart"))
     func chartAdjustAction() async throws {
-        try #require(AXIsProcessTrusted(), "the test runner needs accessibility permission")
+        try requireAccessibilityClient()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = Date()
         let records = (0..<48).map { i in
@@ -209,7 +230,7 @@ struct UXInteractionTests {
     @Test("the inspector's History mode says the reset markers could not be read while its readings and events did",
           .enabled(if: selectedInteraction == "inspector"))
     func inspectorMarkersUnreadable() async throws {
-        try #require(AXIsProcessTrusted(), "the test runner needs accessibility permission")
+        try requireAccessibilityClient()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = Date()
         let reset = now.addingTimeInterval(3 * 86_400)
@@ -432,7 +453,100 @@ struct UXInteractionTests {
         window.makeFirstResponder(host)
         spinMainRunLoop(seconds: 0.4)
         host.layoutSubtreeIfNeeded()
+        do {
+            try requireAccessibleTree(of: window)
+        } catch {
+            dismiss(window)
+            throw error
+        }
         return (window, host)
+    }
+
+    // MARK: - Preflight
+
+    /// Ends a test whose controls this process cannot reach, naming why.
+    struct AccessibilityUnavailable: Error, CustomStringConvertible {
+        let reason: String
+        var description: String { "accessibility not available to this process: \(reason)" }
+    }
+
+    /// What can be known before a window opens: trust and the session.
+    private func requireAccessibilityClient() throws {
+        guard AXIsProcessTrusted() else {
+            throw AccessibilityUnavailable(reason:
+                "AXIsProcessTrusted() is false; trust the app that launched swift test under "
+                + "System Settings › Privacy & Security › Accessibility")
+        }
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+        if (session["CGSSessionScreenIsLocked"] as? Bool) == true {
+            throw AccessibilityUnavailable(reason:
+                "the screen is locked, so no window is on screen and SwiftUI builds no accessibility tree; "
+                + "run again from an unlocked session")
+        }
+        if (session["kCGSSessionOnConsoleKey"] as? Bool) == false {
+            throw AccessibilityUnavailable(reason: "this login session is not on the console")
+        }
+    }
+
+    /// The hosted window is on screen, and its tree has a labelled element.
+    /// SwiftUI builds the tree once a client asks, so it is asked again
+    /// before the tree is judged empty.
+    private func requireAccessibleTree(of window: NSWindow) throws {
+        if CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
+            throw AccessibilityUnavailable(reason: "the main display is asleep, so the window is not on screen")
+        }
+        var walk = TreeWalk()
+        for _ in 0..<5 {
+            walk = withAXClient(Self.walkTree)
+            if walk.labelled > 0, window.occlusionState.contains(.visible) { return }
+        }
+        guard window.occlusionState.contains(.visible) else {
+            throw AccessibilityUnavailable(reason:
+                "the hosted window is not visible on screen (occlusion state \(window.occlusionState.rawValue))")
+        }
+        throw AccessibilityUnavailable(reason:
+            "the hosted window's accessibility tree has no labelled element: \(walk.windows) window(s) listed, "
+            + "\(walk.visited) element(s) reached"
+            + (walk.singleChildChain ? ", each an unlabelled element whose only child is another" : ""))
+    }
+
+    struct TreeWalk {
+        var windows = 0
+        var visited = 0
+        var labelled = 0
+        /// Every element reached had no label and exactly one child.
+        var singleChildChain = false
+    }
+
+    private static func walkTree(from app: AXUIElement) -> TreeWalk {
+        var walk = TreeWalk()
+        var windows: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows)
+        walk.windows = (windows as? [AXUIElement])?.count ?? 0
+        // Depth 0 is the application and 1 its windows, whose titles say
+        // nothing about the hosted view; only what is inside them counts.
+        var queue = [(app, 0)]
+        var chain = true
+        while !queue.isEmpty, walk.visited < 500 {
+            let (element, depth) = queue.removeFirst()
+            walk.visited += 1
+            var isLabelled = false
+            for attribute in [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute] {
+                var value: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                   let text = value as? String, !text.isEmpty {
+                    isLabelled = true
+                }
+            }
+            var children: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+            let kids = (children as? [AXUIElement]) ?? []
+            if isLabelled, depth >= 2 { walk.labelled += 1 }
+            if isLabelled || kids.count != 1 { chain = false }
+            queue += kids.map { ($0, depth + 1) }
+        }
+        walk.singleChildChain = chain && walk.visited > 1
+        return walk
     }
 
     private func sendKeys(_ keys: [(UInt16, String)], to window: NSWindow) throws {
