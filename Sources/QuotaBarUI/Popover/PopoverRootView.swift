@@ -211,7 +211,16 @@ public struct PopoverRootView: View {
             // simply absent when no vendor published a figure.
             let creditEntries = store.snapshots.flatMap(\.apiCredits)
             if !creditEntries.isEmpty {
-                APICreditSectionView(entries: creditEntries)
+                APICreditSectionView(
+                    entries: creditEntries,
+                    // A vendor whose newest poll failed kept its figures, so the
+                    // balances in this card for it are carried over. Named by
+                    // vendor, not by snapshot, because that is what the failure
+                    // belongs to.
+                    staleVendors: Set(
+                        store.snapshots.filter { $0.staleReading != nil }.map(\.vendorId.rawValue)
+                    )
+                )
             }
 
 

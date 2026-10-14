@@ -27,6 +27,18 @@ struct APICreditEntryPresentationTests {
         #expect(p.spoken == "OpenAI API credits, 250 credits remaining")
     }
 
+    /// A figure carried over from a failed poll must be spoken as old. The row
+    /// speaks its figure and its note in one breath, so a screen reader has no
+    /// other channel for the fact — and the same figure is drawn in the vendor's
+    /// own quota row, which does say it.
+    @Test("a stale entry says so in words, and a current one says nothing extra")
+    func staleEntryIsSpoken() {
+        let p = APICreditEntryPresentation(entry: entry(.credits(remaining: 250, unitName: "credits")))
+        #expect(p.spoken(stale: false) == p.spoken)
+        #expect(p.spoken(stale: true) == "\(p.spoken), stale, the last poll failed")
+        #expect(p.spoken(stale: true) != p.spoken)
+    }
+
     /// A six-figure count keeps its grouping so it can be read at a glance, and
     /// strips back to exactly the figure the vendor published — whatever
     /// separator this machine's locale uses.

@@ -23,6 +23,18 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
     /// The whole entry in words, for a screen reader.
     public let spoken: String
 
+    /// The entry in words when the vendor's newest poll failed and so this
+    /// figure is carried over from an earlier one.
+    ///
+    /// The row speaks its figure and its note in one breath, so a reader has no
+    /// way to notice the figure is not current — the same reason
+    /// `MetricRowPresentation.staleSpoken` exists. Passed in rather than read
+    /// from the entry, because staleness is the vendor poll's, not the entry's:
+    /// every entry a failed poll retained is equally old.
+    public func spoken(stale: Bool) -> String {
+        stale ? "\(spoken), stale, the last poll failed" : spoken
+    }
+
     public init(entry: APICreditEntry) {
         self.title = "\(entry.vendorId.displayName) \(entry.label)"
         self.figure = Self.figure(for: entry.metric)

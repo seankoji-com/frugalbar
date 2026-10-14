@@ -45,6 +45,15 @@ struct UXRenderTests {
         try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
+        // A vendor's failed poll retains its balances, and the card must not
+        // present them as this poll's reading. OpenAI's row here is stale;
+        // Claude's, in the same card, is not — a whole card marked stale would
+        // not show that the marker belongs to the vendor.
+        try await save(VStack(spacing: 12) {
+            Text("Credit card · OpenAI's newest poll failed").font(.caption).foregroundStyle(Theme.outline)
+            APICreditSectionView(entries: creditFixtures(), staleVendors: ["openai"])
+        }.padding(12).frame(width: 384).background(Theme.surface),
+            name: "credit-section-stale", directory: directory)
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("fixture.sqlite"))
         try await save(QuotaTimelineChart(segments: [], timeRange: .last7Days)
             .frame(width: 640, height: 240).background(Theme.card),
