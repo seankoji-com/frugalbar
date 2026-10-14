@@ -101,3 +101,34 @@ private final class NonHTTPResponseProtocol: URLProtocol {
     }
     override func stopLoading() {}
 }
+
+// MARK: - The shipped session
+
+/// Asserted against `defaultConfiguration()` rather than
+/// `makeDefaultSession()`: under a test host that returns the blocked session,
+/// whose configuration says nothing about what the app ships.
+@Suite("QuotaHTTP default session")
+struct QuotaHTTPDefaultSessionTests {
+
+    /// Regression: the session is `.ephemeral`, which does not mean
+    /// cache-less — it keeps an in-memory `URLCache`. A replayed response is
+    /// indistinguishable from a fresh one, so a provider that answered ten
+    /// minutes ago was re-read as a reading *now* (stamped with the current
+    /// time), and a cached 429 reported a throttle the vendor never just sent.
+    /// Proven red by dropping either line from `defaultConfiguration()`.
+    @Test("no provider request can be served from a cache")
+    func neverServesCachedResponses() {
+        let config = QuotaHTTP.defaultConfiguration()
+        #expect(config.requestCachePolicy == .reloadIgnoringLocalCacheData)
+        #expect(config.urlCache == nil)
+    }
+
+    @Test("the shipping identity and timeouts are unchanged")
+    func shippingIdentityAndTimeouts() {
+        let config = QuotaHTTP.defaultConfiguration()
+        #expect(config.timeoutIntervalForRequest == 4.0)
+        #expect(config.timeoutIntervalForResource == 8.0)
+        #expect(config.waitsForConnectivity == false)
+        #expect(config.httpAdditionalHeaders?["User-Agent"] as? String == AppInfo.userAgent)
+    }
+}

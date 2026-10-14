@@ -196,6 +196,48 @@ struct MetricRowPresentationTests {
             #expect(p.accessibilityLabel.contains("Vendor"), "label omits the provider name for \(status)")
         }
     }
+
+    // MARK: - A reading carried over from a failed poll
+
+    /// A percentage that arrived an hour ago draws exactly like one that
+    /// arrived a second ago, so the row is the only place a glance can learn
+    /// that its figures are not the newest poll's. Regression: retention
+    /// replaced the failed poll's snapshot wholesale, so the row said nothing
+    /// and hour-old figures read as the provider's state now.
+    /// Proven red by returning nil from `MetricRowPresentation.staleDisplay`.
+    @Test("a stale reading is marked on the row, in words and in the spoken label")
+    func staleReadingIsMarked() {
+        var stale = snapshot(
+            name: "Claude",
+            metric: .percentage(usedFraction: 0.42, displayDetails: nil),
+            status: .measured(.warning),
+            row1: DualBarMetrics(primaryFraction: 0.42, label: "WK")
+        )
+        // Current figures carry no note at all — this is not a decoration
+        // every row wears.
+        let fresh = MetricRowPresentation(snapshot: stale, now: now)
+        #expect(fresh.staleNote == nil)
+        #expect(fresh.staleSpoken == nil)
+
+        // Fetched at `now`; the newest poll failed ten minutes later.
+        stale.staleReading = StaleReading(reason: .offline, at: now.addingTimeInterval(600))
+        let shown = now.addingTimeInterval(660)
+        let p = MetricRowPresentation(snapshot: stale, now: shown)
+
+        let note = p.staleNote ?? ""
+        let figuresAt = MetricDetailPresentation.clockText(now, now: shown)
+        #expect(note == "Stale — last poll failed (Offline), figures from \(figuresAt)")
+        // The figures' own instant, never the failed poll's: naming the poll
+        // would read as "we measured this ten minutes ago", which is the bug.
+        #expect(!note.contains(MetricDetailPresentation.clockText(
+            now.addingTimeInterval(600), now: shown)))
+        #expect(p.staleSpoken?.contains("Offline") == true)
+        // Both labels, because the window grid speaks the short one — a grid
+        // row that stayed silent here would be the same bug in audio.
+        #expect(p.accessibilityLabel.contains("stale"))
+        #expect(p.accessibilityLabelOmittingPercentage.contains("stale"))
+        #expect(p.accessibilityLabel.contains(figuresAt))
+    }
 }
 
 @Suite("MenuBarPresentation")
@@ -261,6 +303,33 @@ struct MenuBarPresentationTests {
             snap(.measured(.none), at: old),
         ])
         #expect(summary.oldestReading == old)
+    }
+
+    /// Regression: retention left a failed poll's snapshot looking exactly like
+    /// a fresh one, so the footer's age was the only sign anything was wrong —
+    /// and an age alone reads as a stuck clock. Proven red by dropping
+    /// `staleCount` from the summary.
+    @Test("a stale reading is reported without being counted as unreadable")
+    func staleReadingIsReportedWithoutDemotingTheIcon() {
+        var stale = QuotaSnapshot(
+            id: "claude", vendorId: .claude, displayName: "Claude", category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.2, displayDetails: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
+        stale.staleReading = StaleReading(reason: .offline, at: Date())
+
+        let summary = SystemHealthSummary.compute(from: [stale])
+        #expect(summary.staleCount == 1)
+        // It is still a reading: an unreadable provider must never outrank a
+        // real one, and a stale provider has a real one.
+        #expect(summary.unavailableCount == 0)
+        #expect(summary.hasAnyReading)
+        #expect(SystemHealthPresentation.symbol(for: summary) == "checkmark.circle.fill")
+        #expect(SystemHealthPresentation.text(for: summary) == "All quotas healthy · 1 stale")
+
+        // And with nothing stale, the wording is exactly what it was.
+        stale.staleReading = nil
+        #expect(SystemHealthPresentation.text(for: SystemHealthSummary.compute(from: [stale]))
+            == "All quotas healthy")
     }
 
     @Test("recommendationDetails extracts lowest remaining bar and time left for recommended platform")

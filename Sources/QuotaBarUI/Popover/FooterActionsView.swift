@@ -44,6 +44,19 @@ struct FooterActionsView: View {
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
                         .help("Oldest reading in view")
                 }
+
+                // An age alone reads as a stale clock rather than as a patch of
+                // stale data — the reported symptom was a footer "stuck on 57m"
+                // with every row still looking live. Naming the count tells the
+                // user the age is a fact about a provider, not about the app.
+                // Words, not colour alone: the same wording is what VoiceOver
+                // gets from `SystemHealthPresentation.text`.
+                if summary.staleCount > 0 {
+                    Text("\(summary.staleCount) stale")
+                        .font(Theme.Typography.footerMeta)
+                        .foregroundStyle(Theme.tertiary)
+                        .help("A provider's newest poll failed, so its figures are from an earlier one")
+                }
             }
             .accessibilityElement(children: .combine)
             // The dot carries the health state in colour alone, so the label

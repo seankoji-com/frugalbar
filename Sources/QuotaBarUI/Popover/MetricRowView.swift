@@ -99,6 +99,9 @@ struct MetricRowView: View {
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
             }
+            if let staleNote = p.staleNote {
+                staleReadingRow(staleNote)
+            }
             if hasOpenRouterBadges {
                 openRouterBadgesRow
             } else if showOpenRouterCatalogPlaceholder {
@@ -167,9 +170,10 @@ struct MetricRowView: View {
     }
 
     /// Only for a provider we are currently reading: a forecast under an
-    /// unavailable row would describe usage we can no longer see.
+    /// unavailable row would describe usage we can no longer see, and a
+    /// reading carried over from a failed poll is exactly that.
     private func forecastText(now: Date) -> String? {
-        guard snapshot.status.confidence == .measured else { return nil }
+        guard snapshot.status.confidence == .measured, snapshot.staleReading == nil else { return nil }
         return forecast?.summary(now: now)
     }
 
@@ -236,6 +240,30 @@ struct MetricRowView: View {
     /// The spoken and visible wording for a catalog that could not be read.
     private var catalogUnavailableText: String {
         "Model info unavailable — will retry"
+    }
+
+    /// Under the row when this poll could not read the provider and the figures
+    /// above are carried over from an earlier one.
+    ///
+    /// A percentage that arrived an hour ago is drawn exactly like one that
+    /// arrived a second ago, so without this line the row reports the last
+    /// known state as the current one — the failure that left the footer's
+    /// "oldest reading" frozen while every figure on screen looked live. The
+    /// triangle carries the meaning as a shape, not colour alone (WCAG 1.4.1),
+    /// and the whole row's accessibility label speaks the same sentence.
+    private func staleReadingRow(_ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Theme.tertiary)
+            Text(text)
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, Theme.gridLeadingInset)
     }
 
     private func row(_ grid: WindowGridPresentation) -> some View {

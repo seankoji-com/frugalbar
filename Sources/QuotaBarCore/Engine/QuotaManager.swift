@@ -432,19 +432,34 @@ public actor QuotaManager {
             // re-hit the failing vendor once the floor's window (measured
             // from that stale timestamp) had elapsed.
             let displaySnapshot: QuotaSnapshot
-            if snap.status.confidence == .measured || cache[id] == nil {
-                displaySnapshot = snap
-            } else {
+            // Retention preserves *figures*, so it only applies to a provider
+            // we previously read. An absence is always the current one: two
+            // failures in a row must report the newest reason rather than
+            // freeze the first one indefinitely, and a placeholder carries no
+            // figures worth keeping.
+            if let reason = snap.status.unavailableReason,
+               let previous = cache[id], previous.snapshot.status.confidence == .measured {
                 // The retained snapshot's hand-entered cycle row (if any) was
                 // computed at the last successful fetch and frozen there — a
                 // vendor down for days would otherwise keep showing e.g. "3
                 // days left in monthly cycle" for the whole outage, the one
                 // figure here that doesn't depend on the provider at all.
                 // Re-attach against `now` so it keeps counting down.
-                let retained = cache[id]!.snapshot
-                displaySnapshot = Self.attachingCycleRow(
-                    to: Self.removingStaleCycleRow(from: retained),
+                var retained = Self.attachingCycleRow(
+                    to: Self.removingStaleCycleRow(from: previous.snapshot),
                     cycle: cycleLookup(provider.vendorId), now: now)
+                // Carry the failure along with the figures. Retention keeps
+                // `status` — the last known pressure must still drive the menu
+                // bar icon, and an unreadable provider must never outrank a
+                // critical quota — so this field is the *only* thing that says
+                // these figures are not this poll's reading. Without it the row
+                // showed hour-old numbers as current, the footer's oldest
+                // reading froze for the whole outage, and the history re-stamped
+                // them with a fresh timestamp.
+                retained.staleReading = StaleReading(reason: reason, at: now)
+                displaySnapshot = retained
+            } else {
+                displaySnapshot = snap
             }
             // A provider we attempted re-arms the floors it is supposed to:
             // `fetchedAt` always (so the automatic floor measures from the
@@ -540,6 +555,10 @@ public actor QuotaManager {
             rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
+            // A fact about the poll, not a figure that was re-fetched: the
+            // pass that re-attaches a cycle row must not turn a stale reading
+            // into a current one.
+            rebuilt.staleReading = updated.staleReading
             updated = rebuilt
         }
         return updated
@@ -608,6 +627,10 @@ public actor QuotaManager {
         rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
+        // Same rule as the catalog failure above: this snapshot's figures are
+        // already known to be old, and stripping a cycle row does not make
+        // them current.
+        rebuilt.staleReading = updated.staleReading
         return rebuilt
     }
 
@@ -650,6 +673,15 @@ public struct SystemHealthSummary: Sendable {
     public let healthyCount: Int
     public let warningCount: Int
     public let criticalCount: Int
+    /// How many providers are still counted as read, but whose figures came
+    /// from an earlier poll because the newest one failed.
+    ///
+    /// Separate from `unavailableCount` on purpose, and never folded into it:
+    /// a stale provider *has* a reading, so it must keep driving the urgency
+    /// bucket and the menu bar icon rather than being swapped for the "cannot
+    /// read" grey. Counting it as unreadable here is exactly the inversion that
+    /// once made the icon a permanent error triangle.
+    public let staleCount: Int
     /// Oldest reading in the set — the honest "data as of" timestamp.
     public let oldestReading: Date?
     public let totalProviders: Int
@@ -658,7 +690,7 @@ public struct SystemHealthSummary: Sendable {
     public var hasAnyReading: Bool { totalProviders > unavailableCount }
 
     public static func compute(from snapshots: [QuotaSnapshot]) -> SystemHealthSummary {
-        var healthy = 0, warning = 0, critical = 0, unavailable = 0
+        var healthy = 0, warning = 0, critical = 0, unavailable = 0, stale = 0
         var worst: Urgency = .none
         var oldest: Date?
 
@@ -667,6 +699,7 @@ public struct SystemHealthSummary: Sendable {
             case .unavailable:
                 unavailable += 1
             case .measured:
+                if snap.staleReading != nil { stale += 1 }
                 switch snap.status.urgency {
                 case .none:     healthy += 1
                 case .warning:  warning += 1
@@ -690,6 +723,7 @@ public struct SystemHealthSummary: Sendable {
             healthyCount: healthy,
             warningCount: warning,
             criticalCount: critical,
+            staleCount: stale,
             oldestReading: oldest,
             totalProviders: snapshots.count
         )

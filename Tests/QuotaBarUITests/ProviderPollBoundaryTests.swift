@@ -145,6 +145,76 @@ struct ProviderPollBoundaryTests {
             .allSatisfy { $0.barLabel != QuotaHistoryStore.providerPollLabel })
     }
 
+    // MARK: - The carried-over figures of a failed poll
+
+    /// Regression: `record` took the snapshot's status at face value, and
+    /// retention had already replaced the failed poll's own status with the
+    /// reading it was carrying over. A failed poll was therefore written as a
+    /// fresh measurement of the old figures, stamped `now`: the timeline drew
+    /// them straight across the outage as current, the inspector called them
+    /// the provider's state now, and the burndown kept projecting from them.
+    /// Proven red by removing the `staleReading` branch from
+    /// `QuotaHistoryStore.record`.
+    @Test("a failed poll records a failed poll, not the figures it carried over")
+    func staleReadingRecordsAsFailedPoll() async throws {
+        let store = makeStore()
+        try await store.record([measured(fiveHour: 0.30, week: 0.40)], now: minutes(0))
+
+        // Exactly what the manager hands over after a failed poll: the last
+        // reading, still stamped with when it was measured, marked with the
+        // failure. Its `status` stays `.measured` — see `StaleReading`.
+        var carried = measured(fiveHour: 0.30, week: 0.40)
+        carried.staleReading = StaleReading(reason: .offline, at: minutes(10))
+        try await store.record([carried], now: minutes(10))
+
+        let readings = try await store.fetchReadings(vendor: .claude, since: nil)
+        // No window gained a row at +10m: those figures were measured at +0m
+        // and that is where they stay.
+        #expect(readings.filter { $0.barLabel == "5H" }.map(\.measuredAt) == [minutes(0)])
+        #expect(readings.filter { $0.barLabel == "WK" }.map(\.measuredAt) == [minutes(0)])
+        // The failure is one row of its own, under the provider's label, with
+        // no figure — what breaks every window of this instance at that instant.
+        #expect(readings.contains {
+            $0.barLabel == QuotaHistoryStore.providerPollLabel
+                && $0.measuredAt == minutes(10)
+                && $0.fraction == nil
+                && $0.confidence == .unavailable
+        })
+
+        let now = minutes(11)
+        // Every surface that asks "what is the window now?" now sees the failure.
+        #expect(HistoryPresentation.failedLatestPoll(readings: readings, instanceID: "claude") == minutes(10))
+        #expect(HistoryPresentation.readingAtLatestPoll(readings: readings, barLabel: "5H") == nil)
+        #expect(BurndownPresentation.burndown(
+            readings: readings, instanceID: "claude", barLabel: "5H", now: now) == nil)
+        #expect(BurndownPresentation.burndownAbsence(
+            readings: readings, instanceID: "claude", barLabel: "5H", now: now) == .lastPollFailed)
+        // The line stops at the failed poll rather than running across it.
+        let line = try #require(HistoryPresentation.segments(
+            from: HistoryPresentation.consumptionReadings(readings)).first { $0.barLabel == "5H" })
+        #expect(line.points.map(\.timestamp) == [minutes(0)])
+
+        // The inspector reaches the same conclusion from the snapshot alone —
+        // reason included, and without waiting for the history read.
+        let detail = MetricDetailPresentation(snapshot: carried, readings: readings, now: now)
+        #expect(detail.summary.state == .lastPollFailed(at: minutes(10)))
+        #expect(detail.summary.headline == "The last poll could not be read")
+        #expect(detail.summary.remedy?.contains("Offline") == true)
+        #expect(detail.summary.percentUsed == nil)
+        #expect(detail.windowsAsOf == minutes(0))
+        #expect(detail.windows.map(\.percentText) == ["40%", "30%"])
+        #expect(detail.windows.allSatisfy { !$0.detail.contains("burning") && !$0.detail.contains("runs out") })
+        #expect(detail.provenance.contains {
+            $0.label == "Last poll" && $0.value?.contains("Offline") == true
+        })
+
+        // And once the provider answers again, the very next poll is current.
+        try await store.record([measured(fiveHour: 0.50, week: 0.44)], now: minutes(20))
+        let recovered = try await store.fetchReadings(vendor: .claude, since: nil)
+        #expect(HistoryPresentation.failedLatestPoll(readings: recovered, instanceID: "claude") == nil)
+        #expect(HistoryPresentation.readingAtLatestPoll(readings: recovered, barLabel: "5H")?.measuredAt == minutes(20))
+    }
+
     // MARK: - The inspector's summary
 
     /// A healthy weekly window with a published pace, fetched at `fetched`.

@@ -46,6 +46,12 @@ enum SystemHealthPresentation {
         if summary.unavailableCount > 0 {
             parts.append("\(summary.unavailableCount) not readable")
         }
+        // Said separately from "not readable": a stale provider still has a
+        // reading, so it counts as read everywhere else — but the person
+        // looking at hour-old figures needs to know they are hour-old.
+        if summary.staleCount > 0 {
+            parts.append("\(summary.staleCount) stale")
+        }
         return parts.joined(separator: " · ")
     }
 

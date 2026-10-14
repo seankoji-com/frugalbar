@@ -70,15 +70,37 @@ public enum QuotaHTTP {
             return URLSession(configuration: cfg)
         }
         #endif
+        return URLSession(configuration: defaultConfiguration())
+    }
+
+    /// What every real provider request is made with.
+    ///
+    /// Split out from `makeDefaultSession()` so the policy can be asserted
+    /// directly: under a test host that function returns the blocked session
+    /// instead, whose configuration says nothing about what the app ships.
+    static func defaultConfiguration() -> URLSessionConfiguration {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 4.0
         cfg.timeoutIntervalForResource = 8.0
         cfg.waitsForConnectivity = false
+        // Every provider request must reach the vendor. An ephemeral session
+        // still keeps an in-memory `URLCache`, and a replayed response is
+        // indistinguishable, downstream, from a fresh one: a provider that
+        // answered a 200 ten minutes ago would be re-read as a reading *now*,
+        // stamped with the current time, and a cached 429 would report a
+        // throttle the vendor never just sent. The unified log caught exactly
+        // that — a 429 served with `cache_hit=true` — and a refresh that
+        // reports a state the vendor has already moved on from is the same
+        // class of bug as a stale figure: a number nobody measured just now,
+        // presented as current. Nothing here is cacheable: a quota figure is
+        // true only as of when the vendor said it.
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.urlCache = nil
         // The app's own name and the version actually running, so a vendor's
         // access log can tell releases apart; the old "QuotaBar/1.0" named a
         // product that no longer exists at a version that never changed.
         cfg.httpAdditionalHeaders = ["User-Agent": AppInfo.userAgent]
-        return URLSession(configuration: cfg)
+        return cfg
     }
 
     /// How a vendor expects its credential to be presented.

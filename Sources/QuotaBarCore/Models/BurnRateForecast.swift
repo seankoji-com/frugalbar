@@ -131,14 +131,19 @@ public struct BurnRateForecast: Sendable, Equatable {
 
     /// The forecast that constrains a provider: whichever window runs out
     /// soonest; failing that, a window that is burning but resets first.
-    /// Nil when no window has a forecast or none is burning.
+    /// Nil when no window has a forecast or none is burning — and nil for a
+    /// reading carried over from a failed poll, since a pace projected from
+    /// figures we can no longer refresh describes usage nobody can currently
+    /// see. The measured figures on such a snapshot are still shown; a
+    /// projection from them is a claim about now, which is the one thing the
+    /// failed poll makes unknowable.
     public static func binding(
         for snapshot: QuotaSnapshot,
         readings: [QuotaHistoryStore.ReadingRecord],
         now: Date,
         lookback: TimeInterval = defaultLookback
     ) -> BurnRateForecast? {
-        guard snapshot.status.confidence == .measured else { return nil }
+        guard snapshot.status.confidence == .measured, snapshot.staleReading == nil else { return nil }
         let forecasts = snapshot.bars
             .filter { !$0.measuresElapsedTimeOnly }
             .compactMap {
