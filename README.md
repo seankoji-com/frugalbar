@@ -102,7 +102,7 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 | Section | What it does |
 |---|---|
-| **Providers** | Each provider's connection state from the last poll (a symbol, the reason, and what to do about it), whether it is shown, and its order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* shows exactly the list you arrange with the up and down buttons. OpenCode Go workspaces are listed under OpenCode with their own arrows and always stay together in the order you give them. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
+| **Providers** | Each provider's connection state from the last poll (a symbol, the reason, and what to do about it), whether it is shown, and its order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* keeps the list you arrange with the up and down buttons, except that a provider with a spent or blocked window drops to the bottom. OpenCode Go workspaces are listed under OpenCode with their own arrows and always stay together in the order you give them. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
 | **API Keys** | Credentials per provider, where each one is coming from, and CLI discovery |
 | **OpenCode Go** | One row per subscription workspace: name, key, monitoring, and order (drag a row or use its arrows) |
 | **Display** | Desktop widget position, and a key to the popover's symbols |
