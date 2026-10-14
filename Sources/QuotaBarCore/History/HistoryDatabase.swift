@@ -11,6 +11,10 @@ public enum HistoryDatabaseError: Error, LocalizedError, Sendable {
     case stepFailed(code: Int32, message: String)
     case bindFailed(index: Int32, message: String)
     case executionFailed(sql: String, message: String)
+    /// A row carried a column this reader cannot decode — a corrupt or
+    /// foreign-written value. Distinct from a step failure: the query answered,
+    /// the answer is unusable.
+    case undecodableRow(column: String, value: String)
     case databaseNotOpen
     case unsupportedPlatform
 
@@ -26,6 +30,8 @@ public enum HistoryDatabaseError: Error, LocalizedError, Sendable {
             "Failed to bind parameter at index \(index): \(message)"
         case let .executionFailed(sql, message):
             "Failed to execute '\(sql)': \(message)"
+        case let .undecodableRow(column, value):
+            "Row carried an undecodable \(column): \(value)"
         case .databaseNotOpen:
             "Database connection is not open"
         case .unsupportedPlatform:

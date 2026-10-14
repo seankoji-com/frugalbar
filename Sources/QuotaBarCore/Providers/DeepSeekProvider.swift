@@ -184,7 +184,9 @@ public final class DeepSeekProvider: QuotaProvider, Sendable {
         return "Account credit balance · " + parts.joined(separator: ", ")
     }
 
+    /// The popover's one money rule (`MoneyText`), so a balance in the account's
+    /// own currency reads identically here and in the row it feeds.
     static func format(_ amount: Decimal, currencyCode: String) -> String {
-        amount.formatted(.currency(code: currencyCode).precision(.fractionLength(2)))
+        MoneyText.format(amount, code: currencyCode)
     }
 }

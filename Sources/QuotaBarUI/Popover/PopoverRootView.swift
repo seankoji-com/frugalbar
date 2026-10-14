@@ -91,6 +91,9 @@ public struct PopoverRootView: View {
                     eventsLoader: { v, i, k, s, l in
                         await store.events(for: v, instanceId: i, kinds: k, since: s, limit: l)
                     },
+                    balanceLoader: { id, since, until, bucket in
+                        await store.balancePoints(seriesId: id, since: since, until: until, bucketSeconds: bucket)
+                    },
                     onClose: {
                         withAnimation(.easeOut(duration: 0.2)) {
                             selectedSnapshot = nil
@@ -196,6 +199,7 @@ public struct PopoverRootView: View {
                         category: category,
                         snapshots: items,
                         forecasts: store.forecasts,
+                        balanceSeries: store.balanceSeries,
                         onSelect: { snap in
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                                 selectedSnapshot = snap
@@ -219,7 +223,8 @@ public struct PopoverRootView: View {
                     // belongs to.
                     staleVendors: Set(
                         store.snapshots.filter { $0.staleReading != nil }.map(\.vendorId.rawValue)
-                    )
+                    ),
+                    balanceSeries: store.balanceSeries
                 )
             }
 

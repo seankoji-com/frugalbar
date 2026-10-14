@@ -197,10 +197,11 @@ extension SubscriptionCycle {
         )
     }
 
-    /// Matches how the popover already renders a `.currency` metric, so a cost
-    /// typed in here and a balance read from a vendor read the same way.
+    /// The popover's one money rule (`MoneyText`), so a cost typed in here and a
+    /// balance read from a vendor read the same way on every machine rather
+    /// than through the reader's locale.
     public static func formatCost(_ amount: Decimal, currencyCode: String) -> String {
-        amount.formatted(.currency(code: currencyCode).precision(.fractionLength(2)))
+        MoneyText.format(amount, code: currencyCode)
     }
 }
 

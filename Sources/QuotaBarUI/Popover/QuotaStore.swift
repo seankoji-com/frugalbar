@@ -28,6 +28,16 @@ public final class QuotaStore {
     /// The most recent AI-platform events, newest first, for the popover's
     /// events section. Empty when no `eventsLoader` was given.
     public private(set) var recentEvents: [AIEvent] = []
+    /// Recorded balance-over-time points per series id, for the popover's inline
+    /// sparklines. Empty when no loader was given or a series has no history.
+    /// A short window on purpose: the strip answers "which way is this moving",
+    /// not "what did I hold a month ago" — the inspector reads the long window.
+    public private(set) var balanceSeries: [String: [BalancePoint]] = [:]
+    /// How far back the inline sparklines read.
+    public static let balanceLookback: TimeInterval = 7 * 86_400
+    /// The inline read's bucket width: hourly keeps a week under ~170 points,
+    /// which is more than a 46pt strip can resolve.
+    public static let balanceBucketSeconds = 3_600
     /// How many events `recentEvents` holds at most.
     public static let recentEventsLimit = 20
 
@@ -45,6 +55,7 @@ public final class QuotaStore {
     private let vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord]?)?
     private let eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent]?)?
     private let tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)?
+    private let balanceSeriesLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ seriesIds: [String]?) async -> [String: [BalancePoint]]?)?
     private let activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)?
 
     /// - Parameters:
@@ -62,6 +73,10 @@ public final class QuotaStore {
     ///     for the desktop widget's Tokens layout. Returns nil when the
     ///     history could not be read, which the widget says rather than
     ///     drawing an empty chart.
+    ///   - balanceSeriesLoader: recorded balance-over-time points per series id,
+    ///     for the popover's inline sparklines and the inspector's balance
+    ///     chart. `seriesIds` nil reads every series. Returns nil when the
+    ///     history could not be read.
     ///   - activityStatusLoader: whether the local-activity ingestion has
     ///     finished its first pass. Without it an empty token chart cannot be
     ///     told from a chart that is still being filled.
@@ -72,6 +87,7 @@ public final class QuotaStore {
         vendorReadingsLoader: (@Sendable (_ vendor: VendorIdentifier, _ since: Date?) async -> [QuotaHistoryStore.ReadingRecord]?)? = nil,
         eventsLoader: (@Sendable (_ vendor: VendorIdentifier?, _ instanceId: String?, _ kinds: Set<AIEventKind>?, _ since: Date?, _ limit: Int?) async -> [AIEvent]?)? = nil,
         tokenUsageLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ anchor: Date) async -> QuotaHistoryStore.TokenUsage?)? = nil,
+        balanceSeriesLoader: (@Sendable (_ since: Date, _ until: Date, _ bucketSeconds: Int, _ seriesIds: [String]?) async -> [String: [BalancePoint]]?)? = nil,
         activityStatusLoader: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
     ) {
         self.manager = manager
@@ -80,6 +96,7 @@ public final class QuotaStore {
         self.vendorReadingsLoader = vendorReadingsLoader
         self.eventsLoader = eventsLoader
         self.tokenUsageLoader = tokenUsageLoader
+        self.balanceSeriesLoader = balanceSeriesLoader
         self.activityStatusLoader = activityStatusLoader
     }
 
@@ -106,6 +123,20 @@ public final class QuotaStore {
     ) async -> QuotaHistoryStore.TokenUsage? {
         guard let tokenUsageLoader else { return nil }
         return await tokenUsageLoader(since, until, bucketSeconds, anchor)
+    }
+
+    /// One balance series' points over `since ... until`, thinned to
+    /// `bucketSeconds`-wide buckets. nil when no loader was injected or the
+    /// history could not be read — a failure to read, which the inspector says
+    /// rather than drawing an empty chart.
+    public func balancePoints(
+        seriesId: String, since: Date, until: Date, bucketSeconds: Int
+    ) async -> [BalancePoint]? {
+        guard let balanceSeriesLoader else { return nil }
+        guard let series = await balanceSeriesLoader(since, until, bucketSeconds, [seriesId]) else {
+            return nil
+        }
+        return series[seriesId] ?? []
     }
 
     /// Recorded events, newest first, optionally scoped to one vendor and one
@@ -208,6 +239,19 @@ public final class QuotaStore {
                 next[snapshot.id] = BurnRateForecast.binding(for: snapshot, readings: readings, now: now)
             }
             self.forecasts = next
+        }
+        // After recording, so this poll's balance is the strip's right-hand end.
+        // A read that fails leaves the last good series in place rather than
+        // blanking every strip on a transient error; the next reload replaces it.
+        if let balanceSeriesLoader {
+            let now = Date()
+            let ids = BalanceSeries.seriesIDs(in: snaps)
+            if !ids.isEmpty,
+               let series = await balanceSeriesLoader(
+                   now.addingTimeInterval(-Self.balanceLookback), now,
+                   Self.balanceBucketSeconds, ids) {
+                self.balanceSeries = series
+            }
         }
         await reloadRecentEvents()
     }

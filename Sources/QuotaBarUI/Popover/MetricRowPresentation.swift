@@ -251,14 +251,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
 
     /// A money figure for a row's own value label and spoken form.
     ///
-    /// Locale-based via `.formatted(.currency(code:))`, which is *not* where
-    /// the popover's money rule lives: `MoneyText.format` is the deterministic
-    /// one, and the credit card plus a provider row's balance subtitle both use
-    /// it. This one is left as-is rather than silently switched, so a machine
-    /// whose locale renders USD as "USD 179.50" keeps its existing inspector
-    /// wording. Unifying the two onto `MoneyText` is a follow-up, not a quiet
-    /// behaviour change here.
+    /// Routed through `MoneyText.format`, the same deterministic rule the
+    /// balance subtitle and the credit card use. It used to consult the process
+    /// locale via `.formatted(.currency(code:))`, which on an en_AU machine
+    /// rendered a USD figure as "USD 179.50" — visibly disagreeing with the
+    /// "$179.50" its own row's subtitle printed a few points to the left.
     static func currency(_ value: Decimal, _ code: String) -> String {
-        value.formatted(.currency(code: code).precision(.fractionLength(2)))
+        MoneyText.format(value, code: code)
     }
 }

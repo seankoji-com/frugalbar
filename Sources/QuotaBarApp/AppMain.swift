@@ -91,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
             },
+            // nil, not empty, on a failed read: the inspector says it could not
+            // read the balance rather than drawing an empty history.
+            balanceSeriesLoader: { since, until, bucketSeconds, seriesIds in
+                do {
+                    return try await hStore.fetchBalanceSeries(
+                        since: since, until: until, bucketSeconds: bucketSeconds, seriesIds: seriesIds)
+                } catch {
+                    NSLog("frugalbar: failed to read balance history: \(error)")
+                    return nil
+                }
+            },
             activityStatusLoader: { await aEngine.status() }
         )
         super.init()

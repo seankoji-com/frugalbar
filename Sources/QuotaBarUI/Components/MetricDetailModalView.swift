@@ -16,7 +16,83 @@ public struct MetricDetailModalView: View {
     let snapshot: QuotaSnapshot
     let readingsLoader: (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]?
     let eventsLoader: (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]?
+    /// One balance series' recorded points over a window, thinned. nil when the
+    /// history could not be read — a failure to read, not an absence.
+    let balanceLoader: (String, Date, Date, Int) async -> [BalancePoint]?
     let onClose: () -> Void
+
+    /// One balance series the snapshot publishes, with the outcome of its read:
+    /// the points it answered with, or nil when the read failed.
+    ///
+    /// The series is listed whether or not the read answered. Gating the card
+    /// on the *successful* reads alone left a failed read out of this list
+    /// entirely, which hid the card and drew the failure as "this provider
+    /// publishes no balance" — the one distinction this feature exists to make,
+    /// with the card's own failure branch unreachable behind it.
+    struct BalanceSeriesRead: Equatable {
+        let series: BalanceSeries.Series
+        /// nil when the read failed; `[]` is an answered read that held no
+        /// readings in the window.
+        let points: [BalancePoint]?
+    }
+
+    /// Which of the card's states applies.
+    ///
+    /// Pure, so the failure state can be asserted rather than only rendered:
+    /// it shipped with no gate that could reach it.
+    enum BalanceCardState: Equatable {
+        case loading
+        /// The pass has not recorded this series yet — a transient, and the
+        /// only state a spinner is honest for.
+        case awaitingRead
+        /// The read failed: a failure to read, never an absence of readings.
+        case readFailed
+        case trend(BalanceSparklinePresentation, unit: BalanceSeries.Unit)
+        case noTrend(readings: Int)
+
+        static func of(isLoading: Bool, read: BalanceSeriesRead?) -> BalanceCardState {
+            if isLoading { return .loading }
+            guard let read else { return .awaitingRead }
+            guard let points = read.points else { return .readFailed }
+            guard let trend = BalanceSparklinePresentation.make(from: points) else {
+                return .noTrend(readings: points.count)
+            }
+            return .trend(trend, unit: read.series.unit)
+        }
+    }
+
+    /// Whether the card is drawn at all: the snapshot publishes at least one
+    /// balance series. *Not* "did a read succeed" — a failed read is one of the
+    /// card's own states, not a reason to hide the card.
+    static func showsBalanceCard(for snapshot: QuotaSnapshot) -> Bool {
+        !BalanceSeries.all(of: snapshot).isEmpty
+    }
+
+    /// The per-series reads one pass records: one entry per series the snapshot
+    /// publishes, each carrying its read's own outcome.
+    ///
+    /// A failed read is *kept*, with `points` nil. Dropping it — which is what
+    /// shipped — left the card with no series to draw when every read failed, so
+    /// a failure to read rendered as "this provider publishes no balance" and
+    /// the card's own failure branch could never be reached. Extracted from
+    /// `load` so a revert of either half can be shown to fail a test: the
+    /// card's gate alone cannot catch it, because one guard masks the other.
+    ///
+    /// Records nothing once the surrounding task is cancelled: a non-throwing
+    /// `await` does not stop on cancellation, so a modal dismissed mid-pass
+    /// would otherwise run every remaining series' read to completion and
+    /// discard the lot.
+    static func balanceReads(
+        for snapshot: QuotaSnapshot,
+        load: (BalanceSeries.Series) async -> [BalancePoint]?
+    ) async -> [BalanceSeriesRead] {
+        var reads: [BalanceSeriesRead] = []
+        for series in BalanceSeries.all(of: snapshot) {
+            if Task.isCancelled { return [] }
+            reads.append(BalanceSeriesRead(series: series, points: await load(series)))
+        }
+        return reads
+    }
 
     @State private var copied = false
     @State private var chartMode: ChartMode = .burndown
@@ -25,6 +101,10 @@ public struct MetricDetailModalView: View {
     @State private var readings: [QuotaHistoryStore.ReadingRecord] = []
     @State private var recentEvents: [AIEvent] = []
     @State private var markerEvents: [AIEvent] = []
+    /// One entry per balance series the snapshot publishes, each with its read's
+    /// outcome. Empty only before the first pass has recorded one.
+    @State private var balanceSeries: [BalanceSeriesRead] = []
+    @State private var selectedBalanceID: String?
     @State private var isLoading = true
     /// The readings or events could not be read. Each is then said as a
     /// failure to read, never as "no readings" or "no events".
@@ -52,6 +132,8 @@ public struct MetricDetailModalView: View {
     static let historyRanges: [HistoryPresentation.TimeRange] = [.last24Hours, .last7Days, .last30Days]
     /// How far back the inspector reads, covering the longest offered range.
     static let historyLookback: TimeInterval = 30 * 86_400
+    /// The balance read's bucket width: a day, so a month is about 30 points.
+    static let balanceBucketSeconds = 86_400
     static let chartHeight: CGFloat = 150
     /// Keeps the whole modal near 600pt: header and footer sit outside this.
     static let maxBodyHeight: CGFloat = 480
@@ -63,18 +145,26 @@ public struct MetricDetailModalView: View {
     ///     given kinds (nil: every kind) since a date, newest first, at most
     ///     `limit`; nil when they could not be read. The instance keeps a
     ///     sibling workspace's events out; the vendor's own still come through.
+    ///   - balanceLoader: one balance series' recorded points over a window,
+    ///     thinned to the given bucket width; nil when the history could not be
+    ///     read. Defaults to a loader that reports a failed read, so a caller
+    ///     that does not wire it draws the failure state rather than a chart
+    ///     built from nothing — a test that means to exercise the balance card
+    ///     must inject this and assert it was hit.
     ///
-    /// Both run once per vendor when the modal appears, never on the refresh
+    /// All run once per vendor when the modal appears, never on the refresh
     /// path.
     public init(
         snapshot: QuotaSnapshot,
         readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]?,
         eventsLoader: @escaping (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]?,
+        balanceLoader: @escaping (String, Date, Date, Int) async -> [BalancePoint]? = { _, _, _, _ in nil },
         onClose: @escaping () -> Void
     ) {
         self.snapshot = snapshot
         self.readingsLoader = readingsLoader
         self.eventsLoader = eventsLoader
+        self.balanceLoader = balanceLoader
         self.onClose = onClose
     }
 
@@ -148,6 +238,16 @@ public struct MetricDetailModalView: View {
             }
         }
         let r = await readingsLoader(vendor, since)
+        // Every balance series this snapshot carries: its own money figure and
+        // one per prepaid credit entry. Read for the same lookback as the
+        // readings, bucketed a day wide so a month is ~30 points. One entry per
+        // series, each with its read's own outcome — a failed read is kept as
+        // that series' outcome rather than used to skip the series.
+        let reads = await Self.balanceReads(for: snapshot) { series in
+            await balanceLoader(
+                series.id, loadTime.addingTimeInterval(-Self.historyLookback), loadTime,
+                Self.balanceBucketSeconds)
+        }
         // Filtered by kind in the query, so the five slots are never spent
         // on scheduled rollovers (the store already drops retired rows).
         // Scoped to this instance, so a sibling workspace's resets and
@@ -159,6 +259,8 @@ public struct MetricDetailModalView: View {
         guard !Task.isCancelled else { return }
         readings = r ?? []
         readingsFailed = r == nil
+        balanceSeries = reads
+        selectedBalanceID = selectedBalanceID ?? reads.first?.series.id
         historySince = since
         recentEvents = e ?? []
         eventsFailed = e == nil
@@ -178,6 +280,15 @@ public struct MetricDetailModalView: View {
                 isExhausted: MetricRowPresentation(snapshot: snapshot).isExhausted
             )
 
+            // The name and its badge claim the row's width before the close
+            // button, so the name keeps its own line instead of breaking
+            // mid-word. A flexible `Spacer` here used to win a share of the row
+            // and leave the name less than its ideal width, which broke
+            // "OpenRouter" across two lines beside a two-word badge — "$179.50
+            // credit", "$12.34 key cap left" and "Payment required" are all real
+            // badges, so it was every one of them. The name stays wrappable,
+            // because "OpenCode Go · Gamma workspace" is wider than the row and
+            // must still take two lines.
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
@@ -191,6 +302,7 @@ public struct MetricDetailModalView: View {
                             .font(Theme.Typography.token)
                             .tracking(Theme.Tracking.token)
                             .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Theme.primary.opacity(0.15))
@@ -202,9 +314,10 @@ public struct MetricDetailModalView: View {
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
             }
-
-            Spacer()
-                .frame(minWidth: 0)
+            // The column takes the row's remaining width, so the close button is
+            // pinned right and the name is not starved by a flexible `Spacer`
+            // competing with it for space.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -238,6 +351,9 @@ public struct MetricDetailModalView: View {
                 windowsCard
             }
             chartCard
+            if Self.showsBalanceCard(for: snapshot) {
+                balanceCard
+            }
             recentEventsCard
             provenanceCard
         }
@@ -580,6 +696,104 @@ public struct MetricDetailModalView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Balance card
+
+    /// The recorded balance the popover's inline strip only gestures at: the
+    /// same readings over a month, one series at a time.
+    ///
+    /// Drawn for every snapshot that *publishes* a balance series — a quota-only
+    /// provider has no line to show, and an empty chart would read as "your
+    /// balance is zero" rather than "this provider has no balance". A snapshot
+    /// that publishes a series but whose read failed draws the failure instead:
+    /// the two are different answers and the card says which it is.
+    private var balanceCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                sectionTitle("Balance history")
+                Spacer(minLength: 0)
+                if balanceSeries.count > 1 {
+                    Picker("Balance series", selection: selectedBalanceBinding) {
+                        ForEach(balanceSeries, id: \.series.id) { entry in
+                            Text(entry.series.label).tag(entry.series.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("Balance series")
+                }
+            }
+            Group {
+                switch BalanceCardState.of(isLoading: isLoading, read: currentBalance) {
+                case .loading, .awaitingRead:
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel("Loading balance history")
+                case .readFailed:
+                    ChartEmptyState(
+                        symbol: "exclamationmark.triangle",
+                        message: "Could not read the recorded balance. This is a failure to read, not an absence of readings."
+                    )
+                case .trend(let trend, let unit):
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(trend.caption(in: unit))
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        BalanceChartView(presentation: trend) { value in
+                            unit.format(value)
+                        }
+                    }
+                case .noTrend(let readings):
+                    ChartEmptyState(
+                        symbol: "chart.line.flattrend.xyaxis",
+                        message: balanceAbsenceMessage(readings: readings)
+                    )
+                }
+            }
+            .frame(height: Self.chartHeight)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surfaceContainerLowest.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+
+    private var selectedBalanceBinding: Binding<String> {
+        Binding(
+            get: { selectedBalanceID ?? balanceSeries.first?.series.id ?? "" },
+            set: { selectedBalanceID = $0 }
+        )
+    }
+
+    /// The series the card is drawing, with its read's outcome. A series whose
+    /// read failed is still selectable: its failure is what the card says.
+    private var currentBalance: BalanceSeriesRead? {
+        balanceSeries.first { $0.series.id == (selectedBalanceID ?? balanceSeries.first?.series.id) }
+    }
+
+    /// Why no trend can be drawn — an absence of readings, said as itself
+    /// rather than as a zero balance.
+    private func balanceAbsenceMessage(readings: Int) -> String {
+        readings == 0
+            ? "No balance recorded in the last 30 days yet."
+            : "Only one balance reading recorded so far, so there is no trend to draw yet."
+    }
+
+    /// A figure in the series' own unit — money through the one money rule, a
+    /// credit count kept as a count. Delegates to the unit's own `format`, so
+    /// the chart's readout, its axis ends and the caption cannot word the same
+    /// number three ways.
+    private func format(_ value: Decimal, in unit: BalanceSeries.Unit) -> String {
+        unit.format(value)
     }
 
     // MARK: - Recent events
