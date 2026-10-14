@@ -43,7 +43,7 @@ public struct ProviderDisplayPreferences: Sendable, Equatable {
     public static let defaultOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode,
         .openrouter, .deepseek, .grok, .kiro, .devpass,
-        .commandcode, .clinepass,
+        .commandcode, .clinepass, .muse,
         .githubRest, .githubGraphql,
     ]
 

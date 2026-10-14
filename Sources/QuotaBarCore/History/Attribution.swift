@@ -103,7 +103,8 @@ public enum AttributionEngine {
         .grok,
         .kiro,
         .gemini,
-        .clinepass
+        .clinepass,
+        .muse
     ]
 
     /// Which local activity sources (if any) can speak for a vendor.

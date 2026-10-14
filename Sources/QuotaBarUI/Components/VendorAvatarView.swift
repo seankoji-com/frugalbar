@@ -144,6 +144,17 @@ public enum VendorSVGLogo {
               <path fill="#FFFFFF" fill-rule="evenodd" d="M5 8.5A1.5 1.5 0 016.5 7h11A1.5 1.5 0 0119 8.5v2a1.5 1.5 0 000 3v2a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 015 15.5v-2a1.5 1.5 0 000-3v-2zm8.2 1h1.2v1.2h-1.2V9.5zm0 2.2h1.2v1.2h-1.2v-1.2zm0 2.2h1.2v1.2h-1.2v-1.2z"/>
             </svg>
             """
+        case .muse:
+            // Meta blue with a white spark — Muse's mark for generated work,
+            // not a lifted wordmark. Fill-based, like every other badge here:
+            // NSImage's offscreen SVG support renders stroke styling unevenly.
+            return """
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="24" height="24" rx="4.5" fill="#0866FF"/>
+              <path fill="#FFFFFF" d="M11.2 4.6a.5.5 0 01.95 0l1.35 3.65a.5.5 0 00.3.3l3.65 1.35a.5.5 0 010 .95l-3.65 1.35a.5.5 0 00-.3.3l-1.35 3.65a.5.5 0 01-.95 0l-1.35-3.65a.5.5 0 00-.3-.3L5.9 10.85a.5.5 0 010-.95L9.55 8.55a.5.5 0 00.3-.3l1.35-3.65z"/>
+              <path fill="#FFFFFF" d="M16.9 15.1a.4.4 0 01.75 0l.5 1.35a.4.4 0 00.24.24l1.35.5a.4.4 0 010 .75l-1.35.5a.4.4 0 00-.24.24l-.5 1.35a.4.4 0 01-.75 0l-.5-1.35a.4.4 0 00-.24-.24l-1.35-.5a.4.4 0 010-.75l1.35-.5a.4.4 0 00.24-.24l.5-1.35z"/>
+            </svg>
+            """
         case .githubRest, .githubGraphql:
             return """
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">

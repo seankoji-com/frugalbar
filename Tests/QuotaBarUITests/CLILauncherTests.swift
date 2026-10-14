@@ -15,6 +15,7 @@ struct CLILauncherTests {
         (.copilot, "opencode"),
         (.openrouter, "opencode"),
         (.deepseek, "opencode"),
+        (.muse, "muse"),
     ])
     func vendorCommands(vendor: VendorIdentifier, expected: String) {
         #expect(CLILauncher.command(for: vendor) == expected)

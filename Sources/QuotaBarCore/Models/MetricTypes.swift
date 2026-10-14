@@ -15,6 +15,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case devpass
     case commandcode
     case clinepass
+    case muse
     case githubRest   = "github_rest"
     case githubGraphql = "github_graphql"
 
@@ -32,6 +33,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .devpass:       "DevPass"
         case .commandcode:   "Command Code"
         case .clinepass:     "ClinePass"
+        case .muse:          "Muse"
         case .githubRest:    "GitHub REST"
         case .githubGraphql: "GitHub GraphQL"
         }
@@ -56,6 +58,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         // Indigo chosen to read as Cline's brand blue; not taken from a
         // published brand sheet.
         case .clinepass:     "#5b5bd6"
+        // Meta's own blue, the family Muse Code belongs to; not taken from a
+        // published Muse brand sheet.
+        case .muse:          "#0866ff"
         case .githubRest:    "#ffb4ab"
         case .githubGraphql: "#ffb4ab"
         }
@@ -75,6 +80,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .devpass:       "ticket"
         case .commandcode:   "command"
         case .clinepass:     "ticket.fill"
+        case .muse:          "wand.and.stars"
         case .githubRest:    "network"
         case .githubGraphql: "point.3.connected.trianglepath.dotted"
         }
@@ -705,6 +711,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .devpass:       return "DevPass"
         case .commandcode:   return "Command Code"
         case .clinepass:     return "ClinePass"
+        case .muse:          return "Muse"
         case .githubRest, .githubGraphql: return "GitHub"
         }
     }

@@ -13,7 +13,7 @@ Each subscription's windows line up in **5H / WK / MO** columns, with the share 
 
 ## Why FrugalBar?
 
-Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, DeepSeek, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass and the GitHub APIs). However:
+Modern engineering workflows rely on many AI models and developer platforms (Claude, OpenAI, Gemini, GitHub Copilot, OpenRouter, DeepSeek, Grok, Kiro, OpenCode, DevPass, Command Code, ClinePass, Muse and the GitHub APIs). However:
 
 - **Surprise quota exhaustion**: Running multi-step autonomous agent runs or code generation tasks often grinds to a halt midway through a long job because a hidden rate limit or budget cap was breached.
 - **Scattered dashboards**: Checking balances requires navigating half a dozen provider dashboards, consoles, and billing portals.
@@ -90,6 +90,7 @@ swift run
    - **DevPass**: Paste an `llmgtwy_…` key from the LLM Gateway dashboard.
    - **Command Code**: Sign in with the `cmd` CLI (`cmd login`); enable CLI discovery and FrugalBar reads `~/.commandcode/auth.json`. A `user_…` API key can also be pasted directly, or set `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`.
    - **ClinePass**: Sign in with the Cline CLI (`cline auth`) or the Cline extension; enable CLI discovery and FrugalBar reads `~/.cline/data/settings/providers.json` (or `$CLINE_DATA_DIR`). A Cline API key from app.cline.bot can also be pasted directly, or set `CLINE_API_KEY` / `CLINEPASS_API_KEY`.
+   - **Muse**: Sign in with the Muse Code CLI (`muse login`); enable CLI discovery and FrugalBar reads that login from the macOS Keychain. Paste the OAuth access token to skip discovery — the minted `api_key` is **not** accepted and answers 401.
 
 Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
 
@@ -134,6 +135,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
 | **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan. A plan id FrugalBar does not recognise gets no credit gauge rather than a guessed denominator |
 | **ClinePass** | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` with the Cline API key or account token | Live gauges: the 5-hour, weekly and monthly ClinePass windows as percentages with reset times. The account's credit balance is deliberately not shown: the API's unit for it is undocumented. HTTP 404 means the account has no ClinePass subscription, and is reported as such |
+| **Muse** | `POST https://api.meta.ai/muse-code/key` with the Muse Code CLI's OAuth session token | Live gauges: the 5-hour and weekly windows as percentages with reset times, plus the subscription tier's published name. Meta offers no read-only usage endpoint — this is the CLI's own key-mint call, and FrugalBar verified it is idempotent (it returns the key the account already holds and creates nothing), never a model call that would spend the quota it reports. An inactive subscription reports "Payment required" rather than a 0%-used row |
 
 ### Caveats worth knowing
 
@@ -174,7 +176,7 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
 - **Event sources**: the status pages (`status.claude.com`, `status.openai.com`, `www.githubstatus.com`) and reset trackers (`claude-resets.com`, `whenreset.dev`) are public and get no credential. Account model lists go to each vendor's own API with the credential that vendor's quota already uses, and nowhere else; the Codex list also reads the latest Codex CLI version from `registry.npmjs.org`, without a credential. Switch all of them off under **Preferences → History & Data → AI events**.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter, DeepSeek), the `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` environment variables, `~/.codex/auth.json`, the Claude Code login Keychain item, `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → API Keys → Credential discovery**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter, DeepSeek), the `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` environment variables, `~/.codex/auth.json`, the Claude Code login Keychain item, the Muse Code login Keychain item (`ai.meta.dev.credentials`), `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → API Keys → Credential discovery**.
 
 ---
 
