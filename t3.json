@@ -1,0 +1,15 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "Build",
+      "command": "swift build -c debug -Xswiftc -warnings-as-errors",
+      "icon": "build"
+    },
+    {
+      "name": "Tests",
+      "command": "swift test -c debug --parallel",
+      "icon": "test"
+    }
+  ]
+}
