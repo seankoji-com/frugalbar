@@ -66,6 +66,18 @@ struct UXRenderTests {
         try await save(balanceInspector.frame(width: 384, height: 1_200).background(Theme.surface),
             name: "inspector-balance", directory: directory)
 
+        // The balance read failed for every series the snapshot publishes. The
+        // card is still drawn, and says the failure: gating it on the
+        // successful reads alone hid it entirely and presented the failure as
+        // "this provider publishes no balance".
+        var balanceUnreadable = MetricDetailModalView(
+            snapshot: snapshots.first { $0.id == "openrouter" }!, readingsLoader: { _, _ in [] },
+            eventsLoader: { _, _, _, _, _ in [] },
+            balanceLoader: { _, _, _, _ in nil }, onClose: {})
+        balanceUnreadable.maxBody = 1_000
+        try await save(balanceUnreadable.frame(width: 384, height: 700).background(Theme.surface),
+            name: "inspector-balance-unreadable", directory: directory)
+
         // The same card for a credit *count*: charted in credits, with the axis
         // labelled in credits — never converted to money.
         var creditsHost = QuotaSnapshot(

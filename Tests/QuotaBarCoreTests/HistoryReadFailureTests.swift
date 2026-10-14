@@ -79,11 +79,57 @@ struct HistoryReadFailureTests {
         }
     }
 
+    @Test("fetchBalanceSeries throws instead of returning a short balance history")
+    func balanceSeries() async throws {
+        let store = try await makeStore()
+        try await replace("balance_reading", with: """
+            SELECT 'openai|credits:credits' AS series_id, 'openai' AS vendor,
+                   'API credits' AS label, 'credits:credits' AS unit,
+                   \(Self.epoch) AS measured_at, \(Self.overflow) AS value
+            """, in: store)
+
+        await #expect(throws: HistoryDatabaseError.self) {
+            _ = try await store.fetchBalanceSeries(
+                since: Date(timeIntervalSince1970: 0),
+                until: Date(timeIntervalSince1970: 2_000_000_000), bucketSeconds: 3600)
+        }
+        // And through the narrowed read the inspector's own loader uses.
+        await #expect(throws: HistoryDatabaseError.self) {
+            _ = try await store.fetchBalanceSeries(
+                since: Date(timeIntervalSince1970: 0),
+                until: Date(timeIntervalSince1970: 2_000_000_000), bucketSeconds: 3600,
+                seriesIds: ["openai|credits:credits"])
+        }
+    }
+
+    /// A row whose *value* will not decode is a failure too, not a point
+    /// quietly left out. Dropping it would make the series come back one
+    /// reading short with nothing said, and the chart would draw that hole as
+    /// fact — the same defect as a short step, reached from the other side.
+    @Test("an undecodable stored value throws rather than dropping the point")
+    func undecodableBalanceValue() async throws {
+        let store = try await makeStore()
+        try await replace("balance_reading", with: """
+            SELECT 'openai|credits:credits' AS series_id, 'openai' AS vendor,
+                   'API credits' AS label, 'credits:credits' AS unit,
+                   \(Self.epoch) AS measured_at, 'not a number' AS value
+            """, in: store)
+
+        await #expect(throws: HistoryDatabaseError.self) {
+            _ = try await store.fetchBalanceSeries(
+                since: Date(timeIntervalSince1970: 0),
+                until: Date(timeIntervalSince1970: 2_000_000_000), bucketSeconds: 3600)
+        }
+    }
+
     @Test("a healthy read still ends cleanly on SQLITE_DONE")
     func healthyReadStillReturns() async throws {
         let store = try await makeStore()
         #expect(try await store.fetchReadings(vendor: .claude).isEmpty)
         #expect(try await store.fetchActivities().isEmpty)
         #expect(try await store.fetchEvents().isEmpty)
+        #expect(try await store.fetchBalanceSeries(
+            since: Date(timeIntervalSince1970: 0),
+            until: Date(timeIntervalSince1970: 2_000_000_000), bucketSeconds: 3600).isEmpty)
     }
 }

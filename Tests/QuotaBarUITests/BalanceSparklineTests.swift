@@ -92,4 +92,57 @@ struct BalanceSparklineTests {
         #expect(BalanceSeries.id(source: "openai", unit: .credits(name: "credits"))
              != BalanceSeries.id(source: "openai", unit: .currency(code: "USD")))
     }
+
+    // MARK: - The caption under the chart
+
+    /// The three directions are the handed-out contract, so nothing downstream
+    /// has to ask what a zero change means.
+    @Test("a change is classified by its sign, and a zero change is neither way")
+    func changeClassification() {
+        #expect(BalanceSparklinePresentation.Trend.of(change: Decimal(string: "15.50")!) == .rose)
+        #expect(BalanceSparklinePresentation.Trend.of(change: Decimal(string: "-30.50")!) == .fell)
+        #expect(BalanceSparklinePresentation.Trend.of(change: 0) == .returned)
+    }
+
+    /// A series can move and come back: 5, 1, 5 has a range of 4, so it is not
+    /// flat, yet its net change is zero. The arrow used to be chosen from
+    /// `change >= 0`, which printed "▲ 0" — a rise that did not happen.
+    @Test("a series that ends where it began claims no direction")
+    func returnedToStartClaimsNothing() throws {
+        let p = try #require(BalanceSparklinePresentation.make(
+            from: [point(0, "5.00"), point(60, "1.00"), point(120, "5.00")]))
+        #expect(!p.isFlat)
+        #expect(p.change == 0)
+        #expect(p.caption(in: .currency(code: "USD")) == "$5.00 · no net change across 3 readings")
+    }
+
+    @Test("a rising and a falling series are said with their own direction and figure")
+    func directionAndMagnitude() throws {
+        let up = try #require(BalanceSparklinePresentation.make(
+            from: [point(0, "10.00"), point(60, "25.50")]))
+        #expect(up.caption(in: .currency(code: "USD")) == "$25.50 · ▲ $15.50 across 2 readings")
+
+        let down = try #require(BalanceSparklinePresentation.make(
+            from: [point(0, "210.00"), point(60, "179.50")]))
+        #expect(down.caption(in: .currency(code: "USD")) == "$179.50 · ▼ $30.50 across 2 readings")
+    }
+
+    /// Every figure is the same, so there was no movement to describe.
+    @Test("a flat series is said as unchanged, not as a zero change")
+    func flatIsSaidAsUnchanged() throws {
+        let p = try #require(BalanceSparklinePresentation.make(
+            from: [point(0, "25.00"), point(60, "25.00")]))
+        #expect(p.caption(in: .currency(code: "USD")) == "Unchanged at $25.00 across 2 readings")
+    }
+
+    /// A count stays a count: the caption never words credits as money, and a
+    /// credit series never picks up a currency symbol from a neighbour.
+    @Test("a credit series is captioned in credits")
+    func creditCaptionKeepsTheUnit() throws {
+        let p = try #require(BalanceSparklinePresentation.make(
+            from: [point(0, "500"), point(60, "600")]))
+        #expect(p.caption(in: .credits(name: "credits"))
+                == "600 credits · ▲ 100 credits across 2 readings")
+        #expect(BalanceSeries.Unit.credits(name: "credits").format(500) == "500 credits")
+    }
 }

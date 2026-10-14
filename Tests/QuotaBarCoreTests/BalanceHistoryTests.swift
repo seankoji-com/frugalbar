@@ -1,6 +1,9 @@
 import Testing
 import Foundation
 @testable import QuotaBarCore
+#if canImport(SQLite3)
+import SQLite3
+#endif
 
 /// Balance-over-time history: the figures that are *not* quotas — an account
 /// credit, a key's remaining cap, a credit pool, a count of credits a vendor
@@ -14,6 +17,19 @@ struct BalanceHistoryTests {
         return QuotaHistoryStore(
             databaseURL: tempDir.appendingPathComponent("balance.sqlite3"),
             retentionInterval: retention, isTestHost: true)
+    }
+
+    /// One series' recorded points, through the one read API the popover's
+    /// strip and the inspector both use. There is deliberately one: two reads
+    /// for one job would have to keep their bucketing and their step-failure
+    /// handling in step with each other.
+    private func recorded(
+        _ store: QuotaHistoryStore, _ seriesId: String, until: Date,
+        since: Date = .distantPast, bucketSeconds: Int = 3600
+    ) async throws -> [BalancePoint] {
+        let all = try await store.fetchBalanceSeries(
+            since: since, until: until, bucketSeconds: bucketSeconds, seriesIds: [seriesId])
+        return all[seriesId] ?? []
     }
 
     private func money(
@@ -34,9 +50,8 @@ struct BalanceHistoryTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.record([money("openrouter", balance: "179.50")], now: now)
 
-        let series = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
-            since: nil, until: now, bucketSeconds: 3600)
+        let series = try await recorded(
+            store, BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")), until: now)
         #expect(series.count == 1)
         #expect(series.first?.value == Decimal(string: "179.50"))
     }
@@ -51,9 +66,8 @@ struct BalanceHistoryTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.record([money("openrouter", balance: "1.005", code: "BHD")], now: now)
 
-        let points = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "BHD")),
-            since: nil, until: now, bucketSeconds: 3600)
+        let points = try await recorded(
+            store, BalanceSeries.id(source: "openrouter", unit: .currency(code: "BHD")), until: now)
         #expect(points.first?.value == Decimal(string: "1.005"))
     }
 
@@ -104,8 +118,7 @@ struct BalanceHistoryTests {
 
         let seriesID = BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD"))
         #expect(BalanceSeries.seriesIDs(in: [stale]) == [seriesID])
-        let points = try await store.fetchBalancePoints(
-            seriesId: seriesID, since: nil, until: now.addingTimeInterval(7200), bucketSeconds: 3600)
+        let points = try await recorded(store, seriesID, until: now.addingTimeInterval(7200))
         // The one real reading, and no invented second point for the failed poll.
         #expect(points.count == 1)
         #expect(points.first?.value == Decimal(string: "179.50"))
@@ -121,9 +134,8 @@ struct BalanceHistoryTests {
 
         let readings = try await store.fetchReadings(vendor: .openrouter)
         #expect(readings.contains { $0.barLabel == QuotaHistoryStore.providerPollLabel })
-        let balances = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
-            since: nil, until: now, bucketSeconds: 3600)
+        let balances = try await recorded(
+            store, BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")), until: now)
         #expect(balances.count == 1)
     }
 
@@ -203,9 +215,9 @@ struct BalanceHistoryTests {
             try await store.record([money("openrouter", balance: amount)],
                                    now: base.addingTimeInterval(TimeInterval(offset)))
         }
-        let points = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
-            since: nil, until: base.addingTimeInterval(3600), bucketSeconds: 3600)
+        let points = try await recorded(
+            store, BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
+            until: base.addingTimeInterval(3600))
         #expect(points.count == 1)
         #expect(points.first?.value == Decimal(string: "6.00"))
     }
@@ -218,9 +230,8 @@ struct BalanceHistoryTests {
                                now: now.addingTimeInterval(-7200))
         try await store.record([money("openrouter", balance: "5.00")], now: now)
 
-        let points = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
-            since: nil, until: now, bucketSeconds: 3600)
+        let points = try await recorded(
+            store, BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")), until: now)
         #expect(points.count == 1)
         #expect(points.first?.value == Decimal(string: "5.00"))
     }
@@ -248,14 +259,62 @@ struct BalanceHistoryTests {
         try await store.record([money("deepseek", balance: "300.00", code: "CNY")],
                                now: now.addingTimeInterval(3600))
 
-        let usd = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD")),
-            since: nil, until: now.addingTimeInterval(7200), bucketSeconds: 3600)
-        let cny = try await store.fetchBalancePoints(
-            seriesId: BalanceSeries.id(source: "deepseek", unit: .currency(code: "CNY")),
-            since: nil, until: now.addingTimeInterval(7200), bucketSeconds: 3600)
+        let usd = try await recorded(
+            store, BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD")),
+            until: now.addingTimeInterval(7200))
+        let cny = try await recorded(
+            store, BalanceSeries.id(source: "deepseek", unit: .currency(code: "CNY")),
+            until: now.addingTimeInterval(7200))
         #expect(usd.map(\.value) == [Decimal(string: "42.00")!])
         #expect(cny.map(\.value) == [Decimal(string: "300.00")!])
+    }
+
+    /// The `WITHOUT ROWID` table's primary key *is* its clustering b-tree on
+    /// `(series_id, measured_at)`, so a secondary index on those same columns
+    /// is a second copy of the same keys: dead storage, and one more b-tree
+    /// write on every poll — for a read that could not use it anyway.
+    /// Asserted against the database the schema actually built, not the SQL
+    /// text that asked for it.
+    @Test("the balance table carries no secondary index")
+    func noSecondaryIndexOnTheBalanceTable() async throws {
+        #if canImport(SQLite3)
+        let store = makeStore()
+        try await store.record([money("openrouter", balance: "10.00")],
+                               now: Date(timeIntervalSince1970: 1_700_000_000))
+        let indexes = try await store.database.perform { db -> [String] in
+            let stmt = try db.prepare(
+                sql: "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?;")
+            defer { db.finalize(stmt) }
+            try db.bindText(stmt, 1, HistorySchema.balanceReadingTable)
+            var names: [String] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let c = sqlite3_column_text(stmt, 0) { names.append(String(cString: c)) }
+            }
+            return names
+        }
+        #expect(indexes.isEmpty)
+        #endif
+    }
+
+    /// An empty list asks for no series, which is not the same request as
+    /// asking for every series. Collapsing the two handed a caller that had
+    /// built its list dynamically and ended up with nothing the points of
+    /// unrelated series — and a full-table scan to be handed them.
+    @Test("asking for no series reads none, and is not the unfiltered read")
+    func emptySeriesIdsReadsNothing() async throws {
+        let store = makeStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await store.record([money("openrouter", balance: "10.00"),
+                                money("deepseek", balance: "42.00")], now: now)
+
+        let none = try await store.fetchBalanceSeries(
+            since: now.addingTimeInterval(-1), until: now, bucketSeconds: 3600, seriesIds: [])
+        #expect(none.isEmpty)
+        // The unfiltered read still sees both, so the empty list is a real
+        // filter rather than a broken query.
+        let all = try await store.fetchBalanceSeries(
+            since: now.addingTimeInterval(-1), until: now, bucketSeconds: 3600)
+        #expect(all.count == 2)
     }
 
     /// The table is additive under the shipped schema generation; a version

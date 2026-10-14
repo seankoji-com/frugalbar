@@ -119,7 +119,31 @@ The popover's inline strip and the inspector's balance card both draw from
 observation is not a trend — and centres a flat series rather than pinning it to
 an edge, where it would read as a reserve that emptied. The inspector's empty
 states say *why* there is no line (no readings, one reading, or a failed read),
-never a blank axis.
+never a blank axis. Its caption takes its direction from
+`BalanceSparklinePresentation.Trend.of(change:)`, not from the sign of a
+comparison: a series can move and come back — 5, 1, 5 is not flat, its range is
+4, and its net change is zero — and choosing the arrow from `change >= 0`
+printed "▲ 0" for one of those, claiming a rise that did not happen.
+
+**The inspector's balance card is drawn for a snapshot that *publishes* a
+series, never for one whose read succeeded.** `MetricDetailModalView.balanceReads`
+records one entry per published series and keeps a failed read as that series'
+outcome (`points` nil); `BalanceCardState.of(isLoading:read:)` then says
+`.readFailed` for it. Both halves matter and each masks the other: skipping the
+failed read leaves the card with no series to draw, so a failure to read renders
+as "this provider publishes no balance" and the failure branch is unreachable —
+which is what shipped, and why the gate alone cannot be caught by a test.
+`QuotaStore.balancePoints` keeps the same three-way distinction (nil = no loader
+or a failed read, `[]` = read but no readings, points = history). The pass bails
+on `Task.isCancelled` before each series: a non-throwing `await` does not stop on
+cancellation, so a dismissed modal would otherwise read every remaining series to
+completion and discard the lot.
+
+**`balance_reading` carries no secondary index.** The `WITHOUT ROWID` table's
+primary key on `(series_id, measured_at)` is already its clustering b-tree, so an
+index on the same columns would be a second copy of the same keys — dead storage,
+and one more b-tree write on every poll. Neither read could use it either. The
+same rule applies to any future `WITHOUT ROWID` table added here.
 
 **History tables are additive only; do not bump `HistorySchema.version`.** A
 bump drops the table set, which deletes the user's readings. New tables go in

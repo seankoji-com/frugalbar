@@ -21,6 +21,79 @@ public struct MetricDetailModalView: View {
     let balanceLoader: (String, Date, Date, Int) async -> [BalancePoint]?
     let onClose: () -> Void
 
+    /// One balance series the snapshot publishes, with the outcome of its read:
+    /// the points it answered with, or nil when the read failed.
+    ///
+    /// The series is listed whether or not the read answered. Gating the card
+    /// on the *successful* reads alone left a failed read out of this list
+    /// entirely, which hid the card and drew the failure as "this provider
+    /// publishes no balance" — the one distinction this feature exists to make,
+    /// with the card's own failure branch unreachable behind it.
+    struct BalanceSeriesRead: Equatable {
+        let series: BalanceSeries.Series
+        /// nil when the read failed; `[]` is an answered read that held no
+        /// readings in the window.
+        let points: [BalancePoint]?
+    }
+
+    /// Which of the card's states applies.
+    ///
+    /// Pure, so the failure state can be asserted rather than only rendered:
+    /// it shipped with no gate that could reach it.
+    enum BalanceCardState: Equatable {
+        case loading
+        /// The pass has not recorded this series yet — a transient, and the
+        /// only state a spinner is honest for.
+        case awaitingRead
+        /// The read failed: a failure to read, never an absence of readings.
+        case readFailed
+        case trend(BalanceSparklinePresentation, unit: BalanceSeries.Unit)
+        case noTrend(readings: Int)
+
+        static func of(isLoading: Bool, read: BalanceSeriesRead?) -> BalanceCardState {
+            if isLoading { return .loading }
+            guard let read else { return .awaitingRead }
+            guard let points = read.points else { return .readFailed }
+            guard let trend = BalanceSparklinePresentation.make(from: points) else {
+                return .noTrend(readings: points.count)
+            }
+            return .trend(trend, unit: read.series.unit)
+        }
+    }
+
+    /// Whether the card is drawn at all: the snapshot publishes at least one
+    /// balance series. *Not* "did a read succeed" — a failed read is one of the
+    /// card's own states, not a reason to hide the card.
+    static func showsBalanceCard(for snapshot: QuotaSnapshot) -> Bool {
+        !BalanceSeries.all(of: snapshot).isEmpty
+    }
+
+    /// The per-series reads one pass records: one entry per series the snapshot
+    /// publishes, each carrying its read's own outcome.
+    ///
+    /// A failed read is *kept*, with `points` nil. Dropping it — which is what
+    /// shipped — left the card with no series to draw when every read failed, so
+    /// a failure to read rendered as "this provider publishes no balance" and
+    /// the card's own failure branch could never be reached. Extracted from
+    /// `load` so a revert of either half can be shown to fail a test: the
+    /// card's gate alone cannot catch it, because one guard masks the other.
+    ///
+    /// Records nothing once the surrounding task is cancelled: a non-throwing
+    /// `await` does not stop on cancellation, so a modal dismissed mid-pass
+    /// would otherwise run every remaining series' read to completion and
+    /// discard the lot.
+    static func balanceReads(
+        for snapshot: QuotaSnapshot,
+        load: (BalanceSeries.Series) async -> [BalancePoint]?
+    ) async -> [BalanceSeriesRead] {
+        var reads: [BalanceSeriesRead] = []
+        for series in BalanceSeries.all(of: snapshot) {
+            if Task.isCancelled { return [] }
+            reads.append(BalanceSeriesRead(series: series, points: await load(series)))
+        }
+        return reads
+    }
+
     @State private var copied = false
     @State private var chartMode: ChartMode = .burndown
     @State private var historyRange: HistoryPresentation.TimeRange = .last24Hours
@@ -28,18 +101,15 @@ public struct MetricDetailModalView: View {
     @State private var readings: [QuotaHistoryStore.ReadingRecord] = []
     @State private var recentEvents: [AIEvent] = []
     @State private var markerEvents: [AIEvent] = []
-    /// Balance-over-time per series, for the balance card. Empty when the
-    /// snapshot has no balance series at all, in which case no card is drawn.
-    @State private var balanceSeries: [(series: BalanceSeries.Series, points: [BalancePoint])] = []
+    /// One entry per balance series the snapshot publishes, each with its read's
+    /// outcome. Empty only before the first pass has recorded one.
+    @State private var balanceSeries: [BalanceSeriesRead] = []
     @State private var selectedBalanceID: String?
     @State private var isLoading = true
     /// The readings or events could not be read. Each is then said as a
     /// failure to read, never as "no readings" or "no events".
     @State private var readingsFailed = false
     @State private var eventsFailed = false
-    /// The balance read failed for at least one series: said as a failure to
-    /// read, never as an empty balance history.
-    @State private var balanceFailed = false
     /// The chart-marker read failed: resets may be missing from the chart.
     /// Tracked apart from `eventsFailed`, whose query is a different one.
     @State private var markersFailed = false
@@ -170,17 +240,13 @@ public struct MetricDetailModalView: View {
         let r = await readingsLoader(vendor, since)
         // Every balance series this snapshot carries: its own money figure and
         // one per prepaid credit entry. Read for the same lookback as the
-        // readings, bucketed a day wide so a month is ~30 points.
-        let seriesList = BalanceSeries.all(of: snapshot)
-        var loadedSeries: [(series: BalanceSeries.Series, points: [BalancePoint])] = []
-        var balanceReadFailed = false
-        for series in seriesList {
-            let points = await balanceLoader(
+        // readings, bucketed a day wide so a month is ~30 points. One entry per
+        // series, each with its read's own outcome — a failed read is kept as
+        // that series' outcome rather than used to skip the series.
+        let reads = await Self.balanceReads(for: snapshot) { series in
+            await balanceLoader(
                 series.id, loadTime.addingTimeInterval(-Self.historyLookback), loadTime,
                 Self.balanceBucketSeconds)
-            if points == nil { balanceReadFailed = true } else {
-                loadedSeries.append((series, points ?? []))
-            }
         }
         // Filtered by kind in the query, so the five slots are never spent
         // on scheduled rollovers (the store already drops retired rows).
@@ -193,9 +259,8 @@ public struct MetricDetailModalView: View {
         guard !Task.isCancelled else { return }
         readings = r ?? []
         readingsFailed = r == nil
-        balanceSeries = loadedSeries
-        balanceFailed = balanceReadFailed
-        selectedBalanceID = selectedBalanceID ?? loadedSeries.first?.series.id
+        balanceSeries = reads
+        selectedBalanceID = selectedBalanceID ?? reads.first?.series.id
         historySince = since
         recentEvents = e ?? []
         eventsFailed = e == nil
@@ -286,7 +351,7 @@ public struct MetricDetailModalView: View {
                 windowsCard
             }
             chartCard
-            if !balanceSeries.isEmpty {
+            if Self.showsBalanceCard(for: snapshot) {
                 balanceCard
             }
             recentEventsCard
@@ -638,9 +703,11 @@ public struct MetricDetailModalView: View {
     /// The recorded balance the popover's inline strip only gestures at: the
     /// same readings over a month, one series at a time.
     ///
-    /// Drawn only for a snapshot that published a balance — a quota-only
+    /// Drawn for every snapshot that *publishes* a balance series — a quota-only
     /// provider has no line to show, and an empty chart would read as "your
-    /// balance is zero" rather than "this provider has no balance".
+    /// balance is zero" rather than "this provider has no balance". A snapshot
+    /// that publishes a series but whose read failed draws the failure instead:
+    /// the two are different answers and the card says which it is.
     private var balanceCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -659,32 +726,32 @@ public struct MetricDetailModalView: View {
                 }
             }
             Group {
-                if isLoading {
+                switch BalanceCardState.of(isLoading: isLoading, read: currentBalance) {
+                case .loading, .awaitingRead:
                     ProgressView()
                         .controlSize(.small)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .accessibilityLabel("Loading balance history")
-                } else if balanceFailed, currentBalance == nil {
+                case .readFailed:
                     ChartEmptyState(
                         symbol: "exclamationmark.triangle",
                         message: "Could not read the recorded balance. This is a failure to read, not an absence of readings."
                     )
-                } else if let entry = currentBalance,
-                          let trend = BalanceSparklinePresentation.make(from: entry.points) {
+                case .trend(let trend, let unit):
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(balanceCaption(trend, unit: entry.series.unit))
+                        Text(trend.caption(in: unit))
                             .font(Theme.Typography.subtitle)
                             .foregroundStyle(Theme.onSurfaceVariant)
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)
                         BalanceChartView(presentation: trend) { value in
-                            format(value, in: entry.series.unit)
+                            unit.format(value)
                         }
                     }
-                } else if let entry = currentBalance {
+                case .noTrend(let readings):
                     ChartEmptyState(
                         symbol: "chart.line.flattrend.xyaxis",
-                        message: balanceAbsenceMessage(readings: entry.points.count)
+                        message: balanceAbsenceMessage(readings: readings)
                     )
                 }
             }
@@ -707,7 +774,9 @@ public struct MetricDetailModalView: View {
         )
     }
 
-    private var currentBalance: (series: BalanceSeries.Series, points: [BalancePoint])? {
+    /// The series the card is drawing, with its read's outcome. A series whose
+    /// read failed is still selectable: its failure is what the card says.
+    private var currentBalance: BalanceSeriesRead? {
         balanceSeries.first { $0.series.id == (selectedBalanceID ?? balanceSeries.first?.series.id) }
     }
 
@@ -719,24 +788,12 @@ public struct MetricDetailModalView: View {
             : "Only one balance reading recorded so far, so there is no trend to draw yet."
     }
 
-    private func balanceCaption(_ trend: BalanceSparklinePresentation, unit: BalanceSeries.Unit) -> String {
-        let latest = format(trend.latestValue, in: unit)
-        guard !trend.isFlat else { return "Unchanged at \(latest) across \(trend.sampleCount) readings" }
-        let change = trend.change
-        let arrow = change >= 0 ? "▲" : "▼"
-        let magnitude = change >= 0 ? change : -change
-        return "\(latest) · \(arrow) \(format(magnitude, in: unit)) across \(trend.sampleCount) readings"
-    }
-
     /// A figure in the series' own unit — money through the one money rule, a
-    /// credit count kept as a count.
+    /// credit count kept as a count. Delegates to the unit's own `format`, so
+    /// the chart's readout, its axis ends and the caption cannot word the same
+    /// number three ways.
     private func format(_ value: Decimal, in unit: BalanceSeries.Unit) -> String {
-        switch unit {
-        case .currency(let code):
-            MoneyText.format(value, code: code)
-        case .credits(let name):
-            "\(NSDecimalNumber(decimal: value).intValue.formatted()) \(name)"
-        }
+        unit.format(value)
     }
 
     // MARK: - Recent events

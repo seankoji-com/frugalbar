@@ -41,6 +41,17 @@ public enum BalanceSeries {
             if case .currency(let code) = self { return code }
             return nil
         }
+
+        /// A figure in this unit's own terms — money through the one money rule,
+        /// a credit count kept a count and never converted. The single place a
+        /// balance figure is worded, so the chart's readout, its axis ends and
+        /// the caption under it cannot disagree about what a number is.
+        public func format(_ value: Decimal) -> String {
+            switch self {
+            case .currency(let code): MoneyText.format(value, code: code)
+            case .credits(let name):  "\(NSDecimalNumber(decimal: value).intValue.formatted()) \(name)"
+            }
+        }
     }
 
     /// One figure a snapshot or credit entry contributes to history.

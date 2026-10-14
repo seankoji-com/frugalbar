@@ -270,6 +270,52 @@ struct QuotaStoreTests {
         await s.forceRefresh()
         #expect(s.balanceSeries[seriesID]?.count == 1)
     }
+
+    /// `balancePoints` is the inspector's only source of balance history, and
+    /// its three outcomes are the failure-vs-absence distinction the balance
+    /// card is built on: nil for no loader or a failed read, `[]` for a read
+    /// that answered without this series, points for history. None of them was
+    /// covered.
+    @Test("balancePoints tells a failed read apart from an absence of readings")
+    func balancePointsDistinguishesFailureFromAbsence() async throws {
+        let seriesID = BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD"))
+        let point = BalancePoint(measuredAt: Date(timeIntervalSince1970: 0), value: 42)
+        let asked = AskedSeries()
+        let box = SeriesResultBox([seriesID: [point]])
+        let until = Date(timeIntervalSince1970: 100)
+        let since = Date(timeIntervalSince1970: 0)
+
+        // No loader injected at all: a failure to read, not an empty history.
+        let unloaded = QuotaStore(manager: QuotaManager(providerFactory: { [] }))
+        #expect(await unloaded.balancePoints(
+            seriesId: seriesID, since: since, until: until, bucketSeconds: 3600) == nil)
+
+        let store = QuotaStore(
+            manager: QuotaManager(providerFactory: { [] }),
+            balanceSeriesLoader: { _, _, _, ids in
+                asked.record(ids)
+                return box.result
+            })
+
+        #expect(await store.balancePoints(
+            seriesId: seriesID, since: since, until: until, bucketSeconds: 3600) == [point])
+
+        // The read itself failed: nil, so the card says so rather than drawing
+        // an empty chart.
+        box.result = nil
+        #expect(await store.balancePoints(
+            seriesId: seriesID, since: since, until: until, bucketSeconds: 3600) == nil)
+
+        // Answered, but without this series: no readings in the window, which
+        // is an absence and not a failure.
+        box.result = ["other|currency:USD": [point]]
+        #expect(await store.balancePoints(
+            seriesId: seriesID, since: since, until: until, bucketSeconds: 3600) == [])
+
+        // Narrowed to the one series asked for — never the empty list, which
+        // `fetchBalanceSeries` reads as "no filter".
+        #expect(asked.last == [seriesID])
+    }
 }
 
 /// A money-only provider stub: no bars, so its row is its figure and it

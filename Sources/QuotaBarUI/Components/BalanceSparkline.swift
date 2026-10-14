@@ -77,4 +77,41 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
             isFlat: isFlat
         )
     }
+
+    /// How a series ended against where it began.
+    ///
+    /// A series can move and come back — readings 5, 1, 5 are not flat, their
+    /// range is 4, yet their net change is zero — and picking the arrow from
+    /// `change >= 0` printed "▲ 0" for one of those, claiming a rise that did
+    /// not happen.
+    public enum Trend: Equatable, Sendable {
+        case rose, fell, returned
+
+        public static func of(change: Decimal) -> Trend {
+            if change > 0 { return .rose }
+            if change < 0 { return .fell }
+            return .returned
+        }
+    }
+
+    /// The line under the chart: the latest figure, how it got there, and how
+    /// many readings stand behind it. Pure, so the wording for a series that
+    /// ended exactly where it started is assertable rather than only visible.
+    ///
+    /// A flat series is said as *unchanged* rather than as "▲ 0": every figure
+    /// is the same, so there was no movement to describe.
+    public func caption(in unit: BalanceSeries.Unit) -> String {
+        let latest = unit.format(latestValue)
+        guard !isFlat else {
+            return "Unchanged at \(latest) across \(sampleCount) readings"
+        }
+        switch Trend.of(change: change) {
+        case .rose:
+            return "\(latest) · ▲ \(unit.format(change)) across \(sampleCount) readings"
+        case .fell:
+            return "\(latest) · ▼ \(unit.format(-change)) across \(sampleCount) readings"
+        case .returned:
+            return "\(latest) · no net change across \(sampleCount) readings"
+        }
+    }
 }

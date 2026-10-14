@@ -80,56 +80,27 @@ extension QuotaHistoryStore {
         Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
     }
 
-    /// One series' points in `since ... until`, thinned to at most one per
-    /// `bucketSeconds`-wide bucket and returned oldest first.
+    /// Every series' points in `since ... until`, thinned to at most one per
+    /// `bucketSeconds`-wide bucket and returned oldest first within each, keyed
+    /// by series id. One query serves the popover's inline sparklines and the
+    /// inspector's single series alike, so neither issues one read per row.
     ///
     /// Each point is a real reading — the latest one recorded in its bucket,
     /// exactly as written. Nothing is averaged or interpolated, so a point is
-    /// always a figure some poll received. Throws when the read stops
-    /// part-way, so a short result is a failure to read rather than an absence
-    /// of history.
-    public func fetchBalancePoints(
-        seriesId: String, since: Date?, until: Date, bucketSeconds: Int
-    ) async throws -> [BalancePoint] {
-        try await ensureOpen()
-        let size = Int64(max(bucketSeconds, 1))
-        let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
-        let untilEpoch = Int64(until.timeIntervalSince1970)
-
-        return try await database.perform { db -> [BalancePoint] in
-            #if canImport(SQLite3)
-            var sql = """
-            SELECT MAX(measured_at), value
-            FROM balance_reading
-            WHERE series_id = ? AND measured_at <= ?
-            """
-            if sinceEpoch != nil { sql += " AND measured_at >= ?" }
-            sql += " GROUP BY measured_at / ? ORDER BY MAX(measured_at) ASC;"
-
-            let stmt = try db.prepare(sql: sql)
-            defer { db.finalize(stmt) }
-            try db.bindText(stmt, 1, seriesId)
-            var index: Int32 = 2
-            try db.bindInt64(stmt, index, untilEpoch); index += 1
-            if let sinceEpoch { try db.bindInt64(stmt, index, sinceEpoch); index += 1 }
-            try db.bindInt64(stmt, index, size)
-
-            return try Self.balancePoints(from: stmt, db: db)
-            #else
-            return []
-            #endif
-        }
-    }
-
-    /// Every series' points in `since ... until`, thinned the same way, keyed
-    /// by series id. One query for the popover's inline sparklines, so opening
-    /// it does not issue one read per row.
+    /// always a figure some poll received. Throws when the read stops part-way,
+    /// so a short result is a failure to read rather than an absence of
+    /// history.
     ///
-    /// `seriesIds` nil reads every series in the window.
+    /// `seriesIds` nil reads every series in the window; an empty list reads
+    /// none. The two are not the same request and must not collapse: a caller
+    /// that built its list dynamically and ended up with nothing would
+    /// otherwise be handed unrelated series' points, and pay for a full-table
+    /// scan to be handed them.
     public func fetchBalanceSeries(
         since: Date, until: Date, bucketSeconds: Int, seriesIds: [String]? = nil
     ) async throws -> [String: [BalancePoint]] {
         try await ensureOpen()
+        if let seriesIds, seriesIds.isEmpty { return [:] }
         let size = Int64(max(bucketSeconds, 1))
         let sinceEpoch = Int64(since.timeIntervalSince1970)
         let untilEpoch = Int64(until.timeIntervalSince1970)
@@ -164,9 +135,13 @@ extension QuotaHistoryStore {
                 guard status == SQLITE_ROW else {
                     throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
                 }
-                guard let idC = sqlite3_column_text(stmt, 0),
-                      let point = Self.balancePoint(measuredAtColumn: 1, valueColumn: 2, stmt: stmt)
-                else { continue }
+                guard let idC = sqlite3_column_text(stmt, 0) else {
+                    // Same rule as the value: a row that cannot be filed under
+                    // a series would otherwise shorten that series silently.
+                    throw HistoryDatabaseError.undecodableRow(
+                        column: "\(HistorySchema.balanceReadingTable).series_id", value: "NULL")
+                }
+                let point = try Self.balancePoint(measuredAtColumn: 1, valueColumn: 2, stmt: stmt)
                 result[String(cString: idC), default: []].append(point)
             }
             return result
@@ -177,27 +152,19 @@ extension QuotaHistoryStore {
     }
 
     #if canImport(SQLite3)
-    /// Rows of `(MAX(measured_at), value)` from a statement, oldest first.
-    private static func balancePoints(from stmt: OpaquePointer?, db: HistoryDatabase) throws -> [BalancePoint] {
-        var results: [BalancePoint] = []
-        while true {
-            let status = sqlite3_step(stmt)
-            if status == SQLITE_DONE { break }
-            guard status == SQLITE_ROW else {
-                throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
-            }
-            if let point = balancePoint(measuredAtColumn: 0, valueColumn: 1, stmt: stmt) {
-                results.append(point)
-            }
-        }
-        return results
-    }
-
+    /// One row's point. Throws rather than returning nil on a value it cannot
+    /// decode: a dropped row makes the series come back one point short with
+    /// nothing said, which is the "short result read as an absence of history"
+    /// every read above exists to prevent. `decimalText` only ever writes a
+    /// POSIX-parseable form, so this is a corrupt or foreign-written row.
     private static func balancePoint(
         measuredAtColumn: Int32, valueColumn: Int32, stmt: OpaquePointer?
-    ) -> BalancePoint? {
-        guard let textC = sqlite3_column_text(stmt, valueColumn),
-              let value = decimal(fromText: String(cString: textC)) else { return nil }
+    ) throws -> BalancePoint {
+        let text = sqlite3_column_text(stmt, valueColumn).map { String(cString: $0) }
+        guard let text, let value = decimal(fromText: text) else {
+            throw HistoryDatabaseError.undecodableRow(
+                column: "\(HistorySchema.balanceReadingTable).value", value: text ?? "NULL")
+        }
         let epoch = sqlite3_column_int64(stmt, measuredAtColumn)
         return BalancePoint(measuredAt: Date(timeIntervalSince1970: TimeInterval(epoch)), value: value)
     }

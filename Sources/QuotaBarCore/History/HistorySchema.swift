@@ -113,9 +113,16 @@ public enum HistorySchema {
       value         TEXT    NOT NULL,    -- the observed figure, exact decimal text
       PRIMARY KEY (series_id, measured_at)
     ) WITHOUT ROWID;
-
-    CREATE INDEX IF NOT EXISTS balance_reading_series_time ON balance_reading(series_id, measured_at);
     """
+
+    // No secondary index on `balance_reading`. The `WITHOUT ROWID` table's
+    // primary key *is* its clustering b-tree, so an index on
+    // `(series_id, measured_at)` would be a second copy of the same keys: pure
+    // dead storage and one more b-tree write on every poll. Neither read could
+    // use it either — a `series_id` prefix is served by the primary key order
+    // itself, an unfiltered `fetchBalanceSeries` has no `series_id` predicate
+    // to use it with, and the retention prune (`WHERE measured_at < ?`) cannot
+    // use a `series_id`-first key at all.
 
     /// Idempotent in-place rewrites of stored values, run on every open after
     /// the tables exist. Never a shape change and never a delete.
