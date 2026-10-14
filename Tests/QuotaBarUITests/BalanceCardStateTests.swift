@@ -13,6 +13,11 @@ import QuotaBarCore
 ///   readings is an absence, a read that failed is a failure.
 ///
 /// Both are pure and asserted here rather than only visible on screen.
+///
+/// `@MainActor` because the decisions live on `MetricDetailModalView`, a
+/// `View`, and so are main-actor isolated: the point of the suite is to assert
+/// them, not to reason about the isolation separately.
+@MainActor
 @Suite("Balance card state")
 struct BalanceCardStateTests {
 
