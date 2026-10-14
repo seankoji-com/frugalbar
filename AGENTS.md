@@ -99,6 +99,36 @@ figure: vendors meter different things over different windows. The widget's Over
 total, and a configured-but-unreadable provider keeps its tile. The widget is an
 app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
 
+**A prepaid API credit balance rides the snapshot that already read it, and is
+never a quota.** `QuotaSnapshot.apiCredits` holds `APICreditEntry` values —
+deliberately *not* snapshots — so no balance can reach `consumptionFraction`,
+the urgency bands, exhaustion sorting, `displayBars`, the advice engine, the
+history recorder or the widget's average, all of which read snapshots. That is
+the structural half of "balances stay out of quota maths". The other half is
+that the figure arrives in a response the snapshot already made (OpenAI's
+`credits` block, Anthropic's `spend`/`extra_usage`/`iguana_necktie`), so a
+provider of its own would duplicate the request and a second cache key would
+split one reading in two. An entry yields no fraction: `MetricType.credits`
+returns nil from `consumptionFraction`, because a count of credits has no cap to
+be a fraction *of*. The popover draws the entries in one card of their own
+(`APICreditSectionView`); the card is absent when nobody published one.
+
+**A unit is never converted across, and a scale is never guessed upward.**
+OpenAI's `credits.balance` is a **count of credits** — the unit its own console
+prints ("62,500 credits remaining") — so it is shown as credits and never as
+money. Anthropic's legacy `extra_usage` amounts are **minor units**, scaled by
+its own `decimal_places` and by 2 when it states none (cents is what two
+independent clients shipped against real payloads; a `$200` monthly limit read
+as `$20,000` is the failure this guards); the newer `spend` block declares its
+own `exponent` per amount and is never scaled by a default; `iguana_necktie`'s
+`*_dollars` are already dollars and are never divided. A pool with **no
+published limit** yields **no entry**: its only figure is what was *used*, and
+`MetricType.currency` has one place for a number — a balance — so printing it
+would be the wrong-label defect again (one figure under one label; OpenRouter's
+balance row sets `spent: nil` for the same reason). A `has_credits: false`, a
+disabled `is_enabled`, an unparseable figure or a missing block all yield
+nothing, never a 0.
+
 **Token totals are observations, and summing them is allowed only because tokens
 share a unit.** The Tokens layout stacks locally recorded tokens (the `activity`
 table, summed in SQL by `fetchTokenUsage`) for the providers with an adapter
@@ -223,6 +253,25 @@ spoken label says "blocked". Without a percentage the cell already says
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
+
+A row's banked reset credits draw as one `ticket` glyph per credit
+(`MetricRowPresentation.ResetCredits`), capped at `maxTickets` with an exact
+`+n` for the remainder, on a line of their own under the row. The glyph strip
+carries no accessibility label — the row is one accessibility element
+(`children: .ignore`), so a label on a child is never announced; the count is
+spoken by `combinedAccessibilityLabel` instead. A vendor that published no
+figure and a vendor that published zero both draw nothing.
+
+**One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
+and `NumberFormatter` both consult the *process* locale, so the same USD figure
+read "$179.50" on one Mac and "USD 179.50" on another — and a credit card once
+printed "USD 179.50" as its figure directly above the vendor's own note
+"$200.00 monthly limit". A balance is a fact about a vendor account, not about
+the reader, so `MoneyText` chooses the symbol deterministically (AUD → "A$",
+USD → "$", anything else stated with its code). Provider rows' balance subtitles
+and the API-credit card both go through it. `MetricRowPresentation.currency`
+stays locale-based for the inspector's wording and is a known follow-up, not a
+second rule to add new money formatting to.
 
 ## Regression tests must be shown to fail
 

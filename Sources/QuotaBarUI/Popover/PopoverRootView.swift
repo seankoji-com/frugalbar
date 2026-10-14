@@ -205,6 +205,15 @@ public struct PopoverRootView: View {
                 }
             }
 
+            // Prepaid API credit balances, in one card of their own. They are
+            // not quotas — no window, no denominator — so they are drawn apart
+            // from the vendor cards rather than inside one, and the section is
+            // simply absent when no vendor published a figure.
+            let creditEntries = store.snapshots.flatMap(\.apiCredits)
+            if !creditEntries.isEmpty {
+                APICreditSectionView(entries: creditEntries)
+            }
+
 
 
             if store.snapshots.isEmpty {

@@ -83,6 +83,195 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         }
     }
 
+    /// Anthropic's monthly **extra-usage** credit, as this endpoint publishes
+    /// it: a spend figure and the monthly limit it draws on.
+    ///
+    /// Two shapes have been seen on this endpoint, and both are decoded
+    /// leniently:
+    ///
+    /// - the older `extra_usage` block — `is_enabled`, `used_credits`,
+    ///   `monthly_limit`, `currency` — whose two amounts are in **minor units
+    ///   (cents)**, so they are scaled by `decimal_places` when the payload
+    ///   declares it and by 2 otherwise. This is the one place in this app
+    ///   where a money figure *is* divided by 100, and the only reason the
+    ///   resulting dollars can be trusted is that the payload's own unit is
+    ///   minor units: assuming the opposite would print a $20.00 monthly limit
+    ///   as $2,000.00.
+    /// - the newer `spend` block, which states its own minor unit and exponent
+    ///   per amount (`{amount_minor, currency, exponent}`), so no scale is
+    ///   assumed at all.
+    ///
+    /// An `enabled` / `is_enabled` that is not true is the vendor saying the
+    /// pool is off, which is why it yields no entry rather than a stale one.
+    /// Every figure is nil when the payload did not carry it: nothing here is
+    /// defaulted to 0.
+    public struct MoneyCredit: Sendable, Equatable {
+        public let used: Decimal
+        public let limit: Decimal?
+        public let currencyCode: String
+        /// The remaining balance, derived by subtraction *only* when both
+        /// published figures are present — the same arithmetic OpenRouter's
+        /// credit balance already rests on, and never a substitute for a
+        /// figure the vendor withheld.
+        public var remaining: Decimal? {
+            guard let limit, limit >= used else { return nil }
+            return limit - used
+        }
+    }
+
+    /// The `spend` block's per-amount shape: minor units plus the exponent that
+    /// turns them into major ones.
+    public struct SpendAmount: Decodable, Sendable, Equatable {
+        public let amountMinor: Int?
+        public let currency: String?
+        public let exponent: Int?
+
+        public init(amountMinor: Int?, currency: String?, exponent: Int?) {
+            self.amountMinor = amountMinor
+            self.currency = currency
+            self.exponent = exponent
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case currency, exponent
+            case amountMinor = "amount_minor"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: LenientKey.self)
+            amountMinor = c.lenientInt("amount_minor")
+            currency = c.lenientString("currency")
+            exponent = c.lenientInt("exponent")
+        }
+
+        /// The amount in major units, or nil when this block did not state a
+        /// scale or a value. A negative amount is not a balance either, so it
+        /// is nil rather than sign-flipped.
+        public var majorUnits: Decimal? {
+            guard let amountMinor, amountMinor >= 0, let exponent else { return nil }
+            return ClaudeOAuthUsageResponse.scaled(amountMinor, exponent: exponent)
+        }
+    }
+
+    public struct SpendBlock: Decodable, Sendable, Equatable {
+        public let enabled: Bool?
+        public let used: SpendAmount?
+        public let limit: SpendAmount?
+
+        public init(enabled: Bool?, used: SpendAmount?, limit: SpendAmount?) {
+            self.enabled = enabled
+            self.used = used
+            self.limit = limit
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: LenientKey.self)
+            enabled = c.lenientBool("enabled")
+            used = try? c.decodeIfPresent(SpendAmount.self, forKey: LenientKey(stringValue: "used"))
+            limit = try? c.decodeIfPresent(SpendAmount.self, forKey: LenientKey(stringValue: "limit"))
+        }
+    }
+
+    /// The older `extra_usage` block. Amounts are minor units (see
+    /// `MoneyCredit`).
+    public struct ExtraUsage: Decodable, Sendable, Equatable {
+        public let isEnabled: Bool?
+        public let usedCredits: Int?
+        public let monthlyLimit: Int?
+        public let currency: String?
+        public let decimalPlaces: Int?
+
+        public init(
+            isEnabled: Bool?, usedCredits: Int?, monthlyLimit: Int?,
+            currency: String?, decimalPlaces: Int?
+        ) {
+            self.isEnabled = isEnabled
+            self.usedCredits = usedCredits
+            self.monthlyLimit = monthlyLimit
+            self.currency = currency
+            self.decimalPlaces = decimalPlaces
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: LenientKey.self)
+            isEnabled = c.lenientBool("is_enabled")
+            usedCredits = c.lenientInt("used_credits")
+            monthlyLimit = c.lenientInt("monthly_limit")
+            currency = c.lenientString("currency")
+            decimalPlaces = c.lenientInt("decimal_places")
+        }
+    }
+
+    /// Anthropic's promo / cloud-session credit — the `iguana_necktie` block,
+    /// another feature codename. Its amounts are **already dollars**
+    /// (`*_dollars`), so they are never scaled; `resets_at` here is the
+    /// credit's **expiry**, not a recurring reset, which is why it is surfaced
+    /// as an expiry and never as a countdown to a refill.
+    public struct PromoCredit: Decodable, Sendable, Equatable {
+        public let limitDollars: Decimal?
+        public let usedDollars: Decimal?
+        public let remainingDollars: Decimal?
+        public let resetsAt: String?
+
+        public init(
+            limitDollars: Decimal?, usedDollars: Decimal?,
+            remainingDollars: Decimal?, resetsAt: String?
+        ) {
+            self.limitDollars = limitDollars
+            self.usedDollars = usedDollars
+            self.remainingDollars = remainingDollars
+            self.resetsAt = resetsAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: LenientKey.self)
+            limitDollars = c.lenientDecimal("limit_dollars")
+            usedDollars = c.lenientDecimal("used_dollars")
+            remainingDollars = c.lenientDecimal("remaining_dollars")
+            resetsAt = c.lenientString("resets_at")
+        }
+    }
+
+    /// Minor units → major units. `decimal_places`/`exponent` is the payload's
+    /// own statement of the scale; this never guesses one beyond the caller's
+    /// documented default.
+    static func scaled(_ minorUnits: Int, exponent: Int) -> Decimal? {
+        guard (0...9).contains(exponent) else { return nil }
+        var result = Decimal(minorUnits)
+        for _ in 0..<exponent { result /= 10 }
+        return result
+    }
+
+    /// Anthropic's monthly API credit, from whichever block this endpoint
+    /// served. Nil when neither carried a usable figure, when the pool is off,
+    /// or when the payload stated no scale to read its minor units in.
+    public var monthlyCredit: MoneyCredit? {
+        if let spend = spendBlock {
+            // The newer block declares its own exponent per amount, so it needs
+            // no default scale.
+            guard spend.enabled == true,
+                  let used = spend.used?.majorUnits,
+                  let code = spend.limit?.currency ?? spend.used?.currency
+            else { return nil }
+            return MoneyCredit(used: used, limit: spend.limit?.majorUnits, currencyCode: code)
+        }
+        if let extra = extraUsage {
+            guard extra.isEnabled == true,
+                  let usedMinor = extra.usedCredits,
+                  usedMinor >= 0
+            else { return nil }
+            // 2 (cents) unless the payload says otherwise — see `MoneyCredit`.
+            let exponent = extra.decimalPlaces ?? 2
+            guard let used = Self.scaled(usedMinor, exponent: exponent) else { return nil }
+            let limit = extra.monthlyLimit.flatMap { $0 >= 0 ? Self.scaled($0, exponent: exponent) : nil }
+            return MoneyCredit(
+                used: used, limit: limit,
+                currencyCode: (extra.currency?.trimmed).flatMap { $0.isEmpty ? nil : $0 } ?? "USD"
+            )
+        }
+        return nil
+    }
+
     /// One banked usage-limit reset Anthropic has granted the account.
     ///
     /// Served under the `cedar_ember` key — an Anthropic feature codename,
@@ -186,19 +375,32 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
     public let sevenDaySonnet: Window?
     /// Banked reset grants, when the surface is served them. See `ResetGrant`.
     public let resetGrants: ResetGrants?
+    /// The pay-as-you-go credit pool, in whichever of its two shapes this
+    /// endpoint served. Both decoded leniently; `monthlyCredit` picks between
+    /// them. Nil is "not published", never "zero".
+    public let spendBlock: SpendBlock?
+    public let extraUsage: ExtraUsage?
+    /// Anthropic's promo / cloud-session credit. See `PromoCredit`.
+    public let promoCredit: PromoCredit?
 
     public init(
         fiveHour: Window? = nil,
         sevenDay: Window? = nil,
         sevenDayOpus: Window? = nil,
         sevenDaySonnet: Window? = nil,
-        resetGrants: ResetGrants? = nil
+        resetGrants: ResetGrants? = nil,
+        spendBlock: SpendBlock? = nil,
+        extraUsage: ExtraUsage? = nil,
+        promoCredit: PromoCredit? = nil
     ) {
         self.fiveHour = fiveHour
         self.sevenDay = sevenDay
         self.sevenDayOpus = sevenDayOpus
         self.sevenDaySonnet = sevenDaySonnet
         self.resetGrants = resetGrants
+        self.spendBlock = spendBlock
+        self.extraUsage = extraUsage
+        self.promoCredit = promoCredit
     }
 
     public init(from decoder: Decoder) throws {
@@ -211,6 +413,12 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         sevenDayOpus = try? container.decodeIfPresent(Window.self, forKey: .sevenDayOpus)
         sevenDaySonnet = try? container.decodeIfPresent(Window.self, forKey: .sevenDaySonnet)
         resetGrants = try? container.decodeIfPresent(ResetGrants.self, forKey: .resetGrants)
+        // Each money block is decoded independently and leniently too: a
+        // reshaped `spend` must not cost the row its reset grants, and a
+        // credit block is one figure among several rather than the reading.
+        spendBlock = try? container.decodeIfPresent(SpendBlock.self, forKey: .spendBlock)
+        extraUsage = try? container.decodeIfPresent(ExtraUsage.self, forKey: .extraUsage)
+        promoCredit = try? container.decodeIfPresent(PromoCredit.self, forKey: .promoCredit)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -219,6 +427,9 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         case sevenDayOpus = "seven_day_opus"
         case sevenDaySonnet = "seven_day_sonnet"
         case resetGrants = "cedar_ember"
+        case spendBlock = "spend"
+        case extraUsage = "extra_usage"
+        case promoCredit = "iguana_necktie"
     }
 }
 

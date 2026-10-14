@@ -144,11 +144,7 @@ private func withStubbedHTTP<T: Sendable>(
     let session = URLProtocolStub.makeSession()
     defer { session.finishTasksAndInvalidate() }
     return try await QuotaHTTP.$session.withValue(session) {
-        // A fresh cache instance per scope, exactly like the session above,
-        // so this test can never read back another test's memoised badges.
-        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
-            try await operation()
-        }
+        try await operation()
     }
 }
 
@@ -169,8 +165,9 @@ struct ProviderHTTPTests {
         _ = try await withStubbedHTTP({ _ in canned(body: #"{"data":{"usage":1,"limit":10}}"#) }) {
             try await provider.fetchSnapshot()
         }
-        // /auth/key, /credits, and the key-less /models catalog call.
-        #expect(URLProtocolStub.requestCount == 3)
+        // /auth/key and /credits. The key-less /models catalog call is gone
+        // with the model badges it fed.
+        #expect(URLProtocolStub.requestCount == 2)
     }
 
     // MARK: OpenRouter
@@ -363,11 +360,16 @@ struct ProviderHTTPTests {
             Issue.record("expected account credit metric")
             return
         }
-        // /auth/key, /credits, and the key-less /models catalog call.
-        #expect(URLProtocolStub.requestCount == 3)
+        // /auth/key and /credits. The key-less /models catalog call is gone
+        // with the model badges it fed.
+        #expect(URLProtocolStub.requestCount == 2)
         #expect(balance == Decimal(74.75))
+        // One figure, one label: the balance. `spent` is nil so the chip can
+        // never print the account's lifetime usage under a "spent" label while
+        // the same row's subtitle shows the balance — the shape DeepSeek's
+        // balance-only row already has.
         #expect(limit == nil)
-        #expect(spent == Decimal(25.75))
+        #expect(spent == nil)
         #expect(code == "USD")
         #expect(snap.badgeText == "$74.75 credit")
     }
@@ -1429,5 +1431,214 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.requestCount == 3)
         #expect(snap.status == .measured(.warning))
         #expect(snap.row1?.primaryFraction == 0.85)
+    }
+
+    // MARK: - Prepaid API credits
+
+/// The prepaid API credit balances the vendors publish inside the same usage
+/// payload as the quota. They ride the snapshot as entries of their own and
+/// must never be folded into the quota, the bars, or the urgency bands.
+///
+/// The unit is the load-bearing part: Anthropic's legacy `extra_usage` amounts
+/// are **minor units** and OpenAI's `credits.balance` is a **count of credits**.
+/// Getting either scale wrong prints a number nobody measured — a $20 monthly
+/// limit as $2,000, or 62,500 credits as $62,500.
+
+    private func claudeCredits(_ extra: String) async throws -> QuotaSnapshot {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},\#(extra)}"#
+        return try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+    }
+
+    private func openAI(credits: String, resetCredits: String = "") async throws -> QuotaSnapshot {
+        let comma = credits.isEmpty || resetCredits.isEmpty ? "" : ","
+        let body = #"{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":10}},"credits":\#(credits)\#(comma)\#(resetCredits)}"#
+        return try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await OpenAIQuotaProvider(accessToken: "t", accountID: "a").fetchSnapshot()
+        }
+    }
+
+    // MARK: Anthropic
+
+    /// The older `extra_usage` block: `used_credits` and `monthly_limit` are
+    /// minor units with no `decimal_places` stated, so the documented default
+    /// of cents applies. 2050 minor units is $20.50, not $2,050.
+    @Test("extra_usage minor units are scaled to dollars")
+    func extraUsageIsMinorUnits() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+
+        #expect(snap.apiCredits.count == 1)
+        let entry = try #require(snap.apiCredits.first)
+        #expect(entry.id == "claude.extra-usage")
+        #expect(entry.vendorId == .claude)
+        #expect(entry.currencyBasis == .prepaidCredit)
+        #expect(entry.detail == "$200.00 monthly limit")
+        guard case .currency(let balance, let limit, let spent, let code) = entry.metric else {
+            Issue.record("expected a currency entry, got \(entry.metric)")
+            return
+        }
+        #expect(balance == Decimal(string: "179.50"))
+        #expect(limit == Decimal(string: "200.00"))
+        // Not `used`: a spend figure under a balance label is the wrong-label
+        // defect this codebase already shipped once.
+        #expect(spent == nil)
+        #expect(code == "USD")
+    }
+
+    /// When the payload states its own scale, that scale wins over the default.
+    @Test("decimal_places overrides the cents default")
+    func decimalPlacesWins() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":1234,"monthly_limit":5000,"currency":"USD","decimal_places":3}"#)
+        let entry = try #require(snap.apiCredits.first)
+        guard case .currency(let balance, let limit, _, _) = entry.metric else {
+            Issue.record("expected a currency entry")
+            return
+        }
+        #expect(balance == Decimal(string: "3.766"))
+        #expect(limit == Decimal(string: "5.000"))
+    }
+
+    /// The newer `spend` block states its own exponent per amount, so nothing
+    /// is assumed at all.
+    @Test("the spend block's own exponent is honoured")
+    func spendBlockExponent() async throws {
+        let snap = try await claudeCredits(#""spend":{"enabled":true,"used":{"amount_minor":541,"currency":"USD","exponent":2},"limit":{"amount_minor":2000,"currency":"USD","exponent":2}}"#)
+        let entry = try #require(snap.apiCredits.first)
+        guard case .currency(let balance, let limit, _, let code) = entry.metric else {
+            Issue.record("expected a currency entry")
+            return
+        }
+        #expect(balance == Decimal(string: "14.59"))
+        #expect(limit == Decimal(string: "20.00"))
+        #expect(code == "USD")
+    }
+
+    /// A pool with no published limit has only a *used* figure, and the metric
+    /// has one place for a number: a balance. Printing used under a balance
+    /// label would assert a fact nobody measured, so nothing is drawn.
+    @Test("an uncapped extra-usage pool yields no entry")
+    func uncappedPoolYieldsNothing() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050}"#)
+        #expect(snap.apiCredits.isEmpty)
+    }
+
+    /// A pool the vendor turned off is not a stale figure.
+    @Test("a disabled extra-usage pool yields no entry")
+    func disabledPoolYieldsNothing() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":false,"used_credits":2050,"monthly_limit":20000}"#)
+        #expect(snap.apiCredits.isEmpty)
+    }
+
+    /// `iguana_necktie` states its amounts in dollars already, so they are
+    /// never scaled — and its `resets_at` is an *expiry*, said as an absolute
+    /// date so it cannot read as a countdown to a refill.
+    @Test("promo credit dollars are taken verbatim, with the expiry as a date")
+    func promoCreditIsAlreadyDollars() async throws {
+        let snap = try await claudeCredits(#""iguana_necktie":{"limit_dollars":200,"used_dollars":50,"remaining_dollars":150,"resets_at":"2026-11-15T00:00:00+00:00"}"#)
+        let entry = try #require(snap.apiCredits.first { $0.id == "claude.promo-credit" })
+        #expect(entry.label == "Promo credit")
+        #expect(entry.detail == "Expires 15 Nov 2026")
+        guard case .currency(let balance, let limit, let spent, _) = entry.metric else {
+            Issue.record("expected a currency entry")
+            return
+        }
+        #expect(balance == Decimal(150))
+        #expect(limit == Decimal(200))
+        #expect(spent == nil)
+    }
+
+    /// Both pools at once are two entries, never one merged figure: they are
+    /// different money with different expiry rules.
+    @Test("two pools produce two entries")
+    func twoPoolsTwoEntries() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"},"iguana_necktie":{"remaining_dollars":150}"#)
+        #expect(snap.apiCredits.map(\.id) == ["claude.extra-usage", "claude.promo-credit"])
+    }
+
+    /// Credits never become quota: no window, no fraction, no reset.
+    @Test("an Anthropic credit entry leaves the quota untouched")
+    func creditLeavesQuotaAlone() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row1?.primaryFraction == 0.10)
+        #expect(snap.resetsAt == nil)
+        #expect(snap.status == .measured(.none))
+    }
+
+    // MARK: OpenAI
+
+    /// `credits.balance` is a count of API credits — the unit OpenAI's own
+    /// console prints — so it is surfaced as a count and never as money.
+    @Test("an OpenAI credit balance is a count, not dollars")
+    func openAIBalanceIsACount() async throws {
+        let snap = try await openAI(credits: #"{"has_credits":true,"unlimited":false,"balance":"62500"}"#)
+        #expect(snap.apiCredits.count == 1)
+        let entry = try #require(snap.apiCredits.first)
+        #expect(entry.id == "openai.api-credits")
+        #expect(entry.currencyBasis == nil)
+        guard case .credits(let remaining, let unit) = entry.metric else {
+            Issue.record("expected a credits entry, got \(entry.metric)")
+            return
+        }
+        #expect(remaining == 62_500)
+        #expect(unit == "credits")
+    }
+
+    @Test("an unlimited credit pool carries no count")
+    func openAIUnlimitedHasNoCount() async throws {
+        let snap = try await openAI(credits: #"{"has_credits":true,"unlimited":true,"balance":"62500"}"#)
+        let entry = try #require(snap.apiCredits.first)
+        guard case .credits(let remaining, _) = entry.metric else {
+            Issue.record("expected a credits entry")
+            return
+        }
+        // The vendor said the account is not metered by this figure. A count
+        // there would have to be invented, so the balance is not looked at.
+        #expect(remaining == nil)
+    }
+
+    @Test("an account holding no credits publishes no entry")
+    func openAICreditlessAccountIsSilent() async throws {
+        let snap = try await openAI(credits: #"{"has_credits":false,"unlimited":false,"balance":"0"}"#)
+        #expect(snap.apiCredits.isEmpty)
+    }
+
+    @Test("a missing or unparseable credit balance publishes no entry")
+    func openAIUnreadableBalanceIsSilent() async throws {
+        let missing = try await openAI(credits: #"{"has_credits":true,"unlimited":false}"#)
+        #expect(missing.apiCredits.isEmpty)
+
+        let fractional = try await openAI(credits: #"{"has_credits":true,"balance":"1234.5"}"#)
+        #expect(fractional.apiCredits.isEmpty)
+    }
+
+    /// The credits block rides the same fetch as the quota, so it costs no
+    /// extra request — the whole reason it is an entry rather than a second
+    /// provider.
+    @Test("the credit entry costs no extra request")
+    func creditsRideTheSameFetch() async throws {
+        _ = try await openAI(credits: #"{"has_credits":true,"balance":"250"}"#)
+        #expect(URLProtocolStub.requestCount == 1)
+    }
+
+    // MARK: The rebuild paths
+
+    /// `resetsAt` is a `let`, so attaching a hand-entered cycle row rebuilds
+    /// the snapshot. The initializer takes no credit entries, so a rebuild that
+    /// forgot to copy them would make the credits blink out of the popover
+    /// whenever a cycle row is attached.
+    @Test("a rebuild for a hand-entered cycle keeps the credit entries")
+    func rebuildKeepsCredits() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        #expect(!snap.apiCredits.isEmpty)
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let attached = QuotaManager.attachingCycleRow(
+            to: snap, cycle: SubscriptionCycle(anchorDate: now.addingTimeInterval(-86_400 * 4)), now: now)
+        #expect(!attached.apiCredits.isEmpty)
+
+        let stripped = QuotaManager.removingStaleCycleRow(from: attached)
+        #expect(stripped.apiCredits == snap.apiCredits)
     }
 }

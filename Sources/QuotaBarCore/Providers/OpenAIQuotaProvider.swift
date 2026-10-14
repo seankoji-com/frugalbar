@@ -56,11 +56,10 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         /// Codex's credit balance block. Every field optional and decoded
         /// leniently: anything unrecognised is nil.
         ///
-        /// `balance` is a string of *unverified unit* — a live Pro account
-        /// reported "62500", which is not plausibly dollars. It is decoded so
-        /// the payload round-trips, but must never be displayed as money (or
-        /// at all) until the unit is known: a figure under the wrong label is
-        /// the same defect as an invented one.
+        /// `balance` is a string of **API credits**, which is the unit OpenAI's
+        /// own console displays it in ("62,500 credits remaining · Current
+        /// balance") — not dollars, and not cents. It is therefore surfaced as
+        /// a credit count (`apiCredits(from:)`) and never as money.
         public struct Credits: Decodable, Sendable, Equatable {
             public let has_credits: Bool?
             public let unlimited: Bool?
@@ -259,7 +258,64 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         )
         snapshot.resetCreditsAvailable = resetCredits
         snapshot.resetCreditsApplicable = applicableCredits
+        snapshot.apiCredits = Self.apiCredits(from: response.credits)
         return snapshot
+    }
+
+    /// The API credit balance as its own entry, or none at all.
+    ///
+    /// `credits.balance` arrives as a **count of credits**, which is the unit
+    /// OpenAI's own console prints it in ("62,500 credits remaining · Current
+    /// balance"). The comment on `Response.Credits` used to refuse to show it
+    /// at all because the unit was unverified; the unit is now known from the
+    /// vendor's own display, so it is shown in that unit and only that unit —
+    /// never reformatted as money, never divided by 100, never put in a
+    /// dollar-denominated `CurrencyBasis`.
+    ///
+    /// Three ways this yields no entry, each an absence rather than a figure:
+    /// the payload carried no `credits` block, it said `has_credits: false`
+    /// (the account holds none), or the balance was missing/unparseable. A
+    /// wrong number is worse than no number: `0` is never substituted.
+    /// `unlimited: true` is the vendor saying the account is not metered by
+    /// this figure, so it is *said*, not counted — a count there would have to
+    /// be invented.
+    static func apiCredits(from credits: Response.Credits?) -> [APICreditEntry] {
+        guard let credits else { return [] }
+        if credits.unlimited == true {
+            return [APICreditEntry(
+                id: "openai.api-credits",
+                vendorId: .openai,
+                label: "API credits",
+                metric: .credits(remaining: nil, unitName: "credits"),
+                source: "Codex usage payload · credits.unlimited"
+            )]
+        }
+        // An explicit "no credits" is the vendor stating the account is empty
+        // of them; it is not a figure either, so nothing is drawn.
+        guard credits.has_credits != false else { return [] }
+        guard let count = creditCount(credits.balance) else { return [] }
+        return [APICreditEntry(
+            id: "openai.api-credits",
+            vendorId: .openai,
+            label: "API credits",
+            metric: .credits(remaining: count, unitName: "credits"),
+            source: "Codex usage payload · credits.balance"
+        )]
+    }
+
+    /// A credit count off the wire, or nil. The payload sends it as a string;
+    /// a bare number is accepted too, and a value with a fractional part that
+    /// is not integral is not a count of anything, so it is nil rather than
+    /// rounded into one.
+    static func creditCount(_ raw: String?) -> Int? {
+        guard let raw else { return nil }
+        let text = raw.trimmed
+        if let count = Int(text) { return count >= 0 ? count : nil }
+        if let value = Double(text), value.isFinite, value.rounded() == value,
+           value >= 0, value < Double(Int32.max) {
+            return Int(value)
+        }
+        return nil
     }
 
     /// The row's note. Mentions banked reset credits only when OpenAI
@@ -382,6 +438,18 @@ extension KeyedDecodingContainer where Key == LenientKey {
         let key = LenientKey(stringValue: name)
         if let value = try? decodeIfPresent(String.self, forKey: key) { return value }
         if let value = try? decodeIfPresent(Decimal.self, forKey: key) { return "\(value)" }
+        return nil
+    }
+
+    /// A money amount, from a JSON number or a numeric string. Anything else
+    /// — including a non-finite value — is "not reported", never 0.
+    func lenientDecimal(_ name: String) -> Decimal? {
+        let key = LenientKey(stringValue: name)
+        if let value = try? decodeIfPresent(Decimal.self, forKey: key) { return value }
+        if let text = try? decodeIfPresent(String.self, forKey: key) {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            return Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX"))
+        }
         return nil
     }
 }

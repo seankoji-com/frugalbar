@@ -282,8 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // same unbundled-executable constraint that rules out
         // UNUserNotificationCenter above. Non-zero exit status is captured
         // via `terminationHandler` (off the caller's thread, so this never
-        // blocks the poll) and its stderr logged, mirroring the
-        // failure-logging pattern in OpenRouterProvider.fetchModelBadges().
+        // blocks the poll) and its stderr logged — the pattern
+        // `GitHubRateLimitFetcher` uses for a subprocess whose failure must not
+        // be swallowed either.
         task.terminationHandler = { process in
             guard process.terminationStatus != 0 else { return }
             let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()

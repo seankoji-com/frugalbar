@@ -43,30 +43,6 @@ struct MetricRowView: View {
         p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
 
-    /// OpenRouter's own catalog badges (free-tier + cheap large-context
-    /// model). Reached through the row's own leading column rather than
-    /// either of the three layout branches below (bars / spend windows /
-    /// no-reading chip fallback) so the badges render identically whichever
-    /// of those a given snapshot lands in — including the chip-fallback
-    /// branch a no-key OpenRouter reading always takes.
-    private var hasOpenRouterBadges: Bool {
-        snapshot.vendorId == .openrouter &&
-        (snapshot.freeTierModelBadge != nil || snapshot.cheapestLargeContextModelBadge != nil)
-    }
-
-    /// A catalog failure surfaces a muted placeholder instead of silently
-    /// omitting the badge row. Deliberately gated on *no badges being present*:
-    /// `openRouterCatalogUnavailable` means "the catalog could not be read at
-    /// all this poll", so if badges did come through the failure is moot and
-    /// the real badges win. Distinct from a genuine zero-match (`failed ==
-    /// false`, no badges), which is a real "nothing qualified" answer and
-    /// draws nothing.
-    private var showOpenRouterCatalogPlaceholder: Bool {
-        snapshot.vendorId == .openrouter &&
-        snapshot.openRouterCatalogUnavailable == true &&
-        !hasOpenRouterBadges
-    }
-
     @ViewBuilder
     var body: some View {
         if let onSelect {
@@ -106,10 +82,8 @@ struct MetricRowView: View {
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
-            if hasOpenRouterBadges {
-                openRouterBadgesRow
-            } else if showOpenRouterCatalogPlaceholder {
-                openRouterCatalogPlaceholderRow
+            if let credits = p.resetCredits {
+                resetCreditRow(credits)
             }
         }
         .padding(.vertical, 8)
@@ -140,11 +114,11 @@ struct MetricRowView: View {
 
     /// The row collapses into a single accessibility element via
     /// `.accessibilityElement(children: .ignore)` above, which means any
-    /// `.accessibilityLabel` set on a child (the badge pills below) is never
-    /// reached by VoiceOver — only this one label is announced. The badges'
-    /// descriptions are folded in here rather than left on the pills, where
-    /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
-    /// styling alone is not an accessible status channel).
+    /// `.accessibilityLabel` set on a child (the reset-credit tickets and the
+    /// stale note below) is never reached by VoiceOver — only this one label is
+    /// announced. The credits' count is folded in here rather than left on the
+    /// glyph strip, where a shape channel alone would silently be the only
+    /// carrier (AGENTS.md, WCAG 1.4.1).
     private func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
@@ -160,16 +134,8 @@ struct MetricRowView: View {
         if let forecastText = forecastText(now: grid.now) {
             parts.append(forecastText)
         }
-        if let free = snapshot.freeTierModelBadge {
-            parts.append("Free tier model: \(free)")
-        }
-        if let cheap = snapshot.cheapestLargeContextModelBadge {
-            parts.append("Cheapest model with 1 million or more context: \(cheap)")
-        }
-        if showOpenRouterCatalogPlaceholder {
-            // Mirror how the badges are folded in: the placeholder is not a
-            // pill with its own reachable label, so it must be spoken here.
-            parts.append(catalogUnavailableText)
+        if let credits = presentation.resetCredits {
+            parts.append(credits.spoken)
         }
         return parts.joined(separator: ". ")
     }
@@ -196,55 +162,31 @@ struct MetricRowView: View {
         return false
     }
 
-    /// One badge per line, each free to use the full card width.
+    /// Banked reset credits the vendor granted, one ticket glyph each, capped
+    /// at `ResetCredits.maxTickets` with a "+n" for the remainder — so a large
+    /// grant still states its exact count instead of running off the row.
     ///
-    /// Side by side they got half the row each and truncated mid-model-name
-    /// ("Google: Lyria…", "DeepSeek: D…"), which is the half that carries the
-    /// information. A second line costs less than a name nobody can read.
-    ///
-    /// The pills themselves carry no accessibility label: the parent row
-    /// ignores child accessibility elements entirely, so any label set here
-    /// would be silently discarded. `combinedAccessibilityLabel` above is
-    /// where the badge text actually reaches VoiceOver.
-    private var openRouterBadgesRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let free = snapshot.freeTierModelBadge {
-                HStack(spacing: 0) {
-                    BadgePillView(text: free)
-                    Spacer(minLength: 0)
-                }
+    /// Its own line under the row, like the non-window pools above it: a reset
+    /// credit is not a window and has no bar, and the row's 332pt budget has no
+    /// column left to put it in. Carries no accessibility label of its own —
+    /// the parent row ignores child elements, so the count is spoken by
+    /// `combinedAccessibilityLabel`.
+    private func resetCreditRow(_ credits: MetricRowPresentation.ResetCredits) -> some View {
+        HStack(spacing: 3) {
+            Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
+            ForEach(0..<credits.tickets, id: \.self) { _ in
+                Image(systemName: "ticket")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.onSurface)
             }
-            if let cheap = snapshot.cheapestLargeContextModelBadge {
-                HStack(spacing: 0) {
-                    BadgePillView(text: cheap, tint: Theme.secondary)
-                    Spacer(minLength: 0)
-                }
+            if credits.overflow > 0 {
+                Text("+\(credits.overflow)")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
             }
-        }
-    }
-
-    /// Muted placeholder shown when OpenRouter's catalog could not be read at
-    /// all this poll. Deliberately a faint text line, not a filled pill: a
-    /// real badge would read as a real model ranking, and this is the honest
-    /// absence of one. Copy frames it as transient/harmless (it's a
-    /// supplementary nicety, not the whole row failing) and the face is the
-    /// subtitle — the same tier of secondary text as the plan/reset line, not
-    /// the monospaced two-character token face. Spoken via
-    /// `combinedAccessibilityLabel`, never a colour-only channel (WCAG 1.4.1).
-    private var openRouterCatalogPlaceholderRow: some View {
-        HStack(spacing: 0) {
-            Text(catalogUnavailableText)
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
-                .lineLimit(1)
-                .truncationMode(.tail)
             Spacer(minLength: 0)
         }
-    }
-
-    /// The spoken and visible wording for a catalog that could not be read.
-    private var catalogUnavailableText: String {
-        "Model info unavailable — will retry"
+        .accessibilityHidden(true)
     }
 
     /// Under the row when this poll could not read the provider and the figures
@@ -314,7 +256,7 @@ struct MetricRowView: View {
                     // Set as a figure, not as a second title. Two 17pt bolds
                     // stacked made this the heaviest row in the popover for no
                     // reason other than that it happens to hold money.
-                    Text(formatCurrency(balance, code: code))
+                    Text(MoneyText.format(balance, code: code))
                         .font(Theme.Typography.numeric)
                         .tracking(Theme.Tracking.numeric)
                         .foregroundStyle(snapshot.status.urgency == .none
@@ -392,14 +334,6 @@ struct MetricRowView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             }
-        } else if let spend = grid.spend[column] {
-            // Spend per window. Deliberately not a bar: spend has no cap to
-            // measure against, so drawing one would invent a denominator.
-            Text(spend.amount.map { formatCurrency($0, code: spend.currencyCode) } ?? "—")
-                .font(Theme.Typography.chip)
-                .foregroundStyle(Theme.onSurface)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
         } else {
             // A window this vendor does not publish: a faint dash keeps the
             // columns aligned. Not a track, which would read as 0% used.
@@ -416,17 +350,6 @@ struct MetricRowView: View {
         HStack(spacing: Theme.rowSpacing) {
             Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
             DualBarProgressView(metrics: bar)
-        }
-    }
-
-    private func formatCurrency(_ value: Decimal, code: String) -> String {
-        let d = NSDecimalNumber(decimal: value).doubleValue
-        if code == "AUD" {
-            return String(format: "A$%.2f", d)
-        } else if code == "USD" {
-            return String(format: "$%.2f", d)
-        } else {
-            return String(format: "%.2f %@", d, code)
         }
     }
 }
