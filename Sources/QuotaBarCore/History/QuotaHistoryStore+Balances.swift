@@ -28,20 +28,24 @@ extension QuotaHistoryStore {
     ///
     /// A snapshot contributes its own metric's figure when that figure is a
     /// balance (`BalanceSeries.of`), and one row per prepaid credit entry it
-    /// carries. A poll that did not measure, a metric with no balance, or a
-    /// cumulative-spend figure all contribute nothing — never a 0 standing in
-    /// for a figure nobody published.
+    /// carries — but only when the poll actually read the vendor
+    /// (`BalanceSeries.isCurrent`). A poll that did not measure, a poll that
+    /// failed and left the previous figures in place, a metric with no balance,
+    /// and a cumulative-spend figure all contribute nothing: never a 0 standing
+    /// in for a figure nobody published, and never a carried-over figure
+    /// re-stamped as this poll's reading.
     static func balanceRows(from snapshots: [QuotaSnapshot], at timestamp: Int64) -> [BalanceRowToWrite] {
         var rows: [BalanceRowToWrite] = []
         for snapshot in snapshots {
+            guard BalanceSeries.isCurrent(snapshot) else { continue }
             if let series = BalanceSeries.of(snapshot),
                let value = BalanceSeries.value(of: snapshot.metric) {
                 rows.append(row(series, value: value, at: timestamp))
             }
             // An entry rides the fetch the snapshot already made, so the
-            // snapshot's own confidence is the entry's: a poll that did not
-            // measure published no figure to record.
-            guard snapshot.status.confidence == .measured else { continue }
+            // snapshot's own freshness is the entry's too: a poll that failed
+            // published no figure to record, and the retained copy's entries are
+            // the previous poll's.
             for entry in snapshot.apiCredits {
                 guard let series = BalanceSeries.of(entry),
                       let value = BalanceSeries.value(of: entry.metric) else { continue }

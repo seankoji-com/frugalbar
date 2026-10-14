@@ -60,11 +60,14 @@ public enum BalanceSeries {
     }
 
     /// The series a snapshot's own metric contributes, or nil when that figure
-    /// is not a balance: a lifetime-spend total is spend, not a balance, and an
-    /// unread poll has no figure to record at all.
+    /// is not a balance.
+    ///
+    /// This is *identity* — which line the figure belongs to — not freshness.
+    /// It deliberately says nothing about whether the figure is this poll's
+    /// reading: a stale snapshot keeps drawing the trend it already had, and
+    /// `isCurrent` is the separate test the recorder applies before writing.
     public static func of(_ snapshot: QuotaSnapshot) -> Series? {
-        guard snapshot.status.confidence == .measured else { return nil }
-        return series(
+        series(
             source: snapshot.id,
             vendor: snapshot.vendorId.rawValue,
             metric: snapshot.metric,
@@ -113,6 +116,22 @@ public enum BalanceSeries {
     /// The series id for `source`'s figure in `unit`.
     public static func id(source: String, unit: Unit) -> String {
         "\(source)|\(unit.storageKey)"
+    }
+
+    /// Whether a snapshot's figures are *this* poll's reading.
+    ///
+    /// A poll that did not measure published nothing. So did a poll that failed
+    /// and left the previous figures in place: such a snapshot keeps
+    /// `confidence == .measured` — the last known pressure must still drive the
+    /// menu bar icon — and marks itself with `StaleReading` instead. Recording a
+    /// carried-over balance under the current timestamp would be a reading from
+    /// silence, which is the one thing a balance series must never hold.
+    ///
+    /// Reading history for such a snapshot is still right, so this is applied by
+    /// the recorder, not by `of(_:)`: the row keeps drawing the trend it already
+    /// had, and simply gets no new point for a poll that failed.
+    public static func isCurrent(_ snapshot: QuotaSnapshot) -> Bool {
+        snapshot.status.confidence == .measured && snapshot.staleReading == nil
     }
 
     /// Every series id a batch of snapshots contributes — each snapshot's own

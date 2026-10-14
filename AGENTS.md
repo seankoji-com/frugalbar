@@ -104,6 +104,16 @@ excluded outright because a cumulative spend total charted under a balance
 heading asserts the wrong thing. A pool the vendor declares unlimited
 (`.credits(remaining: nil)`) has no figure to chart either.
 
+That freshness test is `BalanceSeries.isCurrent`, and it must ask about
+`staleReading` as well as `confidence`. A failed poll keeps the previous
+figures and keeps `confidence == .measured` — deliberately, so the last known
+pressure still drives the menu bar icon — so confidence alone calls a
+carried-over figure this poll's reading, and an outage lands in history as a
+fresh balance. `BalanceSeries.of(_:)` is the *identity* of a series and says
+nothing about freshness: a stale snapshot must still name its series, because
+the row keeps drawing the trend it already had and simply gains no new point.
+Gating the read instead of the write makes an outage erase the user's history.
+
 The popover's inline strip and the inspector's balance card both draw from
 `BalanceSparklinePresentation.make`, which returns nil below two readings — one
 observation is not a trend — and centres a flat series rather than pinning it to

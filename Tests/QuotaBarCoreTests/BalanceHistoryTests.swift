@@ -67,6 +67,50 @@ struct BalanceHistoryTests {
         #expect(QuotaHistoryStore.decimal(fromText: "not a number") == nil)
     }
 
+    /// A poll that failed leaves the previous figures in place, marked with
+    /// `StaleReading` — and keeps `confidence == .measured`, because the last
+    /// known pressure must still drive the menu bar icon. Recording those
+    /// carried-over figures under the current timestamp would be a reading from
+    /// silence: an outage would look like a fresh balance in history.
+    @Test("a stale snapshot records no balance, and no carried-over credit either")
+    func staleSnapshotRecordsNothing() async throws {
+        let store = makeStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var snap = money("openrouter", balance: "179.50")
+        snap.apiCredits = [APICreditEntry(
+            id: "openrouter.promo", vendorId: .openrouter, label: "Promo credit",
+            metric: .currency(balance: 25, limit: nil, spent: nil, currencyCode: "USD"),
+            currencyBasis: .prepaidCredit)]
+        snap.staleReading = StaleReading(reason: .offline, at: now)
+        try await store.record([snap], now: now)
+
+        let all = try await store.fetchBalanceSeries(
+            since: now.addingTimeInterval(-1), until: now, bucketSeconds: 3600)
+        #expect(all.isEmpty)
+    }
+
+    /// The freshness test gates *writing*, not reading: during an outage the row
+    /// must keep drawing the trend it already had, so the series is still named
+    /// for the visible row and its history is still read.
+    @Test("a stale snapshot still names its series, so its history is still read")
+    func staleSnapshotKeepsItsSeriesIdentity() async throws {
+        let store = makeStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await store.record([money("openrouter", balance: "179.50")], now: now)
+
+        var stale = money("openrouter", balance: "179.50")
+        stale.staleReading = StaleReading(reason: .offline, at: now.addingTimeInterval(3600))
+        try await store.record([stale], now: now.addingTimeInterval(3600))
+
+        let seriesID = BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD"))
+        #expect(BalanceSeries.seriesIDs(in: [stale]) == [seriesID])
+        let points = try await store.fetchBalancePoints(
+            seriesId: seriesID, since: nil, until: now.addingTimeInterval(7200), bucketSeconds: 3600)
+        // The one real reading, and no invented second point for the failed poll.
+        #expect(points.count == 1)
+        #expect(points.first?.value == Decimal(string: "179.50"))
+    }
+
     /// A balance and a reading come from one poll and one call, so the two
     /// tables never disagree about which poll they hold.
     @Test("one record call writes both the poll's reading and its balance")
