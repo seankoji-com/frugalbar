@@ -121,13 +121,20 @@ its own `decimal_places` and by 2 when it states none (cents is what two
 independent clients shipped against real payloads; a `$200` monthly limit read
 as `$20,000` is the failure this guards); the newer `spend` block declares its
 own `exponent` per amount and is never scaled by a default; `iguana_necktie`'s
-`*_dollars` are already dollars and are never divided. A pool with **no
-published limit** yields **no entry**: its only figure is what was *used*, and
-`MetricType.currency` has one place for a number — a balance — so printing it
-would be the wrong-label defect again (one figure under one label; OpenRouter's
-balance row sets `spent: nil` for the same reason). A `has_credits: false`, a
+`*_dollars` are already dollars and are never divided. A pool that publishes
+**no limit and no balance** yields **no entry**: its only figure is what was
+*used*, and `MetricType.currency` has one place for a number — a balance — so
+printing it would be the wrong-label defect again (one figure under one label;
+OpenRouter's balance row sets `spent: nil` for the same reason). A published
+*balance* on its own is enough, which is how Anthropic's promo credit is drawn
+from `remaining_dollars` with no `limit_dollars`, and a pool that did publish a
+limit is drawn even with nothing left in it: `remaining` is nil exactly when
+`used` has passed `limit`, and the entry reports zero rather than vanishing,
+floored the same way OpenRouter's credit subtraction is (`max(published −
+used, 0)`) because a balance has no negative form. A `has_credits: false`, a
 disabled `is_enabled`, an unparseable figure or a missing block all yield
-nothing, never a 0.
+nothing, never a 0 — the one zero drawn below is a measured subtraction floored
+at it, not a stand-in for a figure nobody sent.
 
 **Token totals are observations, and summing them is allowed only because tokens
 share a unit.** The Tokens layout stacks locally recorded tokens (the `activity`

@@ -395,8 +395,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case .count(let remaining, let limit, let unit):
             return "\(remaining.formatted()) of \(limit.formatted()) \(unit) remaining"
         case .credits(let remaining, let unit):
-            // The vendor's own unit, verbatim. Never reformatted as money.
-            return remaining.map { "\($0.formatted()) \(unit) remaining" } ?? "\(unit) unlimited"
+            // The vendor's own unit, verbatim. Never reformatted as money, and
+            // worded the same way round the row and the card say it: "unlimited
+            // credits", never the postfix "credits unlimited".
+            return remaining.map { "\($0.formatted()) \(unit) remaining" } ?? "unlimited \(unit)"
         case .currency(let balance, let limit, let spent, let code):
             var parts = ["\(snapshot.currencyBasis?.balanceLabel ?? "Balance:") \(MetricRowPresentation.currency(balance, code))"]
             if let limit { parts.append("cap \(MetricRowPresentation.currency(limit, code))") }

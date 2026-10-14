@@ -70,7 +70,8 @@ struct APICreditEntryPresentationTests {
         // money formatter the provider rows also print with (`MoneyText`) — so
         // the credit card and a provider row can never disagree on how a dollar
         // figure reads. `MetricRowPresentation.currency` stays locale-based and
-        // is deliberately *not* what this is asserted against.
+        // is deliberately *not* what this is asserted against; the spoken form
+        // below is worded through `MoneyText` for that same reason.
         #expect(p.figure == "$179.50")
         #expect(p.figure == MoneyText.format(Decimal(string: "179.50")!, code: "USD"))
         #expect(p.figure.contains("179.50"))
@@ -78,6 +79,22 @@ struct APICreditEntryPresentationTests {
         #expect(!p.figure.contains("credit"))
         #expect(p.detail == "$200.00 monthly limit")
         #expect(p.spoken.contains("179.50"))
+    }
+
+    /// The card speaks the money it draws. The row helper it used to forward
+    /// the money case to renders through the *process locale*, which on an
+    /// en_AU machine reads "USD 1,234.50" — so a card that drew "$1234.50" and
+    /// announced "USD 1,234.50" would re-enter the figure/note disagreement it
+    /// exists to prevent, through the spoken channel. A four-figure balance
+    /// separates the two renderers on any locale, grouping or not.
+    @Test("the spoken figure is the same money the card draws")
+    func spokenMoneyIsTheDrawnMoney() {
+        let metric = MetricType.currency(balance: Decimal(string: "1234.5")!,
+                                         limit: Decimal(string: "2000")!,
+                                         spent: nil, currencyCode: "USD")
+        let p = APICreditEntryPresentation(entry: entry(metric))
+        #expect(p.figure == "$1234.50")
+        #expect(p.spoken.contains(p.figure))
     }
 
     /// The whole point of a separate card: nothing here is a quota. A count of

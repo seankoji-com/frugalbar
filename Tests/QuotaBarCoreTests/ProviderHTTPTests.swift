@@ -1514,6 +1514,75 @@ struct ProviderHTTPTests {
         #expect(code == "USD")
     }
 
+    /// The two shapes have been seen side by side, and the lenient decoding
+    /// exists so that one unusable block cannot cost a figure the other
+    /// published. A `spend` block that is present but states no exponent for
+    /// its amounts used to short-circuit the whole read and surface no credit
+    /// at all.
+    @Test("a spend block that states no scale falls through to extra_usage")
+    func unusableSpendBlockFallsThrough() async throws {
+        let snap = try await claudeCredits(#""spend":{"enabled":true,"used":{"amount_minor":541,"currency":"USD"}},"extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        let entry = try #require(snap.apiCredits.first)
+        guard case .currency(let balance, let limit, _, _) = entry.metric else {
+            Issue.record("expected the extra_usage figure, got \(entry.metric)")
+            return
+        }
+        #expect(balance == Decimal(string: "179.50"))
+        #expect(limit == Decimal(string: "200.00"))
+        #expect(entry.source == "OAuth usage payload · extra_usage")
+    }
+
+    /// The same for a `spend` block the vendor switched off: a pool being off
+    /// says nothing about the `extra_usage` block beside it.
+    @Test("a disabled spend block falls through to extra_usage")
+    func disabledSpendBlockFallsThrough() async throws {
+        let snap = try await claudeCredits(#""spend":{"enabled":false,"used":{"amount_minor":541,"currency":"USD","exponent":2}},"extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        let entry = try #require(snap.apiCredits.first)
+        #expect(entry.source == "OAuth usage payload · extra_usage")
+    }
+
+    /// Provenance is the block the figure was actually read from, not a fixed
+    /// label — the two blocks publish the same pool in different shapes, and a
+    /// tooltip naming the wrong one is worse than naming none.
+    @Test("the entry names the block that served its figure")
+    func provenanceNamesTheBlock() async throws {
+        let spent = try await claudeCredits(#""spend":{"enabled":true,"used":{"amount_minor":541,"currency":"USD","exponent":2},"limit":{"amount_minor":2000,"currency":"USD","exponent":2}}"#)
+        #expect(spent.apiCredits.first?.source == "OAuth usage payload · spend")
+
+        let legacy = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        #expect(legacy.apiCredits.first?.source == "OAuth usage payload · extra_usage")
+    }
+
+    /// A pool past its limit is the account most worth warning about, so it is
+    /// drawn at zero rather than dropping out of the card. `remaining` is nil
+    /// exactly when `used` has passed `limit`, and both figures here are real
+    /// ones the vendor published — the no-limit case above is the one that
+    /// yields nothing.
+    @Test("a pool past its limit reports zero rather than vanishing")
+    func overLimitPoolStillReports() async throws {
+        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":20500,"monthly_limit":20000,"currency":"USD"}"#)
+        #expect(snap.apiCredits.count == 1)
+        let entry = try #require(snap.apiCredits.first)
+        guard case .currency(let balance, let limit, _, _) = entry.metric else {
+            Issue.record("expected a currency entry, got \(entry.metric)")
+            return
+        }
+        // The floor `OpenRouterProvider` also puts under its credit
+        // subtraction: a balance has no negative form, and "$0.00 left" is the
+        // honest reading of an allowance that has been spent past its end.
+        #expect(balance == 0)
+        #expect(limit == Decimal(string: "200.00"))
+        #expect(entry.detail == "$200.00 monthly limit")
+    }
+
+    /// A negative figure is not a balance. The derived path already refused
+    /// one; a published negative is refused too rather than drawn.
+    @Test("a negative promo balance yields no entry")
+    func negativePromoBalanceYieldsNothing() async throws {
+        let snap = try await claudeCredits(#""iguana_necktie":{"remaining_dollars":-5}"#)
+        #expect(snap.apiCredits.isEmpty)
+    }
+
     /// A pool with no published limit has only a *used* figure, and the metric
     /// has one place for a number: a balance. Printing used under a balance
     /// label would assert a fact nobody measured, so nothing is drawn.

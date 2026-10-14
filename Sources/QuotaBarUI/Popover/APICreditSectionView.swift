@@ -93,7 +93,13 @@ struct APICreditEntryRowView: View {
                             .truncationMode(.tail)
                     }
                 }
-                .frame(width: Theme.nameColumnWidth, alignment: .leading)
+                // Flexible, not the fixed provider-name column: this card's
+                // names carry the vendor ("OpenAI API credits") and its notes
+                // are whole sentences, and 112pt truncated both — it fit neither
+                // "OpenAI API credits" nor the "$200.00 monthly limit" beside
+                // it. The figure chip keeps `layoutPriority(1)`, so the text is
+                // what gives way first.
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 0)
 
