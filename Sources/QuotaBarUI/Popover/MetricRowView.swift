@@ -20,9 +20,7 @@ struct MetricRowView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var isHovered = false
 
-    private var p: MetricRowPresentation { MetricRowPresentation(snapshot: snapshot) }
-
-    private var urgencyColor: Color {
+    private func urgencyColor(_ p: MetricRowPresentation) -> Color {
         switch p.urgency {
         case .none:     Theme.secondary
         case .warning:  Theme.tertiary
@@ -34,14 +32,14 @@ struct MetricRowView: View {
     /// the vendor's own reset text — the plan name is the least useful thing to
     /// print about a quota you cannot currently use. Falls back to the plan
     /// when the vendor published no reset rather than inventing one.
-    private var subtitle: String {
+    private func subtitle(_ p: MetricRowPresentation) -> String {
         if p.isExhausted, let reset = p.exhaustedResetText, !reset.isEmpty {
             return reset
         }
         return snapshot.shortPlanName
     }
 
-    private var subtitleColor: Color {
+    private func subtitleColor(_ p: MetricRowPresentation) -> Color {
         p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
 
@@ -93,9 +91,15 @@ struct MetricRowView: View {
         // Built once per render, and it carries the instant: every countdown
         // the row draws or speaks reads `grid.now`, never its own clock.
         let grid = WindowGridPresentation(snapshot: snapshot)
-        let label = combinedAccessibilityLabel(grid: grid)
+        // One presentation per render, built from the grid's instant. Every
+        // string below that names a time — the stale note's "figures from
+        // 14:12", the spoken label — is therefore measured from the same clock
+        // the cells draw their countdowns from, and none of them can straddle a
+        // minute boundary and disagree with the others.
+        let p = MetricRowPresentation(snapshot: snapshot, now: grid.now)
+        let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
-            row(grid)
+            row(grid, presentation: p)
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
             }
@@ -141,10 +145,11 @@ struct MetricRowView: View {
     /// descriptions are folded in here rather than left on the pills, where
     /// they would silently be discarded (AGENTS.md, WCAG 1.4.1: colour/pill
     /// styling alone is not an accessible status channel).
-    private func combinedAccessibilityLabel(grid: WindowGridPresentation) -> String {
+    private func combinedAccessibilityLabel(
+        grid: WindowGridPresentation, presentation: MetricRowPresentation
+    ) -> String {
         // Every countdown in the label, including the headline's own, is
         // measured from the grid's instant: the same one the cells draw.
-        let presentation = MetricRowPresentation(snapshot: snapshot, now: grid.now)
         let windows = grid.spokenSummary()
         // With the grid speaking each window, the headline percentage would
         // be the same figure twice.
@@ -259,14 +264,22 @@ struct MetricRowView: View {
             Text(text)
                 .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                .lineLimit(1)
+                // Two lines, not one: this is the only *visual* disclosure that
+                // the figures above are not current, and the tail is exactly
+                // where the reason and the age sit — the two things the line
+                // exists to say. Tail-truncated to a single line in a narrow
+                // popover it degraded to "Stale — last poll failed …", which
+                // names neither. The row is free to grow downwards; the card
+                // scrolls.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
         .padding(.leading, Theme.gridLeadingInset)
     }
 
-    private func row(_ grid: WindowGridPresentation) -> some View {
+    private func row(_ grid: WindowGridPresentation, presentation p: MetricRowPresentation) -> some View {
         HStack(alignment: .center, spacing: Theme.rowSpacing) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
@@ -285,10 +298,10 @@ struct MetricRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .minimumScaleFactor(0.85)
 
-                if !subtitle.isEmpty {
-                    Text(subtitle)
+                if !subtitle(p).isEmpty {
+                    Text(subtitle(p))
                         .font(Theme.Typography.subtitle)
-                        .foregroundStyle(subtitleColor)
+                        .foregroundStyle(subtitleColor(p))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
@@ -331,13 +344,13 @@ struct MetricRowView: View {
                 Spacer()
 
                 if let fraction = p.fraction, !typeSize.isAccessibilitySize {
-                    MicroProgressBar(fraction: 1.0 - fraction, statusColor: urgencyColor)
+                    MicroProgressBar(fraction: 1.0 - fraction, statusColor: urgencyColor(p))
                         .frame(width: barWidth)
                 }
 
                 Text(p.valueLabel)
                     .font(Theme.Typography.chip)
-                    .foregroundStyle(p.isMeasured ? urgencyColor : Theme.outline)
+                    .foregroundStyle(p.isMeasured ? urgencyColor(p) : Theme.outline)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Theme.surfaceContainerHighest.opacity(0.50))
