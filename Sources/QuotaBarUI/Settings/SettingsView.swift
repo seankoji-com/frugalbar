@@ -154,14 +154,17 @@ public struct SettingsView: View {
     /// reading a single Keychain item, so a render can never touch the
     /// user's real credentials.
     private let readsCredentials: Bool
+    /// Taller only in the render harness, so one image shows a whole pane.
+    private let height: CGFloat
 
     public init(store: QuotaStore? = nil, initialPane: Pane = .providers) {
         self.init(store: store, initialPane: initialPane, readsCredentials: true)
     }
 
-    init(store: QuotaStore?, initialPane: Pane, readsCredentials: Bool) {
+    init(store: QuotaStore?, initialPane: Pane, readsCredentials: Bool, height: CGFloat = 580) {
         self.store = store
         self.readsCredentials = readsCredentials
+        self.height = height
         _selection = State(initialValue: initialPane)
     }
 
@@ -211,7 +214,7 @@ public struct SettingsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 780, height: 580)
+        .frame(width: 780, height: height)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { if readsCredentials { loadKeys() } }
         .onAppear(perform: loadWorkspaces)
@@ -931,28 +934,30 @@ public struct SettingsView: View {
             }
 
             Section {
-                ForEach(Self.legend, id: \.symbol) { entry in
-                    Label {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(entry.title)
-                            Text(entry.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: entry.symbol)
-                            .foregroundStyle(entry.tint)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
+                legendRows(Self.statusLegend)
             } header: {
-                Text("Reading the popover")
+                Text("Provider status")
             } footer: {
                 Text("""
-                     Every state has a shape as well as a colour. A window the \
-                     vendor does not publish shows a faint dash, never an empty \
-                     bar, and a provider FrugalBar could not read says why \
-                     instead of showing a figure.
+                     The shape beside each provider. Each provider sets its own \
+                     levels: most count how full their fullest window is, some \
+                     how much credit is left, and the same reading can be \
+                     healthy for one and running low for another.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                legendRows(Self.windowLegend)
+            } header: {
+                Text("Window bars")
+            } footer: {
+                Text("""
+                     A bar's colour follows pace, blocking and exhaustion, not \
+                     the provider's levels, so a bar can stay green while its \
+                     provider runs low. Every state has a shape as well as a \
+                     colour.
                      """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -961,28 +966,92 @@ public struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private struct LegendEntry {
+    private func legendRows(_ entries: [LegendEntry]) -> some View {
+        ForEach(entries, id: \.title) { entry in
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title)
+                    Text(entry.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: entry.symbol)
+                    .foregroundStyle(entry.tint)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    struct LegendEntry {
         let symbol: String
         let title: String
         let detail: String
         let tint: Color
     }
 
-    private static let legend: [LegendEntry] = [
-        .init(symbol: "checkmark.circle.fill", title: "Healthy",
-              detail: "Read, and below 70% of every window.", tint: .green),
-        .init(symbol: "exclamationmark.circle.fill", title: "Running low",
-              detail: "A window is past 70%.", tint: .orange),
-        .init(symbol: "exclamationmark.octagon.fill", title: "Critically low",
-              detail: "A window is past 90%, or spent.", tint: .red),
-        .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
-              detail: "The vendor says the window cannot be used right now.", tint: .pink),
-        .init(symbol: "minus.circle", title: "Could not be read",
-              detail: "No figure is shown; the reason and what to do are.", tint: .secondary),
-        .init(symbol: "arrowtriangle.down.fill", title: "Even-pace tick",
-              detail: "Where usage would be if spread evenly over the window. Drawn only when the vendor publishes the window's length and reset.",
-              tint: .secondary),
-    ]
+    /// The states the popover row and the inspector lead with, in their own
+    /// words, shapes and colours. No threshold is quoted: providers set their
+    /// own (a share of a window at different levels, or an absolute credit
+    /// balance), so any single figure here would be wrong for some of them.
+    static let statusLegend: [LegendEntry] = {
+        func entry(_ state: MetricDetailPresentation.State, title: String? = nil,
+                   _ detail: String) -> LegendEntry {
+            let label = MetricDetailPresentation.headlineAndSymbol(for: state)
+            return .init(symbol: label.symbol, title: title ?? label.headline, detail: detail,
+                         tint: MetricDetailModalView.color(for: state))
+        }
+        return [
+            entry(.healthy, "Read, and short of the provider's own warning level."),
+            entry(.runningLow, "Past the provider's own warning level."),
+            entry(.critical, "Past the provider's own critical level."),
+            entry(.exhausted, "A window is used up."),
+            entry(.blocked, "The vendor says a window cannot be used right now."),
+            entry(.unavailable(.notConfigured), title: "Could not be read",
+                  "No figure is shown; the reason and what to do are."),
+        ]
+    }()
+
+    /// One window bar per state, its swatch taken from
+    /// `DualBarProgressView.stateColor` for a window in that state, so the
+    /// legend cannot show a colour the bar would not draw.
+    static let windowLegend: [LegendEntry] = {
+        func swatch(_ metrics: DualBarMetrics) -> Color { DualBarProgressView.stateColor(for: metrics) }
+        return [
+            .init(symbol: "circle.fill", title: "Not ahead of pace",
+                  detail: "Not spent, and not meaningfully ahead of an even pace, or no pace was published.",
+                  tint: swatch(LegendSample.onPace)),
+            .init(symbol: "circle.fill", title: "Ahead of pace",
+                  detail: "Used meaningfully more than an even spread would have by now.",
+                  tint: swatch(LegendSample.aheadOfPace)),
+            .init(symbol: "xmark.octagon.fill", title: "Spent",
+                  detail: "Nothing left in the window until it resets.",
+                  tint: swatch(LegendSample.spent)),
+            .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
+                  detail: "In the vendor's own colour when it gives one, whatever the percentage says.",
+                  tint: swatch(LegendSample.blocked)),
+            .init(symbol: "minus", title: "Not published",
+                  detail: "A faint dash, never an empty bar, which would read as nothing used.",
+                  tint: Theme.outline),
+            .init(symbol: "arrowtriangle.down.fill", title: "Even-pace tick",
+                  detail: "Where usage would be if spread evenly over the window. Drawn only when the vendor publishes the window's length and reset.",
+                  tint: .secondary),
+        ]
+    }()
+
+    /// Windows in each state the bar legend describes, so its swatches are
+    /// computed by the code that colours the bars.
+    enum LegendSample {
+        private static let now = Date(timeIntervalSinceReferenceDate: 0)
+        private static func window(used: Double, pace: Double) -> DualBarMetrics {
+            DualBarMetrics(primaryFraction: used, expectedPaceFraction: pace, label: "WK",
+                           resetsAt: now.addingTimeInterval(86_400), windowLength: 7 * 86_400)
+        }
+        static let onPace = window(used: 0.5, pace: 0.5)
+        static let aheadOfPace = window(used: 0.8, pace: 0.4)
+        static let spent = window(used: 1, pace: 0.5)
+        static let blocked = DualBarMetrics(primaryFraction: 0.4, label: "WK", isBlocked: true)
+    }
 
     @State private var desktopWidgetVisibility = DesktopWidgetVisibility.shared
 

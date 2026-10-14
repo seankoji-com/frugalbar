@@ -258,8 +258,11 @@ public struct MetricDetailModalView: View {
             readings: readingsFailed ? nil : readings, instanceID: snapshot.id, since: historySince ?? now)
     }
 
-    private var summaryColor: Color {
-        switch presentation.summary.state {
+    private var summaryColor: Color { Self.color(for: presentation.summary.state) }
+
+    /// Read by Settings' legend as well, so its swatches are the inspector's.
+    nonisolated static func color(for state: MetricDetailPresentation.State) -> Color {
+        switch state {
         case .unavailable, .lastPollFailed: Theme.outline
         case .healthy: Theme.secondary
         case .runningLow: Theme.tertiary

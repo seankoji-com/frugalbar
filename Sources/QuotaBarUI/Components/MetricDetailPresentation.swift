@@ -27,6 +27,19 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case blocked
     }
 
+    /// The words and shape a state leads with. Settings' legend reads this
+    /// too, so it cannot name a state the inspector does not draw.
+    public static func headlineAndSymbol(for state: State) -> (headline: String, symbol: String) {
+        switch state {
+        case .healthy:    ("Healthy", "checkmark.circle.fill")
+        case .runningLow: ("Running low", "exclamationmark.circle.fill")
+        case .critical:   ("Critically low", "exclamationmark.octagon.fill")
+        case .exhausted:  ("Exhausted", "xmark.octagon.fill")
+        case .blocked:    ("Blocked by the vendor", BlockedGlyph.symbolName)
+        case .unavailable, .lastPollFailed: ("", "minus.circle")
+        }
+    }
+
     public struct Summary: Equatable, Sendable {
         public let state: State
         public let headline: String
@@ -211,16 +224,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             return value.isEmpty ? nil : value
         }()
 
-        let headline: String
-        let symbol: String
-        switch state {
-        case .healthy:    (headline, symbol) = ("Healthy", "checkmark.circle.fill")
-        case .runningLow: (headline, symbol) = ("Running low", "exclamationmark.circle.fill")
-        case .critical:   (headline, symbol) = ("Critically low", "exclamationmark.octagon.fill")
-        case .exhausted:  (headline, symbol) = ("Exhausted", "xmark.octagon.fill")
-        case .blocked:    (headline, symbol) = ("Blocked by the vendor", BlockedGlyph.symbolName)
-        case .unavailable, .lastPollFailed: (headline, symbol) = ("", "minus.circle")
-        }
+        let (headline, symbol) = Self.headlineAndSymbol(for: state)
 
         var spoken = [snapshot.displayName, headline]
         if let percent, let label = focus?.label {
