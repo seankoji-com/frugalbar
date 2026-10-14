@@ -107,9 +107,11 @@ struct MetricRowPresentationAllCases {
 
     // MARK: - Currency
 
-    /// Helper: produces the same .formatted(.currency()) output the code uses.
+    /// Helper: the same `MoneyText` rendering the code uses — the one money
+    /// rule, so a USD figure is "$7.50" here on every machine rather than the
+    /// process locale's "USD 7.50".
     private static func fmt(_ value: Decimal, code: String) -> String {
-        value.formatted(.currency(code: code).precision(.fractionLength(2)))
+        MoneyText.format(value, code: code)
     }
 
     @Test("currency with limit shows 'X left of Y'")

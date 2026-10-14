@@ -8,6 +8,7 @@ public enum HistorySchema {
     public static let catalogModelTable = "catalog_model"
     public static let feedItemTable = "feed_item"
     public static let accountModelTable = "account_model"
+    public static let balanceReadingTable = "balance_reading"
 
     /// The on-disk schema generation. A mismatch on open drops every table.
     ///
@@ -96,6 +97,24 @@ public enum HistorySchema {
       last_seen     INTEGER NOT NULL,
       PRIMARY KEY (vendor, model_id)
     ) WITHOUT ROWID;
+
+    -- Balance-over-time: the figures a vendor published across polls that are
+    -- *not* quotas — account credit, a key's remaining cap, a credit pool, a
+    -- count of credits the vendor meters. Kept apart from `reading` because
+    -- these have no window and no fraction: `reading.fraction` is a share of a
+    -- denominator, and a balance has none. `value` is exact decimal text, not
+    -- REAL, so a money figure round-trips without binary rounding.
+    CREATE TABLE IF NOT EXISTS balance_reading (
+      series_id     TEXT    NOT NULL,    -- BalanceSeries.id: "<source>|<unit>"
+      vendor        TEXT    NOT NULL,    -- VendorIdentifier.rawValue
+      label         TEXT    NOT NULL,    -- the row's own label, as written
+      unit          TEXT    NOT NULL,    -- "currency:USD" | "credits:credits"
+      measured_at   INTEGER NOT NULL,    -- epoch seconds
+      value         TEXT    NOT NULL,    -- the observed figure, exact decimal text
+      PRIMARY KEY (series_id, measured_at)
+    ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS balance_reading_series_time ON balance_reading(series_id, measured_at);
     """
 
     /// Idempotent in-place rewrites of stored values, run on every open after
@@ -149,6 +168,7 @@ public enum HistorySchema {
     DROP TABLE IF EXISTS \(catalogModelTable);
     DROP TABLE IF EXISTS \(feedItemTable);
     DROP TABLE IF EXISTS \(accountModelTable);
+    DROP TABLE IF EXISTS \(balanceReadingTable);
     """
 }
 

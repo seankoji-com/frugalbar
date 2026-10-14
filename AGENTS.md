@@ -85,6 +85,32 @@ experimental); those are never decoded. A "new model" is a model on the
 account's own list (`AccountModelWatcher`), never a launch post or a catalog
 listing: the question is whether the user can select it right now.
 
+**A balance series is charted, never summed, and never a quota.**
+`balance_reading` holds the figures a vendor published across polls that are not
+quotas — an account credit, a key's remaining cap, a prepaid pool, a count of
+credits a vendor meters. They have no window and no fraction, so they go in their
+own table (as `event`, `catalog_model`, `feed_item` and `account_model` did),
+written inside `record(_:now:)`'s own transaction so a balance and the poll's
+readings can never disagree about which poll they came from. `value` is exact
+decimal text, not `REAL`: a money figure round-trips as itself.
+
+The series is `<source>|<unit>` (`BalanceSeries.id`), where the unit carries the
+currency code or the vendor's own unit word. Two currencies of one account, and a
+credit count beside money, are separate series and must never be drawn as one
+line. A figure is recorded only when its poll **measured** and the metric
+actually carries a balance: a failed poll records nothing (a synthesised 0 is a
+real and frightening balance), and a `CurrencyBasis.lifetimeSpend` figure is
+excluded outright because a cumulative spend total charted under a balance
+heading asserts the wrong thing. A pool the vendor declares unlimited
+(`.credits(remaining: nil)`) has no figure to chart either.
+
+The popover's inline strip and the inspector's balance card both draw from
+`BalanceSparklinePresentation.make`, which returns nil below two readings — one
+observation is not a trend — and centres a flat series rather than pinning it to
+an edge, where it would read as a reserve that emptied. The inspector's empty
+states say *why* there is no line (no readings, one reading, or a failed read),
+never a blank axis.
+
 **History tables are additive only; do not bump `HistorySchema.version`.** A
 bump drops the table set, which deletes the user's readings. New tables go in
 `createTablesSQL` as `CREATE TABLE IF NOT EXISTS` (as `event`, `catalog_model`
@@ -277,14 +303,15 @@ figure and a vendor that published zero both draw nothing.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure
-read "$179.50" on one Mac and "USD 179.50" on another — and a credit card once
-printed "USD 179.50" as its figure directly above the vendor's own note
-"$200.00 monthly limit". A balance is a fact about a vendor account, not about
-the reader, so `MoneyText` chooses the symbol deterministically (AUD → "A$",
-USD → "$", anything else stated with its code). Provider rows' balance subtitles
-and the API-credit card both go through it. `MetricRowPresentation.currency`
-stays locale-based for the inspector's wording and is a known follow-up, not a
-second rule to add new money formatting to.
+read "$179.50" on one Mac and "USD 179.50" on another — and a money row printed
+"$179.50" in its subtitle directly beside "USD 179.50" in its own value chip,
+because one went through `MoneyText` and the other through the locale. A balance
+is a fact about a vendor account, not about the reader, so `MoneyText` chooses
+the symbol deterministically (AUD → "A$", USD → "$", anything else stated with
+its code). Provider balance subtitles, the row's value chip
+(`MetricRowPresentation.currency`), the inspector's currency block and the
+API-credit card all go through it. Do not add a second money formatting rule
+anywhere: `.formatted(.currency(code:))` is a bug in this codebase.
 
 ## Regression tests must be shown to fail
 

@@ -15,6 +15,10 @@ struct MetricRowView: View {
     /// The last row in its card shows the hover forecast above itself, so the
     /// card's bottom edge and the scroll view never clip it.
     var forecastAbove: Bool = false
+    /// Recorded balance-over-time points for this row's money series, oldest
+    /// first. Empty when the row is not a money row, or its series has no
+    /// history yet — in which case nothing is drawn rather than a flat line.
+    var balancePoints: [BalancePoint] = []
 
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -288,6 +292,16 @@ struct MetricRowView: View {
                 if let fraction = p.fraction, !typeSize.isAccessibilitySize {
                     MicroProgressBar(fraction: 1.0 - fraction, statusColor: urgencyColor(p))
                         .frame(width: barWidth)
+                }
+
+                // A money row's trend, in the free space beside its figure. The
+                // strip only answers "which way is this moving" — the exact
+                // figure is already on the row, in the name column's subtitle
+                // and in the chip below, so the strip itself is speakable
+                // nothing and carries no label.
+                if let trend = BalanceSparklinePresentation.make(from: balancePoints) {
+                    BalanceSparklineView(presentation: trend)
+                        .padding(.trailing, 2)
                 }
 
                 Text(p.valueLabel)

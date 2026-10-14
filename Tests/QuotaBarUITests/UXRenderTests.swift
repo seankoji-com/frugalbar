@@ -33,17 +33,18 @@ struct UXRenderTests {
                     resetText: "Resets in 1h", resetsAt: now.addingTimeInterval(3600)))
         }
         let snapshots = [snapshot(.claude, "Claude", 0.65), snapshot(.opencode, "OpenCode Go · Gamma workspace", 0.45),
-                         snapshot(.commandcode, "Command Code", 0.9)] + soleMeters(now: now)
+                         snapshot(.commandcode, "Command Code", 0.9)] + soleMeters(now: now) + moneyRows(now: now)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             AdviceSectionView(advice: .evaluate(from: snapshots), onActionTap: {})
-            MetricSectionView(category: .aiSubscriptions, snapshots: snapshots, onSelect: { _ in })
-            APICreditSectionView(entries: creditFixtures())
+            MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
+                              balanceSeries: balanceFixtures(now: now), onSelect: { _ in })
+            APICreditSectionView(entries: creditFixtures(), balanceSeries: balanceFixtures(now: now))
             FooterActionsView(summary: .compute(from: snapshots), isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
         }.padding(12).frame(width: 384).background(Theme.surface), name: "popover", directory: directory)
         try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
-            eventsLoader: { _, _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
+            eventsLoader: { _, _, _, _, _ in [] }, balanceLoader: { _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
         // A vendor's failed poll retains its balances, and the card must not
         // present them as this poll's reading. OpenAI's row here is stale;
@@ -54,6 +55,15 @@ struct UXRenderTests {
             APICreditSectionView(entries: creditFixtures(), staleVendors: ["openai"])
         }.padding(12).frame(width: 384).background(Theme.surface),
             name: "credit-section-stale", directory: directory)
+        // The inspector's balance card, against a money row that has a month of
+        // recorded history — the surface the inline strip only gestures at.
+        let balanceHistory = balanceFixtures(now: now)
+        try await save(MetricDetailModalView(
+            snapshot: snapshots.first { $0.id == "openrouter" }!, readingsLoader: { _, _ in [] },
+            eventsLoader: { _, _, _, _, _ in [] },
+            balanceLoader: { id, _, _, _ in balanceHistory[id] }, onClose: {})
+                .frame(width: 384, height: 520),
+            name: "inspector-balance", directory: directory)
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("fixture.sqlite"))
         try await save(QuotaTimelineChart(segments: [], timeRange: .last7Days)
             .frame(width: 640, height: 240).background(Theme.card),
@@ -114,6 +124,50 @@ struct UXRenderTests {
             metric: .currency(balance: Decimal(150), limit: Decimal(200), spent: nil, currencyCode: "USD"),
             currencyBasis: .prepaidCredit, detail: "Expires 15 Nov 2026",
             source: "OAuth usage payload · iguana_necktie")]
+    }
+
+    /// The vendors whose whole row is a money figure: OpenRouter's account
+    /// credit and DeepSeek's prepaid balance. Neither publishes a window, so the
+    /// row has no bar — the figure is the row — and this fixture is what the
+    /// rendered popover shows the inline balance sparkline against.
+    private func moneyRows(now: Date) -> [QuotaSnapshot] {
+        [QuotaSnapshot(id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter",
+            category: .apiSpendAndCredits,
+            metric: .currency(balance: Decimal(string: "179.50")!, limit: nil,
+                              spent: nil, currencyCode: "USD"),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now,
+            auxiliaryInfo: "Account credit balance", row1: nil, row2: nil,
+            badgeText: "$179.50 credit", planName: nil, cliSource: "OPENROUTER_API_KEY",
+            currencyBasis: .accountCredit),
+         QuotaSnapshot(id: "deepseek", vendorId: .deepseek, displayName: "DeepSeek",
+            category: .apiSpendAndCredits,
+            metric: .currency(balance: Decimal(string: "42.00")!, limit: nil,
+                              spent: nil, currencyCode: "USD"),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now,
+            auxiliaryInfo: "Prepaid balance", row1: nil, row2: nil,
+            badgeText: "$42.00", planName: nil, cliSource: "DEEPSEEK_API_KEY",
+            currencyBasis: .accountCredit)]
+    }
+
+    /// A week of hourly balance readings per money series, so the inline
+    /// sparkline has a real trend to draw in the render.
+    private func balanceFixtures(now: Date) -> [String: [BalancePoint]] {
+        func series(_ id: String, from start: Decimal, to end: Decimal) -> (String, [BalancePoint]) {
+            let points = (0...40).map { step -> BalancePoint in
+                let t = now.addingTimeInterval(-Double(40 - step) * 4 * 3600)
+                let value = start + (end - start) * Decimal(step) / Decimal(40)
+                return BalancePoint(measuredAt: t, value: value)
+            }
+            return (id, points)
+        }
+        return Dictionary(uniqueKeysWithValues: [
+            series(BalanceSeries.id(source: "openrouter", unit: .currency(code: "USD")),
+                   from: Decimal(string: "210.00")!, to: Decimal(string: "179.50")!),
+            series(BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD")),
+                   from: Decimal(string: "60.00")!, to: Decimal(string: "42.00")!),
+            series(BalanceSeries.id(source: "claude.extra-usage", unit: .currency(code: "USD")),
+                   from: Decimal(string: "200.00")!, to: Decimal(string: "179.50")!),
+        ])
     }
 
     /// The vendors that publish a single window — GitHub Copilot reports

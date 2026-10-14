@@ -228,4 +228,78 @@ struct QuotaStoreTests {
         let withLoader = QuotaStore(manager: manager, activityStatusLoader: { status })
         #expect(await withLoader.activityIngestionStatus() == status)
     }
+
+    /// The inline sparklines read through the store, narrowed to the series the
+    /// visible rows actually carry — the loader must be hit with those ids and
+    /// its points kept.
+    @Test("a reload reads balance series for exactly the visible rows' series")
+    func balanceSeriesAreLoadedForVisibleRows() async throws {
+        let asked = AskedSeries()
+        let seriesID = BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD"))
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [MoneyStubProvider(vendorId: .deepseek)] })
+        let s = QuotaStore(
+            manager: manager,
+            balanceSeriesLoader: { _, _, _, ids in
+                asked.record(ids)
+                return [seriesID: [BalancePoint(measuredAt: Date(timeIntervalSince1970: 0), value: 42)]]
+            })
+
+        await s.load()
+
+        #expect(asked.last == [seriesID])
+        #expect(s.balanceSeries[seriesID]?.count == 1)
+    }
+
+    /// A failed read keeps the last good series rather than blanking every strip
+    /// on a transient error.
+    @Test("a failed balance read leaves the last good series in place")
+    func failedBalanceReadKeepsLastGood() async throws {
+        let seriesID = BalanceSeries.id(source: "deepseek", unit: .currency(code: "USD"))
+        let box = SeriesResultBox([seriesID: [BalancePoint(measuredAt: Date(timeIntervalSince1970: 0), value: 42)]])
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [MoneyStubProvider(vendorId: .deepseek)] })
+        let s = QuotaStore(manager: manager, balanceSeriesLoader: { _, _, _, _ in box.result })
+
+        await s.load()
+        #expect(s.balanceSeries[seriesID]?.count == 1)
+
+        box.result = nil
+        await s.forceRefresh()
+        #expect(s.balanceSeries[seriesID]?.count == 1)
+    }
+}
+
+/// A money-only provider stub: no bars, so its row is its figure and it
+/// contributes one balance series.
+private struct MoneyStubProvider: QuotaProvider {
+    let vendorId: VendorIdentifier
+    let displayName = "Stub"
+    let category: MetricCategory = .apiSpendAndCredits
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: vendorId.rawValue, vendorId: vendorId, displayName: displayName, category: category,
+            metric: .currency(balance: 42, limit: nil, spent: nil, currencyCode: "USD"),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
+            currencyBasis: .accountCredit)
+    }
+}
+
+private final class AskedSeries: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [[String]] = []
+    func record(_ ids: [String]?) { lock.lock(); calls.append(ids ?? []); lock.unlock() }
+    var last: [String]? { lock.lock(); defer { lock.unlock() }; return calls.last }
+}
+
+private final class SeriesResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _result: [String: [BalancePoint]]?
+    init(_ result: [String: [BalancePoint]]?) { _result = result }
+    var result: [String: [BalancePoint]]? {
+        get { lock.lock(); defer { lock.unlock() }; return _result }
+        set { lock.lock(); _result = newValue; lock.unlock() }
+    }
 }

@@ -22,12 +22,17 @@ struct APICreditSectionView: View {
     /// failure this project treats as the worst kind. Each affected row says so.
     var staleVendors: Set<String> = []
 
+    /// Recorded balance-over-time points per `BalanceSeries.id`, for the entries
+    /// that have history. Empty when no loader was injected or nothing recorded.
+    var balanceSeries: [String: [BalancePoint]] = [:]
+
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 APICreditEntryRowView(
                     entry: entry,
-                    isStale: staleVendors.contains(entry.vendorId.rawValue)
+                    isStale: staleVendors.contains(entry.vendorId.rawValue),
+                    balancePoints: BalanceSeries.of(entry).flatMap { balanceSeries[$0.id] } ?? []
                 )
 
                 if index < entries.count - 1 {
@@ -56,6 +61,10 @@ struct APICreditEntryRowView: View {
     /// too: the two surfaces draw the same figure, so neither may present it as
     /// current while the other says it is old.
     var isStale: Bool = false
+
+    /// This entry's recorded balance points, oldest first. Empty when it has no
+    /// history, which draws no strip rather than a flat or invented one.
+    var balancePoints: [BalancePoint] = []
 
     private var p: APICreditEntryPresentation { APICreditEntryPresentation(entry: entry) }
 
@@ -102,6 +111,15 @@ struct APICreditEntryRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 0)
+
+                // The trend, ahead of the figure it belongs to: the strip states
+                // the direction and does not replace the figure. A count of
+                // credits has history too, and is charted in credits — never
+                // converted to money.
+                if let trend = BalanceSparklinePresentation.make(from: balancePoints) {
+                    BalanceSparklineView(presentation: trend)
+                        .padding(.trailing, 4)
+                }
 
                 Text(p.figure)
                     .font(Theme.Typography.chip)

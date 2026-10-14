@@ -212,6 +212,10 @@ public actor QuotaHistoryStore {
             }
         }
         let rows = preparedRows
+        // Balance figures ride the same poll and the same transaction. They are
+        // not readings — they have no window and no fraction — so they go to
+        // their own table rather than as `reading` rows with a nulled fraction.
+        let balanceRows = Self.balanceRows(from: snapshots, at: timestamp)
 
         try await database.perform { db in
             #if canImport(SQLite3)
@@ -263,6 +267,39 @@ public actor QuotaHistoryStore {
             let pruneStatus = sqlite3_step(pruneStmt)
             guard pruneStatus == SQLITE_DONE else {
                 throw HistoryDatabaseError.stepFailed(code: pruneStatus, message: db.lastErrorMessage)
+            }
+
+            if !balanceRows.isEmpty {
+                let balanceSQL = """
+                INSERT OR REPLACE INTO balance_reading (
+                  series_id, vendor, label, unit, measured_at, value
+                ) VALUES (?, ?, ?, ?, ?, ?);
+                """
+                let balanceStmt = try db.prepare(sql: balanceSQL)
+                defer { db.finalize(balanceStmt) }
+                for row in balanceRows {
+                    sqlite3_reset(balanceStmt)
+                    sqlite3_clear_bindings(balanceStmt)
+                    try db.bindText(balanceStmt, 1, row.seriesId)
+                    try db.bindText(balanceStmt, 2, row.vendor)
+                    try db.bindText(balanceStmt, 3, row.label)
+                    try db.bindText(balanceStmt, 4, row.unit)
+                    try db.bindInt64(balanceStmt, 5, row.measuredAt)
+                    try db.bindText(balanceStmt, 6, row.value)
+                    let step = sqlite3_step(balanceStmt)
+                    guard step == SQLITE_DONE else {
+                        throw HistoryDatabaseError.stepFailed(code: step, message: db.lastErrorMessage)
+                    }
+                }
+            }
+
+            let pruneBalancesSQL = "DELETE FROM balance_reading WHERE measured_at < ?;"
+            let pruneBalancesStmt = try db.prepare(sql: pruneBalancesSQL)
+            defer { db.finalize(pruneBalancesStmt) }
+            try db.bindInt64(pruneBalancesStmt, 1, cutoff)
+            let pruneBalancesStatus = sqlite3_step(pruneBalancesStmt)
+            guard pruneBalancesStatus == SQLITE_DONE else {
+                throw HistoryDatabaseError.stepFailed(code: pruneBalancesStatus, message: db.lastErrorMessage)
             }
 
             try db.commitTransaction()

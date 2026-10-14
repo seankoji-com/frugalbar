@@ -8,6 +8,10 @@ struct MetricSectionView: View {
     let category: MetricCategory
     let snapshots: [QuotaSnapshot]
     var forecasts: [String: BurnRateForecast] = [:]
+    /// Recorded balance-over-time points per `BalanceSeries.id`, for the rows
+    /// that carry a money figure. Empty when the history loader was not
+    /// injected or no series has history.
+    var balanceSeries: [String: [BalancePoint]] = [:]
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
 
     /// The column header shows only when a row actually uses the grid.
@@ -25,7 +29,8 @@ struct MetricSectionView: View {
                     snapshot: snap,
                     onSelect: onSelect,
                     forecast: forecasts[snap.id],
-                    forecastAbove: index == snapshots.count - 1
+                    forecastAbove: index == snapshots.count - 1,
+                    balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? []
                 )
 
                 if index < snapshots.count - 1 {
