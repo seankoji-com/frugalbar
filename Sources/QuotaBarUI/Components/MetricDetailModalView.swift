@@ -215,6 +215,15 @@ public struct MetricDetailModalView: View {
                 isExhausted: MetricRowPresentation(snapshot: snapshot).isExhausted
             )
 
+            // The name and its badge claim the row's width before the close
+            // button, so the name keeps its own line instead of breaking
+            // mid-word. A flexible `Spacer` here used to win a share of the row
+            // and leave the name less than its ideal width, which broke
+            // "OpenRouter" across two lines beside a two-word badge — "$179.50
+            // credit", "$12.34 key cap left" and "Payment required" are all real
+            // badges, so it was every one of them. The name stays wrappable,
+            // because "OpenCode Go · Gamma workspace" is wider than the row and
+            // must still take two lines.
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
@@ -228,6 +237,7 @@ public struct MetricDetailModalView: View {
                             .font(Theme.Typography.token)
                             .tracking(Theme.Tracking.token)
                             .foregroundStyle(Theme.primary)
+                            .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Theme.primary.opacity(0.15))
@@ -239,9 +249,10 @@ public struct MetricDetailModalView: View {
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
             }
-
-            Spacer()
-                .frame(minWidth: 0)
+            // The column takes the row's remaining width, so the close button is
+            // pinned right and the name is not starved by a flexible `Spacer`
+            // competing with it for space.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
