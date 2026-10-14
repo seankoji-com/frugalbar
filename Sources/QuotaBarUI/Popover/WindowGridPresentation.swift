@@ -100,6 +100,26 @@ public struct WindowGridPresentation: Equatable, Sendable {
         !bars.isEmpty || !spend.isEmpty
     }
 
+    /// The one column this row draws, when the vendor published a single meter
+    /// and nothing else to put beside it — GitHub Copilot reports a monthly
+    /// window only, OpenAI a weekly one.
+    ///
+    /// A lone cell used to sit marooned in one of the three columns with a
+    /// faint dash either side, which reads as two missing readings rather than
+    /// as "this vendor publishes one window". The row draws its sole meter
+    /// across the whole grid instead (`MetricRowView`).
+    ///
+    /// nil as soon as the grid holds two cells: the columns are then doing
+    /// their job of lining the same window up down the card. nil too when the
+    /// row draws a pool on its own line under the grid (`extras`), because
+    /// that row shows more than one meter and is not the sparse case this
+    /// answers.
+    public var soleColumn: WindowColumn? {
+        guard extras.isEmpty else { return nil }
+        let filled = WindowColumn.allCases.filter { bars[$0] != nil || spend[$0] != nil }
+        return filled.count == 1 ? filled[0] : nil
+    }
+
     /// The figure printed under a bar: the share used, which is what the bar
     /// itself draws. nil when the vendor published no fraction — the cell
     /// then says why in words (`unmeasuredText`) instead of printing 0%.

@@ -58,6 +58,33 @@ struct WindowGridPresentationTests {
         #expect(grid.bars[.monthly]?.primaryFraction == 1.0)
     }
 
+    /// The row's layout branch reads `soleColumn`, so this is the decision
+    /// under test: a vendor publishing one window (GitHub Copilot monthly
+    /// only, OpenAI weekly only) draws it across the whole grid, while two or
+    /// more meters keep their columns and the alignment down the card.
+    @Test("a row with one meter spans the grid; two or more keep their columns")
+    func soleMeterSpansTheGrid() {
+        #expect(WindowGridPresentation(snapshot: snap([bar("MO", 0.4)])).soleColumn == .monthly)
+        #expect(WindowGridPresentation(snapshot: snap([bar("WK", 0.12)])).soleColumn == .weekly)
+        #expect(WindowGridPresentation(snapshot: snap([bar("5H", 0.1), bar("MO", 0.4)])).soleColumn == nil)
+        #expect(WindowGridPresentation(snapshot: snap([])).soleColumn == nil)
+        // The collapse above can leave exactly one meter behind: it then spans
+        // the grid.
+        #expect(WindowGridPresentation(snapshot: snap([
+            bar("5H", 0.1, length: 5 * 3600), bar("MO", 1.0, length: 30 * 86_400),
+        ])).soleColumn == .monthly)
+    }
+
+    /// A pool drawn on its own line under the row means the row already shows
+    /// more than one meter, so it is not the sparse case: the grid keeps its
+    /// columns and the pool stays where it is.
+    @Test("a row that also draws a pool keeps the grid's columns")
+    func poolMeansNotSole() {
+        let grid = WindowGridPresentation(snapshot: snap([bar("MO", 0.4), bar("BN", 0.5)]))
+        #expect(grid.usesGrid)
+        #expect(grid.soleColumn == nil)
+    }
+
     @Test("an unmeasured cell says blocked or shows a dash, never 0%")
     func unmeasuredText() {
         #expect(WindowGridPresentation.percentText(for: bar("5H", nil, blocked: true)) == nil)
@@ -71,10 +98,7 @@ struct WindowGridPresentationTests {
 
     @Test("spend windows fill the matching columns as text when there are no bars")
     func spendColumns() {
-        var s = QuotaSnapshot(
-            id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter", category: .apiSpendAndCredits,
-            metric: .currency(balance: 10, limit: nil, spent: nil, currencyCode: "USD"),
-            status: .measured(.none), resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil)
+        var s = openRouterSnapshot()
         s.spendWindows = [SpendWindow(label: "MO", amount: 12.4, currencyCode: "USD"),
                           SpendWindow(label: "WK", amount: nil, currencyCode: "USD")]
         let grid = WindowGridPresentation(snapshot: s)
@@ -83,10 +107,37 @@ struct WindowGridPresentationTests {
         #expect(grid.spend[.weekly] != nil)
         #expect(grid.spend[.weekly]?.amount == nil)
         #expect(grid.spend[.fiveHour] == nil)
+        // Two cells: the columns are still lining something up.
+        #expect(grid.soleColumn == nil)
         // VoiceOver hears the same figures the cells show.
         let spoken = grid.spokenSummary() ?? ""
         #expect(spoken.hasPrefix("weekly spend not reported, monthly spend "))
         #expect(spoken.contains("12.40"))
+    }
+
+    /// One spend window and nothing else is the same sparse case the bars'
+    /// `soleColumn` answers: the single figure takes the whole grid rather
+    /// than sitting in the middle column with a dash either side.
+    @Test("a sole spend window spans the grid")
+    func soleSpendSpansTheGrid() {
+        var s = openRouterSnapshot()
+        s.spendWindows = [SpendWindow(label: "MO", amount: 12.4, currencyCode: "USD")]
+        #expect(WindowGridPresentation(snapshot: s).soleColumn == .monthly)
+
+        var unmeasured = openRouterSnapshot()
+        unmeasured.spendWindows = [SpendWindow(label: "WK", amount: nil, currencyCode: "USD")]
+        // A window the vendor listed but published no amount for is still the
+        // one meter this row would draw ("—"), and expands with it.
+        #expect(WindowGridPresentation(snapshot: unmeasured).soleColumn == .weekly)
+    }
+
+    /// An OpenRouter row as the spend tests build it: no bars, and whatever
+    /// `spendWindows` the test sets.
+    private func openRouterSnapshot() -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter", category: .apiSpendAndCredits,
+            metric: .currency(balance: 10, limit: nil, spent: nil, currencyCode: "USD"),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil)
     }
 
     /// The headline "42 percent used" and the grid's "5-hour 42% used" are
