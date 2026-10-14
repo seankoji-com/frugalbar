@@ -97,6 +97,39 @@ struct APICreditEntryPresentationTests {
         #expect(p.spoken.contains(p.figure))
     }
 
+    /// An Anthropic promo credit published with `remaining_dollars` and no
+    /// `limit_dollars` takes this path: a balance, a nil limit and a nil spent.
+    /// The wording has to be the balance's, because printing that figure under
+    /// "spent" asserts something nobody measured, and it must carry the same
+    /// figure the row draws rather than a second rendering of it.
+    @Test("a currency entry with no limit is worded as its balance")
+    func moneyWithNoLimitIsWordedAsABalance() {
+        let metric = MetricType.currency(balance: Decimal(string: "12.34")!,
+                                         limit: nil, spent: nil, currencyCode: "USD")
+        let wording = APICreditEntryPresentation.spoken(for: metric)
+        #expect(wording == "$12.34 balance")
+
+        // The entry this path is reachable from is Anthropic's promo credit,
+        // which always carries a note ("Expires …" or "Cloud-session credit"),
+        // so the balance wording sits inside the spoken string rather than at
+        // its end.
+        let p = APICreditEntryPresentation(entry: entry(metric, detail: "Cloud-session credit"))
+        #expect(p.figure == "$12.34")
+        #expect(p.spoken.contains(p.figure))
+        #expect(p.spoken.contains(wording))
+        #expect(!p.spoken.contains("spent"))
+        #expect(!p.spoken.contains("remaining"))
+    }
+
+    /// A count of credits is not a money figure, so the nil-limit money path
+    /// must not be reachable for one.
+    @Test("a credit count never reaches the money wording")
+    func creditCountNeverTakesTheMoneyPath() {
+        let p = APICreditEntryPresentation(entry: entry(.credits(remaining: 250, unitName: "credits")))
+        #expect(!p.spoken.contains("balance"))
+        #expect(p.spoken.hasSuffix("250 credits remaining"))
+    }
+
     /// The whole point of a separate card: nothing here is a quota. A count of
     /// credits has no cap to be a fraction *of*, so it can never drive a bar,
     /// an urgency band or the menu-bar icon — which all read a snapshot's

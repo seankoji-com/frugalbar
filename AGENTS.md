@@ -133,8 +133,9 @@ limit is drawn even with nothing left in it: `remaining` is nil exactly when
 floored the same way OpenRouter's credit subtraction is (`max(published −
 used, 0)`) because a balance has no negative form. A `has_credits: false`, a
 disabled `is_enabled`, an unparseable figure or a missing block all yield
-nothing, never a 0 — the one zero drawn below is a measured subtraction floored
-at it, not a stand-in for a figure nobody sent.
+nothing, never a 0 — the only zero drawn is the pool above, floored at it
+because it has passed its own measured limit, not a stand-in for a figure nobody
+sent.
 
 **Token totals are observations, and summing them is allowed only because tokens
 share a unit.** The Tokens layout stacks locally recorded tokens (the `activity`
