@@ -67,11 +67,7 @@ private func withStubbedHTTP<T: Sendable>(
     LocalStub.reset()
     LocalStub.handler = handler
     return try await QuotaHTTP.$session.withValue(LocalStub.makeSession()) {
-        // A fresh cache instance per scope, exactly like the session above,
-        // so this test can never read back another test's memoised badges.
-        try await ModelCatalogCache.$current.withValue(ModelCatalogCache()) {
-            try await operation()
-        }
+        try await operation()
     }
 }
 
@@ -270,12 +266,13 @@ struct OpenRouterExtendedTests {
 
     // MARK: - Empty key
 
-    @Test("empty key returns notConfigured without issuing an /auth/key request")
+    @Test("empty key returns notConfigured without issuing a request")
     func emptyKeyNoRequest() async throws {
         let provider = OpenRouterProvider(apiKey: "")
-        // No key means the primary /auth/key call never fires — but the
-        // model-catalog call needs no key, so it still runs on a cache miss
-        // (that's what lets its badges appear with no key configured).
+        // No key means the primary /auth/key call never fires. The key-less
+        // model-catalog call that used to run anyway — which is why this was
+        // once one request rather than none — went with the model badges, so
+        // this row now makes no network call at all.
         let snap = try await withStubbedHTTP({ request in
             #expect(request.url?.absoluteString.contains("auth/key") != true)
             return canned(body: "unused")
@@ -283,7 +280,7 @@ struct OpenRouterExtendedTests {
             try await provider.fetchSnapshot()
         }
         #expect(snap.status == .unavailable(.notConfigured))
-        #expect(LocalStub.requestCount == 1)
+        #expect(LocalStub.requestCount == 0)
     }
 
     // MARK: - Currency metric shape
@@ -325,8 +322,8 @@ struct OpenRouterExtendedTests {
     }
 }
 
-@Suite("OpenRouter spend windows", .serialized)
-struct OpenRouterSpendWindowTests {
+@Suite("OpenRouter balance row", .serialized)
+struct OpenRouterBalanceRowTests {
 
     private func snapshot(body: String) async throws -> QuotaSnapshot {
         let provider = OpenRouterProvider(apiKey: "key")
@@ -335,36 +332,33 @@ struct OpenRouterSpendWindowTests {
         }
     }
 
-    /// Both figures are published by `/auth/key`; neither is derived. The row
-    /// shows them as amounts, never as a bar — spend has no cap to measure
-    /// against, so a gauge would invent a denominator.
-    @Test("monthly and weekly spend come straight from the API")
-    func spendWindowsArePublished() async throws {
+    /// The per-window spend columns are gone: `usage_daily`, `usage_weekly` and
+    /// `usage_monthly` are no longer decoded at all, and the row reports the
+    /// one figure it still has — the key's spend, or the account credit balance
+    /// when the key can read it — the same way DeepSeek's balance-only row does.
+    /// A snapshot that carries spend windows again would mean the deleted
+    /// mechanism came back.
+    @Test("a balance row publishes no spend windows and no bars")
+    func balanceRowHasNoSpendWindows() async throws {
         let snap = try await snapshot(body: #"""
         {"data":{"usage":96.02,"usage_daily":0.835992537,"usage_weekly":13.000224144,
                  "usage_monthly":102.918365099,
                  "limit":null,"limit_remaining":null,"is_free_tier":false}}
         """#)
-        #expect(snap.spendWindows.count == 2)
-        // Longest period first, like the quota bars. `usage_daily` is not
-        // shown: it is a UTC calendar day with no reset timestamp, so it turns
-        // over mid-morning in eastern timezones with nothing to explain it.
-        #expect(snap.spendWindows.map(\.label) == ["MO", "WK"])
-        // Omitting the monthly figure made an account with real spend read as
-        // $0.00, because a key idle today and this week reports 0 for both.
-        #expect(snap.spendWindows[0].amount == Decimal(102.918365099))
-        #expect(snap.spendWindows[1].amount == Decimal(13.000224144))
         // No bars: there is no denominator for spend.
         #expect(snap.bars.isEmpty)
-    }
-
-    /// A window the vendor omits is an absence, not a zero — "$0.00 today"
-    /// and "we were not told" are different claims.
-    @Test("an omitted window is absent rather than zero")
-    func omittedWindowIsNil() async throws {
-        let snap = try await snapshot(body: #"{"data":{"usage":96.02,"limit":null}}"#)
-        #expect(snap.spendWindows.count == 2)
-        #expect(snap.spendWindows.allSatisfy { $0.amount == nil })
+        #expect(snap.apiCredits.isEmpty)
+        // Still one figure, still read as a lifetime-spend row rather than as
+        // three per-window amounts. `usage_monthly` (102.92) must not appear
+        // anywhere: it is neither the balance nor the spent figure.
+        guard case .currency(let balance, let limit, _, let code) = snap.metric else {
+            Issue.record("expected a currency metric, got \(snap.metric)")
+            return
+        }
+        #expect(balance == Decimal(96.02))
+        #expect(limit == nil)
+        #expect(code == "USD")
+        #expect(snap.currencyBasis == .lifetimeSpend)
     }
 
     /// The plan slot carries the credit balance for a money provider, so it

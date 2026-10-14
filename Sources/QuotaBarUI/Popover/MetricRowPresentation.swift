@@ -30,6 +30,42 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// "Resets on 1st of month". nil when it published nothing, in which case
     /// the row keeps showing the plan name rather than inventing a date.
     public let exhaustedResetText: String?
+    /// Banked reset credits the vendor says the account holds (one ticket glyph
+    /// each). nil when it published no such figure — which is *not* the same as
+    /// publishing zero.
+    public let resetCredits: ResetCredits?
+
+    /// Banked usage-limit resets, as the row draws them: one ticket glyph per
+    /// credit, capped so a large grant cannot run off the row.
+    public struct ResetCredits: Equatable, Sendable {
+        /// The full count the vendor published.
+        public let total: Int
+        /// Glyphs to draw — `total` itself until the cap.
+        public let tickets: Int
+        /// Credits beyond the glyph cap, so a truncated run still states its
+        /// own count: five glyphs and "+2" is seven, not "5 or more".
+        public let overflow: Int
+
+        /// The most glyphs any row draws. Past this the strip stops widening
+        /// and the overflow count carries the rest.
+        public static let maxTickets = 5
+
+        /// nil when there is nothing to draw. A vendor that published no figure
+        /// (`nil`), or published zero, draws nothing: "0 reset credits" is
+        /// noise on every account that never had one.
+        public init?(total: Int?) {
+            guard let total, total > 0 else { return nil }
+            self.total = total
+            self.tickets = min(total, Self.maxTickets)
+            self.overflow = max(0, total - Self.maxTickets)
+        }
+
+        /// The strip in words, for a screen reader. The glyph run is a shape
+        /// channel, so the count must also be spoken (WCAG 1.4.1).
+        public var spoken: String {
+            "\(total) banked reset credit\(total == 1 ? "" : "s")"
+        }
+    }
 
     /// One line naming figures that are not the newest poll's — the failure
     /// behind them and when they were really measured — or nil while they are
@@ -53,6 +89,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
+        self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable)
 
         // An unreadable provider has no bars, so this reads false there — a
         // quota we could not fetch is not a quota we know is spent.
@@ -170,6 +207,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
             "\(Int((used * 100).rounded()))%"
         case .count(let remaining, let limit, _):
             "\(remaining.formatted())/\(limit.formatted())"
+        case .credits(let remaining, let unitName):
+            // A count with no cap behind it is stated on its own; only a pool
+            // the vendor declares unlimited says so, because that is the
+            // vendor's own word rather than a missing number.
+            remaining.map { "\($0.formatted()) \(unitName)" } ?? "Unlimited"
         case .currency(let balance, let limit, let spent, let code):
             // An uncapped key has no "left of" to show. Falling back to
             // `spent ?? balance` printed the *balance* under a spend label —
@@ -192,6 +234,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
             "\(Int((used * 100).rounded())) percent used"
         case .count(let remaining, let limit, let unit):
             "\(remaining) of \(limit) \(unit) remaining"
+        case .credits(let remaining, let unitName):
+            remaining.map { "\($0) \(unitName) remaining" } ?? "unlimited"
         case .currency(let balance, let limit, let spent, let code):
             if let limit {
                 "\(currency(balance, code)) of \(currency(limit, code)) remaining"
@@ -205,6 +249,15 @@ public struct MetricRowPresentation: Equatable, Sendable {
         }
     }
 
+    /// A money figure for a row's own value label and spoken form.
+    ///
+    /// Locale-based via `.formatted(.currency(code:))`, which is *not* where
+    /// the popover's money rule lives: `MoneyText.format` is the deterministic
+    /// one, and the credit card plus a provider row's balance subtitle both use
+    /// it. This one is left as-is rather than silently switched, so a machine
+    /// whose locale renders USD as "USD 179.50" keeps its existing inspector
+    /// wording. Unifying the two onto `MoneyText` is a follow-up, not a quiet
+    /// behaviour change here.
     static func currency(_ value: Decimal, _ code: String) -> String {
         value.formatted(.currency(code: code).precision(.fractionLength(2)))
     }

@@ -541,9 +541,9 @@ public actor QuotaManager {
         // A vendor that published no reset can still show when the user's own
         // period turns over. `resetsAt` is a `let`, so this has to rebuild
         // the snapshot rather than assign in place — which means every field
-        // the initializer doesn't accept (spendWindows, the two catalog
-        // badges) has to be copied across explicitly, or it silently reverts
-        // to its default on this one path.
+        // the initializer doesn't accept (the credit entries) has to be copied
+        // across explicitly, or it silently reverts to its default on this one
+        // path.
         if updated.resetsAt == nil, let renewal = row.resetsAt {
             var rebuilt = QuotaSnapshot(
                 id: updated.id,
@@ -565,14 +565,10 @@ public actor QuotaManager {
                 cliSource: updated.cliSource,
                 currencyBasis: updated.currencyBasis
             )
-            rebuilt.spendWindows = updated.spendWindows
-            rebuilt.freeTierModelBadge = updated.freeTierModelBadge
-            rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
-            // A rebuild must not drop a real measurement fact: if the catalog
-            // fetch failed, the "couldn't load" placeholder must survive the
-            // attach pass or it silently disappears until the next poll, even
-            // though the failure is still real.
-            rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+            // A rebuild must not drop real published figures: the credit
+            // entries ride this snapshot, and losing them here would make
+            // them flicker out whenever a hand-entered cycle row is attached.
+            rebuilt.apiCredits = updated.apiCredits
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             // A fact about the poll, not a figure that was re-fetched: the
@@ -637,14 +633,7 @@ public actor QuotaManager {
             cliSource: updated.cliSource,
             currencyBasis: updated.currencyBasis
         )
-        rebuilt.spendWindows = updated.spendWindows
-        rebuilt.freeTierModelBadge = updated.freeTierModelBadge
-        rebuilt.cheapestLargeContextModelBadge = updated.cheapestLargeContextModelBadge
-        // A rebuild must not drop a real measurement fact: if the catalog
-        // fetch failed, the "couldn't load" placeholder must survive the
-        // retention pass or it silently disappears until the next poll, even
-        // though the failure is still real.
-        rebuilt.openRouterCatalogUnavailable = updated.openRouterCatalogUnavailable
+        rebuilt.apiCredits = updated.apiCredits
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         // Same rule as the catalog failure above: this snapshot's figures are

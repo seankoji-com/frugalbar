@@ -95,6 +95,15 @@ public enum MetricType: Sendable, Equatable {
     case percentage(usedFraction: Double, displayDetails: String?)
     case count(remaining: Int, limit: Int, unitName: String)
     case currency(balance: Decimal, limit: Decimal?, spent: Decimal?, currencyCode: String)
+    /// A count the vendor published in a unit of its own that is **not
+    /// money** — OpenAI's API credits, which its own console reads as
+    /// "62,500 credits remaining". Every figure is rendered in that unit,
+    /// verbatim: never reformatted as currency, never scaled.
+    ///
+    /// `remaining` is nil only for a pool the vendor declares unlimited, which
+    /// is a statement in its own right — the same reason `consumptionFraction`
+    /// is optional. It is never a 0 standing in for "not reported".
+    case credits(remaining: Int?, unitName: String)
     case subscription(tierName: String?, renewalDate: Date?)
 }
 
@@ -396,6 +405,12 @@ public enum CurrencyBasis: String, Sendable, Codable, Equatable {
     case keySpendCap
     /// Cumulative spend, with no cap to measure it against.
     case lifetimeSpend
+    /// A credit pool the vendor refills on a schedule, as opposed to
+    /// `accountCredit`'s standing balance — Anthropic's monthly extra-usage
+    /// allowance. Kept apart from `accountCredit` because its spend figure is
+    /// this period's, and printing it under "Lifetime used:" would assert a
+    /// total nobody measured.
+    case prepaidCredit
 
     /// Caption for the "spent" figure in the popover's currency block.
     public var spendLabel: String {
@@ -403,6 +418,7 @@ public enum CurrencyBasis: String, Sendable, Codable, Equatable {
         case .accountCredit: "Lifetime used:"
         case .keySpendCap:   "Key spend:"
         case .lifetimeSpend: "Lifetime spend:"
+        case .prepaidCredit: "Credit used:"
         }
     }
 
@@ -412,25 +428,8 @@ public enum CurrencyBasis: String, Sendable, Codable, Equatable {
         case .accountCredit: "Account credit:"
         case .keySpendCap:   "Key cap left:"
         case .lifetimeSpend: "Recorded spend:"
+        case .prepaidCredit: "Credit left:"
         }
-    }
-}
-
-/// Money spent over a named window, as the vendor reports it.
-///
-/// Distinct from `DualBarMetrics` because there is no denominator: spend has
-/// no cap to draw a bar against, so this renders as an amount and never as a
-/// gauge. `amount` is nil when the vendor published no figure for the window,
-/// which the UI shows as an absence.
-public struct SpendWindow: Sendable, Equatable {
-    public let label: String
-    public let amount: Decimal?
-    public let currencyCode: String
-
-    public init(label: String, amount: Decimal?, currencyCode: String) {
-        self.label = label
-        self.amount = amount
-        self.currencyCode = currencyCode
     }
 }
 
@@ -461,7 +460,6 @@ public struct StaleReading: Sendable, Equatable {
         self.at = at
     }
 }
-
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// The provider *instance* this reading belongs to.
     ///
@@ -486,27 +484,25 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var row3: DualBarMetrics?
     public var badgeText: String?
     public var planName: String?
-    /// Spend per window, for providers that meter money rather than quota.
-    public var spendWindows: [SpendWindow] = []
     public var latencyMs: Int?
     public var keyMasked: String?
     public var cliSource: String?
     public var currencyBasis: CurrencyBasis?
-    /// OpenRouter's own catalog badges — real, vendor-published data points,
-    /// never a fabricated ranking. `nil` when the catalog fetch failed or no
-    /// model qualified. Defaulted here (not as an init parameter) so neither
-    /// existing initializer, nor any other provider's call site, has to change.
-    public var freeTierModelBadge: String? = nil
-    public var cheapestLargeContextModelBadge: String? = nil
-    /// True when OpenRouter's model catalog could not be fetched this poll
-    /// (network/HTTP/decode failure or the 5s deadline elapsing). A MEASUREMENT
-    /// FACT — drives whether the UI draws a "couldn't load model info"
-    /// placeholder instead of silently omitting the badges anyway. Deliberately
-    /// distinct from a genuine zero-match, where the catalog *was* read and no
-    /// model qualified: that is a real answer and stays `false`, drawing
-    /// nothing. Defaulted here (not as an init parameter) so neither existing
-    /// initializer, nor any other provider's call site, has to change.
-    public var openRouterCatalogUnavailable: Bool = false
+    /// Prepaid API credit balances the vendor published in the same payload as
+    /// the quota this snapshot reports — OpenAI's `credits.balance`, Anthropic's
+    /// `extra_usage` / promo credit.
+    ///
+    /// Carried here rather than fetched by an entry of their own, because the
+    /// figure arrives in a response this snapshot already made: a second
+    /// provider would duplicate the request and a second cache key would split
+    /// one reading into two.
+    ///
+    /// These are *not* this snapshot's quota. They are drawn as their own
+    /// labelled entries in the popover (`APICreditEntry` says why they are a
+    /// separate type), and they take no part in `consumptionFraction`, the
+    /// urgency bands, exhaustion sorting, the advice engine, the menu-bar icon
+    /// or the history recorder — all of which read snapshots.
+    public var apiCredits: [APICreditEntry] = []
     /// Banked usage-reset credits the vendor says the user can redeem right
     /// now (OpenAI's `rate_limit_reset_credits.available_count`). `nil` when
     /// the vendor published no such figure — never 0 as a stand-in, since
@@ -811,6 +807,10 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
             let ld = NSDecimalNumber(decimal: limit).doubleValue
             let bd = NSDecimalNumber(decimal: balance).doubleValue
             return 1.0 - min(max(bd / ld, 0.0), 1.0)
+        case .credits:
+            // A count of credits has no cap to be a fraction *of*: the vendor
+            // publishes what is left, not what it is out of. Nil, never 0.
+            return nil
         case .subscription:
             return nil
         }

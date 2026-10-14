@@ -45,17 +45,9 @@ public enum WindowColumn: Int, CaseIterable, Sendable, Identifiable {
 /// One provider row laid out on the window grid.
 public struct WindowGridPresentation: Equatable, Sendable {
 
-    /// A spend amount placed in a column (OpenRouter's weekly and monthly
-    /// spend). Text, never a bar: spend has no cap to measure against.
-    public struct SpendCell: Equatable, Sendable {
-        public let amount: Decimal?
-        public let currencyCode: String
-    }
-
     /// The bar in each column. A column the vendor does not publish is
     /// simply absent — drawn empty, never as 0%.
     public let bars: [WindowColumn: DualBarMetrics]
-    public let spend: [WindowColumn: SpendCell]
     /// Bars that belong to no column, drawn on their own lines under the
     /// row with their own tokens, in the order the provider gave them.
     public let extras: [DualBarMetrics]
@@ -76,15 +68,7 @@ public struct WindowGridPresentation: Equatable, Sendable {
                 extras.append(bar)
             }
         }
-        var spend: [WindowColumn: SpendCell] = [:]
-        if bars.isEmpty {
-            for window in snapshot.spendWindows {
-                guard let column = WindowColumn.column(forLabel: window.label), spend[column] == nil else { continue }
-                spend[column] = SpendCell(amount: window.amount, currencyCode: window.currencyCode)
-            }
-        }
         self.bars = bars
-        self.spend = spend
         self.extras = extras
     }
 
@@ -97,7 +81,7 @@ public struct WindowGridPresentation: Equatable, Sendable {
     /// True when the row has anything to put in the grid. A row with nothing
     /// there keeps the chip fallback layout.
     public var usesGrid: Bool {
-        !bars.isEmpty || !spend.isEmpty
+        !bars.isEmpty
     }
 
     /// The one column this row draws, when the vendor published a single meter
@@ -116,7 +100,7 @@ public struct WindowGridPresentation: Equatable, Sendable {
     /// answers.
     public var soleColumn: WindowColumn? {
         guard extras.isEmpty else { return nil }
-        let filled = WindowColumn.allCases.filter { bars[$0] != nil || spend[$0] != nil }
+        let filled = WindowColumn.allCases.filter { bars[$0] != nil }
         return filled.count == 1 ? filled[0] : nil
     }
 
@@ -142,11 +126,11 @@ public struct WindowGridPresentation: Equatable, Sendable {
 
     /// Everything the grid draws, in words, for the row label: "5-hour 42%
     /// used, resets in 3 hours, weekly 80% used, ahead of an even pace, resets
-    /// in 6 days", then spend cells ("weekly spend $3.10") and the non-window
-    /// pools by token ("BN 50% used"). A figure a sighted user can read must
-    /// reach VoiceOver too: the reset time under each bar, and the amber fill
-    /// that means "ahead of an even pace", which would otherwise be colour
-    /// alone. Only windows in columns show either, so only they speak them.
+    /// in 6 days", then the non-window pools by token ("BN 50% used"). A figure
+    /// a sighted user can read must reach VoiceOver too: the reset time under
+    /// each bar, and the amber fill that means "ahead of an even pace", which
+    /// would otherwise be colour alone. Only windows in columns show either, so
+    /// only they speak them.
     public func spokenSummary(now explicitNow: Date? = nil) -> String? {
         let now = explicitNow ?? self.now
         func spoken(_ bar: DualBarMetrics, name: String, isColumn: Bool = false) -> String {
@@ -173,12 +157,7 @@ public struct WindowGridPresentation: Equatable, Sendable {
             return text
         }
         var parts = WindowColumn.allCases.compactMap { column -> String? in
-            if let bar = bars[column] { return spoken(bar, name: column.spokenName, isColumn: true) }
-            if let cell = spend[column] {
-                let amount = cell.amount.map { MetricRowPresentation.currency($0, cell.currencyCode) } ?? "not reported"
-                return "\(column.spokenName) spend \(amount)"
-            }
-            return nil
+            bars[column].map { spoken($0, name: column.spokenName, isColumn: true) }
         }
         parts += extras.map { spoken($0, name: $0.label) }
         return parts.isEmpty ? nil : parts.joined(separator: ", ")

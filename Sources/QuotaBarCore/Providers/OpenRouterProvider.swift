@@ -1,56 +1,5 @@
 import Foundation
 
-/// Memoises the fetched-and-ranked OpenRouter model catalog behind a TTL so
-/// repeated polls don't each re-fetch and re-rank the same public catalog.
-/// Deliberately process-lifetime state, not a second cache layer with disk
-/// persistence — a cold app launch always fetches fresh.
-actor ModelCatalogCache {
-
-    /// Task-local, mirroring `QuotaHTTP.$session`: production never rebinds
-    /// it, so `Self.current` always resolves to this one process-lifetime
-    /// instance, but a test that enters its own scope via
-    /// `$current.withValue(ModelCatalogCache())` — alongside its own
-    /// `QuotaHTTP.$session.withValue(_:)` — gets a brand new, empty actor
-    /// instance instead of sharing global memoised state. That is a
-    /// structural guarantee against cross-test leakage, unlike keying on a
-    /// session's `ObjectIdentifier`: an unretained `URLSession`'s address can
-    /// be reused after `finishTasksAndInvalidate()`, which made that scheme
-    /// only a probabilistic guard against a stale hit.
-    @TaskLocal static var current = ModelCatalogCache()
-
-    private var cached: (badges: OpenRouterProvider.ModelBadges, at: Date)?
-
-    /// Returns the memoised badges if they're younger than `ttl`, otherwise
-    /// runs `fetch` and caches the result.
-    ///
-    /// Deliberately does not coalesce concurrent misses onto one in-flight
-    /// call: an actor hop preserves the caller's own task-local session, and
-    /// joining another caller's in-flight future would hand back a result
-    /// fetched under *that* caller's session instead.
-    ///
-    /// `fetch` returns nil for a network/HTTP/decode failure, and a failure is
-    /// never memoised: caching it would pin empty badges for the whole TTL, so
-    /// one poll made while offline would blank the badges for four hours after
-    /// the network came back. Only a catalog we actually read is cached — even
-    /// when nothing in it qualified, which is a real answer.
-    fileprivate func badges(
-        ttl: TimeInterval,
-        fetch: @Sendable @escaping () async -> OpenRouterProvider.ModelBadges?
-    ) async -> OpenRouterProvider.ModelBadges {
-        if let cached, Date().timeIntervalSince(cached.at) < ttl {
-            return cached.badges
-        }
-        guard let badges = await fetch() else {
-            // `fetch` returned nil on a network/HTTP/decode failure. It must
-            // not be cached, but it must carry the failure bit so the caller
-            // can distinguish it from a genuine zero-match.
-            return OpenRouterProvider.ModelBadges(failed: true)
-        }
-        cached = (badges, Date())
-        return badges
-    }
-}
-
 /// OpenRouter credit provider — `GET /api/v1/auth/key`.
 ///
 /// Contract notes, because a previous revision misread all three:
@@ -78,15 +27,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        // The catalog fetch needs no key, so it starts concurrently with the
-        // (possibly key-gated) primary snapshot rather than after it.
-        async let badgesTask = Self.fetchModelBadges()
-        var snapshot = try await fetchPrimarySnapshot()
-        let badges = await badgesTask
-        snapshot.freeTierModelBadge = badges.freeTier
-        snapshot.cheapestLargeContextModelBadge = badges.cheapestLargeContext
-        snapshot.openRouterCatalogUnavailable = badges.failed
-        return snapshot
+        try await fetchPrimarySnapshot()
     }
 
     private func fetchPrimarySnapshot() async throws -> QuotaSnapshot {
@@ -112,9 +53,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         struct Response: Decodable, Sendable {
             struct Payload: Decodable, Sendable {
                 let usage: Double?
-                let usage_daily: Double?
                 let usage_weekly: Double?
-                let usage_monthly: Double?
                 let limit: Double?
                 let limit_remaining: Double?
                 let is_free_tier: Bool?
@@ -131,29 +70,16 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             return unavailable(.badResponse)
         }
 
-        // Spend per window, straight from `/auth/key`. These are this key's
-        // figures; the credit balance below is account-wide, so the two are
-        // different scopes and are labelled as such rather than combined.
-        // A window the API omits stays nil and renders as an absence.
-        // Longest period first, matching how the quota bars are ordered.
+        // `usage_monthly` and `usage_daily` are deliberately not decoded at
+        // all any more. They were the two spend-per-window columns this row
+        // used to draw, and they are calendar-aligned to UTC with no reset
+        // timestamp published for either: a "daily" figure silently rolled
+        // over mid-morning for anyone well east of UTC and read as spend that
+        // vanished. The row reports spend, not a spend window — see below.
         //
-        // The monthly figure is the one that carries information: OpenRouter
-        // reports these per-key, so a key idle this week reads $0.00 while
-        // still holding real spend for the month. Publishing only the short
-        // windows made an account with $100 of monthly spend look untouched.
-        //
-        // `usage_daily` is deliberately dropped. These buckets are calendar
-        // aligned to UTC, not rolling, and the API returns no reset timestamp
-        // for any of them — so a "daily" figure silently rolls over mid-morning
-        // for anyone well east of UTC and reads as spend that vanished. The
-        // coarser windows carry the same alignment, where a boundary a few
-        // hours out matters far less. None of them is drawn as a countdown.
-        let spendWindows = [
-            SpendWindow(label: "MO", amount: decoded.data.usage_monthly.map { Decimal($0) },
-                        currencyCode: "USD"),
-            SpendWindow(label: "WK", amount: decoded.data.usage_weekly.map { Decimal($0) },
-                        currencyCode: "USD"),
-        ]
+        // `usage_weekly` survives because it names the figure the uncapped
+        // path reports: a key with no cap has spend and no headroom, and the
+        // figure beside "spent" has to be one the vendor actually published.
 
         // Credits are authoritative when the supplied key can read them. If
         // this endpoint rejects a normal key, fall back to that key's cap.
@@ -183,11 +109,17 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 // empty account is exactly what this app exists to warn about.
                 // Thresholds are on the absolute balance, in dollars.
                 let urgency: Urgency = balance < 1 ? .critical : balance < 5 ? .warning : .none
-                var snapshot = QuotaSnapshot(
+                return QuotaSnapshot(
                     id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                     category: category,
+                    // The balance *is* this row's figure, so it is the metric's
+                    // balance and nothing else: `spent` is nil, which is what
+                    // stops the row's chip from printing the account's
+                    // lifetime usage under a "spent" label while the balance
+                    // sits in the subtitle beside it. One figure, one label —
+                    // the shape DeepSeek's balance-only row already has.
                     metric: .currency(balance: Decimal(balance), limit: nil,
-                                      spent: Decimal(used), currencyCode: "USD"),
+                                      spent: nil, currencyCode: "USD"),
                     status: .measured(urgency), resetsAt: nil, lastUpdated: Date(),
                     auxiliaryInfo: "Account credit balance",
                     row1: nil, row2: nil,
@@ -195,8 +127,6 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                     planName: nil, cliSource: "OPENROUTER_API_KEY / auth.json",
                     currencyBasis: .accountCredit
                 )
-                snapshot.spendWindows = spendWindows
-                return snapshot
             }
         }
         let tierNote = decoded.data.is_free_tier == true ? "Free tier" : nil
@@ -208,7 +138,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             ?? String(format: "$%.2f lifetime", spentUsd)
 
         guard let capUsd = decoded.data.limit, capUsd > 0 else {
-            var snapshot = QuotaSnapshot(
+            return QuotaSnapshot(
                 id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
                 category: category,
                 metric: .currency(balance: Decimal(spentUsd), limit: nil,
@@ -223,8 +153,6 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                 cliSource: "OPENROUTER_API_KEY / auth.json",
                 currencyBasis: .lifetimeSpend
             )
-            snapshot.spendWindows = spendWindows
-            return snapshot
         }
 
         let remainingUsd = decoded.data.limit_remaining ?? max(capUsd - spentUsd, 0)
@@ -236,7 +164,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
 
         let remainingFormatted = String(format: "$%.2f", remainingUsd)
 
-        var snapshot = QuotaSnapshot(
+        return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
             metric: .currency(balance: Decimal(remainingUsd), limit: Decimal(capUsd),
@@ -251,202 +179,10 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
             cliSource: "OPENROUTER_API_KEY / auth.json",
             currencyBasis: .keySpendCap
         )
-        snapshot.spendWindows = spendWindows
-        return snapshot
     }
-
-
 
 
     private static func retryAfter(from http: HTTPURLResponse) -> Date? {
         QuotaHTTP.retryAfterDate(secondsHeader: http.value(forHTTPHeaderField: "Retry-After"))
-    }
-
-    // MARK: - Model catalog badges
-
-    /// One entry from `GET /api/v1/models`, OpenRouter's public model
-    /// catalog. `pricing`/`context_length` are optional because a model
-    /// missing either is excluded from both badge rankings below — never
-    /// treated as `0` or as qualifying.
-    private struct ModelCatalogEntry: Decodable, Sendable {
-        struct Pricing: Decodable, Sendable {
-            let prompt: String?
-            let completion: String?
-        }
-        /// The advertised modalities, used to exclude models that are not
-        /// usable for agentic coding. `architecture.modality` is a compact
-        /// string like `"text->text"` or `"text+image->text+audio"`;
-        /// `output_modalities` is the machine-readable list. Both are optional
-        /// because an entry missing them is excluded from consideration below,
-        /// never treated as a text-only model.
-        struct Architecture: Decodable, Sendable {
-            let modality: String?
-            let input_modalities: [String]?
-            let output_modalities: [String]?
-        }
-        let id: String
-        let name: String?
-        let context_length: Int?
-        let pricing: Pricing?
-        let architecture: Architecture?
-    }
-
-    private struct ModelCatalogResponse: Decodable, Sendable {
-        let data: [ModelCatalogEntry]
-    }
-
-    /// The two badge strings, or nil each when the catalog call failed or no
-    /// model qualified. Never fabricated — every field comes straight off a
-    /// real catalog entry.
-    fileprivate struct ModelBadges: Sendable {
-        var freeTier: String?
-        var cheapestLargeContext: String?
-        var failed: Bool = false
-    }
-
-    private struct RankedModel {
-        let id: String
-        let name: String
-        let contextLength: Int
-        let promptPrice: Double
-        let completionPrice: Double
-    }
-
-    /// How long a fetched-and-ranked catalog stays valid before the next
-    /// call re-fetches. The public model list changes on the order of days,
-    /// not seconds, so a multi-hour TTL trades a little staleness for
-    /// sparing every poll of every OpenRouter provider instance a redundant
-    /// `/api/v1/models` round trip and re-rank. One hour, not four: the badge
-    /// pills sit in the same popover as live spend, and a four-hour-old
-    /// catalog had no freshness cue — an hour bounds that staleness to a
-    /// window that reads as current while still sparing 23 of 24 polls per
-    /// day on a hourly refresh cycle. (A separate "as of" date pill was
-    /// considered and rejected: it would only label the staleness, not reduce
-    /// it, for a row whose whole value is at-a-glance.)
-    static let catalogTTL: TimeInterval = 1 * 60 * 60
-
-    /// Best-effort fetch of the free/cheap-model badges from OpenRouter's
-    /// public catalog, which needs no key. Bounded to a deadline well under
-    /// `CachePolicy.perProviderTimeout` (10s) so a slow-but-not-erroring
-    /// `/api/v1/models` response can never ride the outer per-provider
-    /// deadline down to a generic `.timedOut` — including on the no-key fast
-    /// path, where `fetchPrimarySnapshot()` already has its real answer
-    /// (`.notConfigured`) instantly and shouldn't be held hostage by this
-    /// enrichment call. `withDeadline` races the fetch against its own
-    /// timer; a miss here simply yields empty badges, exactly like the
-    /// `try?` failure path it wraps.
-    private static func fetchModelBadges() async -> ModelBadges {
-        let outcome = await withDeadline(seconds: 5) {
-            await ModelCatalogCache.current.badges(ttl: catalogTTL) {
-                await fetchModelBadgesFromCatalog()
-            }
-        }
-        switch outcome {
-        case .success(let badges):
-            return badges
-        case .failure:
-            // The wrapped fetch never throws, so a `.failure` here is always
-            // the 5s deadline itself elapsing. Logged so a degraded/slow
-            // catalog is distinguishable in the unified log from the
-            // legitimate "fetched fine, nothing qualified" case below, which
-            // stays silent on purpose. The failure bit surfaces this to the
-            // UI, which draws a placeholder instead of silently omitting the
-            // badges row.
-            NSLog("frugalbar: OpenRouter model-catalog fetch timed out after 5s; badges omitted this poll")
-            return ModelBadges(failed: true)
-        }
-    }
-
-    /// nil on a network/HTTP/decode failure, which is what keeps the failure
-    /// out of `ModelCatalogCache` — a genuine zero-match returns real (empty)
-    /// badges and is cached, a failure is retried on the next poll.
-    private static func fetchModelBadgesFromCatalog() async -> ModelBadges? {
-        guard let result = try? await QuotaHTTP.get(url: "https://openrouter.ai/api/v1/models"),
-              (200...299).contains(result.1.statusCode),
-              let decoded = try? JSONDecoder().decode(ModelCatalogResponse.self, from: result.0)
-        else {
-            // Distinct from a genuine zero-match: this is a network/HTTP/
-            // decode failure, not "fetched fine, no model qualified."
-            NSLog("frugalbar: OpenRouter model-catalog fetch failed or returned an unparseable body; badges omitted this poll")
-            return nil
-        }
-
-        // A model with a missing/unparseable context_length or pricing is
-        // dropped from consideration entirely — it never becomes a `0` or a
-        // false qualifier for either ranking. So is a model that is not usable
-        // for agentic coding: an audio/music generator (e.g. Google Lyria)
-        // advertises a huge context at $0 but cannot hold a coding session, and
-        // would otherwise win the "free" badge. Excluding any model whose
-        // output modalities include audio keeps the badges to text-capable
-        // coding models. A model with no modality data at all is excluded the
-        // same way — never assumed text-safe.
-        let candidates: [RankedModel] = decoded.data.compactMap { entry in
-            guard let pricing = entry.pricing,
-                  let promptStr = pricing.prompt, let promptPrice = Double(promptStr),
-                  let completionStr = pricing.completion, let completionPrice = Double(completionStr),
-                  let contextLength = entry.context_length,
-                  let modalities = entry.architecture?.output_modalities,
-                  // The badge claims a *text-capable* coding model. Requiring
-                  // "text" output excludes both a genuinely empty modality list
-                  // and any entry whose only outputs are image/audio/video —
-                  // never assuming one is text-safe. Audio is also excluded
-                  // explicitly: a `text+audio` music generator is still not a
-                  // coding model and must not win a badge.
-                  modalities.contains("text"),
-                  !modalities.contains("audio")
-            else { return nil }
-            return RankedModel(
-                id: entry.id, name: entry.name ?? entry.id, contextLength: contextLength,
-                promptPrice: promptPrice, completionPrice: completionPrice
-            )
-        }
-
-        // Badge 1: $0 prompt AND $0 completion, largest context wins. Ties
-        // broken alphabetically by id for determinism. Candidates are already
-        // filtered to text-capable coding models, so a free audio generator
-        // can never take this badge.
-        let free = candidates
-            .filter { $0.promptPrice == 0.0 && $0.completionPrice == 0.0 }
-            .min { lhs, rhs in
-                lhs.contextLength != rhs.contextLength
-                    ? lhs.contextLength > rhs.contextLength
-                    : lhs.id < rhs.id
-            }
-
-        // Badge 2: strictly-paid (completion > 0) with context >= 1M,
-        // cheapest $/M completion tokens wins. Ties broken alphabetically.
-        let cheap = candidates
-            .filter { $0.completionPrice > 0.0 && $0.contextLength >= 1_000_000 }
-            .min { lhs, rhs in
-                lhs.completionPrice != rhs.completionPrice
-                    ? lhs.completionPrice < rhs.completionPrice
-                    : lhs.id < rhs.id
-            }
-
-        return ModelBadges(
-            freeTier: free.map { "Free · \($0.name) (\(abbreviateContext($0.contextLength)) ctx)" },
-            cheapestLargeContext: cheap.map {
-                "\(formatPricePerMillion($0.completionPrice)) · \($0.name) (\(abbreviateContext($0.contextLength)) ctx)"
-            }
-        )
-    }
-
-    /// Abbreviates a token count for a compact badge: `128000` → `"128K"`,
-    /// `1000000` → `"1M"`, `10000000` → `"10M"`.
-    private static func abbreviateContext(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            let millions = Double(tokens) / 1_000_000
-            return millions == millions.rounded() ? "\(Int(millions))M" : String(format: "%.1fM", millions)
-        }
-        if tokens >= 1_000 {
-            let thousands = Double(tokens) / 1_000
-            return thousands == thousands.rounded() ? "\(Int(thousands))K" : String(format: "%.1fK", thousands)
-        }
-        return "\(tokens)"
-    }
-
-    /// OpenRouter publishes price per token in USD; badges read as $/M tokens.
-    private static func formatPricePerMillion(_ perToken: Double) -> String {
-        String(format: "$%.2f/M", perToken * 1_000_000)
     }
 }

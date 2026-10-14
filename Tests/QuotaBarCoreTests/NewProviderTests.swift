@@ -1192,7 +1192,7 @@ struct DeepSeekProviderTests {
         // A balance has no denominator: no reset, no bars, no spend windows.
         #expect(snap.resetsAt == nil)
         #expect(snap.row1 == nil && snap.row2 == nil && snap.row3 == nil)
-        #expect(snap.spendWindows.isEmpty)
+        #expect(snap.apiCredits.isEmpty)
 
         guard case .currency(let balance, let limit, let spent, let code) = snap.metric else {
             Issue.record("expected .currency, got \(snap.metric)")

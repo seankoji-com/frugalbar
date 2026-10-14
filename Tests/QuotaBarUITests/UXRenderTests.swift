@@ -38,12 +38,22 @@ struct UXRenderTests {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             AdviceSectionView(advice: .evaluate(from: snapshots), onActionTap: {})
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots, onSelect: { _ in })
+            APICreditSectionView(entries: creditFixtures())
             FooterActionsView(summary: .compute(from: snapshots), isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
         }.padding(12).frame(width: 384).background(Theme.surface), name: "popover", directory: directory)
         try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
+        // A vendor's failed poll retains its balances, and the card must not
+        // present them as this poll's reading. OpenAI's row here is stale;
+        // Claude's, in the same card, is not — a whole card marked stale would
+        // not show that the marker belongs to the vendor.
+        try await save(VStack(spacing: 12) {
+            Text("Credit card · OpenAI's newest poll failed").font(.caption).foregroundStyle(Theme.outline)
+            APICreditSectionView(entries: creditFixtures(), staleVendors: ["openai"])
+        }.padding(12).frame(width: 384).background(Theme.surface),
+            name: "credit-section-stale", directory: directory)
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("fixture.sqlite"))
         try await save(QuotaTimelineChart(segments: [], timeRange: .last7Days)
             .frame(width: 640, height: 240).background(Theme.card),
@@ -84,14 +94,39 @@ struct UXRenderTests {
             .frame(width: 320, height: 240).background(Theme.surface), name: "token-caveats", directory: directory)
     }
 
+    /// The prepaid credit entries the API Spend & Credits card draws: a credit
+    /// count (OpenAI's unit, never money), a monthly money pool with its limit
+    /// as the note, and a promo credit whose expiry is a date rather than a
+    /// countdown. None of them carries a bar.
+    private func creditFixtures() -> [APICreditEntry] {
+        [APICreditEntry(
+            id: "openai.api-credits", vendorId: .openai, label: "API credits",
+            metric: .credits(remaining: 62_500, unitName: "credits"),
+            source: "Codex usage payload · credits.balance"),
+         APICreditEntry(
+            id: "claude.extra-usage", vendorId: .claude, label: "API credits",
+            metric: .currency(balance: Decimal(string: "179.50")!,
+                              limit: Decimal(string: "200.00")!, spent: nil, currencyCode: "USD"),
+            currencyBasis: .prepaidCredit, detail: "$200.00 monthly limit",
+            source: "OAuth usage payload · extra_usage"),
+         APICreditEntry(
+            id: "claude.promo-credit", vendorId: .claude, label: "Promo credit",
+            metric: .currency(balance: Decimal(150), limit: Decimal(200), spent: nil, currencyCode: "USD"),
+            currencyBasis: .prepaidCredit, detail: "Expires 15 Nov 2026",
+            source: "OAuth usage payload · iguana_necktie")]
+    }
+
     /// The vendors that publish a single window — GitHub Copilot reports
     /// monthly only, OpenAI weekly only. Each row's one meter spans the whole
     /// grid rather than sitting in a third of the row with a faint dash either
-    /// side, and this fixture is what the rendered popover shows it with.
+    /// side, and this fixture is what the rendered popover shows it with. The
+    /// OpenAI row also carries banked reset credits, so the ticket strip
+    /// (capped, with the overflow count) is visible in the render.
     private func soleMeters(now: Date) -> [QuotaSnapshot] {
         func sole(_ vendor: VendorIdentifier, _ name: String, _ plan: String, _ token: String,
-                  fraction: Double, pace: Double?, length: TimeInterval, resetsIn: TimeInterval) -> QuotaSnapshot {
-            QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name, category: .aiSubscriptions,
+                  fraction: Double, pace: Double?, length: TimeInterval, resetsIn: TimeInterval,
+                  bankedResets: Int? = nil) -> QuotaSnapshot {
+            var snap = QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name, category: .aiSubscriptions,
                 metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
                 resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
                 row1: DualBarMetrics(
@@ -99,11 +134,13 @@ struct UXRenderTests {
                     usedText: "\(Int(fraction * 100))% used",
                     resetText: "Resets in \(Int(resetsIn / 86_400))d",
                     resetsAt: now.addingTimeInterval(resetsIn), windowLength: length))
+            snap.resetCreditsAvailable = bankedResets
+            return snap
         }
         return [sole(.copilot, "GitHub Copilot", "Pro", "MO", fraction: 1.0, pace: nil,
                      length: 30 * 86_400, resetsIn: 18 * 86_400),
                 sole(.openai, "OpenAI", "Plus", "WK", fraction: 0.12, pace: 0.15,
-                     length: 7 * 86_400, resetsIn: 6 * 86_400)]
+                     length: 7 * 86_400, resetsIn: 6 * 86_400, bankedResets: 7)]
     }
 
     // MARK: - Detail, History, Settings and workspace order

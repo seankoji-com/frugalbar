@@ -205,6 +205,24 @@ public struct PopoverRootView: View {
                 }
             }
 
+            // Prepaid API credit balances, in one card of their own. They are
+            // not quotas — no window, no denominator — so they are drawn apart
+            // from the vendor cards rather than inside one, and the section is
+            // simply absent when no vendor published a figure.
+            let creditEntries = store.snapshots.flatMap(\.apiCredits)
+            if !creditEntries.isEmpty {
+                APICreditSectionView(
+                    entries: creditEntries,
+                    // A vendor whose newest poll failed kept its figures, so the
+                    // balances in this card for it are carried over. Named by
+                    // vendor, not by snapshot, because that is what the failure
+                    // belongs to.
+                    staleVendors: Set(
+                        store.snapshots.filter { $0.staleReading != nil }.map(\.vendorId.rawValue)
+                    )
+                )
+            }
+
 
 
             if store.snapshots.isEmpty {

@@ -96,48 +96,12 @@ struct WindowGridPresentationTests {
         #expect(grid.spokenSummary() == "5-hour blocked, weekly no reading")
     }
 
-    @Test("spend windows fill the matching columns as text when there are no bars")
-    func spendColumns() {
-        var s = openRouterSnapshot()
-        s.spendWindows = [SpendWindow(label: "MO", amount: 12.4, currencyCode: "USD"),
-                          SpendWindow(label: "WK", amount: nil, currencyCode: "USD")]
-        let grid = WindowGridPresentation(snapshot: s)
-        #expect(grid.usesGrid)
-        #expect(grid.spend[.monthly]?.amount == 12.4)
-        #expect(grid.spend[.weekly] != nil)
-        #expect(grid.spend[.weekly]?.amount == nil)
-        #expect(grid.spend[.fiveHour] == nil)
-        // Two cells: the columns are still lining something up.
-        #expect(grid.soleColumn == nil)
-        // VoiceOver hears the same figures the cells show.
-        let spoken = grid.spokenSummary() ?? ""
-        #expect(spoken.hasPrefix("weekly spend not reported, monthly spend "))
-        #expect(spoken.contains("12.40"))
-    }
-
     /// One spend window and nothing else is the same sparse case the bars'
     /// `soleColumn` answers: the single figure takes the whole grid rather
     /// than sitting in the middle column with a dash either side.
-    @Test("a sole spend window spans the grid")
+    @Test("a sole bar spans the grid")
     func soleSpendSpansTheGrid() {
-        var s = openRouterSnapshot()
-        s.spendWindows = [SpendWindow(label: "MO", amount: 12.4, currencyCode: "USD")]
-        #expect(WindowGridPresentation(snapshot: s).soleColumn == .monthly)
-
-        var unmeasured = openRouterSnapshot()
-        unmeasured.spendWindows = [SpendWindow(label: "WK", amount: nil, currencyCode: "USD")]
-        // A window the vendor listed but published no amount for is still the
-        // one meter this row would draw ("—"), and expands with it.
-        #expect(WindowGridPresentation(snapshot: unmeasured).soleColumn == .weekly)
-    }
-
-    /// An OpenRouter row as the spend tests build it: no bars, and whatever
-    /// `spendWindows` the test sets.
-    private func openRouterSnapshot() -> QuotaSnapshot {
-        QuotaSnapshot(
-            id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter", category: .apiSpendAndCredits,
-            metric: .currency(balance: 10, limit: nil, spent: nil, currencyCode: "USD"),
-            status: .measured(.none), resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil)
+        #expect(WindowGridPresentation(snapshot: snap([bar("MO", 0.2)])).soleColumn == .monthly)
     }
 
     /// The headline "42 percent used" and the grid's "5-hour 42% used" are
