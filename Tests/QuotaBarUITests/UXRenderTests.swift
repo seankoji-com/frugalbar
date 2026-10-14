@@ -33,7 +33,7 @@ struct UXRenderTests {
                     resetText: "Resets in 1h", resetsAt: now.addingTimeInterval(3600)))
         }
         let snapshots = [snapshot(.claude, "Claude", 0.65), snapshot(.opencode, "OpenCode Go · Gamma workspace", 0.45),
-                         snapshot(.commandcode, "Command Code", 0.9)]
+                         snapshot(.commandcode, "Command Code", 0.9)] + soleMeters(now: now)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             AdviceSectionView(advice: .evaluate(from: snapshots), onActionTap: {})
@@ -82,6 +82,28 @@ struct UXRenderTests {
             configured: [.claude, .openai, .gemini, .grok, .kiro], ingestion: .incomplete, now: now)
         try await save(TokenUsageChartView(chart: tokenChart, range: .last24Hours).padding(14)
             .frame(width: 320, height: 240).background(Theme.surface), name: "token-caveats", directory: directory)
+    }
+
+    /// The vendors that publish a single window — GitHub Copilot reports
+    /// monthly only, OpenAI weekly only. Each row's one meter spans the whole
+    /// grid rather than sitting in a third of the row with a faint dash either
+    /// side, and this fixture is what the rendered popover shows it with.
+    private func soleMeters(now: Date) -> [QuotaSnapshot] {
+        func sole(_ vendor: VendorIdentifier, _ name: String, _ plan: String, _ token: String,
+                  fraction: Double, pace: Double?, length: TimeInterval, resetsIn: TimeInterval) -> QuotaSnapshot {
+            QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name, category: .aiSubscriptions,
+                metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
+                resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                row1: DualBarMetrics(
+                    primaryFraction: fraction, expectedPaceFraction: pace, label: token,
+                    usedText: "\(Int(fraction * 100))% used",
+                    resetText: "Resets in \(Int(resetsIn / 86_400))d",
+                    resetsAt: now.addingTimeInterval(resetsIn), windowLength: length))
+        }
+        return [sole(.copilot, "GitHub Copilot", "Pro", "MO", fraction: 1.0, pace: nil,
+                     length: 30 * 86_400, resetsIn: 18 * 86_400),
+                sole(.openai, "OpenAI", "Plus", "WK", fraction: 0.12, pace: 0.15,
+                     length: 7 * 86_400, resetsIn: 6 * 86_400)]
     }
 
     // MARK: - Detail, History, Settings and workspace order

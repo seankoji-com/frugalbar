@@ -284,7 +284,14 @@ struct MetricRowView: View {
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
-            if grid.usesGrid {
+            if let sole = grid.soleColumn {
+                // One meter takes the whole grid, rather than a single bar in
+                // a third of the row with a dash either side (GitHub Copilot's
+                // monthly, OpenAI's weekly). `soleColumn` decides when; the
+                // bar's own track fills whatever width the cell is given.
+                gridCell(sole, grid: grid)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if grid.usesGrid {
                 HStack(alignment: .center, spacing: Theme.gridColumnSpacing) {
                     ForEach(WindowColumn.allCases) { column in
                         gridCell(column, grid: grid)
