@@ -25,6 +25,12 @@ import Testing
 //   element whose one child is another of the same — the "repeating
 //   accessibility-tree response" an unattended run reports, with the runner
 //   trusted. `cacheDisplay` still draws, so the PNGs alone prove nothing here.
+// - AppKit events dispatched before the window's `occlusionState` is read.
+//   AppKit updates it only as it dispatches events, and `RunLoop.main.run`
+//   dispatches none, so a window on screen in an unlocked session read as
+//   not visible (8192) and the run was refused for a cause it did not have.
+//   The preflight pumps `nextEvent`/`sendEvent` until the window reads as
+//   visible, for two seconds at most; past that, "not visible" is real.
 // - The hosted window's tree exposing at least one labelled element.
 //
 // One test per process because, once the accessibility client is attached,
@@ -495,6 +501,7 @@ struct UXInteractionTests {
         if CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
             throw AccessibilityUnavailable(reason: "the main display is asleep, so the window is not on screen")
         }
+        dispatchEvents(until: window, seconds: 2)
         var walk = TreeWalk()
         for _ in 0..<5 {
             walk = withAXClient(Self.walkTree)
@@ -508,6 +515,23 @@ struct UXInteractionTests {
             "the hosted window's accessibility tree has no labelled element: \(walk.windows) window(s) listed, "
             + "\(walk.visited) element(s) reached"
             + (walk.singleChildChain ? ", each an unlabelled element whose only child is another" : ""))
+    }
+
+    /// Dispatches AppKit's queued events until `window` reads as visible or
+    /// `seconds` pass. AppKit updates `occlusionState` only as it dispatches
+    /// events, and a bare run-loop turn dispatches none, so without this a
+    /// window on screen reads as not visible (8192) for ever. `nextEvent`
+    /// runs its own nested loop, so a stop it absorbs never reaches the
+    /// async test main.
+    private func dispatchEvents(until window: NSWindow, seconds: TimeInterval) {
+        let app = NSApplication.shared
+        let deadline = Date().addingTimeInterval(seconds)
+        while !window.occlusionState.contains(.visible), Date() < deadline {
+            if let event = app.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05),
+                                         inMode: .default, dequeue: true) {
+                app.sendEvent(event)
+            }
+        }
     }
 
     struct TreeWalk {
