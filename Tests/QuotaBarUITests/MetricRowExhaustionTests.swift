@@ -11,6 +11,22 @@ struct MetricRowExhaustionTests {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test("a subscription without a plan shows and speaks its published status badge")
+    func paymentRequiredBadgeIsVisibleAndSpoken() {
+        let snapshot = QuotaSnapshot(
+            id: "muse", vendorId: .muse, displayName: "Muse",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil,
+            lastUpdated: now, auxiliaryInfo: nil, badgeText: "Payment required"
+        )
+        let presentation = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(presentation.valueLabel == "Payment required")
+        #expect(presentation.accessibilityLabel.contains("Payment required"))
+        #expect(presentation.accessibilityLabelOmittingPercentage.contains("Payment required"))
+        #expect(presentation.fraction == nil)
+    }
+
     private func snapshot(
         bars: [DualBarMetrics],
         status: ProviderStatus = .measured(.none)

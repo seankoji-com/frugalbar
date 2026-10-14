@@ -15,11 +15,16 @@ import SQLite3
 private final class NewProviderStub: URLProtocol {
     nonisolated(unsafe) private static var _stubs: [String: @Sendable (URLRequest) -> Stubbed] = [:]
     nonisolated(unsafe) private static var _lastRequests: [String: URLRequest] = [:]
+    /// The request bodies, captured at request time. A `URLProtocol` sees a
+    /// POST body as a stream rather than `httpBody`, and that stream is spent
+    /// by the time a test reads `lastRequest`, so it is drained here.
+    nonisolated(unsafe) private static var _lastBodies: [String: Data] = [:]
     private static let lock = NSLock()
 
     struct Stubbed: Sendable {
         let status: Int
         let body: Data
+        var headers: [String: String] = [:]
     }
 
     static func install(_ stub: Stubbed, host: String) {
@@ -40,6 +45,28 @@ private final class NewProviderStub: URLProtocol {
         lock.withLock { _lastRequests[host] }
     }
 
+    /// The body that went out in the most recent request to `host`.
+    static func lastBody(host: String) -> Data? {
+        lock.withLock { _lastBodies[host] }
+    }
+
+    /// Reads a request body, which the loading system hands a `URLProtocol` as
+    /// a stream rather than as `httpBody`.
+    private static func drain(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+
     static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [NewProviderStub.self]
@@ -56,6 +83,7 @@ private final class NewProviderStub: URLProtocol {
         }
         let responder: (@Sendable (URLRequest) -> Stubbed)? = Self.lock.withLock {
             Self._lastRequests[host] = request
+            Self._lastBodies[host] = Self.drain(request)
             return Self._stubs[host]
         }
         guard let stub = responder?(request) else {
@@ -63,7 +91,8 @@ private final class NewProviderStub: URLProtocol {
             return
         }
         let response = HTTPURLResponse(
-            url: url, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: nil)!
+            url: url, statusCode: stub.status, httpVersion: "HTTP/1.1",
+            headerFields: stub.headers.isEmpty ? nil : stub.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: stub.body)
         client?.urlProtocolDidFinishLoading(self)
@@ -78,6 +107,7 @@ private enum StubHost {
     static let opencode = "opencode.ai"
     static let commandcode = "api.commandcode.ai"
     static let deepseek = "api.deepseek.com"
+    static let muse = "api.meta.ai"
 }
 
 private func withRoutedHTTP<T: Sendable>(
@@ -1307,5 +1337,279 @@ struct DeepSeekProviderTests {
         #expect(request.url?.path.hasSuffix("/user/balance") == true)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-secret")
         #expect(request.url?.absoluteString.contains("sk-secret") != true)
+    }
+}
+
+// MARK: - Muse
+
+/// The instant every Muse assertion is taken at, so none depends on the wall
+/// clock. The body's reset times are expressed as offsets from it.
+private let museNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+/// The body `POST /muse-code/key` returns, trimmed to the fields the provider
+/// reads. `used_percent` is an integer percentage and `resets_at` is epoch
+/// **seconds** in the real response — the CLI normalises it to milliseconds
+/// for its own wire schema, so the provider must not assume milliseconds.
+private func museBody(
+    isActive: Bool = true,
+    requirePayment: Bool = false,
+    tierName: String = "Muse Code Power Usage",
+    windowPercent: Int = 26,
+    windowMins: Int = 300,
+    windowReset: TimeInterval = 2.5 * 3600,
+    weeklyPercent: Int = 8,
+    weeklyReset: TimeInterval = 3 * 24 * 3600
+) -> String {
+    let windowResetsAt = Int(museNow.addingTimeInterval(windowReset).timeIntervalSince1970)
+    let weeklyResetsAt = Int(museNow.addingTimeInterval(weeklyReset).timeIntervalSince1970)
+    return """
+    {"is_subs_active":\(isActive),"require_payment":\(requirePayment),\
+    "subs_tier_name":"\(tierName)",\
+    "subs_usage":{"tier":"27681631238169137",\
+    "window":{"used_percent":\(windowPercent),"window_duration_mins":\(windowMins),"resets_at":\(windowResetsAt)},\
+    "weekly":{"used_percent":\(weeklyPercent),"resets_at":\(weeklyResetsAt)}}}
+    """
+}
+
+@Suite("MuseQuotaProvider", .serialized)
+struct MuseQuotaProviderTests {
+
+    private static let fixedNow = museNow
+
+    /// Parses a body and builds the snapshot at a fixed instant.
+    private func snapshot(_ body: String) throws -> QuotaSnapshot {
+        let response = try #require(MuseQuotaProvider.parse(Data(body.utf8)))
+        return MuseQuotaProvider.snapshot(
+            from: response, provider: MuseQuotaProvider(), now: Self.fixedNow)
+    }
+
+    @Test("the mint body is a measured subscription with a 5H and a WK bar")
+    func liveBody() throws {
+        let snap = try snapshot(museBody())
+
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.status.urgency == .none)
+        #expect(snap.category == .aiSubscriptions)
+        // The vendor's own tier label, verbatim.
+        #expect(snap.planName == "Muse Code Power Usage")
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.label == "WK")
+        #expect(snap.row1?.primaryFraction == 0.26)
+        #expect(snap.row2?.primaryFraction == 0.08)
+        #expect(snap.badgeText == "74% left")
+        // The reading is a snapshot of the account at fetch time.
+        #expect(snap.resetsAt == snap.row2?.resetsAt)
+    }
+
+    /// `used_percent` is verbatim and may exceed 100: over quota stays over
+    /// quota in the text, and the fill only reaches the end of the track.
+    @Test("an over-quota window reads Exhausted, never a clamped, calm 100")
+    func overCap() throws {
+        let snap = try snapshot(museBody(windowPercent: 120))
+        #expect(snap.row1?.primaryFraction == 1.0)
+        #expect(snap.row1?.usedText == "120% used")
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "Exhausted")
+    }
+
+    @Test("urgency bands follow the worst window")
+    func urgencyBands() throws {
+        #expect(try snapshot(museBody(windowPercent: 79, weeklyPercent: 10)).status.urgency == .none)
+        #expect(try snapshot(museBody(windowPercent: 80, weeklyPercent: 10)).status.urgency == .warning)
+        #expect(try snapshot(museBody(windowPercent: 95, weeklyPercent: 10)).status.urgency == .critical)
+    }
+
+    /// The vendor's own length drives the pace tick. Its absence draws no
+    /// marker rather than assuming a five-hour window.
+    @Test("the vendor's window length drives the pace marker")
+    func windowDurationDrivesPace() throws {
+        let paced = try snapshot(museBody(windowMins: 300, windowReset: 2.5 * 3600))
+        #expect(paced.row1?.windowLength == QuotaWindow.fiveHours)
+        #expect(paced.row1?.expectedPaceFraction == 0.5)
+
+        let unpaced = try snapshot("""
+        {"is_subs_active":true,"subs_usage":{"window":{"used_percent":26,"resets_at":1700009000}}}
+        """)
+        #expect(unpaced.row1?.windowLength == nil)
+        #expect(unpaced.row1?.expectedPaceFraction == nil)
+    }
+
+    /// Epoch **seconds**, unlike the CLI's own millisecond schema. Both units
+    /// must land on the same instant, or a countdown reads centuries out.
+    @Test("reset seconds and milliseconds resolve to the same instant")
+    func resetUnits() throws {
+        let seconds = try snapshot(
+            #"{"is_subs_active":true,"subs_usage":{"window":{"used_percent":10,"resets_at":1767243600}}}"#)
+        #expect(seconds.row1?.resetsAt == Date(timeIntervalSince1970: 1_767_243_600))
+
+        let millis = try snapshot(
+            #"{"is_subs_active":true,"subs_usage":{"window":{"used_percent":10,"resets_at":1767243600000}}}"#)
+        #expect(millis.row1?.resetsAt == Date(timeIntervalSince1970: 1_767_243_600))
+    }
+
+    /// A block with no percentage is omitted, never drawn at 0% — an empty bar
+    /// reads as "plenty left" when the vendor published nothing at all.
+    @Test("a window without a percentage is omitted, not drawn as empty")
+    func missingPercent() throws {
+        let snap = try snapshot("""
+        {"is_subs_active":true,"subs_usage":{"weekly":{"used_percent":8,"resets_at":1700259200}}}
+        """)
+        #expect(snap.status.confidence == .measured)
+        // The 5H block carried no figure, so nothing is drawn for it; the WK
+        // row keeps its own position in the grid (matching CommandCode and
+        // ClinePass, which leave the same gap).
+        #expect(snap.row1 == nil)
+        #expect(snap.row2?.label == "WK")
+    }
+
+    @Test("a body with no window at all is unsupported, never a healthy row")
+    func noWindows() throws {
+        #expect(try snapshot(#"{"is_subs_active":true,"subs_usage":{"tier":"1"}}"#)
+            .status == .unavailable(.unsupported("Muse reported no usage window")))
+    }
+
+    @Test("a body with no usage payload is unsupported, not measured")
+    func noUsage() throws {
+        #expect(try snapshot(#"{"is_subs_active":true}"#)
+            .status == .unavailable(.unsupported("Muse reported no subscription usage")))
+    }
+
+    /// An inactive subscription must not render as a healthy 0%-used row: the
+    /// vendor stated it cannot serve.
+    @Test("an inactive subscription with a payment requirement is critical")
+    func paymentRequired() throws {
+        let snap = try snapshot(#"{"is_subs_active":false,"require_payment":true}"#)
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "Payment required")
+        #expect(snap.row1 == nil && snap.row2 == nil)
+    }
+
+    @Test("an inactive subscription without a payment flag is unsupported")
+    func inactiveNoPayment() throws {
+        #expect(try snapshot(#"{"is_subs_active":false,"require_payment":false}"#)
+            .status == .unavailable(.unsupported("Muse reported no active subscription")))
+    }
+
+    /// An absent `is_subs_active` is unknown, not "active" — but it is not a
+    /// reason to discard a usage payload the vendor did send.
+    @Test("an absent activity flag does not by itself discard the reading")
+    func absentActivityFlag() throws {
+        let snap = try snapshot(museBody().replacingOccurrences(of: "\"is_subs_active\":true,", with: ""))
+        #expect(snap.status.confidence == .measured)
+    }
+
+    @Test("a non-JSON body does not decode")
+    func notJSON() {
+        #expect(MuseQuotaProvider.parse(Data("not json".utf8)) == nil)
+    }
+
+    // MARK: HTTP plumbing
+
+    @Test("the mint is a JSON POST carrying the token in a header, never the URL")
+    func requestShape() async throws {
+        _ = try await withStubbedHTTP(host: StubHost.muse, body: museBody()) {
+            try await MuseQuotaProvider(apiKey: "dca-secret").fetchSnapshot()
+        }
+        // The stub was actually hit.
+        let request = try #require(NewProviderStub.lastRequest(host: StubHost.muse))
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.path.hasSuffix("/muse-code/key") == true)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer dca-secret")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        #expect(request.value(forHTTPHeaderField: "x-api-version") == "1.0.0")
+        #expect(request.url?.absoluteString.contains("dca-secret") != true)
+    }
+
+    /// The endpoint requires a JSON body — an empty one is a 400 upstream. The
+    /// stub answers 400 to an empty body, so a provider that stopped sending
+    /// `{}` fails here as a bad read rather than passing silently.
+    @Test("{} must go out, because an empty body is a 400 upstream")
+    func bodyIsRequired() async throws {
+        NewProviderStub.install(host: StubHost.muse) { request in
+            let host = request.url?.host ?? ""
+            let empty = (NewProviderStub.lastBody(host: host) ?? Data()).isEmpty
+            return NewProviderStub.Stubbed(
+                status: empty ? 400 : 200,
+                body: Data((empty ? "{}" : museBody()).utf8))
+        }
+        defer { NewProviderStub.remove(host: StubHost.muse) }
+
+        let snap = try await QuotaHTTP.$session.withValue(NewProviderStub.makeSession()) {
+            try await MuseQuotaProvider(apiKey: "dca").fetchSnapshot()
+        }
+        #expect(snap.status.confidence == .measured)
+        #expect(NewProviderStub.lastBody(host: StubHost.muse) == Data("{}".utf8))
+    }
+
+    @Test("a 401 is a rejected credential")
+    func rejected() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.muse, status: 401, body: "{}") {
+            try await MuseQuotaProvider(apiKey: "dca-bad").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    /// A 429 keeps the vendor's own backoff: that instruction is what holds
+    /// back the next automatic poll, so dropping it would poll straight back.
+    @Test("a 429 keeps the vendor's Retry-After")
+    func throttled() async throws {
+        NewProviderStub.install(host: StubHost.muse) { _ in
+            NewProviderStub.Stubbed(
+                status: 429, body: Data("{}".utf8), headers: ["Retry-After": "30"])
+        }
+        defer { NewProviderStub.remove(host: StubHost.muse) }
+
+        let snap = try await QuotaHTTP.$session.withValue(NewProviderStub.makeSession()) {
+            try await MuseQuotaProvider(apiKey: "dca").fetchSnapshot()
+        }
+        guard case .rateLimited(let retryAfter) = snap.status.unavailableReason else {
+            Issue.record("expected .rateLimited, got \(String(describing: snap.status.unavailableReason))")
+            return
+        }
+        let date = try #require(retryAfter)
+        #expect(abs(date.timeIntervalSinceNow - 30) < 10)
+    }
+
+    /// A 429 with no `Retry-After` is still a rate limit, with no instant.
+    @Test("a 429 without a Retry-After carries no backoff")
+    func throttledWithoutHeader() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.muse, status: 429, body: "{}") {
+            try await MuseQuotaProvider(apiKey: "dca").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: nil)))
+    }
+
+    @Test("a 400 is a bad response, not a fabricated calm reading")
+    func emptyBody400() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.muse, status: 400, body: "{}") {
+            try await MuseQuotaProvider(apiKey: "dca").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+    }
+
+    @Test("an unparseable 200 is a bad response, never a blank healthy row")
+    func unparseableBody() async throws {
+        let snap = try await withStubbedHTTP(host: StubHost.muse, body: "not json") {
+            try await MuseQuotaProvider(apiKey: "dca").fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+    }
+
+    @Test("with no credential the provider is 'not configured' and never hits the network")
+    func noKey() async throws {
+        let snap = try await MuseQuotaProvider(apiKey: "").fetchSnapshot()
+        #expect(snap.status == .unavailable(.notConfigured))
+    }
+
+    /// The only credential that can read this endpoint is the OAuth session
+    /// token; the minted api_key in the same blob is rejected with 401.
+    @Test("only the access_token field of the CLI blob is a credential")
+    func accessTokenExtraction() {
+        let blob = Data(#"{"secret_schema_version":1,"access_token":"dca:abc","api_key":"LLM|xyz"}"#.utf8)
+        #expect(MuseQuotaProvider.accessToken(from: blob) == "dca:abc")
+        #expect(MuseQuotaProvider.accessToken(from: Data(#"{"secret_schema_version":1,"api_key":"LLM|xyz"}"#.utf8)) == nil)
+        #expect(MuseQuotaProvider.accessToken(from: Data(#"{"access_token":""}"#.utf8)) == nil)
+        #expect(MuseQuotaProvider.accessToken(from: nil) == nil)
+        #expect(MuseQuotaProvider.accessToken(from: Data("not json".utf8)) == nil)
     }
 }

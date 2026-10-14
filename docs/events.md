@@ -43,7 +43,7 @@ Official Statuspage incident history (`/api/v2/incidents.json`, the newest 50 in
 | `status.openai.com` | OpenAI | The page lists no components: the incident name mentions Codex, or the impact is critical |
 | `www.githubstatus.com` | GitHub Copilot | Components Copilot or Copilot AI Model Providers |
 
-OpenRouter and xAI answer the incident API with 403. Google (Gemini), Kiro, OpenCode, Cline, Command Code and LLM Gateway publish no machine-readable status history.
+OpenRouter and xAI answer the incident API with 403. Google (Gemini), Kiro, OpenCode, Cline, Command Code, LLM Gateway and Meta publish no machine-readable status history.
 
 ### Reset trackers
 
@@ -72,7 +72,7 @@ Each subscription's own model list, fetched with the credential its quota alread
 | DevPass | `GET api.llmgateway.io/v1/models` (scoped to the key) | Every id without `deactivated_at` | Yes |
 | ClinePass | `GET api.cline.bot/api/v1/ai/cline/recommended-models`, a plan catalogue | `clinePass[]`, and only when `/users/me/plan` reports `cline_pass.enabled` | Yes |
 
-Command Code has no model list (its CLI decides access from a table compiled into the client), and OpenRouter is pay-as-you-go with ~460 models from every lab, so neither is read. A list that cannot be read, or comes back empty, changes nothing.
+Command Code has no model list (its CLI decides access from a table compiled into the client), and OpenRouter is pay-as-you-go with ~460 models from every lab, so neither is read. Muse is not read either: its `GET api.meta.ai/muse-code/models` authenticates the **api_key** from the same Keychain blob the quota provider reads the OAuth token out of, so watching it would mean sending a credential the rest of the app never uses for a list the plan does not gate on. A list that cannot be read, or comes back empty, changes nothing.
 
 ## Deduplication
 

@@ -464,10 +464,15 @@ public enum CredentialStore {
         static let ghTokenTTL: TimeInterval = 30
         static let claudeBlobTTL: TimeInterval = 300
         static let claudeBlobFailureTTL: TimeInterval = 30
+        /// The Muse blob carries no expiry of its own, so this is purely a
+        /// "do not shell out on every poll" window, like Claude's.
+        static let museBlobTTL: TimeInterval = 300
+        static let museBlobFailureTTL: TimeInterval = 30
 
         private let lock = NSLock()
         private var ghTokenCache: (token: String?, expires: Date)?
         private var claudeBlobCache: (data: Data?, expires: Date)?
+        private var museBlobCache: (data: Data?, expires: Date)?
 
         func ghToken(now: Date, resolve: () -> String?) -> String? {
             lock.lock()
@@ -521,6 +526,30 @@ public enum CredentialStore {
                 claudeBlobCache = (data, now.addingTimeInterval(ttl))
             } else {
                 claudeBlobCache = (nil, now.addingTimeInterval(Self.claudeBlobFailureTTL))
+            }
+            lock.unlock()
+            return data
+        }
+
+        /// The Muse Code CLI credential blob. Unlike Claude's there is no
+        /// embedded token expiry to shorten the TTL for, so a plain
+        /// read-or-refresh cache suffices; a miss is held for the much shorter
+        /// failure window, so running `muse login` is picked up promptly
+        /// instead of being ignored until the full TTL lapses.
+        func museBlob(now: Date, resolve: () -> Data?) -> Data? {
+            lock.lock()
+            if let cached = museBlobCache, cached.expires > now {
+                let data = cached.data
+                lock.unlock()
+                return data
+            }
+            lock.unlock()
+            let data = resolve()
+            lock.lock()
+            if let data {
+                museBlobCache = (data, now.addingTimeInterval(Self.museBlobTTL))
+            } else {
+                museBlobCache = (nil, now.addingTimeInterval(Self.museBlobFailureTTL))
             }
             lock.unlock()
             return data
@@ -581,6 +610,74 @@ public enum CredentialStore {
 
     static func cachedClaudeBlob(now: Date = Date()) -> Data? {
         CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob() }
+    }
+
+    /// The Muse Code CLI credential blob from the macOS login Keychain
+    /// (service `ai.meta.dev.credentials`, account `meta`). Read with
+    /// `/usr/bin/security` first, not `SecItemCopyMatching`: reading another
+    /// app's Keychain item directly prompts the user every time from an
+    /// unbundled process, exactly as it does for Claude's blob above.
+    static func runSecurityMuseCredential() -> Data? {
+        guard !TestHost.isActive else { return nil }
+        guard let securityPath = securityCandidatePaths.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else { return nil }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: securityPath)
+        task.arguments = ["find-generic-password", "-s", "ai.meta.dev.credentials", "-a", "meta", "-w"]
+        let out = Pipe()
+        task.standardOutput = out
+        let err = Pipe()
+        task.standardError = err
+        task.standardInput = FileHandle.nullDevice
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        let deadline = DispatchTime.now() + 5
+        DispatchQueue.global().asyncAfter(deadline: deadline) { [task] in
+            if task.isRunning { task.terminate() }
+        }
+
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else {
+            return nil
+        }
+
+        return data.isEmpty ? nil : data
+    }
+
+    private static func discoverMuseBlob() -> Data? {
+        if let secData = runSecurityMuseCredential(), !secData.isEmpty {
+            return secData
+        }
+        guard !TestHost.isActive else { return nil }
+        return museKeychainBlob()
+    }
+
+    static func cachedMuseBlob(now: Date = Date()) -> Data? {
+        CredentialCache.shared.museBlob(now: now) { discoverMuseBlob() }
+    }
+
+    /// The Muse blob the CLI writes to the macOS login Keychain, which lives
+    /// under a different service name than our own items and so cannot be
+    /// served by `KeychainManager`.
+    private static func museKeychainBlob() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: "ai.meta.dev.credentials",
+            kSecAttrAccount as String: "meta",
+            kSecReturnData as String:  true,
+            kSecMatchLimit as String:  kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
     }
 
     /// Synchronous bridge into `CredentialCache` for `discoverFromCLI`'s
@@ -739,6 +836,12 @@ public enum CredentialStore {
             // legacy secrets.json — see `discoverCLICredential` for the exact
             // keys and their provenance.
             return ClinePassQuotaProvider.discoverCLICredential()
+
+        case .muse:
+            // The Muse Code CLI's OAuth session token, from the blob the CLI
+            // keeps in the macOS login Keychain. The blob's minted api_key is
+            // deliberately not used: the usage endpoint rejects it with 401.
+            return MuseQuotaProvider.discoverCLICredential()
         }
     }
 }
@@ -859,6 +962,7 @@ extension CredentialStore {
         case .devpass:       "DevPass dashboard key"
         case .commandcode:   "~/.commandcode/auth.json"
         case .clinepass:     "~/.cline/data/settings/providers.json"
+        case .muse:          "Muse CLI login Keychain"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }
