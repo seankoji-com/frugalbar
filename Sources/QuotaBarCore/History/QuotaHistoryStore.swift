@@ -154,6 +154,33 @@ public actor QuotaHistoryStore {
             // same string, so existing series are untouched.
             let key = snapshot.id
             let bars = snapshot.bars
+            // A poll that could not read the provider recorded nothing,
+            // however many figures the snapshot still carries: those were
+            // measured earlier and are stamped with their own `lastUpdated`.
+            // Writing them under `now` — which is what happened while retention
+            // replaced the poll's own status — made a failed poll
+            // indistinguishable from a fresh reading, so
+            // `HistoryPresentation.failedLatestPoll` never fired, the charts
+            // drew the carried-over figures straight across the outage as if
+            // they were current, and the inspector kept presenting them as the
+            // provider's state now. The failure is recorded exactly as the very
+            // first failed poll of a provider is: one row, no fraction, so it
+            // breaks every window of this instance at this instant.
+            if snapshot.staleReading != nil {
+                preparedRows.append(RowToWrite(
+                    vendor: key,
+                    barLabel: Self.providerPollLabel,
+                    measuredAt: timestamp,
+                    fraction: nil,
+                    isBlocked: false,
+                    confidence: .unavailable,
+                    urgency: .none,
+                    resetsAt: nil,
+                    windowLength: nil,
+                    elapsedOnly: false
+                ))
+                continue
+            }
             if bars.isEmpty {
                 preparedRows.append(RowToWrite(
                     vendor: key,

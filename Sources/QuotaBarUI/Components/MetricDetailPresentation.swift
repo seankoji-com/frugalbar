@@ -135,19 +135,29 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     ///   the inspector holds the snapshot it was opened with, and a provider
     ///   that has failed since must not keep reading "Healthy". A snapshot
     ///   newer than the failure is the provider's state, and stands.
+    ///
+    ///   A snapshot that already carries `staleReading` states the failure
+    ///   itself, reason included, and needs no history read to be honest about
+    ///   it — that path is what the popover row and the inspector share, so a
+    ///   stale figure is never described as current even between the failed
+    ///   poll and the history write that records it.
     public init(
         snapshot: QuotaSnapshot,
         history: RecordedHistory = .loading,
         readings: [QuotaHistoryStore.ReadingRecord]? = nil,
         now: Date
     ) {
-        let failedPoll = Self.failedPollAfter(snapshot, readings: readings)
-        self.summary = Self.summary(for: snapshot, failedPollAt: failedPoll, now: now)
+        let stale = snapshot.staleReading
+        let failedPoll = stale?.at ?? Self.failedPollAfter(snapshot, readings: readings)
+        self.summary = Self.summary(
+            for: snapshot, failedPollAt: failedPoll, staleReason: stale?.reason, now: now)
         self.windows = snapshot.status.confidence == .measured
             ? snapshot.displayBars.map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
             : []
         self.windowsAsOf = failedPoll == nil || windows.isEmpty ? nil : snapshot.lastUpdated
-        self.provenance = Self.provenance(for: snapshot, history: history, failedPollAt: failedPoll, now: now)
+        self.provenance = Self.provenance(
+            for: snapshot, history: history, failedPollAt: failedPoll,
+            staleReason: stale?.reason, now: now)
     }
 
     /// The instance's newest recorded poll, when it failed after `snapshot`
@@ -171,7 +181,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
     }
 
-    static func summary(for snapshot: QuotaSnapshot, failedPollAt: Date? = nil, now: Date) -> Summary {
+    static func summary(
+        for snapshot: QuotaSnapshot, failedPollAt: Date? = nil,
+        staleReason: UnavailableReason? = nil, now: Date
+    ) -> Summary {
         if let reason = snapshot.status.unavailableReason {
             return Summary(
                 state: .unavailable(reason), headline: reason.headline, symbol: "minus.circle",
@@ -184,7 +197,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         if let failedPollAt {
             let state = State.lastPollFailed(at: failedPollAt)
             let (headline, symbol) = Self.headlineAndSymbol(for: state)
-            let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading. "
+            // Naming the reason is the difference between "something is wrong"
+            // and "your key was rejected" — the row under the bar has no room
+            // for it, and it is the first thing anyone opens this card to find.
+            let why = staleReason.map { " (\($0.headline))" } ?? ""
+            let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading\(why). "
                 + "The figures below are from \(clockText(snapshot.lastUpdated, now: now)), before it, "
                 + "and may be out of date."
             return Summary(
@@ -306,7 +323,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     // MARK: - Provenance
 
     static func provenance(
-        for snapshot: QuotaSnapshot, history: RecordedHistory, failedPollAt: Date? = nil, now: Date
+        for snapshot: QuotaSnapshot, history: RecordedHistory, failedPollAt: Date? = nil,
+        staleReason: UnavailableReason? = nil, now: Date
     ) -> [ProvenanceRow] {
         var rows: [ProvenanceRow] = [
             ProvenanceRow(label: "Source", value: snapshot.cliSource),
@@ -321,7 +339,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
         if let failedPollAt {
             rows.append(ProvenanceRow(
-                label: "Last poll", value: "Could not be read, \(lastFetchedText(failedPollAt, now: now))"))
+                label: "Last poll",
+                value: "Could not be read\(staleReason.map { " (\($0.headline))" } ?? ""), "
+                    + "\(lastFetchedText(failedPollAt, now: now))"))
         }
         if let key = snapshot.keyMasked {
             rows.append(ProvenanceRow(label: "Key", value: key))

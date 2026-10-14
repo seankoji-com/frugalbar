@@ -31,6 +31,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// the row keeps showing the plan name rather than inventing a date.
     public let exhaustedResetText: String?
 
+    /// One line naming figures that are not the newest poll's — the failure
+    /// behind them and when they were really measured — or nil while they are
+    /// current. Drawn under the row by `MetricRowView`: the bare percentages
+    /// look identical whether they arrived seconds or an hour ago, so this is
+    /// the only thing that says which.
+    public let staleNote: String?
+    /// The same fact as a sentence for VoiceOver, where the row's figures are
+    /// spoken in one breath and a reader has no way to notice an absence of
+    /// change. Always set and cleared together with `staleNote`.
+    public let staleSpoken: String?
+
     /// A bar is only exhausted at the top of its range. `>= 1` would miss the
     /// floating-point residue of a percentage that arrived as 100.
     /// Defined in `QuotaSnapshot` so the popover's idea of "spent" and the
@@ -58,11 +69,26 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.exhaustedResetText = spentBar?.resetText
             ?? snapshot.quotaBars.first(where: { $0.isBlocked })?.resetText
 
+        // A reading carried over through a failed poll is not this poll's
+        // reading, and is marked as such before the branches below can return:
+        // the figures, the inspector's provenance and the history all have to
+        // agree that they are old.
+        if let stale = Self.staleDisplay(snapshot.staleReading, figuresAt: snapshot.lastUpdated, now: now) {
+            self.staleNote = stale.visible
+            self.staleSpoken = stale.spoken
+        } else {
+            self.staleNote = nil
+            self.staleSpoken = nil
+        }
+
         if let reason = snapshot.status.unavailableReason {
             self.valueLabel = reason.headline
             self.resetLabel = "—"
-            self.accessibilityLabel =
-                "\(snapshot.displayName), \(reason.headline), \(reason.remedy)"
+            // A placeholder never carries a stale figure, but if one ever did,
+            // the eye and the spoken label must still agree.
+            var spoken = [snapshot.displayName, reason.headline, reason.remedy]
+            if let staleSpoken { spoken.append(staleSpoken) }
+            self.accessibilityLabel = spoken.joined(separator: ", ")
             self.accessibilityLabelOmittingPercentage = accessibilityLabel
             return
         }
@@ -104,6 +130,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
         if snapshot.resetsAt != nil {
             parts.append(ResetCountdownBadge.description(snapshot.resetsAt, now: now))
         }
+        // Before both labels are built, so the short form the window grid uses
+        // speaks it too: a row whose figures are stale must say so whichever
+        // label is read out.
+        if let staleSpoken {
+            parts.append(staleSpoken)
+        }
         self.accessibilityLabel = parts.joined(separator: ", ")
         if case .percentage = snapshot.metric, !spokenMetric.isEmpty, parts.count > 1, parts[1] == spokenMetric {
             parts.remove(at: 1)
@@ -112,6 +144,25 @@ public struct MetricRowPresentation: Equatable, Sendable {
     }
 
     // MARK: - Formatting
+
+    /// The two forms of "these figures are not this poll's": one line for the
+    /// row, one sentence for VoiceOver. Built together so they cannot state
+    /// different failures or different times.
+    ///
+    /// `figuresAt` is the snapshot's own `lastUpdated` — when the figures were
+    /// measured — never the failed poll's instant. The clock text comes from
+    /// `MetricDetailPresentation`, so the row under the bar and the inspector
+    /// behind it name the same time for the same reading.
+    static func staleDisplay(
+        _ reading: StaleReading?, figuresAt: Date, now: Date
+    ) -> (visible: String, spoken: String)? {
+        guard let reading else { return nil }
+        let at = MetricDetailPresentation.clockText(figuresAt, now: now)
+        return (
+            "Stale — last poll failed (\(reading.reason.headline)), figures from \(at)",
+            "stale, the last poll failed (\(reading.reason.headline)), figures from \(at)"
+        )
+    }
 
     static func value(for metric: MetricType) -> String {
         switch metric {

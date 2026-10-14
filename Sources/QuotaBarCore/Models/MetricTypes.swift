@@ -434,6 +434,34 @@ public struct SpendWindow: Sendable, Equatable {
     }
 }
 
+/// The newest poll of a snapshot's provider failed, so the figures on the
+/// snapshot are carried over from an earlier one.
+///
+/// A transient failure must not blank a row that already had a real reading —
+/// but it must not disappear either. Retention used to replace the whole cached
+/// snapshot, `status` and `lastUpdated` included, so a row kept presenting
+/// hour-old figures as the provider's state *now*, the footer's "oldest
+/// reading" froze for the length of the outage, and the history recorded the
+/// carried-over figures as a fresh measurement. That is how a 59-minute Claude
+/// failure read as a footer stuck on "57m" with every percentage on screen
+/// still drawn as current.
+///
+/// A fact about the *poll*, never about the quota: it says nothing about usage,
+/// only that the figures beside it were measured earlier.
+public struct StaleReading: Sendable, Equatable {
+    /// Why the poll failed. The same closed set a `.unavailable` status uses,
+    /// so the row and the inspector can name the same remedy.
+    public let reason: UnavailableReason
+    /// When the failed poll happened — always later than the snapshot's
+    /// `lastUpdated`, which is when the figures were really measured.
+    public let at: Date
+
+    public init(reason: UnavailableReason, at: Date) {
+        self.reason = reason
+        self.at = at
+    }
+}
+
 public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// The provider *instance* this reading belongs to.
     ///
@@ -491,6 +519,21 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// window state, so nothing fires on it changing; display only. `nil`
     /// when not published.
     public var resetCreditsApplicable: Int? = nil
+    /// Set when this poll could not read the provider and the figures above
+    /// were carried over from an earlier one. `nil` when they came from the
+    /// newest poll — including a provider never read at all, whose absence is
+    /// its `.unavailable` status rather than staleness.
+    ///
+    /// `status` deliberately stays whatever the carried-over snapshot said, so
+    /// the last known quota pressure still drives the menu bar icon instead of
+    /// being replaced by "cannot read" — an unreadable provider must never
+    /// outrank a critical quota. This field is what tells every other surface
+    /// that the reading behind those figures is old: the popover row marks it,
+    /// the inspector names the reason, and the history records a failed poll
+    /// instead of a new measurement. Defaulted here (not as an init parameter)
+    /// so neither existing initializer, nor any other provider's call site, has
+    /// to change.
+    public var staleReading: StaleReading? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.

@@ -145,6 +145,22 @@ struct BurnRateForecastTests {
             for: claudeSnapshot(measured: false), readings: readings, now: now) == nil)
     }
 
+    /// Regression: the gate was confidence alone, and a reading carried over
+    /// from a failed poll is `.measured` by design — so the popover showed a
+    /// "recent pace" projection over a row whose newest poll could not be read.
+    /// Proven red by dropping `staleReading == nil` from `binding`.
+    @Test("a reading carried over from a failed poll is not forecast from")
+    func staleReadingIsNotForecastFrom() throws {
+        let readings = steadyBurn + [reading(label: "WK", minutesAgo: 30, fraction: 0.10),
+                                     reading(label: "WK", minutesAgo: 15, fraction: 0.25),
+                                     reading(label: "WK", minutesAgo: 0, fraction: 0.40)]
+        var carried = claudeSnapshot(measured: true)
+        #expect(BurnRateForecast.binding(for: carried, readings: readings, now: now) != nil)
+
+        carried.staleReading = StaleReading(reason: .offline, at: now.addingTimeInterval(600))
+        #expect(BurnRateForecast.binding(for: carried, readings: readings, now: now) == nil)
+    }
+
     @Test("durations format to the nearest minute")
     func durationFormatting() {
         #expect(BurnRateForecast.formatDuration(10) == "1m")

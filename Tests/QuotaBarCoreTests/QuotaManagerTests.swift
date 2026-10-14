@@ -423,4 +423,84 @@ struct QuotaManagerTests {
         let second = await manager.forceRefresh()
         #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
     }
+
+    /// Regression: retention replaced the whole cached snapshot, `status` and
+    /// `lastUpdated` included, so a failed poll left no trace anywhere. The row
+    /// drew hour-old figures as the provider's state now, the footer's "oldest
+    /// reading" froze for the length of the outage (the reported "stuck on
+    /// 57m"), and nothing could tell that the poll had failed at all.
+    /// Proven red by dropping the `retained.staleReading = ...` assignment.
+    @Test("a failed poll keeps the figures, marks them stale, and the next success clears the mark")
+    func failedPollMarksTheReadingStale() async throws {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                switch counter.increment() {
+                case 1:  return [StubProvider(vendorId: .claude, behavior: .succeed(.warning))]
+                case 2:  return [StubProvider(vendorId: .claude, behavior: .throwError(ProviderError(.offline)))]
+                default: return [StubProvider(vendorId: .claude, behavior: .succeed(.none))]
+                }
+            }
+        )
+
+        let first = await manager.forceRefresh()
+        let measured = try #require(first[VendorIdentifier.claude.rawValue])
+        let figuresAt = measured.lastUpdated
+        #expect(measured.staleReading == nil)
+        #expect(measured.consumptionFraction != nil)
+
+        let second = await manager.forceRefresh()
+        let stale = try #require(second[VendorIdentifier.claude.rawValue])
+        // The last known figures survive, status included — an unreadable
+        // provider must never take over the icon from a real reading...
+        #expect(stale.status == .measured(.warning))
+        #expect(stale.consumptionFraction == measured.consumptionFraction)
+        #expect(stale.lastUpdated == figuresAt)
+        // ...but the failure is carried with them, so no surface can present
+        // them as this poll's reading.
+        let failure = try #require(stale.staleReading)
+        #expect(failure.reason == .offline)
+        #expect(failure.at >= figuresAt)
+
+        // One stale provider, no unreadable ones, and the quota pressure it
+        // last reported still drives the icon.
+        let during = SystemHealthSummary.compute(from: Array(second.values))
+        #expect(during.staleCount == 1)
+        #expect(during.unavailableCount == 0)
+        #expect(during.worstUrgency == .warning)
+        // The staleness is what the footer counts its age from, so the age is
+        // a fact about a provider rather than about the app.
+        #expect(during.oldestReading == figuresAt)
+
+        let third = await manager.forceRefresh()
+        let recovered = try #require(third[VendorIdentifier.claude.rawValue])
+        #expect(recovered.staleReading == nil)
+        #expect(recovered.status == .measured(.none))
+        #expect(SystemHealthSummary.compute(from: Array(third.values)).staleCount == 0)
+    }
+
+    /// Two failures in a row report the newest reason. Retention exists to keep
+    /// *figures*, and a placeholder carries none, so freezing the first failure's
+    /// reason would leave a provider whose key was rejected reading "Not
+    /// configured" for as long as the outage lasted.
+    @Test("consecutive failed polls report the newest reason, not the first")
+    func consecutiveFailuresReportTheNewestReason() async throws {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                switch counter.increment() {
+                case 1:  return [StubProvider(vendorId: .claude, behavior: .throwError(.notConfigured))]
+                default: return [StubProvider(vendorId: .claude, behavior: .throwError(ProviderError(.offline)))]
+                }
+            }
+        )
+        _ = await manager.forceRefresh()
+        let second = await manager.forceRefresh()
+        let snapshot = try #require(second[VendorIdentifier.claude.rawValue])
+        #expect(snapshot.status == .unavailable(.offline))
+        // Nothing was carried over, so there is no reading to call stale.
+        #expect(snapshot.staleReading == nil)
+    }
 }
