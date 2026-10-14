@@ -115,6 +115,39 @@ struct HistoryPresentationTests {
         #expect(segments[1].points.count == 1)
     }
 
+    @Test("interleaved windows each form one line instead of breaking at every poll")
+    func interleavedWindowsFormOneSegmentEach() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        // What the store returns for one vendor: every window, interleaved by
+        // time. Segmenting that stream as one broke the line at each reading.
+        var readings: [QuotaHistoryStore.ReadingRecord] = []
+        for poll in 0..<4 {
+            let at = base.addingTimeInterval(Double(poll) * 300)
+            readings.append(makeRecord(barLabel: "5H", measuredAt: at, fraction: 0.1 + Double(poll) * 0.05))
+            readings.append(makeRecord(barLabel: "WK", measuredAt: at, fraction: 0.4 + Double(poll) * 0.01,
+                                       windowLength: 7 * 86_400))
+        }
+
+        let segments = HistoryPresentation.segments(from: readings)
+        #expect(segments.count == 2)
+        #expect(segments.map(\.barLabel) == ["5H", "WK"])
+        #expect(segments.allSatisfy { $0.points.count == 4 })
+    }
+
+    @Test("two instances of one vendor never join into one line")
+    func instancesSegmentSeparately() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let readings = [
+            makeRecord(vendor: "opencode-go:alpha", measuredAt: base, fraction: 0.1),
+            makeRecord(vendor: "opencode-go:beta", measuredAt: base, fraction: 0.9),
+            makeRecord(vendor: "opencode-go:alpha", measuredAt: base.addingTimeInterval(300), fraction: 0.2),
+            makeRecord(vendor: "opencode-go:beta", measuredAt: base.addingTimeInterval(300), fraction: 0.95),
+        ]
+        let segments = HistoryPresentation.segments(from: readings)
+        #expect(segments.map(\.vendor) == ["opencode-go:alpha", "opencode-go:beta"])
+        #expect(segments.map { $0.points.map(\.fraction) } == [[0.1, 0.2], [0.9, 0.95]])
+    }
+
     // MARK: - Pace Comparison Tests
 
     @Test("ahead of pace detected when consumed significantly exceeds elapsed")
@@ -179,5 +212,44 @@ struct HistoryPresentationTests {
 
         let start7 = HistoryPresentation.TimeRange.last7Days.startDate(from: now)
         #expect(start7 == now.addingTimeInterval(-7 * 86_400))
+    }
+}
+
+@Suite("History activity breakdown wording")
+struct HistoryActivityWordingTests {
+
+    @Test("only a finished, clean pass may say there was no activity")
+    func emptyNeedsACleanPass() {
+        let reading = HistoryPresentation.activityEmptyMessage(.indexing, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        let short = HistoryPresentation.activityEmptyMessage(.incomplete, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        let clean = HistoryPresentation.activityEmptyMessage(.complete, vendorName: "Claude", recordsWithoutTokenTotals: 0)
+        #expect(reading.hasPrefix("Still reading"))
+        #expect(short.contains("could not be read"))
+        #expect(!reading.contains("No local") && !short.contains("No local"))
+        #expect(clean == "No local Claude activity recorded in this range.")
+        // An unknown status is never complete.
+        #expect(TokenUsagePresentation.IngestionProgress(nil) == .indexing)
+    }
+
+    @Test("records with no token total are named, not counted as zero")
+    func uncountedRecords() {
+        let text = HistoryPresentation.activityEmptyMessage(.complete, vendorName: "Codex", recordsWithoutTokenTotals: 3)
+        #expect(text.hasPrefix("3 session records"))
+        #expect(!text.contains("No local"))
+    }
+
+    @Test("a breakdown that is still filling or short says so above its figures")
+    func progressNotes() {
+        #expect(HistoryPresentation.activityProgressNote(.complete) == nil)
+        #expect(HistoryPresentation.activityProgressNote(.indexing) != nil)
+        #expect(HistoryPresentation.activityProgressNote(.incomplete) != nil)
+    }
+
+    @Test("OpenCode activity is never presented as one workspace's own")
+    func workspaceScope() throws {
+        let note = try #require(HistoryPresentation.activityScopeNote(vendor: .opencode, subjectName: "Go Beta"))
+        #expect(note.contains("every OpenCode account"))
+        #expect(note.contains("Go Beta"))
+        #expect(HistoryPresentation.activityScopeNote(vendor: .claude, subjectName: "Claude") == nil)
     }
 }

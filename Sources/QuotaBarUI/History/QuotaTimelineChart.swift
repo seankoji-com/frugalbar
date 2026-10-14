@@ -18,23 +18,67 @@ public struct QuotaTimelineChart: View {
     /// Recorded reset-type events, drawn as dashed vertical rules. Callers
     /// filter with `EventsPresentation.markerEvents`.
     public let markers: [AIEvent]
+    /// Why there is nothing to draw, when there is nothing. Defaults to the
+    /// generic explanation.
+    public let emptyMessage: String?
+    /// Overrides the empty state's title, for polls that happened but left
+    /// nothing to draw.
+    public let emptyTitle: String?
+    /// The inspected instant: where the pointer is over the plot, or the poll
+    /// the keyboard stepped to. Drives the readout.
+    @State private var hoverDate: Date?
 
     public init(
         segments: [HistoryPresentation.TimelineSegment],
         timeRange: HistoryPresentation.TimeRange,
-        markers: [AIEvent] = []
+        markers: [AIEvent] = [],
+        emptyMessage: String? = nil,
+        emptyTitle: String? = nil
     ) {
         self.segments = segments
         self.timeRange = timeRange
         self.markers = markers
+        self.emptyMessage = emptyMessage
+        self.emptyTitle = emptyTitle
     }
 
     public var body: some View {
         if segments.isEmpty || segments.allSatisfy({ $0.points.isEmpty }) {
             emptyState
         } else {
-            chart
+            VStack(alignment: .leading, spacing: 6) {
+                if labels.count > 1 {
+                    WindowDashLegend(labels: labels)
+                }
+                chart
+            }
         }
+    }
+
+    /// Windows in the order they first appear. Told apart by dash pattern, not
+    /// colour, which stays the per-reading urgency.
+    /// The chart with the readout already open at `date`, as the pointer
+    /// would leave it. The render harness uses it to show the readout.
+    func inspecting(_ date: Date?) -> QuotaTimelineChart {
+        var copy = self
+        copy._hoverDate = State(initialValue: date)
+        return copy
+    }
+
+    private var labels: [String] {
+        var out: [String] = []
+        for segment in segments where !out.contains(segment.barLabel) { out.append(segment.barLabel) }
+        return out
+    }
+
+    private var tolerance: TimeInterval {
+        HistoryOverviewPresentation.inspectionTolerance(
+            range: timeRange, now: segments.compactMap { $0.points.last?.timestamp }.max() ?? Date(),
+            earliest: segments.compactMap { $0.points.first?.timestamp }.min())
+    }
+
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap { HistoryOverviewPresentation.nearestPoll(to: $0, in: segments, tolerance: tolerance) }
     }
 
     /// Shape is the non-colour channel: colour alone fails WCAG 1.4.1, and
@@ -80,7 +124,7 @@ public struct QuotaTimelineChart: View {
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(colorForPoint(point))
-                    .lineStyle(StrokeStyle(lineWidth: 2.2))
+                    .lineStyle(StrokeStyle(lineWidth: 2.2, dash: WindowDashLegend.dash(for: segment.barLabel, in: labels)))
 
                     PointMark(
                         x: .value("Time", point.timestamp),
@@ -104,6 +148,19 @@ public struct QuotaTimelineChart: View {
                             .help("\(event.kind.title): \(event.title)")
                     }
             }
+
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, alignment: .center, spacing: 2,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        ReadingReadout(poll: poll)
+                    }
+            }
+        }
+        .chartOverlay { proxy in
+            ChartHoverCatcher(proxy: proxy) { hoverDate = $0 }
         }
         .chartYScale(domain: 0...100)
         .chartYAxis {
@@ -138,13 +195,12 @@ public struct QuotaTimelineChart: View {
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Quota timeline, \(timeRange.title)")
-        .accessibilityValue(
-            (segments.map(accessibilityDescription(for:))
-             + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
-            .joined(separator: ". ")
-        )
+        .modifier(ReadingInspection(
+            segments: segments, selection: $hoverDate, tolerance: tolerance,
+            label: "Quota timeline, \(timeRange.title)",
+            summary: (segments.map(accessibilityDescription(for:))
+                      + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+                .joined(separator: ". ")))
     }
 
     private var emptyState: some View {
@@ -153,13 +209,15 @@ public struct QuotaTimelineChart: View {
                 .font(.system(size: 28))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.4))
 
-            Text("No readings recorded in this time range")
+            Text(emptyTitle ?? "No readings recorded in this time range")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
 
-            Text("Readings accumulate automatically as FrugalBar polls your providers.")
+            Text(emptyMessage ?? "Readings accumulate automatically as FrugalBar polls your providers.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.outline)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

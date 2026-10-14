@@ -119,6 +119,12 @@ public actor QuotaHistoryStore {
         #endif
     }
 
+    /// The label of the one row a poll writes when its snapshot carries no
+    /// window: a read that failed, or an answer with no usage in it. It is the
+    /// provider's poll, not any window's, so it speaks for every window of the
+    /// same instance at that instant.
+    public static let providerPollLabel = "DEFAULT"
+
     /// Records a snapshot batch and prunes readings older than `retentionInterval`.
     public func record(_ snapshots: [QuotaSnapshot], now: Date = Date()) async throws {
         try await ensureOpen()
@@ -151,7 +157,7 @@ public actor QuotaHistoryStore {
             if bars.isEmpty {
                 preparedRows.append(RowToWrite(
                     vendor: key,
-                    barLabel: "DEFAULT",
+                    barLabel: Self.providerPollLabel,
                     measuredAt: timestamp,
                     fraction: nil,
                     isBlocked: false,
@@ -327,61 +333,8 @@ public actor QuotaHistoryStore {
             }
 
             var results: [ReadingRecord] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                guard let vendorText = sqlite3_column_text(stmt, 0),
-                      let labelText = sqlite3_column_text(stmt, 1) else {
-                    continue
-                }
-                let vendor = String(cString: vendorText)
-                let label = String(cString: labelText)
-                let measuredAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 2)))
-
-                let fraction: Double?
-                if sqlite3_column_type(stmt, 3) == SQLITE_NULL {
-                    fraction = nil
-                } else {
-                    fraction = sqlite3_column_double(stmt, 3)
-                }
-
-                let isBlocked = sqlite3_column_int64(stmt, 4) != 0
-
-                // Read by name. An unrecognised name means this row was written
-                // by a build with a case we do not have; it is treated as
-                // unreadable rather than as a calm reading.
-                let confidenceName = sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? ""
-                let confidence = Confidence(historyName: confidenceName) ?? .unavailable
-
-                let urgencyName = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
-                let urgency = Urgency(historyName: urgencyName) ?? .none
-
-                let resetsAt: Date?
-                if sqlite3_column_type(stmt, 7) == SQLITE_NULL {
-                    resetsAt = nil
-                } else {
-                    resetsAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
-                }
-
-                let windowLength: TimeInterval?
-                if sqlite3_column_type(stmt, 8) == SQLITE_NULL {
-                    windowLength = nil
-                } else {
-                    windowLength = TimeInterval(sqlite3_column_int64(stmt, 8))
-                }
-
-                let elapsedOnly = sqlite3_column_int64(stmt, 9) != 0
-
-                results.append(ReadingRecord(
-                    vendor: vendor,
-                    barLabel: label,
-                    measuredAt: measuredAt,
-                    fraction: fraction,
-                    isBlocked: isBlocked,
-                    confidence: confidence,
-                    urgency: urgency,
-                    resetsAt: resetsAt,
-                    windowLength: windowLength,
-                    elapsedOnly: elapsedOnly
-                ))
+            while try db.step(stmt) {
+                if let record = Self.readingRecord(from: stmt) { results.append(record) }
             }
             return results
             #else
@@ -389,6 +342,68 @@ public actor QuotaHistoryStore {
             #endif
         }
     }
+
+    #if canImport(SQLite3)
+    /// Decodes one `reading` row selected as `vendor, bar_label, measured_at,
+    /// fraction, is_blocked, confidence, urgency, resets_at, window_length,
+    /// elapsed_only`, in that order. nil for a row with no vendor or label.
+    static func readingRecord(from stmt: OpaquePointer?) -> ReadingRecord? {
+        guard let vendorText = sqlite3_column_text(stmt, 0),
+              let labelText = sqlite3_column_text(stmt, 1) else {
+            return nil
+        }
+        let vendor = String(cString: vendorText)
+        let label = String(cString: labelText)
+        let measuredAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 2)))
+
+        let fraction: Double?
+        if sqlite3_column_type(stmt, 3) == SQLITE_NULL {
+            fraction = nil
+        } else {
+            fraction = sqlite3_column_double(stmt, 3)
+        }
+
+        let isBlocked = sqlite3_column_int64(stmt, 4) != 0
+
+        // Read by name. An unrecognised name means this row was written
+        // by a build with a case we do not have; it is treated as
+        // unreadable rather than as a calm reading.
+        let confidenceName = sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? ""
+        let confidence = Confidence(historyName: confidenceName) ?? .unavailable
+
+        let urgencyName = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+        let urgency = Urgency(historyName: urgencyName) ?? .none
+
+        let resetsAt: Date?
+        if sqlite3_column_type(stmt, 7) == SQLITE_NULL {
+            resetsAt = nil
+        } else {
+            resetsAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
+        }
+
+        let windowLength: TimeInterval?
+        if sqlite3_column_type(stmt, 8) == SQLITE_NULL {
+            windowLength = nil
+        } else {
+            windowLength = TimeInterval(sqlite3_column_int64(stmt, 8))
+        }
+
+        let elapsedOnly = sqlite3_column_int64(stmt, 9) != 0
+
+        return ReadingRecord(
+            vendor: vendor,
+            barLabel: label,
+            measuredAt: measuredAt,
+            fraction: fraction,
+            isBlocked: isBlocked,
+            confidence: confidence,
+            urgency: urgency,
+            resetsAt: resetsAt,
+            windowLength: windowLength,
+            elapsedOnly: elapsedOnly
+        )
+    }
+    #endif
 
     // MARK: - Activity Records
 
@@ -501,7 +516,7 @@ public actor QuotaHistoryStore {
             }
 
             var results: [ActivityRecord] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try db.step(stmt) {
                 guard let sourceText = sqlite3_column_text(stmt, 0),
                       let recordIdText = sqlite3_column_text(stmt, 1),
                       let sessionIdText = sqlite3_column_text(stmt, 2) else {
@@ -632,4 +647,11 @@ public actor QuotaHistoryStore {
             #endif
         }
     }
+}
+
+extension Notification.Name {
+    /// Posted on the main thread after a poll's readings are written, so a
+    /// window showing history reloads instead of drawing the history it had
+    /// when it opened.
+    public static let frugalbarHistoryDidRecord = Notification.Name("FrugalBarHistoryDidRecord")
 }

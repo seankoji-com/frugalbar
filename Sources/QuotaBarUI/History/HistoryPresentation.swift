@@ -141,12 +141,84 @@ public enum HistoryPresentation {
     /// the description claimed: polling runs far more often than that, so a
     /// two-hour hole is a genuine ingestion outage. Anything shorter would break
     /// the line on an idle afternoon and imply a reset that never happened.
+    ///
+    /// Readings are split by instance and window before segmenting. The store
+    /// returns every window of a vendor interleaved by time, and segmenting
+    /// that stream as one broke the line at every poll — each window's reading
+    /// "mismatched" the previous one — so the History chart drew a scatter of
+    /// lone points instead of lines.
+    ///
+    /// A poll that returned no window at all is recorded once, under
+    /// `QuotaHistoryStore.providerPollLabel`, not under each window, so it
+    /// breaks every window of its instance. Splitting by window first left it
+    /// in a group of its own, and a line ran straight across the outage.
+    /// Pass every label an instance recorded and name the window in
+    /// `barLabel`, rather than filtering to the window first, which drops the
+    /// failed polls with the other labels.
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String? = nil,
         maxGap: TimeInterval = 7200
     ) -> [TimelineSegment] {
-        // Sort by timestamp
         let sorted = readings.sorted { $0.measuredAt < $1.measuredAt }
+        var keys: [String] = []
+        var windows: [String: [QuotaHistoryStore.ReadingRecord]] = [:]
+        var providerPolls: [String: [QuotaHistoryStore.ReadingRecord]] = [:]
+        for record in sorted {
+            if record.barLabel == QuotaHistoryStore.providerPollLabel {
+                providerPolls[record.vendor, default: []].append(record)
+                continue
+            }
+            if let barLabel, record.barLabel != barLabel { continue }
+            let key = record.vendor + "|" + record.barLabel
+            if windows[key] == nil { keys.append(key) }
+            windows[key, default: []].append(record)
+        }
+        return keys.flatMap { key -> [TimelineSegment] in
+            let window = windows[key] ?? []
+            // A provider poll carries no fraction, so it ends the segment
+            // like any reading that could not be charted.
+            let polls = window.first.flatMap { providerPolls[$0.vendor] } ?? []
+            let merged = (window + polls).sorted { $0.measuredAt < $1.measuredAt }
+            return segments(ofOneWindow: merged, maxGap: maxGap)
+        }
+    }
+
+    /// `barLabel`'s reading from the instance's newest poll, or nil when that
+    /// poll did not report the window: it failed (and was recorded under
+    /// `QuotaHistoryStore.providerPollLabel`), or answered without it.
+    ///
+    /// `readings` is one instance's every label. Anything that presents a
+    /// window as it stands now reads it through this, so a figure from
+    /// before a failed poll is never shown as current.
+    public static func readingAtLatestPoll(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String
+    ) -> QuotaHistoryStore.ReadingRecord? {
+        guard let lastPoll = readings.map(\.measuredAt).max() else { return nil }
+        return readings.first { $0.barLabel == barLabel && $0.measuredAt == lastPoll }
+    }
+
+    /// The instant of the instance's newest recorded poll when that poll
+    /// could not be read — every row it wrote, a window's or
+    /// `QuotaHistoryStore.providerPollLabel`'s, is unread — or nil when it
+    /// was read or nothing is recorded. A poll that answered without a
+    /// window was read, and is not a failure.
+    public static func failedLatestPoll(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        instanceID: String
+    ) -> Date? {
+        let instance = readings.filter { $0.vendor == instanceID }
+        guard let lastPoll = instance.map(\.measuredAt).max() else { return nil }
+        let failed = instance.allSatisfy { $0.measuredAt != lastPoll || $0.confidence != .measured }
+        return failed ? lastPoll : nil
+    }
+
+    /// One instance's one window, oldest first.
+    private static func segments(
+        ofOneWindow sorted: [QuotaHistoryStore.ReadingRecord],
+        maxGap: TimeInterval
+    ) -> [TimelineSegment] {
 
         var result: [TimelineSegment] = []
         var currentPoints: [TimelinePoint] = []
@@ -184,13 +256,12 @@ public enum HistoryPresentation {
             )
 
             if let prev = lastRecord {
-                let isVendorOrLabelMismatch = prev.vendor != record.vendor || prev.barLabel != record.barLabel
                 let isGap = record.measuredAt.timeIntervalSince(prev.measuredAt) > maxGap
                 let resetsAtChanged = prev.resetsAt != nil && record.resetsAt != nil && prev.resetsAt != record.resetsAt
                 let windowExpired = prev.resetsAt.map { record.measuredAt >= $0 } ?? false
                 let negativeResetJump = (prev.fraction != nil) && (fraction < prev.fraction! - 0.15)
 
-                if isVendorOrLabelMismatch || isGap || resetsAtChanged || windowExpired || negativeResetJump {
+                if isGap || resetsAtChanged || windowExpired || negativeResetJump {
                     finalizeSegment()
                     currentVendor = record.vendor
                     currentLabel = record.barLabel
@@ -222,12 +293,37 @@ public enum HistoryPresentation {
         readings.filter { !$0.elapsedOnly }
     }
 
+    /// The reading the pace card may compare, or nil when the subject's
+    /// newest poll did not report one.
+    ///
+    /// `readings` is everything the subject recorded, every label included:
+    /// a poll that could not be read is stored under `DEFAULT`, not under the
+    /// window, so reaching back to the window's last reading with a fraction
+    /// put a current-looking pace card under an overview that said the last
+    /// poll could not be read.
+    public static func currentPaceReading(
+        readings: [QuotaHistoryStore.ReadingRecord],
+        barLabel: String?
+    ) -> QuotaHistoryStore.ReadingRecord? {
+        guard let barLabel,
+              let latest = readingAtLatestPoll(readings: readings, barLabel: barLabel),
+              latest.fraction != nil, latest.resetsAt != nil
+        else { return nil }
+        return latest
+    }
+
     /// Evaluates burn pace for an active sliding or fixed window.
     ///
     /// Compares fraction of quota consumed against fraction of window elapsed.
     /// Returns `nil` for a window that only measures elapsed time: its fraction
     /// *is* the elapsed fraction, so the comparison would be a quantity against
     /// itself — permanently "on pace", under a label that says "consumed".
+    ///
+    /// The verdict is `DualBarMetrics.paceStanding`, the one the bar's tick and
+    /// the inspector read, so it is nil wherever the bar draws no tick (a
+    /// blocked or spent window, a window that has only just started) and uses
+    /// the bar's margin. A ten-point margin here once called 62% used at 54%
+    /// elapsed "On Pace" while the inspector said "Ahead of even pace".
     public static func computePace(
         reading: QuotaHistoryStore.ReadingRecord,
         now: Date = Date()
@@ -246,13 +342,16 @@ public enum HistoryPresentation {
         let consumedFraction = min(1.0, max(0.0, fraction))
         let delta = consumedFraction - elapsedFraction
 
-        let status: PaceStatus
-        if delta > 0.10 {
-            status = .aheadOfPace
-        } else if delta < -0.10 {
-            status = .underPace
-        } else {
-            status = .onPace
+        let metrics = DualBarMetrics(
+            primaryFraction: fraction, expectedPaceFraction: elapsedFraction,
+            label: reading.barLabel, isBlocked: reading.isBlocked,
+            resetsAt: resetsAt, windowLength: windowLength)
+        guard let standing = metrics.paceStanding else { return nil }
+
+        let status: PaceStatus = switch standing {
+        case .ahead: .aheadOfPace
+        case .behind: .underPace
+        case .even: .onPace
         }
 
         let consumedPercent = Int(round(consumedFraction * 100))
@@ -278,5 +377,53 @@ public enum HistoryPresentation {
             status: status,
             headline: headline
         )
+    }
+}
+
+// MARK: - Local activity
+
+extension HistoryPresentation {
+
+    /// What the project breakdown may claim, read from the ingestion status
+    /// before the records: the activity table is empty on a first run, stale
+    /// after a restart until a pass finishes, and short while an input cannot
+    /// be read (AGENTS.md, "An empty activity table is not an empty week").
+    ///
+    /// nil when the breakdown can be read as it stands.
+    public static func activityProgressNote(_ progress: TokenUsagePresentation.IngestionProgress) -> String? {
+        switch progress {
+        case .complete: nil
+        case .indexing: "Still reading local activity, so this breakdown may be short until that finishes."
+        case .incomplete: "Some local activity could not be read, so sessions may be missing from this breakdown."
+        }
+    }
+
+    /// Said instead of an empty breakdown. Only a finished, clean pass may
+    /// say there was no activity.
+    public static func activityEmptyMessage(
+        _ progress: TokenUsagePresentation.IngestionProgress,
+        vendorName: String,
+        recordsWithoutTokenTotals: Int
+    ) -> String {
+        switch progress {
+        case .indexing:
+            return "Still reading local activity. Nothing is shown until that pass finishes."
+        case .incomplete:
+            return "Local activity could not be read in full, so an empty breakdown here is not evidence of no activity."
+        case .complete:
+            guard recordsWithoutTokenTotals == 0 else {
+                return "\(recordsWithoutTokenTotals) session record\(recordsWithoutTokenTotals == 1 ? "" : "s") in this range carried no token total, so nothing can be shared out."
+            }
+            return "No local \(vendorName) activity recorded in this range."
+        }
+    }
+
+    /// Local activity is recorded per tool, not per subscription: an OpenCode
+    /// session does not say which OpenCode Go workspace it billed. Charting a
+    /// workspace's readings above every OpenCode session would attribute
+    /// activity nothing measured, so the breakdown says whose it is.
+    public static func activityScopeNote(vendor: VendorIdentifier, subjectName: String) -> String? {
+        guard vendor == .opencode else { return nil }
+        return "Sessions from every OpenCode account on this Mac. Which workspace a session used is not recorded, so this is not \(subjectName)'s activity alone."
     }
 }

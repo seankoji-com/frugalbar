@@ -167,7 +167,7 @@ extension QuotaHistoryStore {
             }
 
             var results: [AIEvent] = []
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try db.step(stmt) {
                 guard let idText = sqlite3_column_text(stmt, 0),
                       let kindText = sqlite3_column_text(stmt, 1),
                       let vendorText = sqlite3_column_text(stmt, 2),

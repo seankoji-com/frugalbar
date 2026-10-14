@@ -1,11 +1,60 @@
 import SwiftUI
 import QuotaBarCore
 
-/// Tabbed preferences: credentials and general behaviour.
+/// Preferences, as a sidebar of sections: what each provider is doing and in
+/// what order, where its credential comes from, OpenCode Go workspaces,
+/// display, notifications, billing cycles, history and data, and about.
+///
+/// Every control still writes the moment it changes and posts the same change
+/// notifications as before; only API keys wait for "Save & verify", because a
+/// half-typed key must not be stored.
 public struct SettingsView: View {
 
-    private enum Tab: String {
-        case keys = "API Keys", providers = "Providers", cycles = "Cycles", general = "General"
+    /// The sidebar's sections, in reading order.
+    public enum Pane: String, CaseIterable, Identifiable, Sendable {
+        case providers, credentials, workspaces, display, notifications, cycles, data, about
+
+        public var id: String { rawValue }
+
+        public var title: String {
+            switch self {
+            case .providers: "Providers"
+            case .credentials: "API Keys"
+            case .workspaces: "OpenCode Go"
+            case .display: "Display"
+            case .notifications: "Notifications"
+            case .cycles: "Billing Cycles"
+            case .data: "History & Data"
+            case .about: "About"
+            }
+        }
+
+        /// One line under the pane's title saying what it is for.
+        public var summary: String {
+            switch self {
+            case .providers: "Connection state, visibility and order for every provider."
+            case .credentials: "Where each provider's key comes from, and overrides."
+            case .workspaces: "Each OpenCode Go subscription, its key, and its place in the list."
+            case .display: "The desktop widget, and how to read the popover and usage details."
+            case .notifications: "What FrugalBar tells you about, and when."
+            case .cycles: "Renewal dates for vendors that publish none."
+            case .data: "What FrugalBar records, and where it is kept."
+            case .about: "Version and links."
+            }
+        }
+
+        public var symbol: String {
+            switch self {
+            case .providers: "list.bullet"
+            case .credentials: "key"
+            case .workspaces: "chevron.left.forwardslash.chevron.right"
+            case .display: "paintbrush"
+            case .notifications: "bell.badge"
+            case .cycles: "calendar"
+            case .data: "cylinder.split.1x2"
+            case .about: "info.circle"
+            }
+        }
     }
 
     /// Only vendors we can actually do something with are offered. Claude is
@@ -37,7 +86,7 @@ public struct SettingsView: View {
                   + "or OpenCode auth.json when CLI discovery is on."),
         // OpenCode Go is not a single slot: it is one row per named workspace,
         // each with its own key, managed in the "OpenCode Go workspaces"
-        // section below. The first workspace keeps the legacy `opencode`
+        // section below. The original workspace keeps the legacy `opencode`
         // Keychain label, so a key entered before workspaces existed is still
         // the one that is used and never has to be re-entered.
         .init(id: .grok, label: "Grok",
@@ -62,7 +111,10 @@ public struct SettingsView: View {
                   + "Run `muse login` if the row stops reading."),
     ]
 
-    @State private var selectedTab: Tab = .keys
+    @State private var selection: Pane?
+    /// The running app's store, for live connection states. nil in the
+    /// standalone Settings scene.
+    private let store: QuotaStore?
     @State private var cycles: [VendorIdentifier: SubscriptionCycle] = [:]
     @State private var entered: [VendorIdentifier: String] = [:]
     @State private var loaded: [VendorIdentifier: String] = [:]
@@ -103,7 +155,23 @@ public struct SettingsView: View {
     @State private var workspaceHasKey: [String: Bool] = [:]
     @State private var newWorkspaceName = ""
 
-    public init() {}
+    /// False only in the test render harness: the panes are drawn without
+    /// reading a single Keychain item, so a render can never touch the
+    /// user's real credentials.
+    private let readsCredentials: Bool
+    /// Taller only in the render harness, so one image shows a whole pane.
+    private let height: CGFloat
+
+    public init(store: QuotaStore? = nil, initialPane: Pane = .providers) {
+        self.init(store: store, initialPane: initialPane, readsCredentials: true)
+    }
+
+    init(store: QuotaStore?, initialPane: Pane, readsCredentials: Bool, height: CGFloat = 580) {
+        self.store = store
+        self.readsCredentials = readsCredentials
+        self.height = height
+        _selection = State(initialValue: initialPane)
+    }
 
     /// OpenRouter and DeepSeek meter money, not a window, so they never reset.
     private static let resetAlertCandidates =
@@ -133,32 +201,75 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        TabView(selection: $selectedTab) {
-            keysTab
-                .tabItem { Label(Tab.keys.rawValue, systemImage: "key") }
-                .tag(Tab.keys)
-            ProviderOrderSettings()
-                .tabItem { Label(Tab.providers.rawValue, systemImage: "list.bullet") }
-                .tag(Tab.providers)
-            cyclesTab
-                .tabItem { Label(Tab.cycles.rawValue, systemImage: "calendar") }
-                .tag(Tab.cycles)
-            generalTab
-                .tabItem { Label(Tab.general.rawValue, systemImage: "gearshape") }
-                .tag(Tab.general)
+        HStack(spacing: 0) {
+            List(Pane.allCases, selection: $selection) { pane in
+                Label(pane.title, systemImage: pane.symbol)
+                    .tag(pane)
+                    .accessibilityLabel(pane.title)
+            }
+            .listStyle(.sidebar)
+            .frame(width: 190)
+            .accessibilityLabel("Preferences sections")
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                paneHeader(selection ?? .providers)
+                pane(selection ?? .providers)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        // Grown with the rest of the app's density pass: at 460x340 the keys
-        // tab scrolled as soon as the notes under each field wrapped.
-        .frame(width: 540, height: 520)
-        .padding()
-        .onAppear(perform: loadKeys)
+        .frame(width: 780, height: height)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { if readsCredentials { loadKeys() } }
         .onAppear(perform: loadWorkspaces)
         .onAppear { cycles = SubscriptionCycleStore.all() }
-        .task { await refreshSources() }
+        .task { if readsCredentials { await refreshSources() } }
         // Turning discovery off can strip a row back to "Not configured";
         // saving a key can flip one to "Stored in Keychain". Both have to be
         // reflected, or the status line becomes a lie the moment it matters.
         .onChange(of: cliDiscovery) { Task { await refreshSources() } }
+        // A rename typed into the workspace list but never committed with
+        // Return is kept when the user moves to another section.
+        .onChange(of: selection) { old, _ in
+            if old == .workspaces { commitWorkspaceRenames() }
+        }
+    }
+
+    private func paneHeader(_ pane: Pane) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(pane.title, systemImage: pane.symbol)
+                .font(.title3.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text(pane.summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func pane(_ pane: Pane) -> some View {
+        switch pane {
+        case .providers:
+            ProviderOrderSettings(store: store, onManageWorkspaces: { selection = .workspaces })
+        case .credentials:
+            keysTab
+        case .workspaces:
+            workspacesPane
+        case .display:
+            displayPane
+        case .notifications:
+            notificationsPane
+        case .cycles:
+            cyclesTab
+        case .data:
+            dataPane
+        case .about:
+            ScrollView { AboutView().frame(maxWidth: .infinity) }
+        }
     }
 
     // MARK: - Keys
@@ -173,6 +284,8 @@ public struct SettingsView: View {
 
     private var keysForm: some View {
         Form {
+            credentialDiscoverySection
+
             Section {
                 ForEach(Self.slots) { slot in
                     slotRow(slot)
@@ -188,7 +301,16 @@ public struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            openCodeWorkspaceSection
+            Section {
+                Button("Manage OpenCode Go workspace keys…") { selection = .workspaces }
+                    .buttonStyle(.link)
+            } header: {
+                Text("OpenCode Go")
+            } footer: {
+                Text("Each workspace has its own key, set in the OpenCode Go section.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Section("Google (Gemini)") {
                 HStack {
@@ -295,13 +417,32 @@ public struct SettingsView: View {
             HStack(spacing: 8) {
                 Image(systemName: Self.icon(for: source))
                     .foregroundStyle(Self.tint(for: source))
-                Text(slot.label)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(slot.label)
+                    // What the last poll made of the credential, so a key
+                    // that is stored but rejected does not look settled.
+                    if let status = liveStatus(for: slot.id) {
+                        ConnectionStatusLine(status: status)
+                    }
+                }
                 Spacer()
                 Text(Self.describe(source))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
         }
+    }
+
+    /// The vendor's state from the running app's last poll; nil without one,
+    /// or for a vendor the user hid (which is not polled).
+    private func liveStatus(for vendor: VendorIdentifier) -> ProviderConnectionPresentation.Status? {
+        guard let store, store.hasLoaded, !CredentialStore.hiddenProviders.contains(vendor) else { return nil }
+        let snapshots = store.snapshots.filter { $0.vendorId == vendor }
+        guard !snapshots.isEmpty else { return nil }
+        return ProviderConnectionPresentation.status(
+            vendorSnapshots: snapshots, isHidden: false, hasPolled: true, now: Date())
     }
 
     // MARK: - OpenCode Go workspaces
@@ -309,10 +450,28 @@ public struct SettingsView: View {
     /// One OpenCode Go subscription per row: name, enable toggle, its own key,
     /// and reorder/remove. The key is never read back into the field — it starts
     /// blank and a stored key is only ever indicated.
+    private var workspacesPane: some View {
+        Form {
+            openCodeWorkspaceSection
+        }
+        .formStyle(.grouped)
+        // The Providers section reorders the same list; re-read it so this
+        // one never shows, or later writes back, an order that is gone.
+        .onAppear {
+            workspaces = OpenCodeGoWorkspaceStore.resolved()
+            refreshWorkspaceHasKey()
+        }
+    }
+
     private var openCodeWorkspaceSection: some View {
         Section {
             ForEach(workspaces) { workspace in
                 workspaceRow(workspace)
+            }
+            // Drag a row to reorder, as well as the arrows on each row.
+            .onMove { source, destination in
+                workspaces = OpenCodeGoWorkspaceStore.moved(workspaces, fromOffsets: source, toOffset: destination)
+                persistWorkspaces()
             }
             HStack(spacing: 8) {
                 TextField("New workspace name", text: $newWorkspaceName)
@@ -322,14 +481,18 @@ public struct SettingsView: View {
                     .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         } header: {
-            Text("OpenCode Go workspaces")
+            Text("Workspaces")
         } footer: {
             Text("""
                  Each workspace is a separate OpenCode Go subscription with its \
-                 own API key, monitored and shown as its own reading. The first \
-                 workspace keeps your existing OpenCode key and the CLI \
-                 auth.json fallback; later ones are read from their own Keychain \
-                 entry only. A key is written to the Keychain and never shown again.
+                 own API key, monitored and shown as its own reading. Drag a row \
+                 or use its arrows to set the order the popover, History and the \
+                 desktop widget list them in; renaming or reordering never moves \
+                 a key or its history. The original workspace, marked below \
+                 its key field, keeps your existing OpenCode key and the CLI \
+                 auth.json fallback wherever it sits in the list; every other \
+                 workspace is read from its own Keychain entry only. A key is \
+                 written to the Keychain and never shown again.
                  """)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -351,9 +514,18 @@ public struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(persistWorkspaces)
 
-                Text(workspaceHasKey[instanceID] == true ? "Stored in Keychain" : "Not configured")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.tertiary)
+                    .help("Drag to reorder")
+                    .accessibilityHidden(true)
+
+                // Only where the Keychain itself says so. "Not configured" here
+                // contradicted a workspace that reads fine from the CLI login.
+                if let hasKey = workspaceHasKey[instanceID] {
+                    Text(hasKey ? "Stored in Keychain" : "No key in Keychain")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Button { moveWorkspace(workspace.id, by: -1) } label: {
                     Image(systemName: "chevron.up")
@@ -391,12 +563,55 @@ public struct SettingsView: View {
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
+            // Credential ownership follows the workspace, not its position:
+            // this one inherited the pre-workspace key wherever it is moved.
+            if workspace.id == OpenCodeGoWorkspaceStore.legacyID {
+                Label("Original workspace: uses your existing OpenCode key and the CLI login",
+                      systemImage: "key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let status = workspaceStatus[instanceID] {
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if let live = liveWorkspaceStatus(workspace) {
+                ConnectionStatusLine(status: live)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "Workspace \(workspace.name), position \((workspaces.firstIndex { $0.id == workspace.id } ?? 0) + 1) of \(workspaces.count)")
+    }
+
+    private func liveWorkspaceStatus(_ workspace: OpenCodeGoWorkspace) -> ProviderConnectionPresentation.Status? {
+        guard workspace.isEnabled, let store, store.hasLoaded,
+              let snapshot = store.snapshots.first(where: { $0.id == workspace.instanceID })
+        else { return nil }
+        return ProviderConnectionPresentation.status(for: snapshot, now: Date())
+    }
+
+    /// Writes a name typed but not committed with Return, and nothing else.
+    ///
+    /// The names are applied to the stored list rather than writing this
+    /// view's copy: the Providers section may have reordered the workspaces
+    /// since this copy was read, and writing it back would undo that. Nothing
+    /// is written when no name changed, so leaving the section does not post
+    /// a change (and a refresh) for nothing.
+    private func commitWorkspaceRenames() {
+        let stored = OpenCodeGoWorkspaceStore.resolved()
+        let names = Dictionary(workspaces.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let renamed = stored.contains { workspace in
+            names[workspace.id].map { $0 != workspace.name } ?? false
+        }
+        guard renamed else { return }
+        workspaces = stored.map { workspace in
+            var copy = workspace
+            if let name = names[workspace.id] { copy.name = name }
+            return copy
+        }
+        persistWorkspaces()
     }
 
     private func enabledBinding(for id: String) -> Binding<Bool> {
@@ -448,6 +663,7 @@ public struct SettingsView: View {
     }
 
     private func refreshWorkspaceHasKey() {
+        guard readsCredentials else { return }
         var has: [String: Bool] = [:]
         for workspace in workspaces {
             has[workspace.instanceID] = OpenCodeGoWorkspaceStore.hasCredential(for: workspace)
@@ -605,31 +821,33 @@ public struct SettingsView: View {
         .deepseek, .grok, .kiro, .muse,
     ]
 
-    private var generalTab: some View {
+    private var credentialDiscoverySection: some View {
+        Section {
+            Toggle("Read credentials from local CLI tools", isOn: $cliDiscovery)
+            Text("""
+                 When on, FrugalBar may run `gh auth token`; read \
+                 CLI Proxy hubs (~/.t3/userdata/settings.json); read \
+                 ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
+                 ~/.claude/.credentials.json, \
+                 ~/.config/github-copilot/hosts.json, \
+                 ~/.commandcode/auth.json, or \
+                 ~/.cline/data/settings/providers.json; read the \
+                 OPENROUTER_API_KEY environment variable; or read the \
+                 Claude Code or Muse Code login Keychain item — if the \
+                 Keychain has no entry for a provider. Off by default: this reads \
+                 credentials you have not explicitly given the app.
+                 """)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        } header: {
+            Text("Credential discovery")
+        }
+    }
+
+    // MARK: - Notifications
+
+    private var notificationsPane: some View {
         Form {
-            Section {
-                Toggle("Read credentials from local CLI tools", isOn: $cliDiscovery)
-                Text("""
-                     When on, FrugalBar may run `gh auth token`; read \
-                     CLI Proxy hubs (~/.t3/userdata/settings.json); read \
-                     ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
-                     ~/.claude/.credentials.json, \
-                     ~/.config/github-copilot/hosts.json, \
-                     ~/.commandcode/auth.json, or \
-                     ~/.cline/data/settings/providers.json; read the \
-                     OPENROUTER_API_KEY environment variable; or read the \
-                     Claude Code or Muse Code login Keychain item — if the \
-                     Keychain has no \
-                     entry for a provider. Off by default: this reads \
-                     credentials you have not explicitly given the app.
-                     """)
-
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } header: {
-                Text("Credential discovery")
-            }
-
             Section {
                 Toggle("Notify when a quota recovers", isOn: $notificationsEnabled)
                 Text("""
@@ -666,8 +884,249 @@ public struct SettingsView: View {
             }
 
             Section {
-                Toggle("Track resets, outages and new models",
-                       isOn: $eventTracking)
+                ForEach(Self.eventNotificationCandidates) { kind in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
+                        Text(kind.notificationCaption)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .disabled(!eventTracking)
+                }
+                if !eventTracking {
+                    Label("Event tracking is off in History & Data, so there is nothing to notify about.",
+                          systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("AI events")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Display
+
+    private var displayPane: some View {
+        Form {
+            Section {
+                Picker("Position", selection: $desktopWidgetMode) {
+                    Text("Pinned to desktop").tag(DesktopWidgetMode.desktop)
+                    Text("Floats above windows").tag(DesktopWidgetMode.floating)
+                }
+                .onChange(of: desktopWidgetMode) {
+                    CredentialStore.desktopWidgetMode = desktopWidgetMode
+                    DesktopWidgetWindow.applyMode()
+                }
+                if store != nil {
+                    Button(desktopWidgetVisibility.isVisible ? "Hide desktop widget" : "Show desktop widget") {
+                        DesktopWidgetWindow.toggle()
+                    }
+                }
+                Text("""
+                     A small panel in one of three layouts: the tokens \
+                     recorded on this Mac, a tile per provider, or a chart of \
+                     the windows you select with each one's headroom, and \
+                     their average once two or more are selected. Open it \
+                     from the gear menu. It is a window FrugalBar owns, not a \
+                     WidgetKit widget — those need an app bundle this build \
+                     does not have.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } header: {
+                Text("Desktop widget")
+            }
+
+            Section {
+                legendRows(Self.popoverLegend)
+            } header: {
+                Text("Provider logos in the popover")
+            } footer: {
+                Text("""
+                     Only a provider that needs attention gets a mark. Each \
+                     provider sets its own levels: most count how full their \
+                     fullest window is, some how much credit is left, so the \
+                     same reading can be healthy for one and running low for \
+                     another.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                legendRows(Self.detailLegend)
+            } header: {
+                Text("Usage details")
+            } footer: {
+                Text("""
+                     What the details opened from a provider's row lead with. \
+                     Unlike the popover's logo, they name Healthy with a \
+                     checkmark, and call a provider blocked whenever the \
+                     vendor blocks a window, whatever its level.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                legendRows(Self.windowLegend)
+            } header: {
+                Text("Window bars")
+            } footer: {
+                Text("""
+                     A bar's colour follows pace, blocking and exhaustion, not \
+                     the provider's levels, so a bar can stay green while its \
+                     provider runs low. Colour is not the only sign: a bar's \
+                     share used is written beside or under it, or in its \
+                     tooltip; ahead of pace means the fill has passed the \
+                     tick; and a blocked window carries a sign or a dashed \
+                     outline.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func legendRows(_ entries: [LegendEntry]) -> some View {
+        ForEach(entries, id: \.title) { entry in
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title)
+                    Text(entry.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: entry.symbol)
+                    .foregroundStyle(entry.tint)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    struct LegendEntry {
+        let symbol: String
+        let title: String
+        let detail: String
+        let tint: Color
+    }
+
+    /// The mark on each provider's logo in the popover, each built from
+    /// `VendorAvatarView.overlay(status:isExhausted:)` for a provider in that
+    /// state, so the legend cannot show a mark the avatar does not draw. No
+    /// threshold is quoted: providers set their own (a share of a window at
+    /// different levels, or an absolute credit balance), so any single figure
+    /// here would be wrong for some of them.
+    static let popoverLegend: [LegendEntry] = {
+        func entry(_ status: ProviderStatus, isExhausted: Bool = false, title: String,
+                   _ detail: String) -> LegendEntry {
+            switch VendorAvatarView.overlay(status: status, isExhausted: isExhausted) {
+            case .none:
+                return .init(symbol: noMarkSymbol, title: title, detail: detail, tint: Theme.outline)
+            case .struckThrough:
+                return .init(symbol: VendorAvatarView.Overlay.strikeSymbol, title: title, detail: detail,
+                             tint: VendorAvatarView.Overlay.strikeTint)
+            case .badge(let symbol, let tint):
+                return .init(symbol: symbol, title: title, detail: detail, tint: tint)
+            }
+        }
+        return [
+            entry(.healthy, title: "No mark",
+                  "Read, and short of the provider's own warning level: the logo alone."),
+            entry(.warning, title: "Running low", "Past the provider's own warning level."),
+            entry(.critical, title: "Critically low",
+                  "Past the provider's own critical level. Some providers also go critical when the vendor blocks a window; its bar says which."),
+            entry(.healthy, isExhausted: true, title: "Logo struck through",
+                  "A window is used up, or the vendor blocked every window without a figure. It replaces any other mark."),
+            entry(.unavailable(.notConfigured), title: "Could not be read",
+                  "No figure is shown; the row names the reason instead."),
+        ]
+    }()
+
+    /// Stands in for a logo with nothing drawn over it.
+    nonisolated static let noMarkSymbol = "app"
+
+    /// The states a provider's usage details lead with, in the inspector's
+    /// own words, shapes and colours.
+    static let detailLegend: [LegendEntry] = {
+        func entry(_ state: MetricDetailPresentation.State, title: String? = nil,
+                   _ detail: String) -> LegendEntry {
+            let label = MetricDetailPresentation.headlineAndSymbol(for: state)
+            return .init(symbol: label.symbol, title: title ?? label.headline, detail: detail,
+                         tint: MetricDetailModalView.color(for: state))
+        }
+        return [
+            entry(.healthy, "Read, and short of the provider's own warning level."),
+            entry(.runningLow, "Past the provider's own warning level."),
+            entry(.critical, "Past the provider's own critical level."),
+            entry(.exhausted, "A window is used up."),
+            entry(.blocked, "The vendor says a window cannot be used right now."),
+            entry(.lastPollFailed(at: .distantPast), title: "Last poll could not be read",
+                  "The figures shown are from the reading before it, and may be out of date."),
+            entry(.unavailable(.notConfigured), title: "Could not be read",
+                  "No figure is shown; the reason and what to do are."),
+        ]
+    }()
+
+    /// A bar's fill, which carries no shape of its own.
+    nonisolated static let fillSymbol = "capsule.fill"
+    /// The even-pace tick, an upright capsule across the bar.
+    nonisolated static let tickSymbol = "capsule.portrait.fill"
+
+    /// One window bar per state, its swatch taken from
+    /// `DualBarProgressView.stateColor` for a window in that state, so the
+    /// legend cannot show a colour the bar would not draw. Its only glyphs
+    /// are ones the bar's cell draws.
+    static let windowLegend: [LegendEntry] = {
+        func swatch(_ metrics: DualBarMetrics) -> Color { DualBarProgressView.stateColor(for: metrics) }
+        return [
+            .init(symbol: fillSymbol, title: "Not ahead of pace",
+                  detail: "Not spent, and not meaningfully ahead of an even pace, or no pace was published.",
+                  tint: swatch(LegendSample.onPace)),
+            .init(symbol: fillSymbol, title: "Ahead of pace",
+                  detail: "Used meaningfully more than an even spread would have by now.",
+                  tint: swatch(LegendSample.aheadOfPace)),
+            .init(symbol: fillSymbol, title: "Spent",
+                  detail: "A full bar: nothing left in the window until it resets.",
+                  tint: swatch(LegendSample.spent)),
+            .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
+                  detail: "In the vendor's own colour when it gives one, whatever the percentage says, with this sign beside its figure, or a dashed outline in place of a fill when there is no figure.",
+                  tint: swatch(LegendSample.blocked)),
+            .init(symbol: "minus", title: "Not published",
+                  detail: "A faint dash, never an empty bar, which would read as nothing used.",
+                  tint: Theme.outline),
+            .init(symbol: tickSymbol, title: "Even-pace tick",
+                  detail: "A short white mark across the bar, where usage would be if spread evenly over the window. Drawn only when the vendor publishes the window's length and reset, and never on a spent window.",
+                  tint: .secondary),
+        ]
+    }()
+
+    /// Windows in each state the bar legend describes, so its swatches are
+    /// computed by the code that colours the bars.
+    enum LegendSample {
+        private static let now = Date(timeIntervalSinceReferenceDate: 0)
+        private static func window(used: Double, pace: Double) -> DualBarMetrics {
+            DualBarMetrics(primaryFraction: used, expectedPaceFraction: pace, label: "WK",
+                           resetsAt: now.addingTimeInterval(86_400), windowLength: 7 * 86_400)
+        }
+        static let onPace = window(used: 0.5, pace: 0.5)
+        static let aheadOfPace = window(used: 0.8, pace: 0.4)
+        static let spent = window(used: 1, pace: 0.5)
+        static let blocked = DualBarMetrics(primaryFraction: 0.4, label: "WK", isBlocked: true)
+    }
+
+    @State private var desktopWidgetVisibility = DesktopWidgetVisibility.shared
+
+    // MARK: - History & data
+
+    private var dataPane: some View {
+        Form {
+            Section {
+                Toggle("Track resets, outages and new models", isOn: $eventTracking)
                 Text("""
                      Reads the official status pages for Claude, OpenAI and \
                      GitHub every 10 minutes, the community reset trackers \
@@ -678,42 +1137,37 @@ public struct SettingsView: View {
                      """)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                Text("Notify about")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(Self.eventNotificationCandidates) { kind in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
-                        Text(kind.notificationCaption)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
             } header: {
                 Text("AI events")
             }
 
             Section {
-                Picker("Position", selection: $desktopWidgetMode) {
-                    Text("Pinned to desktop").tag(DesktopWidgetMode.desktop)
-                    Text("Floats above windows").tag(DesktopWidgetMode.floating)
+                LabeledContent("Kept for") {
+                    Text("\(Int(QuotaHistoryStore.defaultRetentionInterval / 86_400)) days")
                 }
-                .onChange(of: desktopWidgetMode) {
-                    CredentialStore.desktopWidgetMode = desktopWidgetMode
-                    DesktopWidgetWindow.applyMode()
+                LabeledContent("Location") {
+                    Text(QuotaHistoryStore.databaseURL().path(percentEncoded: false))
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Open History") { HistoryWindow.show() }
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([QuotaHistoryStore.databaseURL()])
+                    }
                 }
                 Text("""
-                     A small panel charting every subscription's usage \
-                     window over time, with an average of the selected \
-                     windows' readings and their current headroom. Open it \
-                     from the gear menu. It is a window FrugalBar owns, not a \
-                     WidgetKit widget — those need an app bundle this build \
-                     does not have.
+                     Each poll records the reading every visible provider \
+                     returned — or that it returned none — on this Mac only. \
+                     Nothing is uploaded. The History window and the inspector \
+                     chart these readings; a hidden provider records nothing.
                      """)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } header: {
-                Text("Desktop widget")
+                Text("Quota history")
             }
         }
         .formStyle(.grouped)
@@ -779,7 +1233,7 @@ public struct SettingsView: View {
         defer { isVerifying = false }
 
         // Commit any workspace rename the user typed but did not press Return on.
-        persistWorkspaces()
+        commitWorkspaceRenames()
 
         // Persist the Gemini client alongside the vendor keys. Changing it
         // orphans any stored session — a refresh token belongs to the client

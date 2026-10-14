@@ -39,6 +39,25 @@ enum DetailChartStyle {
 struct BurndownChartView: View {
     let burndown: BurndownPresentation.Burndown
     let now: Date
+    @State private var hoverDate: Date?
+
+    /// The recorded readings as one inspectable series. Projections and the
+    /// pace line are never inspected: they are not readings.
+    private var readingSegments: [HistoryPresentation.TimelineSegment] {
+        BurndownPresentation.inspectionSegments(for: burndown)
+    }
+
+    private var tolerance: TimeInterval {
+        max(300, (range.map { $0.upperBound.timeIntervalSince($0.lowerBound) } ?? 86_400) / 50)
+    }
+
+    /// The recorded reading under the pointer or keyboard selection, if one
+    /// is close enough to claim.
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap {
+            HistoryOverviewPresentation.nearestPoll(to: $0, in: readingSegments, tolerance: tolerance)
+        }
+    }
 
     private var range: ClosedRange<Date>? { BurndownPresentation.windowRange(for: burndown) }
 
@@ -81,9 +100,10 @@ struct BurndownChartView: View {
                     }
                 }
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(burndown.barLabel) burndown, remaining quota")
-            .accessibilityValue(BurndownPresentation.accessibilityDescription(for: burndown, now: now))
+            .modifier(ReadingInspection(
+                segments: readingSegments, selection: $hoverDate, tolerance: tolerance,
+                label: "\(burndown.barLabel) burndown, remaining quota",
+                summary: BurndownPresentation.accessibilityDescription(for: burndown, now: now)))
     }
 
     @ViewBuilder
@@ -142,6 +162,19 @@ struct BurndownChartView: View {
                             .foregroundStyle(Theme.primary.opacity(0.8))
                     }
             }
+
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, alignment: .center, spacing: 2,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        ReadingReadout(poll: poll)
+                    }
+            }
+        }
+        .chartOverlay { proxy in
+            ChartHoverCatcher(proxy: proxy) { hoverDate = $0 }
         }
         if let range {
             base.chartXScale(domain: range)
@@ -160,17 +193,30 @@ struct UsageHistoryChartView: View {
     let markers: [AIEvent]
     let now: Date
 
+    @State private var hoverDate: Date?
+
     private var labels: [String] {
         var out: [String] = []
         for s in series where !out.contains(s.label) { out.append(s.label) }
         return out
     }
 
-    private static let dashes: [[CGFloat]] = [[], [5, 3], [1.5, 2.5]]
-
     private func dash(for label: String) -> [CGFloat] {
-        let index = labels.firstIndex(of: label) ?? 0
-        return Self.dashes[index % Self.dashes.count]
+        WindowDashLegend.dash(for: label, in: labels)
+    }
+
+    private var readingSegments: [HistoryPresentation.TimelineSegment] {
+        BurndownPresentation.inspectionSegments(for: series)
+    }
+
+    private var tolerance: TimeInterval {
+        HistoryOverviewPresentation.inspectionTolerance(range: range, now: now, earliest: nil)
+    }
+
+    private var inspected: HistoryOverviewPresentation.InspectedPoll? {
+        hoverDate.flatMap {
+            HistoryOverviewPresentation.nearestPoll(to: $0, in: readingSegments, tolerance: tolerance)
+        }
     }
 
     private var axisFormat: String {
@@ -184,22 +230,7 @@ struct UsageHistoryChartView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if labels.count > 1 {
-                HStack(spacing: 10) {
-                    ForEach(labels, id: \.self) { label in
-                        HStack(spacing: 4) {
-                            Path { p in
-                                p.move(to: CGPoint(x: 0, y: 4))
-                                p.addLine(to: CGPoint(x: 16, y: 4))
-                            }
-                            .stroke(Theme.onSurfaceVariant, style: StrokeStyle(lineWidth: 1.5, dash: dash(for: label)))
-                            .frame(width: 16, height: 8)
-                            Text(label)
-                                .font(Theme.Typography.token)
-                                .foregroundStyle(Theme.onSurfaceVariant)
-                        }
-                    }
-                }
-                .accessibilityHidden(true)
+                WindowDashLegend(labels: labels)
             }
             chart
         }
@@ -238,6 +269,19 @@ struct UsageHistoryChartView: View {
                             .foregroundStyle(EventsPresentation.kindTint(event.kind))
                     }
             }
+
+            if let poll = inspected {
+                RuleMark(x: .value("Inspected", poll.timestamp))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(position: .top, alignment: .center, spacing: 2,
+                                overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                        ReadingReadout(poll: poll)
+                    }
+            }
+        }
+        .chartOverlay { proxy in
+            ChartHoverCatcher(proxy: proxy) { hoverDate = $0 }
         }
         .chartYScale(domain: 0...100)
         .chartXScale(domain: (range.startDate(from: now) ?? now.addingTimeInterval(-86_400))...now)
@@ -269,13 +313,12 @@ struct UsageHistoryChartView: View {
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Usage history, \(range.title)")
-        .accessibilityValue(
-            ([BurndownPresentation.historyAccessibilityDescription(series: series, range: range)]
-             + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
-            .joined(separator: ". ")
-        )
+        .modifier(ReadingInspection(
+            segments: readingSegments, selection: $hoverDate, tolerance: tolerance,
+            label: "Usage history, \(range.title)",
+            summary: ([BurndownPresentation.historyAccessibilityDescription(series: series, range: range)]
+                      + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+                .joined(separator: ". ")))
     }
 }
 

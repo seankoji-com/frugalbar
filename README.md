@@ -84,7 +84,7 @@ swift run
    - **Google Gemini**: Connect Google OAuth for Antigravity subscription quota.
    - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
    - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
-   - **OpenCode Go**: Configure a token under Preferences → Providers. Add a row per subscription workspace; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The first workspace keeps your existing key and the CLI `auth.json` fallback.
+   - **OpenCode Go**: Configure a token under Preferences → OpenCode Go. Add a row per subscription workspace and arrange them in the order you want them listed; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The original workspace keeps your existing key and the CLI `auth.json` fallback, wherever you move it in the list.
    - **Grok**: Sign in with the Grok CLI (`grok login`); enable CLI discovery and FrugalBar reads `~/.grok/auth.json`.
    - **Kiro**: Sign in with the Kiro CLI or IDE; enable CLI discovery and FrugalBar reads the CLI's own state database.
    - **DevPass**: Paste an `llmgtwy_…` key from the LLM Gateway dashboard.
@@ -98,14 +98,18 @@ Credentials are validated against live vendor endpoints upon saving to immediate
 
 ## Preferences
 
-Gear menu → **Settings…** (⌘,) has four tabs:
+Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
-| Tab | What it does |
+| Section | What it does |
 |---|---|
-| **API Keys** | Credentials per provider, and where each one is coming from |
-| **Providers** | Show or hide each provider, and choose the order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* shows exactly the list you arrange with the up and down buttons. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
-| **Cycles** | Renewal dates for vendors that publish no billing period |
-| **General** | CLI discovery, notifications, AI events, desktop widget position |
+| **Providers** | Each provider's connection state from the last poll (a symbol, the reason, and what to do about it), whether it is shown, and its order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* shows exactly the list you arrange with the up and down buttons. OpenCode Go workspaces are listed under OpenCode with their own arrows and always stay together in the order you give them. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
+| **API Keys** | Credentials per provider, where each one is coming from, and CLI discovery |
+| **OpenCode Go** | One row per subscription workspace: name, key, monitoring, and order (drag a row or use its arrows) |
+| **Display** | Desktop widget position, and a key to the popover's symbols |
+| **Notifications** | Quota-recovery notifications, reset alerts, and which AI events notify |
+| **Billing Cycles** | Renewal dates for vendors that publish no billing period |
+| **History & Data** | AI event tracking, and where quota history is kept |
+| **About** | Version and links |
 
 The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
@@ -145,7 +149,7 @@ Two of these readings carry a cost or routing characteristic the table can't sho
 
 ## Subscription cycles
 
-Some vendors meter usage but never say when the billing period turns over. Rather than guess one, **Preferences → Cycles** lets you record the renewal date yourself for any provider.
+Some vendors meter usage but never say when the billing period turns over. Rather than guess one, **Preferences → Billing Cycles** lets you record the renewal date yourself for any provider.
 
 A recorded cycle adds a `CYCLE` bar showing how many days of the period you have paid for remain, with the pro-rata marker set from the real calendar month rather than a 30-day constant. It reports **no usage** — only elapsed time against the date you entered — and is labelled separately so a vendor's own window is never confused with one typed in by hand. A vendor-published window always wins: the cycle bar only ever fills a slot the vendor left empty. It also attaches to providers FrugalBar cannot read at all, which is the case a renewal countdown is most useful for.
 
@@ -157,13 +161,13 @@ Optionally record the cost per period and it appears alongside the countdown.
 
 FrugalBar keeps a log of three things on the platforms you use, all of them things that already happened: **resets** (a vendor reset everyone's usage or granted a banked reset, your own window was restored early, or OpenAI granted your account a reset credit), **outages** (a major or critical incident on the vendor's official status page, and its recovery), and **new models** that became selectable on your own subscription. Forecasts, launch posts and catalog listings are never read.
 
-Outages come from the official status pages for Claude, OpenAI (Codex) and GitHub Copilot, polled every 10 minutes. Vendor resets come from the community trackers claude-resets.com (Claude, Codex) and whenreset.dev (Grok), hourly, and are captioned as community-sourced. New models come from each subscription's own model list, read hourly with the credential its quota already uses. Everything can be switched off under **Preferences → General → AI events**, where each kind also has its own notification toggle. The newest event shows in the popover; all of them are in **History → Events**, as timeline markers and in the inspector, and are kept for 365 days. Details: [docs/events.md](docs/events.md).
+Outages come from the official status pages for Claude, OpenAI (Codex) and GitHub Copilot, polled every 10 minutes. Vendor resets come from the community trackers claude-resets.com (Claude, Codex) and whenreset.dev (Grok), hourly, and are captioned as community-sourced. New models come from each subscription's own model list, read hourly with the credential its quota already uses. Everything can be switched off under **Preferences → History & Data → AI events**, and each kind has its own notification toggle under **Preferences → Notifications**. The newest event shows in the popover; all of them are in **History → Events**, as timeline markers and in the inspector, and are kept for 365 days. Details: [docs/events.md](docs/events.md).
 
 ---
 
 ## Desktop widget
 
-**Gear menu → Desktop Widget** (⌘D) opens a small panel with three layouts: a stacked **Tokens** chart (the default) of raw token consumption across the providers FrugalBar can count (Claude Code, Codex, OpenCode), a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The Tokens view is what local tools recorded, cache included, and is never a quota; providers with no token counts are named, not drawn as zero. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → General**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
+**Gear menu → Desktop Widget** (⌘D) opens a small panel with three layouts: a stacked **Tokens** chart (the default) of raw token consumption across the providers FrugalBar can count (Claude Code, Codex, OpenCode), a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The Tokens view is what local tools recorded, cache included, and is never a quota; providers with no token counts are named, not drawn as zero. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → Display**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
 
 ---
 
@@ -171,8 +175,8 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 
 - **macOS Keychain Storage**: Keys are stored locally in the secure Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced to iCloud or external clouds).
 - **No In-URL Token Leaks**: API credentials are sent strictly in HTTP request headers, never query parameters.
-- **Event sources**: the status pages (`status.claude.com`, `status.openai.com`, `www.githubstatus.com`) and reset trackers (`claude-resets.com`, `whenreset.dev`) are public and get no credential. Account model lists go to each vendor's own API with the credential that vendor's quota already uses, and nowhere else; the Codex list also reads the latest Codex CLI version from `registry.npmjs.org`, without a credential. Switch all of them off under **Preferences → General → AI events**.
-- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter, DeepSeek), the `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` environment variables, `~/.codex/auth.json`, the Claude Code login Keychain item, the Muse Code login Keychain item (`ai.meta.dev.credentials`), `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → General**.
+- **Event sources**: the status pages (`status.claude.com`, `status.openai.com`, `www.githubstatus.com`) and reset trackers (`claude-resets.com`, `whenreset.dev`) are public and get no credential. Account model lists go to each vendor's own API with the credential that vendor's quota already uses, and nowhere else; the Codex list also reads the latest Codex CLI version from `registry.npmjs.org`, without a credential. Switch all of them off under **Preferences → History & Data → AI events**.
+- **Local CLI Discovery (Opt-in)**: Auto-detecting credentials from local developer tools — `gh auth token`, CLI Proxy hubs (`~/.t3/userdata/settings.json`, `~/.t3/userdata/secrets`, `CLIPROXY_*` environment variables), `~/.local/share/opencode/auth.json` (OpenCode, Copilot, OpenRouter, DeepSeek), the `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` environment variables, `~/.codex/auth.json`, the Claude Code login Keychain item, the Muse Code login Keychain item (`ai.meta.dev.credentials`), `~/.claude/.credentials.json`, `~/.config/github-copilot/hosts.json`, `~/.grok/auth.json`, `~/Library/Application Support/kiro-cli/data.sqlite3` (opened read-only), `~/.commandcode/auth.json` (and the `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variables), and `~/.cline/data/settings/providers.json` (under `$CLINE_DATA_DIR` when set; legacy `secrets.json`; and the `CLINE_API_KEY` / `CLINEPASS_API_KEY` environment variables) — is **disabled by default** and can be enabled under **Preferences → API Keys → Credential discovery**.
 
 ---
 

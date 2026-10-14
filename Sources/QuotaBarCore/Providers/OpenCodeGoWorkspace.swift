@@ -100,22 +100,36 @@ public enum OpenCodeGoWorkspaceStore {
         resolved().first { $0.instanceID == key }?.name
     }
 
+    /// A workspace instance key's place in the user's list, or `nil` for a key
+    /// the list does not name. Lets a surface that holds only stored keys (the
+    /// History overview, the widget before its first poll) draw workspaces in
+    /// the order the user arranged rather than in key order, which is a UUID's.
+    public static func position(
+        ofInstanceKey key: String,
+        in workspaces: [OpenCodeGoWorkspace] = resolved()
+    ) -> Int? {
+        workspaces.firstIndex { $0.instanceID == key }
+    }
+
     /// The stored workspace list, or `nil` when nothing has been stored yet.
     ///
     /// The distinction is the whole point: an install that has never stored a
     /// list seeds the legacy workspace, while a user who removed every
     /// workspace has stored an *empty* list and must not have one put back.
     /// `all()` flattens the two for the many callers that only read.
-    public static func stored() -> [OpenCodeGoWorkspace]? {
-        guard let data = CredentialStore.preferences.data(forKey: defaultsKey) else { return nil }
+    ///
+    /// `defaults` is the shared suite in the app; a test passes a randomised
+    /// suite of its own so it never reads or writes the shared one.
+    public static func stored(in defaults: UserDefaults = CredentialStore.preferences) -> [OpenCodeGoWorkspace]? {
+        guard let data = defaults.data(forKey: defaultsKey) else { return nil }
         return try? JSONDecoder().decode([OpenCodeGoWorkspace].self, from: data)
     }
 
     /// Every configured workspace, in display order. Empty when none has been
     /// stored, and empty when the user has removed all of them — a stored
     /// empty list is a decision, not a missing value.
-    public static func all() -> [OpenCodeGoWorkspace] {
-        stored() ?? []
+    public static func all(in defaults: UserDefaults = CredentialStore.preferences) -> [OpenCodeGoWorkspace] {
+        stored(in: defaults) ?? []
     }
 
     /// Writes the list and tells the running app to re-read it, so adding,
@@ -130,8 +144,11 @@ public enum OpenCodeGoWorkspaceStore {
     /// accidental select-all-delete leaves the workspace named; a non-blank one
     /// is trimmed. That is the same rule `SettingsView.addWorkspace` applies
     /// when it refuses to create a workspace from an empty field.
-    public static func set(_ workspaces: [OpenCodeGoWorkspace]) {
-        let previous = stored() ?? []
+    public static func set(
+        _ workspaces: [OpenCodeGoWorkspace],
+        in defaults: UserDefaults = CredentialStore.preferences
+    ) {
+        let previous = stored(in: defaults) ?? []
         let normalised = workspaces.map { workspace -> OpenCodeGoWorkspace in
             var copy = workspace
             let trimmed = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,7 +160,7 @@ public enum OpenCodeGoWorkspaceStore {
             return copy
         }
         guard let data = try? JSONEncoder().encode(normalised) else { return }
-        CredentialStore.preferences.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: defaultsKey)
         NotificationCenter.default.post(
             name: .frugalbarProviderPreferencesDidChange, object: changeSender)
     }
@@ -167,8 +184,8 @@ public enum OpenCodeGoWorkspaceStore {
     ///
     /// A stored empty list is returned as it is. Removing every workspace is a
     /// choice, and re-seeding would undo it on the very next poll.
-    public static func resolved() -> [OpenCodeGoWorkspace] {
-        stored() ?? [legacy]
+    public static func resolved(in defaults: UserDefaults = CredentialStore.preferences) -> [OpenCodeGoWorkspace] {
+        stored(in: defaults) ?? [legacy]
     }
 
     /// Seeds the legacy workspace on a first run, and only then.
@@ -209,5 +226,25 @@ public enum OpenCodeGoWorkspaceStore {
         var copy = workspaces
         copy.swapAt(index, target)
         return copy
+    }
+
+    /// The list after a drag: the rows at `source` land before the row that
+    /// was at `destination`, with the meaning `List.onMove` gives both. Like
+    /// `moved(_:id:by:)` this only reorders; every workspace keeps its id,
+    /// name, credential and history.
+    public static func moved(
+        _ workspaces: [OpenCodeGoWorkspace],
+        fromOffsets source: IndexSet,
+        toOffset destination: Int
+    ) -> [OpenCodeGoWorkspace] {
+        let valid = source.filter { workspaces.indices.contains($0) }
+        guard !valid.isEmpty else { return workspaces }
+        let moving = valid.map { workspaces[$0] }
+        var remaining = workspaces
+        for index in valid.sorted(by: >) { remaining.remove(at: index) }
+        // Rows taken out above the destination shift it up by one each.
+        let insertAt = min(max(destination - valid.filter { $0 < destination }.count, 0), remaining.count)
+        remaining.insert(contentsOf: moving, at: insertAt)
+        return remaining
     }
 }

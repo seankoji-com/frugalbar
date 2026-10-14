@@ -503,4 +503,35 @@ struct AggregateBurndownPresentationTests {
         #expect(thinned.id == series.id)
         #expect(thinned.allPoints.count < points.count)
     }
+
+    @Test("a vendor whose history could not be read is named, and the average is said to be withheld")
+    func unreadNote() {
+        #expect(AggregateBurndownPresentation.unreadNote([]) == nil)
+        let one = AggregateBurndownPresentation.unreadNote([.openai])
+        #expect(one == "Could not read history for \(VendorIdentifier.openai.displayName), so it is missing and no average is drawn.")
+        let two = AggregateBurndownPresentation.unreadNote([.claude, .openai])
+        #expect(two?.contains("\(VendorIdentifier.claude.displayName), \(VendorIdentifier.openai.displayName)") == true)
+        #expect(two?.contains("they are missing") == true)
+    }
+}
+
+@Suite("Widget series order before the first poll")
+struct WidgetStoredKeyOrderTests {
+
+    private func reading(_ key: String) -> QuotaHistoryStore.ReadingRecord {
+        QuotaHistoryStore.ReadingRecord(
+            vendor: key, barLabel: "WK", measuredAt: Date(timeIntervalSince1970: 1_791_848_000), fraction: 0.3,
+            isBlocked: false, confidence: .measured, urgency: .none, resetsAt: nil,
+            windowLength: 7 * 86_400, elapsedOnly: false)
+    }
+
+    @Test("workspace keys keep the user's order among themselves; other keys stay in key order")
+    func workspaceKeysFollowUserOrder() {
+        // Key order would put "…aaa" before "…zzz"; the user put zzz first.
+        let positions = ["opencode-go:zzz": 0, "opencode-go:aaa": 1]
+        let keys = AggregateBurndownPresentation.storedKeys(
+            ["claude", "opencode-go:aaa", "opencode-go:zzz", "openai"].map(reading),
+            position: { positions[$0] })
+        #expect(keys == ["claude", "openai", "opencode-go:zzz", "opencode-go:aaa"])
+    }
 }

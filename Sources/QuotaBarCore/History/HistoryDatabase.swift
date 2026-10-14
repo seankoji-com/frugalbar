@@ -236,6 +236,18 @@ public final class HistoryDatabase: @unchecked Sendable {
         }
     }
 
+    /// Steps a row loop: true for a row, false once the statement is done.
+    ///
+    /// Anything else throws. Ending a loop on any result but `SQLITE_ROW`
+    /// turned a read that failed part-way into a short or empty result that
+    /// the screens then reported as "no readings" or "no events".
+    public func step(_ stmt: OpaquePointer) throws -> Bool {
+        let status = sqlite3_step(stmt)
+        if status == SQLITE_ROW { return true }
+        if status == SQLITE_DONE { return false }
+        throw HistoryDatabaseError.stepFailed(code: status, message: lastErrorMessage)
+    }
+
     public func finalize(_ stmt: OpaquePointer) {
         sqlite3_finalize(stmt)
     }

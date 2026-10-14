@@ -31,7 +31,7 @@ Usage reset is routine (every five hours for some vendors), so it never takes th
 
 ## Where the evidence comes from
 
-All outbound sources are switched by one toggle, **Preferences → General → AI events → Track resets, outages and new models** (on by default), and are read only for vendors you have configured.
+All outbound sources are switched by one toggle, **Preferences → History & Data → AI events → Track resets, outages and new models** (on by default), and are read only for vendors you have configured.
 
 ### Status pages
 
@@ -95,8 +95,8 @@ Banners are posted with `osascript` `display notification`. FrugalBar ships as a
 
 | Rule | Behaviour |
 |---|---|
-| Per-kind toggles | **Preferences → General → AI events → Notify about.** Every kind above except Usage reset, all on by default. The preference stores the kinds you switched *off*, so a kind added later notifies by default; a choice saved by an older version is honoured for the kinds it offered. |
-| Usage reset | Per vendor under **Preferences → General → Reset alerts**, off by default. |
+| Per-kind toggles | **Preferences → Notifications → AI events.** Every kind above except Usage reset, all on by default. The preference stores the kinds you switched *off*, so a kind added later notifies by default; a choice saved by an older version is honoured for the kinds it offered. |
+| Usage reset | Per vendor under **Preferences → Notifications → Reset alerts**, off by default. |
 | Age cutoff | An event whose `occurredAt` is older than **48 hours** is recorded but never announced. This is what keeps the first poll's backfill of months of resets and outages silent. |
 | Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"); outage banners lead with the vendor, since incident names often don't say it. Several events of one kind in one poll become "3 new models" with the titles in the body. |
 

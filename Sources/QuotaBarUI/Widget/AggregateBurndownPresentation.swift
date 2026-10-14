@@ -293,6 +293,16 @@ public enum AggregateBurndownPresentation {
 
     /// The vendors the filters select. Empty filter means every vendor with a
     /// consumable window.
+    /// Names the selected vendors whose history could not be read, for the
+    /// Chart layout. Nil when every read succeeded. The average is withheld
+    /// meanwhile: a mean of the windows that happened to read is not the
+    /// mean of the windows the user selected.
+    public static func unreadNote(_ unread: [VendorIdentifier]) -> String? {
+        guard !unread.isEmpty else { return nil }
+        let names = unread.map(\.displayName).joined(separator: ", ")
+        return "Could not read history for \(names), so \(unread.count == 1 ? "it is" : "they are") missing and no average is drawn."
+    }
+
     public static func selectedVendors(snapshots: [QuotaSnapshot], filters: WidgetFilters) -> [VendorIdentifier] {
         let available = availableVendors(snapshots: snapshots)
         guard !filters.vendors.isEmpty else { return available }
@@ -352,15 +362,17 @@ public enum AggregateBurndownPresentation {
     /// `HistoryPresentation.segments`, so a reset never connects to the
     /// previous window's line.
     ///
-    /// `instanceName` names a stored key whose snapshot is gone. It defaults to
-    /// the workspace list; a test injects a literal table so the widget's
-    /// labels never depend on the shared preference file.
+    /// `instanceName` names a stored key whose snapshot is gone, and
+    /// `instancePosition` places it in the user's workspace order. Both
+    /// default to the workspace list; a test injects literal tables so the
+    /// widget never depends on the shared preference file.
     public static func series(
         readings: [QuotaHistoryStore.ReadingRecord],
         snapshots: [QuotaSnapshot],
         filters: WidgetFilters,
         now: Date,
-        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:)
+        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:),
+        instancePosition: (String) -> Int? = { OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0) }
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let inRange = HistoryPresentation.consumptionReadings(readings).filter { record in
@@ -370,7 +382,7 @@ public enum AggregateBurndownPresentation {
         // One reference per instance to draw. A filtered vendor with no current
         // snapshot still charts its own history under the vendor key, as before.
         if snapshots.isEmpty && filters.vendors.isEmpty {
-            return storedKeys(inRange).compactMap { key in
+            return storedKeys(inRange, position: instancePosition).compactMap { key in
                 makeSeries(
                     instanceID: key,
                     vendorId: OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key),
@@ -405,10 +417,25 @@ public enum AggregateBurndownPresentation {
         }
     }
 
-    /// The stored reading keys present, sorted, for the "nothing polled yet"
-    /// case where a series can only be built from history.
-    private static func storedKeys(_ readings: [QuotaHistoryStore.ReadingRecord]) -> [String] {
-        Set(readings.map(\.vendor)).sorted()
+    /// The stored reading keys present, for the "nothing polled yet" case
+    /// where a series can only be built from history. Sorted by key, except
+    /// that keys the workspace list places keep the user's workspace order
+    /// among themselves: a workspace key is a UUID, so key order is no order
+    /// the user chose.
+    static func storedKeys(
+        _ readings: [QuotaHistoryStore.ReadingRecord],
+        position: (String) -> Int?
+    ) -> [String] {
+        let keys = Set(readings.map(\.vendor)).sorted()
+        let placed = keys.filter { position($0) != nil }
+            .sorted { (position($0) ?? 0) < (position($1) ?? 0) }
+        var queue = placed[...]
+        // Placed keys fill the slots placed keys held in key order, so they
+        // move only among themselves.
+        return keys.map { key in
+            guard position(key) != nil else { return key }
+            return queue.popFirst() ?? key
+        }
     }
 
     /// One instance's series from its own readings. `vendorId` nil means the
@@ -430,8 +457,7 @@ public enum AggregateBurndownPresentation {
             filters: filters
         ) else { return nil }
 
-        let windowReadings = instanceReadings.filter { $0.barLabel == label }
-        let segments = HistoryPresentation.segments(from: windowReadings).map { segment in
+        let segments = HistoryPresentation.segments(from: instanceReadings, barLabel: label).map { segment in
             SeriesSegment(points: segment.points.map { point in
                 let used = min(max(point.fraction, 0), 1)
                 return SeriesPoint(
