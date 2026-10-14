@@ -40,7 +40,13 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
         self.figure = Self.figure(for: entry.metric)
         self.detail = entry.detail
         self.source = entry.source
-        var parts = [title, Self.spoken(for: entry.metric)]
+        // `MetricRowPresentation.spoken` is the one spoken form: it words a
+        // credit count as a count and money through `MoneyText.format`, the rule
+        // every row now prints with, so this card's speech cannot drift from the
+        // row it was read from. This type used to word money itself, because the
+        // shared form consulted the process locale there and this card did not —
+        // a divergence `MetricRowPresentation.currency` no longer has.
+        var parts = [title, MetricRowPresentation.spoken(for: entry.metric)]
         if let detail = entry.detail { parts.append(detail) }
         self.spoken = parts.joined(separator: ", ")
     }
@@ -60,27 +66,6 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
             "\(Int((used * 100).rounded()))%"
         case .subscription(let tierName, _):
             tierName ?? ""
-        }
-    }
-
-    /// The figure as speech. `MetricRowPresentation.spoken` already words each
-    /// unit correctly, so a credit count is not read as money and vice versa —
-    /// except money, which it renders through the *process* locale ("USD
-    /// 179.50") and so contradicts either the card's own figure or the vendor
-    /// note printed beneath it. Money is worded here with `MoneyText`, the same
-    /// rule the figure itself uses.
-    static func spoken(for metric: MetricType) -> String {
-        switch metric {
-        case .currency(let balance, let limit, let spent, let code):
-            if let limit {
-                "\(MoneyText.format(balance, code: code)) of \(MoneyText.format(limit, code: code)) remaining"
-            } else if let spent {
-                "\(MoneyText.format(spent, code: code)) spent"
-            } else {
-                "\(MoneyText.format(balance, code: code)) balance"
-            }
-        case .credits, .count, .percentage, .subscription:
-            MetricRowPresentation.spoken(for: metric)
         }
     }
 }

@@ -66,12 +66,14 @@ struct APICreditEntryPresentationTests {
                                          limit: Decimal(string: "200")!,
                                          spent: nil, currencyCode: "USD")
         let p = APICreditEntryPresentation(entry: entry(metric, detail: "$200.00 monthly limit"))
-        // The value, in the vendor's own currency, through the one deterministic
-        // money formatter the provider rows also print with (`MoneyText`) — so
-        // the credit card and a provider row can never disagree on how a dollar
-        // figure reads. `MetricRowPresentation.currency` stays locale-based and
-        // is deliberately *not* what this is asserted against; the spoken form
-        // below is worded through `MoneyText` for that same reason.
+        // The value, in the vendor's own currency, worded by `MoneyText.format`
+        // — the one deterministic money rule this row and a provider row both
+        // print with. `MetricRowPresentation.currency` delegates to it as well,
+        // because a locale-based formatter rendered a USD figure as
+        // "USD 179.50" on an en_AU machine while the same row's subtitle, a few
+        // points to the left, printed "$179.50". There is one rule and both
+        // surfaces read it, which is why this asserts against `MoneyText` itself
+        // rather than a second spelling of it.
         #expect(p.figure == "$179.50")
         #expect(p.figure == MoneyText.format(Decimal(string: "179.50")!, code: "USD"))
         #expect(p.figure.contains("179.50"))
@@ -106,8 +108,11 @@ struct APICreditEntryPresentationTests {
     func moneyWithNoLimitIsWordedAsABalance() {
         let metric = MetricType.currency(balance: Decimal(string: "12.34")!,
                                          limit: nil, spent: nil, currencyCode: "USD")
-        let wording = APICreditEntryPresentation.spoken(for: metric)
+        let wording = MetricRowPresentation.spoken(for: metric)
         #expect(wording == "$12.34 balance")
+
+        // Worded by the shared rule, not by a copy of it: the card's spoken form
+        // is `MetricRowPresentation.spoken`'s, so the two cannot drift.
 
         // The entry this path is reachable from is Anthropic's promo credit,
         // which always carries a note ("Expires …" or "Cloud-session credit"),
