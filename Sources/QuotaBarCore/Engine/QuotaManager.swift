@@ -180,6 +180,10 @@ public actor QuotaManager {
     ///
     /// A hidden vendor is dropped here as well as purged at fetch time, so
     /// hiding one takes effect on the very next read, before any poll.
+    ///
+    /// A custom order keeps the user's relative order and moves only the
+    /// exhausted: a vendor with nothing left drops to the bottom as a block.
+    /// See the comment at the custom branch below.
     static func arrange(
         _ snapshots: [QuotaSnapshot],
         preferences prefs: ProviderDisplayPreferences,
@@ -206,8 +210,24 @@ public actor QuotaManager {
         }
         let groups = prefs.visibleOrder.compactMap { byVendor[$0] }
 
-        // A custom order is the user's, verbatim: no band or deadline moves a row.
-        if prefs.ordering == .custom { return groups.flatMap { $0 } }
+        // A custom order is the user's, verbatim — with one exception. A
+        // provider whose best instance has nothing left is not somewhere to
+        // send work, however high the user put it, so the exhausted move to the
+        // bottom as a block: the same "best instance" rule the automatic sort
+        // uses below, applied to the user's order instead of a deadline.
+        //
+        // Deliberately a stable split rather than a re-sort: everything live
+        // keeps the user's relative order, and the workspaces of one vendor
+        // stay together, placed by whichever of them is most usable. Splitting
+        // a block would scatter two OpenCode Go workspaces to opposite ends of
+        // the list.
+        if prefs.ordering == .custom {
+            func isExhausted(_ group: [QuotaSnapshot]) -> Bool {
+                group.map(Self.sortBand).min() == 2
+            }
+            return groups.filter { !isExhausted($0) }.flatMap { $0 }
+                + groups.filter(isExhausted).flatMap { $0 }
+        }
 
         // A group's place is its best instance's: the lowest band, and within
         // band 0 the soonest reset. For a single-instance vendor that is

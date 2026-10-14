@@ -120,9 +120,13 @@ struct ProviderVisibilityTests {
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .grok])
     }
 
-    @Test("a custom order can put a spent vendor first")
-    func customOrderIgnoresExhaustion() async {
+    @Test("a spent vendor drops to the bottom of a custom order")
+    func customOrderMovesExhaustionLast() async {
         let counter = Counter()
+        // The user put Claude first, but it has nothing left to spend. A spent
+        // vendor is not somewhere to send work, so it drops below the live one
+        // rather than keeping the top slot a `custom` order used to reserve for
+        // it vacuously.
         let providers = [
             Provider(vendorId: .claude, counter: counter, used: 1.0),
             Provider(vendorId: .grok, counter: counter),
@@ -130,9 +134,26 @@ struct ProviderVisibilityTests {
         let box = PreferenceBox(ProviderDisplayPreferences(ordering: .custom, order: [.claude, .grok]))
         let m = manager(providers, box: box)
         _ = await m.forceRefresh()
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .grok])
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .claude])
         box.value.ordering = .automatic
         #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .claude])
+    }
+
+    @Test("a custom order still lists the live vendors in the user's order")
+    func customOrderKeepsLiveOrder() async {
+        let counter = Counter()
+        // Both vendors are live; the spent one below must not drag them out of
+        // the arrangement the user gave.
+        let providers = [
+            Provider(vendorId: .claude, counter: counter, used: 1.0),
+            Provider(vendorId: .kiro, counter: counter),
+            Provider(vendorId: .grok, counter: counter),
+        ]
+        let box = PreferenceBox(ProviderDisplayPreferences(
+            ordering: .custom, order: [.claude, .grok, .kiro]))
+        let m = manager(providers, box: box)
+        _ = await m.forceRefresh()
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .kiro, .claude])
     }
 
     // MARK: Tie-breaks follow the user's list
