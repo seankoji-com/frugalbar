@@ -59,8 +59,18 @@ public enum MenuBarPresentation {
                 ?? snapshots.first(where: { $0.category == .aiSubscriptions && $0.status.confidence == .measured })?.vendorId
         }
 
-        guard let vendorId = targetVendor,
-              let snapshot = snapshots.first(where: { $0.vendorId == vendorId }) else {
+        // The advised *instance* wins over the vendor: for a vendor with more
+        // than one subscription under one id (OpenCode Go workspaces), the
+        // first `vendorId` match is the wrong workspace — that is how advice
+        // naming the untouched Gamma drew the menu bar from Alpha's spent
+        // window. Falling back to the vendor match keeps a hand-built advice,
+        // or one recorded before the instance id existed, working.
+        let resolved = advice.instanceId.flatMap { id in
+            snapshots.first { $0.id == id }
+        } ?? targetVendor.flatMap { vendorId in
+            snapshots.first { $0.vendorId == vendorId }
+        }
+        guard let vendorId = resolved?.vendorId, let snapshot = resolved else {
             return RecommendationDetails(
                 vendorId: nil,
                 lowestRemainingFraction: nil,
@@ -72,8 +82,14 @@ public enum MenuBarPresentation {
         }
 
 
-        // Find the bar with the lowest remaining capacity (highest primaryFraction)
+        // Find the bar with the lowest remaining capacity (highest primaryFraction).
+        // Equal shares are broken by the *earliest* reset: three untouched
+        // windows all read "100% remaining", and the soonest reset is the one
+        // the figure is worth next to. Without the tie-break the longest window
+        // (drawn first) won, so an untouched account read "100% 20d" while its
+        // five-hour bucket refilled in five hours.
         var lowestRemaining = 1.0
+        var matchingReset: Date? = nil
         var matchingResetText: String? = nil
         var foundBar = false
 
@@ -83,8 +99,17 @@ public enum MenuBarPresentation {
             // coercing the missing reading to 0% or 100% remaining.
             guard let used = bar.primaryFraction else { continue }
             let remaining = max(0.0, min(1.0, 1.0 - used))
-            if !foundBar || remaining < lowestRemaining {
+            let isLower = !foundBar || remaining < lowestRemaining - Self.fractionTie
+            let isTie = foundBar && abs(remaining - lowestRemaining) <= Self.fractionTie
+            let earlierReset: Bool
+            if let candidate = bar.resetsAt {
+                earlierReset = matchingReset.map { candidate < $0 } ?? true
+            } else {
+                earlierReset = false
+            }
+            if isLower || (isTie && earlierReset) {
                 lowestRemaining = remaining
+                matchingReset = bar.resetsAt ?? (isTie ? matchingReset : nil)
                 matchingResetText = bar.resetText
                 foundBar = true
             }
@@ -132,6 +157,12 @@ public enum MenuBarPresentation {
             recommendedTint: recommendedTint
         )
     }
+
+    /// Two remaining shares within this of each other are a tie. A vendor
+    /// reports untouched windows as 0.0 used, which lands on exactly 1.0
+    /// remaining, but a percentage that arrived as 99.999 carries float
+    /// residue — the tie-break must not be defeated by the last bit.
+    private static let fractionTie = 1e-9
 
     public static func formatTimeLeft(_ text: String?) -> String? {
         guard let text, !text.isEmpty else { return nil }
