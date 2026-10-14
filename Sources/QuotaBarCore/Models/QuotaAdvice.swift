@@ -9,6 +9,16 @@ public struct QuotaAdvice: Sendable, Equatable {
     public let iconName: String
     public let iconColorHex: String
     public let vendorId: VendorIdentifier?
+    /// The provider *instance* the advice names, when it names one.
+    ///
+    /// A vendor can serve several independent subscriptions (`QuotaSnapshot.id`
+    /// is the instance key). Naming only the vendor made the consumer resolve
+    /// "the first snapshot with that vendor id" — for OpenCode Go that is the
+    /// first workspace, so advice about the untouched Gamma drew the menu bar
+    /// from Alpha's spent window. Optional, and defaulted, so a hand-built
+    /// advice (or a caller that only knows the vendor) still compiles and falls
+    /// back to the vendor match.
+    public let instanceId: String?
 
     public init(
         headline: String,
@@ -17,7 +27,8 @@ public struct QuotaAdvice: Sendable, Equatable {
         urgency: Urgency = .none,
         iconName: String = "sparkles",
         iconColorHex: String = "#53e16f",
-        vendorId: VendorIdentifier? = nil
+        vendorId: VendorIdentifier? = nil,
+        instanceId: String? = nil
     ) {
         self.headline = headline
         self.message = message
@@ -26,6 +37,7 @@ public struct QuotaAdvice: Sendable, Equatable {
         self.iconName = iconName
         self.iconColorHex = iconColorHex
         self.vendorId = vendorId
+        self.instanceId = instanceId
     }
 
     // MARK: - Candidates
@@ -38,6 +50,10 @@ public struct QuotaAdvice: Sendable, Equatable {
     /// `?? 0.0` default let an *unreadable* provider stand in as an empty one.
     private struct Candidate {
         let vendorId: VendorIdentifier
+        /// The instance this candidate is: `QuotaSnapshot.id`. Carried so the
+        /// consumer resolves the same row the advice is about when a vendor
+        /// serves several subscriptions under one id.
+        let instanceId: String
         let name: String
         /// 0…1 consumed in the fullest window — the binding constraint.
         let used: Double
@@ -83,6 +99,7 @@ public struct QuotaAdvice: Sendable, Equatable {
             guard let used = worstBar?.primaryFraction ?? snapshot.consumptionFraction else { return nil }
             return Candidate(
                 vendorId: snapshot.vendorId,
+                instanceId: snapshot.id,
                 name: snapshot.rowTitle,
                 used: used,
                 bar: worstBar,
@@ -151,7 +168,8 @@ public struct QuotaAdvice: Sendable, Equatable {
                     urgency: .critical,
                     iconName: "arrow.triangle.swap",
                     iconColorHex: "#9C52FD",
-                    vendorId: best.vendorId
+                    vendorId: best.vendorId,
+                    instanceId: best.instanceId
                 )
             }
 
@@ -172,7 +190,8 @@ public struct QuotaAdvice: Sendable, Equatable {
                     urgency: .warning,
                     iconName: "hourglass.bottomhalf.filled",
                     iconColorHex: "#ffb874",
-                    vendorId: expiring.vendorId
+                    vendorId: expiring.vendorId,
+                    instanceId: expiring.instanceId
                 )
             }
 
@@ -189,7 +208,8 @@ public struct QuotaAdvice: Sendable, Equatable {
                 urgency: .critical,
                 iconName: "exclamationmark.triangle.fill",
                 iconColorHex: "#ffb4ab",
-                vendorId: .openrouter
+                vendorId: .openrouter,
+                instanceId: openrouterSnap?.id
             )
         }
 
@@ -216,7 +236,8 @@ public struct QuotaAdvice: Sendable, Equatable {
                 urgency: isGitHubCritical ? .critical : .warning,
                 iconName: "network.badge.shield.half.filled",
                 iconColorHex: isGitHubCritical ? "#ffb4ab" : "#ffb874",
-                vendorId: .githubRest
+                vendorId: .githubRest,
+                instanceId: githubRestSnap?.id
             )
         }
 
@@ -233,7 +254,8 @@ public struct QuotaAdvice: Sendable, Equatable {
                 urgency: .none,
                 iconName: "flame.fill",
                 iconColorHex: "#adc6ff",
-                vendorId: best.vendorId
+                vendorId: best.vendorId,
+                instanceId: best.instanceId
             )
         }
 
