@@ -198,8 +198,8 @@ struct SnapshotOrderingTests {
     func customOrderPutsExhaustedLast() async {
         // The user's own order, with the spent one in the middle. Its place is
         // a statement about where they want to look, not about where work
-        // should go — a vendor with every window spent is not somewhere to
-        // send work however high it sits in the list.
+        // should go — a vendor with a spent or blocked window is not somewhere
+        // to send work, however high it sits in the list.
         let preferences = ProviderDisplayPreferences(
             ordering: .custom,
             order: [.claude, .copilot, .grok, .openrouter]
