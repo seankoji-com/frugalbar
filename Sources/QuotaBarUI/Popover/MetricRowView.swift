@@ -302,7 +302,7 @@ struct MetricRowView: View {
 
                 Text(p.valueLabel)
                     .font(Theme.Typography.chip)
-                    .foregroundStyle(p.isMeasured ? (p.fraction != nil ? urgencyColor : Theme.secondary) : Theme.outline)
+                    .foregroundStyle(p.isMeasured ? urgencyColor : Theme.outline)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Theme.surfaceContainerHighest.opacity(0.50))

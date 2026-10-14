@@ -67,10 +67,15 @@ public struct MetricRowPresentation: Equatable, Sendable {
             return
         }
 
-        self.valueLabel = Self.value(for: snapshot.metric)
+        // A subscription can publish an account state without a plan or a
+        // quota figure, such as Muse's "Payment required". Keep that state
+        // visible and spoken rather than drawing an empty status pill.
+        let metricValue = Self.value(for: snapshot.metric)
+        self.valueLabel = metricValue.isEmpty ? (snapshot.badgeText ?? metricValue) : metricValue
         self.resetLabel = ResetCountdownBadge.format(snapshot.resetsAt, now: now)
 
-        let spokenMetric = Self.spoken(for: snapshot.metric)
+        let metricSpeech = Self.spoken(for: snapshot.metric)
+        let spokenMetric = metricSpeech.isEmpty ? (snapshot.badgeText ?? metricSpeech) : metricSpeech
         var parts = [snapshot.displayName, spokenMetric].filter { !$0.isEmpty }
         if snapshot.isFullyBlockedWithoutReading {
             // The bars' own language. A screen reader must hear "blocked", not
