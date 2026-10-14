@@ -36,7 +36,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case .critical:   ("Critically low", "exclamationmark.octagon.fill")
         case .exhausted:  ("Exhausted", "xmark.octagon.fill")
         case .blocked:    ("Blocked by the vendor", BlockedGlyph.symbolName)
-        case .unavailable, .lastPollFailed: ("", "minus.circle")
+        case .lastPollFailed: ("The last poll could not be read", "exclamationmark.triangle.fill")
+        case .unavailable: ("", "minus.circle")
         }
     }
 
@@ -181,13 +182,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // No hero figure, reset or pace: each would read as the provider's
         // state now, and the newest poll says nothing about that.
         if let failedPollAt {
-            let headline = "The last poll could not be read"
+            let state = State.lastPollFailed(at: failedPollAt)
+            let (headline, symbol) = Self.headlineAndSymbol(for: state)
             let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading. "
                 + "The figures below are from \(clockText(snapshot.lastUpdated, now: now)), before it, "
                 + "and may be out of date."
             return Summary(
-                state: .lastPollFailed(at: failedPollAt), headline: headline,
-                symbol: "exclamationmark.triangle.fill",
+                state: state, headline: headline, symbol: symbol,
                 focusLabel: nil, percentUsed: nil, figure: nil, resetText: nil, paceVerdict: nil,
                 remedy: note,
                 accessibilityLabel: "\(snapshot.displayName), \(headline), \(note)")

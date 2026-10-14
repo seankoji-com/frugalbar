@@ -196,27 +196,49 @@ public struct VendorAvatarView: View {
         }
     }
 
+    /// What the avatar draws over the logo.
+    enum Overlay: Equatable {
+        /// The logo alone.
+        case none
+        /// The logo faded, with a ✗ over it.
+        case struckThrough
+        /// A `StatusIndicatorDot` in the corner.
+        case badge(symbol: String, tint: Color)
+
+        static let strikeSymbol = "xmark"
+        static let strikeTint = Theme.error
+    }
+
+    /// The ✗ already says everything the dot would, louder. Beyond that, the
+    /// badge only appears for a status that is *wrong* — a healthy avatar gets
+    /// no redundant checkmark. Settings' legend reads this, so it cannot
+    /// describe a mark the avatar does not draw.
+    nonisolated static func overlay(status: ProviderStatus, isExhausted: Bool) -> Overlay {
+        if isExhausted { return .struckThrough }
+        guard StatusIndicatorDot.shouldShowIndicator(for: status) else { return .none }
+        return .badge(symbol: StatusIndicatorDot.symbol(for: status),
+                      tint: StatusIndicatorDot.tint(for: status))
+    }
+
     public var body: some View {
+        let overlay = Self.overlay(status: status, isExhausted: isExhausted)
         ZStack(alignment: .topTrailing) {
             ZStack {
                 // Faded rather than hidden: enough to keep the vendor
                 // recognisable, dim enough that the ✗ is what registers first.
-                mark.opacity(isExhausted ? 0.40 : 1)
+                mark.opacity(overlay == .struckThrough ? 0.40 : 1)
 
-                if isExhausted {
-                    Image(systemName: "xmark")
+                if overlay == .struckThrough {
+                    Image(systemName: Overlay.strikeSymbol)
                         .font(.system(size: size * 0.78, weight: .heavy))
-                        .foregroundStyle(Theme.error)
+                        .foregroundStyle(Overlay.strikeTint)
                 }
             }
             .frame(width: size, height: size)
 
-            // The ✗ already says everything the dot would, louder. Beyond
-            // that, the badge only appears for a status that is *wrong* — a
-            // healthy avatar gets no redundant checkmark. Size it from the
-            // avatar and tuck it toward the inside so it never hangs off the
-            // corner.
-            if !isExhausted && StatusIndicatorDot.shouldShowIndicator(for: status) {
+            // Size the badge from the avatar and tuck it toward the inside so
+            // it never hangs off the corner.
+            if case .badge = overlay {
                 StatusIndicatorDot(status: status, size: size)
                     .offset(x: -size * 0.08, y: size * 0.08)
             }

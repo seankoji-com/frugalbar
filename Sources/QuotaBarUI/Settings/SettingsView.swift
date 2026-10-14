@@ -35,7 +35,7 @@ public struct SettingsView: View {
             case .providers: "Connection state, visibility and order for every provider."
             case .credentials: "Where each provider's key comes from, and overrides."
             case .workspaces: "Each OpenCode Go subscription, its key, and its place in the list."
-            case .display: "The desktop widget, and how to read the popover."
+            case .display: "The desktop widget, and how to read the popover and usage details."
             case .notifications: "What FrugalBar tells you about, and when."
             case .cycles: "Renewal dates for vendors that publish none."
             case .data: "What FrugalBar records, and where it is kept."
@@ -920,9 +920,10 @@ public struct SettingsView: View {
                     }
                 }
                 Text("""
-                     A small panel charting every subscription's usage \
-                     window over time, with an average of the selected \
-                     windows' readings and their current headroom. Open it \
+                     A small panel in one of three layouts: the tokens \
+                     recorded on this Mac, a tile per provider, or a chart of \
+                     the windows you select with each one's headroom, and \
+                     their average once two or more are selected. Open it \
                      from the gear menu. It is a window FrugalBar owns, not a \
                      WidgetKit widget — those need an app bundle this build \
                      does not have.
@@ -934,15 +935,31 @@ public struct SettingsView: View {
             }
 
             Section {
-                legendRows(Self.statusLegend)
+                legendRows(Self.popoverLegend)
             } header: {
-                Text("Provider status")
+                Text("Provider logos in the popover")
             } footer: {
                 Text("""
-                     The shape beside each provider. Each provider sets its own \
-                     levels: most count how full their fullest window is, some \
-                     how much credit is left, and the same reading can be \
-                     healthy for one and running low for another.
+                     Only a provider that needs attention gets a mark. Each \
+                     provider sets its own levels: most count how full their \
+                     fullest window is, some how much credit is left, so the \
+                     same reading can be healthy for one and running low for \
+                     another.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                legendRows(Self.detailLegend)
+            } header: {
+                Text("Usage details")
+            } footer: {
+                Text("""
+                     What the details opened from a provider's row lead with. \
+                     Unlike the popover's logo, they name Healthy with a \
+                     checkmark, and call a provider blocked whenever the \
+                     vendor blocks a window, whatever its level.
                      """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -956,8 +973,11 @@ public struct SettingsView: View {
                 Text("""
                      A bar's colour follows pace, blocking and exhaustion, not \
                      the provider's levels, so a bar can stay green while its \
-                     provider runs low. Every state has a shape as well as a \
-                     colour.
+                     provider runs low. Colour is not the only sign: a bar's \
+                     share used is written beside or under it, or in its \
+                     tooltip; ahead of pace means the fill has passed the \
+                     tick; and a blocked window carries a sign or a dashed \
+                     outline.
                      """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -990,11 +1010,44 @@ public struct SettingsView: View {
         let tint: Color
     }
 
-    /// The states the popover row and the inspector lead with, in their own
-    /// words, shapes and colours. No threshold is quoted: providers set their
-    /// own (a share of a window at different levels, or an absolute credit
-    /// balance), so any single figure here would be wrong for some of them.
-    static let statusLegend: [LegendEntry] = {
+    /// The mark on each provider's logo in the popover, each built from
+    /// `VendorAvatarView.overlay(status:isExhausted:)` for a provider in that
+    /// state, so the legend cannot show a mark the avatar does not draw. No
+    /// threshold is quoted: providers set their own (a share of a window at
+    /// different levels, or an absolute credit balance), so any single figure
+    /// here would be wrong for some of them.
+    static let popoverLegend: [LegendEntry] = {
+        func entry(_ status: ProviderStatus, isExhausted: Bool = false, title: String,
+                   _ detail: String) -> LegendEntry {
+            switch VendorAvatarView.overlay(status: status, isExhausted: isExhausted) {
+            case .none:
+                return .init(symbol: noMarkSymbol, title: title, detail: detail, tint: Theme.outline)
+            case .struckThrough:
+                return .init(symbol: VendorAvatarView.Overlay.strikeSymbol, title: title, detail: detail,
+                             tint: VendorAvatarView.Overlay.strikeTint)
+            case .badge(let symbol, let tint):
+                return .init(symbol: symbol, title: title, detail: detail, tint: tint)
+            }
+        }
+        return [
+            entry(.healthy, title: "No mark",
+                  "Read, and short of the provider's own warning level: the logo alone."),
+            entry(.warning, title: "Running low", "Past the provider's own warning level."),
+            entry(.critical, title: "Critically low",
+                  "Past the provider's own critical level. Some providers also go critical when the vendor blocks a window; its bar says which."),
+            entry(.healthy, isExhausted: true, title: "Logo struck through",
+                  "A window is used up, or the vendor blocked every window without a figure. It replaces any other mark."),
+            entry(.unavailable(.notConfigured), title: "Could not be read",
+                  "No figure is shown; the row names the reason instead."),
+        ]
+    }()
+
+    /// Stands in for a logo with nothing drawn over it.
+    nonisolated static let noMarkSymbol = "app"
+
+    /// The states a provider's usage details lead with, in the inspector's
+    /// own words, shapes and colours.
+    static let detailLegend: [LegendEntry] = {
         func entry(_ state: MetricDetailPresentation.State, title: String? = nil,
                    _ detail: String) -> LegendEntry {
             let label = MetricDetailPresentation.headlineAndSymbol(for: state)
@@ -1007,34 +1060,42 @@ public struct SettingsView: View {
             entry(.critical, "Past the provider's own critical level."),
             entry(.exhausted, "A window is used up."),
             entry(.blocked, "The vendor says a window cannot be used right now."),
+            entry(.lastPollFailed(at: .distantPast), title: "Last poll could not be read",
+                  "The figures shown are from the reading before it, and may be out of date."),
             entry(.unavailable(.notConfigured), title: "Could not be read",
                   "No figure is shown; the reason and what to do are."),
         ]
     }()
 
+    /// A bar's fill, which carries no shape of its own.
+    nonisolated static let fillSymbol = "capsule.fill"
+    /// The even-pace tick, an upright capsule across the bar.
+    nonisolated static let tickSymbol = "capsule.portrait.fill"
+
     /// One window bar per state, its swatch taken from
     /// `DualBarProgressView.stateColor` for a window in that state, so the
-    /// legend cannot show a colour the bar would not draw.
+    /// legend cannot show a colour the bar would not draw. Its only glyphs
+    /// are ones the bar's cell draws.
     static let windowLegend: [LegendEntry] = {
         func swatch(_ metrics: DualBarMetrics) -> Color { DualBarProgressView.stateColor(for: metrics) }
         return [
-            .init(symbol: "circle.fill", title: "Not ahead of pace",
+            .init(symbol: fillSymbol, title: "Not ahead of pace",
                   detail: "Not spent, and not meaningfully ahead of an even pace, or no pace was published.",
                   tint: swatch(LegendSample.onPace)),
-            .init(symbol: "circle.fill", title: "Ahead of pace",
+            .init(symbol: fillSymbol, title: "Ahead of pace",
                   detail: "Used meaningfully more than an even spread would have by now.",
                   tint: swatch(LegendSample.aheadOfPace)),
-            .init(symbol: "xmark.octagon.fill", title: "Spent",
-                  detail: "Nothing left in the window until it resets.",
+            .init(symbol: fillSymbol, title: "Spent",
+                  detail: "A full bar: nothing left in the window until it resets.",
                   tint: swatch(LegendSample.spent)),
             .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
-                  detail: "In the vendor's own colour when it gives one, whatever the percentage says.",
+                  detail: "In the vendor's own colour when it gives one, whatever the percentage says, with this sign beside its figure, or a dashed outline in place of a fill when there is no figure.",
                   tint: swatch(LegendSample.blocked)),
             .init(symbol: "minus", title: "Not published",
                   detail: "A faint dash, never an empty bar, which would read as nothing used.",
                   tint: Theme.outline),
-            .init(symbol: "arrowtriangle.down.fill", title: "Even-pace tick",
-                  detail: "Where usage would be if spread evenly over the window. Drawn only when the vendor publishes the window's length and reset.",
+            .init(symbol: tickSymbol, title: "Even-pace tick",
+                  detail: "A short white mark across the bar, where usage would be if spread evenly over the window. Drawn only when the vendor publishes the window's length and reset, and never on a spent window.",
                   tint: .secondary),
         ]
     }()

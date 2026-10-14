@@ -490,10 +490,10 @@ struct UXRenderTests {
                 SettingsView(store: store, initialPane: pane, readsCredentials: false),
                 name: "settings-\(pane.rawValue)", directory: directory)
         }
-        // The whole Display pane, so the status and window-bar legends are
-        // both on one image.
+        // The whole Display pane, so the popover, usage-details and
+        // window-bar legends are all on one image.
         try await save(
-            SettingsView(store: store, initialPane: .display, readsCredentials: false, height: 1180),
+            SettingsView(store: store, initialPane: .display, readsCredentials: false, height: 1900),
             name: "settings-display-full", directory: directory)
         _ = snapshots
     }
