@@ -64,10 +64,22 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
     }
 
     /// The figure as speech. `MetricRowPresentation.spoken` already words each
-    /// unit correctly, so a credit count is not read as money and vice versa.
+    /// unit correctly, so a credit count is not read as money and vice versa —
+    /// except money, which it renders through the *process* locale ("USD
+    /// 179.50") and so contradicts either the card's own figure or the vendor
+    /// note printed beneath it. Money is worded here with `MoneyText`, the same
+    /// rule the figure itself uses.
     static func spoken(for metric: MetricType) -> String {
         switch metric {
-        case .credits, .currency, .count, .percentage, .subscription:
+        case .currency(let balance, let limit, let spent, let code):
+            if let limit {
+                "\(MoneyText.format(balance, code: code)) of \(MoneyText.format(limit, code: code)) remaining"
+            } else if let spent {
+                "\(MoneyText.format(spent, code: code)) spent"
+            } else {
+                "\(MoneyText.format(balance, code: code)) balance"
+            }
+        case .credits, .count, .percentage, .subscription:
             MetricRowPresentation.spoken(for: metric)
         }
     }

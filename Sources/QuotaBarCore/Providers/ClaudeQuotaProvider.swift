@@ -183,19 +183,28 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     /// Two pools can arrive at once, and they are different money: the monthly
     /// extra-usage allowance (`spend` or the older `extra_usage`) and the promo
     /// / cloud-session credit (`iguana_necktie`). Each is drawn separately
-    /// because each has its own limit and its own expiry rule.
+    /// because each has its own limit and its own expiry rule, and each entry
+    /// names the block it was actually read from rather than assuming the newer
+    /// one won.
     ///
-    /// A pool whose payload carried no **limit** yields no entry. Its only
-    /// figure is then what was *used*, and `MetricType.currency` has one place
-    /// to put a number: a balance. Printing a used figure under a balance label
-    /// is the wrong-label defect this codebase already shipped once, so an
-    /// uncapped pool is left unsaid rather than mislabelled. Nothing is
-    /// defaulted: no 0, no inferred cap.
+    /// An entry needs a published **limit**: it is the only figure that makes a
+    /// balance a balance rather than a spend figure wearing a balance label,
+    /// which is the wrong-label defect this codebase already shipped once. So a
+    /// pool with no limit yields no entry — nothing is inferred from `used`
+    /// alone. A pool that published a limit and has spent past it is a
+    /// different case, and a measured one: its limit and used figures are both
+    /// present, so its remaining headroom is a real zero and the entry says so.
+    /// The account with none of its allowance left is the one most worth
+    /// showing, and absence of the figure is kept for the payload that withheld
+    /// it.
     static func apiCredits(from usage: ClaudeOAuthUsageResponse) -> [APICreditEntry] {
         var entries: [APICreditEntry] = []
 
-        if let credit = usage.monthlyCredit, let limit = credit.limit,
-           let remaining = credit.remaining {
+        if let credit = usage.monthlyCredit, let limit = credit.limit {
+            // `remaining` is nil only when the pool is over its limit: the
+            // payload's own limit and used figures are both present and their
+            // difference is a real zero rather than a missing reading.
+            let remaining = credit.remaining ?? 0
             entries.append(APICreditEntry(
                 id: "claude.extra-usage",
                 vendorId: .claude,
@@ -204,18 +213,23 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                                   currencyCode: credit.currencyCode),
                 currencyBasis: .prepaidCredit,
                 detail: "\(money(limit, credit.currencyCode)) monthly limit",
-                source: "OAuth usage payload · extra_usage"
+                source: "OAuth usage payload · \(credit.source.rawValue)"
             ))
         }
 
         // The promo credit states its own remaining figure; falling back to
         // `limit - used` covers a payload that withheld only the total, and
         // yields nothing when it withheld enough that neither can be known.
+        // A figure the payload did publish is taken only when it cannot be
+        // negative: `-3` of a promo credit is not money that is left, and
+        // printing it under a balance label is the mislabelled figure this
+        // function already refuses the derived way below zero. The two agree.
         if let promo = usage.promoCredit {
             let derived = promo.limitDollars.flatMap { limit in
                 promo.usedDollars.flatMap { used in limit >= used ? limit - used : nil }
             }
-            if let remaining = promo.remainingDollars ?? derived {
+            let published = promo.remainingDollars.flatMap { $0 >= 0 ? $0 : nil }
+            if let remaining = published ?? derived {
                 entries.append(APICreditEntry(
                     id: "claude.promo-credit",
                     vendorId: .claude,

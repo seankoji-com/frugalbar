@@ -73,7 +73,11 @@ struct APICreditEntryRowView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.label)
+                    // The presented title, not the bare label: the row speaks
+                    // `p.title` and sets it as its tooltip, and a visible name
+                    // that dropped the vendor would leave the three surfaces
+                    // disagreeing about what the figure belongs to.
+                    Text(p.title)
                         .font(Theme.Typography.title)
                         .tracking(Theme.Tracking.title)
                         .foregroundStyle(Theme.onSurface)

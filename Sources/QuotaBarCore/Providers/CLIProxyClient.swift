@@ -106,9 +106,35 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
     /// Every figure is nil when the payload did not carry it: nothing here is
     /// defaulted to 0.
     public struct MoneyCredit: Sendable, Equatable {
+        /// Which block of the payload this reading was taken from.
+        ///
+        /// The two blocks are the same pool in two shapes, and only the block
+        /// that actually answered can be named: a `spend` block that is off or
+        /// unreadable falls through to `extra_usage` (see `monthlyCredit`), so
+        /// a provenance line that assumed the newer block won would name a
+        /// block that contributed nothing.
+        public enum Source: String, Sendable, Equatable {
+            case spend
+            case extraUsage = "extra_usage"
+        }
+
         public let used: Decimal
         public let limit: Decimal?
         public let currencyCode: String
+        /// Defaulted to the older block, so a caller that does not track the
+        /// provenance cannot claim the newer one by omission.
+        public let source: Source
+
+        public init(
+            used: Decimal, limit: Decimal?, currencyCode: String,
+            source: Source = .extraUsage
+        ) {
+            self.used = used
+            self.limit = limit
+            self.currencyCode = currencyCode
+            self.source = source
+        }
+
         /// The remaining balance, derived by subtraction *only* when both
         /// published figures are present — the same arithmetic OpenRouter's
         /// credit balance already rests on, and never a substitute for a
@@ -243,17 +269,31 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
     }
 
     /// Anthropic's monthly API credit, from whichever block this endpoint
-    /// served. Nil when neither carried a usable figure, when the pool is off,
-    /// or when the payload stated no scale to read its minor units in.
+    /// served. Nil when neither carried a usable figure, or when the payload
+    /// stated no scale to read its minor units in.
+    ///
+    /// The newer `spend` block is preferred, but only when it can actually be
+    /// read. A `spend` block that is present and unusable — off, without a
+    /// readable amount, or without a currency — must not hide the older
+    /// `extra_usage` block the same payload may still carry: this endpoint has
+    /// served both at once during its rollover, and returning nil on the
+    /// unusable newer one discarded a figure the payload did publish. The
+    /// block that answered is reported as `source`, so the row is not left
+    /// claiming a provenance it did not use. Each block's own `enabled` /
+    /// `is_enabled` still gates the entry, so an explicitly off `spend` block
+    /// only means that block reports nothing — it is not a reading of the
+    /// account, and `extra_usage` is then the reading, if it is on.
     public var monthlyCredit: MoneyCredit? {
-        if let spend = spendBlock {
-            // The newer block declares its own exponent per amount, so it needs
-            // no default scale.
-            guard spend.enabled == true,
-                  let used = spend.used?.majorUnits,
-                  let code = spend.limit?.currency ?? spend.used?.currency
-            else { return nil }
-            return MoneyCredit(used: used, limit: spend.limit?.majorUnits, currencyCode: code)
+        if let spend = spendBlock,
+           spend.enabled == true,
+           let used = spend.used?.majorUnits,
+           let code = spend.limit?.currency ?? spend.used?.currency {
+            // The newer block declares its own exponent per amount, so it
+            // needs no default scale.
+            return MoneyCredit(
+                used: used, limit: spend.limit?.majorUnits,
+                currencyCode: code, source: .spend
+            )
         }
         if let extra = extraUsage {
             guard extra.isEnabled == true,
@@ -266,7 +306,8 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
             let limit = extra.monthlyLimit.flatMap { $0 >= 0 ? Self.scaled($0, exponent: exponent) : nil }
             return MoneyCredit(
                 used: used, limit: limit,
-                currencyCode: (extra.currency?.trimmed).flatMap { $0.isEmpty ? nil : $0 } ?? "USD"
+                currencyCode: (extra.currency?.trimmed).flatMap { $0.isEmpty ? nil : $0 } ?? "USD",
+                source: .extraUsage
             )
         }
         return nil
