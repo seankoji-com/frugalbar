@@ -132,8 +132,13 @@ the data, and treat an unknown status as not complete.
 vendors' fetches and removes their cache entries, so they vanish from the
 summary, advice, history recorder and widget, and a vendor shown again is
 fetched at once instead of waiting out `minPollInterval`. `sortedSnapshots()`
-also drops them on read. A `.custom` order is the user's list verbatim: no
-band, deadline or exhaustion moves a row. Tests inject
+also drops them on read. A `.custom` order is the user's list verbatim, with
+one exception: the exhausted drop to the bottom as a block and everything live
+keeps the user's relative order. "Exhausted" there is `sortBand == 2` — for a
+single-instance vendor that is `isQuotaExhausted`, deliberately *any* spent or
+blocked window rather than every one; a multi-instance vendor's block moves
+only when every workspace is spent, because the test is the `min()` of its
+instances' bands. Tests inject
 `displayPreferences:` and never touch the real preference store.
 
 **The poll floor has two clocks, and a forced refresh uses the user's.** A

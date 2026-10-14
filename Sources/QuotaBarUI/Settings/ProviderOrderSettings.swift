@@ -59,7 +59,15 @@ struct ProviderOrderSettings: View {
                        usable, so a spent workspace stays with the others until \
                        every one of them is spent.
                        """
-                     : "Providers and workspaces appear exactly in the order below.")
+                     : """
+                       Providers and workspaces appear in the order below, \
+                       except that a provider with a spent or blocked window \
+                       drops to the bottom — it is not somewhere to send work \
+                       right now. OpenCode Go workspaces always stay together, \
+                       placed by whichever of them is most usable, so a spent \
+                       workspace stays with the others until every one of them \
+                       is spent.
+                       """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

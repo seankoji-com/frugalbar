@@ -9,6 +9,11 @@ private struct FixedProvider: QuotaProvider {
     let category: MetricCategory = .aiSubscriptions
     let snapshot: QuotaSnapshot
 
+    /// The snapshot's own id, so a test can serve several instances of one
+    /// vendor (OpenCode Go workspaces) without them collapsing onto one cache
+    /// key.
+    var instanceID: String { snapshot.id }
+
     func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
 }
 
@@ -187,9 +192,162 @@ struct SnapshotOrderingTests {
         #expect(snap.longestWindowReset == reset)
     }
 
+    // MARK: - Custom order
+
+    @Test("in a custom order an exhausted vendor moves to the bottom and the rest keep their places")
+    func customOrderPutsExhaustedLast() async {
+        // The user's own order, with the spent one in the middle. Its place is
+        // a statement about where they want to look, not about where work
+        // should go — a vendor with a spent or blocked window is not somewhere
+        // to send work, however high it sits in the list.
+        let preferences = ProviderDisplayPreferences(
+            ordering: .custom,
+            order: [.claude, .copilot, .grok, .openrouter]
+        )
+        let claude = snapshot(.claude, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 100, now: now),
+        ])
+        let copilot = snapshot(.copilot, now: now, rows: [
+            bar("MO", used: 1.0, window: 30 * 86_400, resetsIn: 1, now: now),
+        ])
+        let grok = snapshot(.grok, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 140, now: now),
+        ])
+        // No window at all: not exhausted, so it keeps its place among the live.
+        let openrouter = snapshot(.openrouter, now: now)
+
+        let ordered = await orderedIDs(
+            from: [claude, copilot, grok, openrouter], preferences: preferences)
+
+        #expect(ordered == ["claude", "grok", "openrouter", "copilot"])
+    }
+
+    @Test("the custom split uses the same exhausted rule as the automatic sort")
+    func customSplitSharesTheExhaustedDefinition() async {
+        // Claude's five-hour bucket is spent while its week has headroom. The
+        // automatic sort already calls that exhausted — a vendor with even one
+        // spent window is not somewhere to start work right now — and the
+        // custom split must not invent a second, gentler definition, or the
+        // same row would sort one way in one mode and another way in the other.
+        let preferences = ProviderDisplayPreferences(
+            ordering: .custom, order: [.claude, .grok]
+        )
+        let claude = snapshot(.claude, now: now, rows: [
+            bar("5H", used: 1.0, window: QuotaWindow.fiveHours, resetsIn: 1, now: now),
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 100, now: now),
+        ])
+        let grok = snapshot(.grok, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 200, now: now),
+        ])
+        #expect(QuotaManager.sortBand(claude) == 2)
+
+        let ordered = await orderedIDs(from: [claude, grok], preferences: preferences)
+
+        #expect(ordered == ["grok", "claude"])
+    }
+
+    @Test("custom order keeps one vendor's workspaces together, placed by their best instance")
+    func customOrderKeepsWorkspacesTogether() async {
+        // Alpha is spent, Beta is not: the block stays at OpenCode's place in
+        // the user's list rather than half of it dropping to the bottom, and
+        // the two instances keep the order they were arranged in.
+        let preferences = ProviderDisplayPreferences(
+            ordering: .custom, order: [.claude, .opencode, .grok]
+        )
+        let claude = snapshot(.claude, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 100, now: now),
+        ])
+        let alpha = instance(
+            .opencode, id: "opencode-go-alpha", now: now,
+            rows: [bar("MO", used: 1.0, window: 30 * 86_400, resetsIn: 1, now: now)])
+        let beta = instance(
+            .opencode, id: "opencode-go-beta", now: now,
+            rows: [bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 140, now: now)])
+        let grok = snapshot(.grok, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 200, now: now),
+        ])
+
+        let ordered = await orderedIDs(
+            from: [claude, alpha, beta, grok], preferences: preferences)
+
+        #expect(ordered == ["claude", "opencode-go-alpha", "opencode-go-beta", "grok"])
+    }
+
+    @Test("custom order moves a vendor block whose every workspace is spent")
+    func customOrderMovesFullySpentWorkspaceBlock() async {
+        let preferences = ProviderDisplayPreferences(
+            ordering: .custom, order: [.opencode, .grok]
+        )
+        let alpha = instance(
+            .opencode, id: "opencode-go-alpha", now: now,
+            rows: [bar("MO", used: 1.0, window: 30 * 86_400, resetsIn: 1, now: now)])
+        let beta = instance(
+            .opencode, id: "opencode-go-beta", now: now,
+            rows: [bar("WK", used: 1.0, window: QuotaWindow.week, resetsIn: 2, now: now)])
+        let grok = snapshot(.grok, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 200, now: now),
+        ])
+
+        let ordered = await orderedIDs(from: [alpha, beta, grok], preferences: preferences)
+
+        #expect(ordered == ["grok", "opencode-go-alpha", "opencode-go-beta"])
+    }
+
+    @Test("an automatic order still sorts by deadline, band by band")
+    func automaticOrderIsUnchanged() async {
+        // The custom split must not leak into `.automatic`, which already
+        // places a spent vendor last by band.
+        let preferences = ProviderDisplayPreferences(ordering: .automatic)
+        let spent = snapshot(.copilot, now: now, rows: [
+            bar("MO", used: 1.0, window: 30 * 86_400, resetsIn: 1, now: now),
+        ])
+        let undated = snapshot(.openrouter, now: now)
+        let grok = snapshot(.grok, now: now, rows: [
+            bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 200, now: now),
+        ])
+        #expect(await orderedVendors(from: [spent, undated, grok]) == [.grok, .openrouter, .copilot])
+        let ordered = await orderedIDs(from: [spent, undated, grok], preferences: preferences)
+        #expect(ordered == ["grok", "openrouter", "copilot"])
+    }
+
+    private func instance(
+        _ vendor: VendorIdentifier,
+        id: String,
+        now: Date,
+        rows: [DualBarMetrics] = []
+    ) -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: id, vendorId: vendor, displayName: id,
+            category: .aiSubscriptions,
+            metric: .percentage(usedFraction: 0.1, displayDetails: nil),
+            status: .measured(.none),
+            resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: rows.count > 0 ? rows[0] : nil,
+            row2: rows.count > 1 ? rows[1] : nil,
+            row3: rows.count > 2 ? rows[2] : nil
+        )
+    }
+
     private func orderedVendors(from snapshots: [QuotaSnapshot]) async -> [VendorIdentifier] {
         let manager = manager(snapshots)
         _ = await manager.forceRefresh()
         return await manager.sortedSnapshots().map(\.vendorId)
+    }
+
+    /// The same read, but with the display preferences a test hands it, and
+    /// keyed by instance id so several instances of one vendor are tellable
+    /// apart.
+    private func orderedIDs(
+        from snapshots: [QuotaSnapshot],
+        preferences: ProviderDisplayPreferences
+    ) async -> [String] {
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(
+                cacheTTL: 30, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { snapshots.map { FixedProvider(vendorId: $0.vendorId, snapshot: $0) } },
+            displayPreferences: { preferences }
+        )
+        _ = await manager.forceRefresh()
+        return await manager.sortedSnapshots().map(\.id)
     }
 }
