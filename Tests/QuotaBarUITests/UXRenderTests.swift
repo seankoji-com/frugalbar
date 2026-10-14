@@ -58,12 +58,28 @@ struct UXRenderTests {
         // The inspector's balance card, against a money row that has a month of
         // recorded history — the surface the inline strip only gestures at.
         let balanceHistory = balanceFixtures(now: now)
-        try await save(MetricDetailModalView(
+        var balanceInspector = MetricDetailModalView(
             snapshot: snapshots.first { $0.id == "openrouter" }!, readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] },
             balanceLoader: { id, _, _, _ in balanceHistory[id] }, onClose: {})
-                .frame(width: 384, height: 520),
+        balanceInspector.maxBody = 1_400
+        try await save(balanceInspector.frame(width: 384, height: 1_200).background(Theme.surface),
             name: "inspector-balance", directory: directory)
+
+        // The same card for a credit *count*: charted in credits, with the axis
+        // labelled in credits — never converted to money.
+        var creditsHost = QuotaSnapshot(
+            id: "openai", vendorId: .openai, displayName: "OpenAI", category: .aiSubscriptions,
+            metric: .subscription(tierName: "Plus", renewalDate: nil), status: .measured(.none),
+            resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        creditsHost.apiCredits = [creditFixtures()[0]]
+        var creditsInspector = MetricDetailModalView(
+            snapshot: creditsHost, readingsLoader: { _, _ in [] },
+            eventsLoader: { _, _, _, _, _ in [] },
+            balanceLoader: { id, _, _, _ in balanceHistory[id] }, onClose: {})
+        creditsInspector.maxBody = 1_200
+        try await save(creditsInspector.frame(width: 384, height: 1_000).background(Theme.surface),
+            name: "inspector-balance-credits", directory: directory)
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("fixture.sqlite"))
         try await save(QuotaTimelineChart(segments: [], timeRange: .last7Days)
             .frame(width: 640, height: 240).background(Theme.card),
@@ -150,13 +166,16 @@ struct UXRenderTests {
     }
 
     /// A week of hourly balance readings per money series, so the inline
-    /// sparkline has a real trend to draw in the render.
+    /// sparkline has a real trend to draw in the render: a steady draw-down with
+    /// a plateau, not a straight ramp, which a strip would only render as one
+    /// unreadable diagonal.
     private func balanceFixtures(now: Date) -> [String: [BalancePoint]] {
         func series(_ id: String, from start: Decimal, to end: Decimal) -> (String, [BalancePoint]) {
             let points = (0...40).map { step -> BalancePoint in
                 let t = now.addingTimeInterval(-Double(40 - step) * 4 * 3600)
-                let value = start + (end - start) * Decimal(step) / Decimal(40)
-                return BalancePoint(measuredAt: t, value: value)
+                // Flat for the first third (no work), then a steady draw-down.
+                let fraction = step < 14 ? 0 : Decimal(step - 14) / Decimal(26)
+                return BalancePoint(measuredAt: t, value: start + (end - start) * fraction)
             }
             return (id, points)
         }
@@ -167,6 +186,10 @@ struct UXRenderTests {
                    from: Decimal(string: "60.00")!, to: Decimal(string: "42.00")!),
             series(BalanceSeries.id(source: "claude.extra-usage", unit: .currency(code: "USD")),
                    from: Decimal(string: "200.00")!, to: Decimal(string: "179.50")!),
+            // A credit *count* has history too, and is charted in its own unit —
+            // never converted to money.
+            series(BalanceSeries.id(source: "openai.api-credits", unit: .credits(name: "credits")),
+                   from: Decimal(80_000), to: Decimal(62_500)),
         ])
     }
 

@@ -123,7 +123,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                     status: .measured(urgency), resetsAt: nil, lastUpdated: Date(),
                     auxiliaryInfo: "Account credit balance",
                     row1: nil, row2: nil,
-                    badgeText: "\(String(format: "$%.2f", balance)) credit",
+                    badgeText: "\(MoneyText.format(Decimal(balance), code: "USD")) credit",
                     planName: nil, cliSource: "OPENROUTER_API_KEY / auth.json",
                     currencyBasis: .accountCredit
                 )
@@ -134,8 +134,8 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
         // `usage` never resets, so presenting it as a weekly figure would be a
         // fabricated number by this project's own definition.
         let weeklySpentUsd = decoded.data.usage_weekly ?? spentUsd
-        let spendBadge = decoded.data.usage_weekly.map { String(format: "$%.2f this week", $0) }
-            ?? String(format: "$%.2f lifetime", spentUsd)
+        let spendBadge = decoded.data.usage_weekly.map { "\(MoneyText.format(Decimal($0), code: "USD")) this week" }
+            ?? "\(MoneyText.format(Decimal(spentUsd), code: "USD")) lifetime"
 
         guard let capUsd = decoded.data.limit, capUsd > 0 else {
             return QuotaSnapshot(
@@ -145,7 +145,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                                   spent: Decimal(weeklySpentUsd), currencyCode: "USD"),
                 status: .measured(.none),
                 resetsAt: nil, lastUpdated: Date(),
-                auxiliaryInfo: tierNote ?? "Key lifetime spend: \(String(format: "$%.2f", spentUsd))",
+                auxiliaryInfo: tierNote ?? "Key lifetime spend: \(MoneyText.format(Decimal(spentUsd), code: "USD"))",
                 row1: nil,
                 row2: nil,
                 badgeText: spendBadge,
@@ -162,7 +162,7 @@ public final class OpenRouterProvider: QuotaProvider, Sendable {
                              : consumed > 0.70 ? .warning
                              : .none
 
-        let remainingFormatted = String(format: "$%.2f", remainingUsd)
+        let remainingFormatted = MoneyText.format(Decimal(remainingUsd), code: "USD")
 
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,

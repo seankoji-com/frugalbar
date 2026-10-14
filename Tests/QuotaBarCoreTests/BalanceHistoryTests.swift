@@ -41,6 +41,32 @@ struct BalanceHistoryTests {
         #expect(series.first?.value == Decimal(string: "179.50"))
     }
 
+    /// Stored as exact decimal text, not as a `REAL`. Three-decimal currencies
+    /// exist (the dinar, the rial) and Anthropic's `spend` declares its own
+    /// exponent, so a money figure can carry more than two places. Through a
+    /// binary double, 1.005 comes back as 1.0050000000000001.
+    @Test("a money figure with more than two decimals survives the round-trip")
+    func threeDecimalMoneyRoundTrips() async throws {
+        let store = makeStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await store.record([money("openrouter", balance: "1.005", code: "BHD")], now: now)
+
+        let points = try await store.fetchBalancePoints(
+            seriesId: BalanceSeries.id(source: "openrouter", unit: .currency(code: "BHD")),
+            since: nil, until: now, bucketSeconds: 3600)
+        #expect(points.first?.value == Decimal(string: "1.005"))
+    }
+
+    /// The text form is the exact decimal, so no reader's locale and no binary
+    /// approximation can change what a figure is.
+    @Test("the stored text is the exact decimal, locale-independent")
+    func storedTextIsExact() {
+        #expect(QuotaHistoryStore.decimalText(Decimal(string: "1.005")!) == "1.005")
+        #expect(QuotaHistoryStore.decimalText(Decimal(string: "300.00")!) == "300")
+        #expect(QuotaHistoryStore.decimal(fromText: "179.5") == Decimal(string: "179.50"))
+        #expect(QuotaHistoryStore.decimal(fromText: "not a number") == nil)
+    }
+
     /// A balance and a reading come from one poll and one call, so the two
     /// tables never disagree about which poll they hold.
     @Test("one record call writes both the poll's reading and its balance")
