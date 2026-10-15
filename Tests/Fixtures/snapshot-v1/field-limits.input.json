@@ -1,0 +1,203 @@
+{
+  "description": "Every field at its limit: strings at and over their escaped byte limits (multibyte and escaped characters), the largest integer and decimal, fractions 0 and 1, a 512-byte URL kept and a 513-byte one dropped, and a ninth API credit that is not exported.",
+  "covers": [
+    "fixture:every-field-at-limit"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "count",
+        "remaining": 9007199254740991,
+        "limit": 9007199254740991,
+        "unitName": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+      },
+      "status": {
+        "kind": "unavailable",
+        "reason": "unsupported",
+        "message": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "éééééééééééééééééééééééééééééééé",
+        "primaryFraction": 0.0,
+        "usedText": "USEDTEXT-MARKER éééééééééééééééééééééééééééééééé",
+        "resetText": "RESETTEXT-MARKER éééééééééééééééééééééééééééééééé",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-16T00:00:00.000Z",
+        "windowLength": 2592000,
+        "quantityUsed": "999999999999999999.99999999",
+        "quantityLimit": "999999999999999999.99999999",
+        "quantityUnit": "cccccccccccccccccccccccccccccccc"
+      },
+      "row2": {
+        "label": "Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé ",
+        "primaryFraction": 1.0,
+        "usedText": "USEDTEXT-MARKER Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé ",
+        "resetText": "RESETTEXT-MARKER Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé Ünïcödé ",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-17T00:00:00.000Z",
+        "quantityUsed": "-1.5",
+        "quantityLimit": "0",
+        "quantityUnit": "ccccccccccccccccccccccccccccccccc"
+      },
+      "row3": {
+        "label": "Tab\there \"quoted\" back\\slash\nqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER Tab\there \"quoted\" back\\slash\nqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        "resetText": "RESETTEXT-MARKER Tab\there \"quoted\" back\\slash\nqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "0.00000001",
+        "quantityLimit": "1",
+        "quantityUnit": "credits"
+      },
+      "planName": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "apiCredits": [
+        {
+          "id": "kiro.credit-0",
+          "vendorId": "kiro",
+          "label": "Credit 0",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-1",
+          "vendorId": "kiro",
+          "label": "Credit 1",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-2",
+          "vendorId": "kiro",
+          "label": "Credit 2",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-3",
+          "vendorId": "kiro",
+          "label": "Credit 3",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-4",
+          "vendorId": "kiro",
+          "label": "Credit 4",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-5",
+          "vendorId": "kiro",
+          "label": "Credit 5",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-6",
+          "vendorId": "kiro",
+          "label": "Credit 6",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-7",
+          "vendorId": "kiro",
+          "label": "Credit 7",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "id": "kiro.credit-8",
+          "vendorId": "kiro",
+          "label": "Credit 8",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740991,
+            "unit": "credits"
+          },
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "outage_started|claude|limit-ok",
+      "kind": "outage_started",
+      "vendorId": "claude",
+      "title": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+      "detail": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "occurredAt": "2026-10-14T23:00:00.000Z",
+      "observedAt": "2026-10-14T23:05:00.000Z",
+      "source": "status:claude",
+      "url": "https://status.claude.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "outage_started|claude|limit-over",
+      "kind": "outage_started",
+      "vendorId": "claude",
+      "title": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+      "detail": "\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"",
+      "occurredAt": "2026-10-14T22:00:00.000Z",
+      "observedAt": "2026-10-14T22:05:00.000Z",
+      "source": "status:claude",
+      "url": "https://status.claude.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

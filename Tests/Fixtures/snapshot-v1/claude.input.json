@@ -1,0 +1,78 @@
+{
+  "description": "Claude: plan-wide 5h and weekly windows, each with its own reset; a prepaid credit entry.",
+  "covers": [
+    "table:claude"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "claude",
+      "vendorId": "claude",
+      "displayName": "Claude",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER claude",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.62,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T02:00:00.000Z",
+        "windowLength": 18000
+      },
+      "row2": {
+        "label": "WK",
+        "primaryFraction": 0.35,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-18T00:00:00.000Z",
+        "windowLength": 604800
+      },
+      "planName": "Max",
+      "apiCredits": [
+        {
+          "id": "claude.extra_usage",
+          "vendorId": "claude",
+          "label": "Extra usage",
+          "metric": {
+            "type": "currency",
+            "balance": "150.25",
+            "limit": "200",
+            "spent": "49.75",
+            "currencyCode": "USD"
+          },
+          "currencyBasis": "prepaidCredit",
+          "detail": "$200.00 monthly limit",
+          "source": "oauth/usage extra_usage"
+        }
+      ]
+    }
+  ],
+  "events": []
+}
