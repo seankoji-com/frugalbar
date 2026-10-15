@@ -255,6 +255,12 @@ actor SyncAccessTokens {
             return response.accessToken
         case .failure(let failure):
             cached = nil
+            // Google rejected this token for good. Deleting it records that
+            // outside the state file, so a relaunch after a lost state write
+            // cannot send it again; only a new sign-in stores another.
+            if failure.isTerminal, (try? secrets.read(SyncSecretAccount.refreshToken)) == refreshToken {
+                try? secrets.delete(SyncSecretAccount.refreshToken)
+            }
             throw SyncAuthError.refresh(failure)
         }
     }

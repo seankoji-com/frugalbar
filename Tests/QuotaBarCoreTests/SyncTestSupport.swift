@@ -151,6 +151,8 @@ actor FakeGoogle: SyncTransport {
     var tokenRequests = 0
     /// The next N verification reads find older bytes: a late write landed.
     var staleReads = 0
+    /// The next N `files.get` metadata reads are held until `releaseAll`.
+    var metadataHolds = 0
     var aboutAccount = SyncFakes.account
     private var held: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var heldCancelled: Set<UUID> = []
@@ -227,6 +229,10 @@ actor FakeGoogle: SyncTransport {
                     files[id] = file
                 }
                 return respond(200, file.content)
+            }
+            if metadataHolds > 0 {
+                metadataHolds -= 1
+                try await hold()
             }
             let properties = file.publisherId.map { #"{"publisherId":"\#($0)"}"# } ?? "{}"
             let body = #"{"appProperties":\#(properties),"modifiedTime":"\#(Self.rfc3339(file.modifiedTime))"}"#

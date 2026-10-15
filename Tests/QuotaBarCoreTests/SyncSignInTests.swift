@@ -388,6 +388,8 @@ struct SyncRefreshFailureTests {
         #expect(second.timeIntervalSince(first) == SyncPublisher.backoff(2))
         #expect(SyncPublisher.backoff(2) > SyncPublisher.backoff(1))
         #expect(!(await harness.publisher.status().needsSignIn))
+        // Only a terminal answer removes the token.
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == SyncFakes.refreshToken)
     }
 
     @Test("a network error at the token endpoint backs off")
@@ -422,6 +424,8 @@ struct SyncRefreshFailureTests {
         }
         #expect(await harness.google.tokenRequests == 1)
         #expect(await harness.google.uploads.isEmpty)
+        // The rejected token is deleted, so nothing can send it again.
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == nil)
     }
 
     @Test("signing in again as the same account resumes publishing with the same session")
@@ -433,6 +437,10 @@ struct SyncRefreshFailureTests {
         await harness.publisher.submit(SyncFakes.source())
         await harness.publisher.tick()
         let publisherId = try harness.secrets.read(SyncSecretAccount.publisherId)
+        // The rejected token is gone; the sign-in stores a new one before
+        // telling the publisher.
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == nil)
+        try harness.secrets.write("fake-refresh-token-after-sign-in", account: SyncSecretAccount.refreshToken)
 
         await #expect(throws: SyncSignInError.wrongAccount) {
             try await harness.publisher.reauthorized(account: SyncFakes.otherAccount)

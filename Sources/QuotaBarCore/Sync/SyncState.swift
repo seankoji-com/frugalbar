@@ -80,9 +80,11 @@ public struct SyncPersistentState: Codable, Sendable, Equatable {
     /// Start of the last publish attempt: the 2-minute floor counts from it,
     /// across relaunches too.
     public var lastAttemptAt: Date?
-    /// Start of the last heartbeat whose outcome was uncertain. The next
-    /// heartbeat counts from it, so uncertainty that persists past the 3
-    /// forced publishes uploads every 15 minutes, not every 2.
+    /// Start of the last heartbeat that may have landed. The next heartbeat
+    /// counts from it, so uncertainty that persists past the 3 forced
+    /// publishes uploads every 15 minutes, not every 2. The attempt's
+    /// checkpoint sets it, so a lost outcome keeps the deadline; a heartbeat
+    /// that cannot have landed gives it back.
     public var lastHeartbeatAttemptAt: Date?
     /// Set by the checkpoint written before an attempt contacts Google, and
     /// cleared when its outcome is saved. Found set at launch, the outcome

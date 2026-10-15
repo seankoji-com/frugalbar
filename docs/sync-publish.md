@@ -32,8 +32,9 @@ attribute (spike decision 6). The same store holds the session's `publisherId`.
 `permissionId` before storing anything.
 
 Refresh failures: 429, 5xx, network errors and timeouts back off (2, 4, 8, then 15 minutes). Any
-other 4xx stops publishing and shows "Sign in again", with nothing scheduled. No code calls
-Google's revoke endpoint.
+other 4xx stops publishing and shows "Sign in again", with nothing scheduled, and deletes the
+rejected refresh token from the Keychain, so nothing can send it again; the next sign-in stores a new
+one. No code calls Google's revoke endpoint.
 
 ## Publishing
 
@@ -56,16 +57,48 @@ takeover however old it is.
 ## Durable state fails closed
 
 State lives in `~/Library/Application Support/FrugalBar/sync-state.json` (0600, one atomic write per
-transition). A change that sync depends on takes effect only once it is on disk:
+transition). One rule covers every write in `Sources/QuotaBarCore/Sync`:
+
+1. **The gate is checked as each request leaves.** Every Google request, token refresh included, goes
+   through `GatedSyncTransport`, which asks `SyncPublisher.permits(_:)` immediately before sending.
+   A publish request needs `active` with no Stop pending, no "Sign in again", no ownership prompt
+   and disk level with runtime. A cleanup request needs `stopping` with auth intact and disk level
+   with runtime. Requests outside both scopes, or from a cancelled attempt, are refused. An attempt
+   still running when Stop is pressed therefore sends nothing more, from whichever await it resumes.
+2. **A decision takes effect only once it is on disk.** Activation, the checkpoint before each attempt,
+   Take over, Sign in again, Stop step 1, each cleanup step, Finish without deleting and `stopped`
+   change runtime state only after their write lands.
+3. **A lost outcome write holds everything back.** An outcome Google already gave is applied at once.
+   If its write fails, the publisher is behind its disk: `permits` refuses every request, Settings
+   shows "Couldn't save sync state on this Mac", and each tick (at least every minute) writes the
+   whole state again. Every write carries the whole state, so the first one that lands clears it.
 
 | Write | If it fails |
 |---|---|
 | Activation (active record with account) | sign-in reports it; sync stays off; the new publisherId and refresh token are deleted |
-| Checkpoint before each attempt (floor, repair count, `uploadStartedAt`) | no Google request; retried after backoff |
-| Outcome of an upload | `uploadStartedAt` stays on disk, so a relaunch treats the upload as uncertain: forced, verified, and a later foreign id is a takeover |
-| Stop step 1 | nothing more publishes; step 1 is retried; a relaunch shows the session with Stop |
-| Take over, Sign in again | no change; the prompt stays |
-| A detected takeover, a terminal sign-in failure, a cleanup step | found again or retried; what stays on disk is the safe earlier record |
+| Checkpoint before each attempt (floor, repair count, heartbeat deadline, `uploadStartedAt`) | no Google request; retried after backoff |
+| Stop step 1 | nothing more is sent, including by an attempt already running; step 1 is retried; a relaunch shows the session with Stop |
+| Take over, Sign in again, Finish without deleting | no change; the prompt stays |
+| An upload outcome, a detected takeover, a terminal sign-in failure, a cleanup error or pause | behind: no request of any kind until a later write lands |
+
+### A relaunch while behind
+
+A relaunch before the lost write lands is the same as a crash at that point. The saved record keeps it
+safe:
+
+- The checkpoint's `uploadStartedAt` makes the open attempt an uncertain upload: the next publish is
+  forced and verified, and a foreign id found later is a takeover.
+- The checkpoint already moved a heartbeat's deadline, so a lost uncertain heartbeat does not open
+  the 2-minute slots again once the 3 forced publishes are spent.
+- A terminal refresh answer deletes the rejected refresh token before anything else, so the relaunch
+  finds no token and shows "Sign in again" (or "Sign in to finish cleanup") without contacting Google.
+
+What remains is the window every design has: the process dies after Google answered and before
+anything was recorded, or the Keychain delete and the state write both fail. Then the relaunch acts as
+if the answer never came. That can mean one more refresh with a token Google already rejected; it
+fails the same way and stops. Separately, a request the gate passed an instant before Stop was pressed
+counts as already sent, and Stop's settle step handles it.
+`clockDidChange` clamps attempt times in memory only; `recovered` applies the same clamp at launch.
 
 A missing state file means sync was never turned on. A file that exists but can't be read or
 decoded is never treated as `off` and never written over: Settings says "Sync is paused", Start is
