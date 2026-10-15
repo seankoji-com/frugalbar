@@ -45,13 +45,31 @@ once; `SyncController.start` runs the ticks in their own task.
 | Material change (D§2.2.D, `SyncMaterial`) | next 2-minute slot |
 | Heartbeat, full document | when the last successful publish is 15 min old |
 | Request timeout | 20 s, every Google request |
-| Uncertain upload (timeout, cancel, lost connection, 5xx) | forced publish at the next slot, then a SHA-256 verification read; at most 3 forced per run, then only the heartbeat, even with a material change pending. A heartbeat that is itself uncertain moves the next one 15 min on |
-| Foreign `publisherId` modified < 1 h ago | stop, "Another Mac (label) is syncing — Take over?" |
+| Uncertain upload (timeout, cancel, lost connection, 5xx, a 2xx answer without a file id) | forced publish at the next slot, then a SHA-256 verification read; at most 3 forced per run, then only the heartbeat, even with a material change pending. A heartbeat that is itself uncertain moves the next one 15 min on |
+| Foreign `publisherId` modified < 1 h ago by Drive's clock (its `modifiedTime` against the same response's `Date` header), or of unknown age | stop, "Another Mac (label) is syncing — Take over?" |
 | Foreign id after this session published | stop, "Another Mac took over syncing" |
 
 The last attempt time, the repair run and whether this session has published are persisted, so a
 relaunch keeps the 2-minute floor and the 3-publish cap, and a former publisher still stops on a
 takeover however old it is.
+
+## Durable state fails closed
+
+State lives in `~/Library/Application Support/FrugalBar/sync-state.json` (0600, one atomic write per
+transition). A change that sync depends on takes effect only once it is on disk:
+
+| Write | If it fails |
+|---|---|
+| Activation (active record with account) | sign-in reports it; sync stays off; the new publisherId and refresh token are deleted |
+| Checkpoint before each attempt (floor, repair count, `uploadStartedAt`) | no Google request; retried after backoff |
+| Outcome of an upload | `uploadStartedAt` stays on disk, so a relaunch treats the upload as uncertain: forced, verified, and a later foreign id is a takeover |
+| Stop step 1 | nothing more publishes; step 1 is retried; a relaunch shows the session with Stop |
+| Take over, Sign in again | no change; the prompt stays |
+| A detected takeover, a terminal sign-in failure, a cleanup step | found again or retried; what stays on disk is the safe earlier record |
+
+A missing state file means sync was never turned on. A file that exists but can't be read or
+decoded is never treated as `off` and never written over: Settings says "Sync is paused", Start is
+unavailable, and the file is read again every minute and on "Try Again".
 
 `measuredAtTrusted` and `providersOmitted` count as material on top of the D§2.2.D list, so a
 distrusted reading or a dropped provider reaches the phone before the heartbeat.
@@ -71,8 +89,7 @@ duplicates. An export failure withholds the publish before any request, and Sett
 
 ## Stop
 
-State lives in `~/Library/Application Support/FrugalBar/sync-state.json` (0600, one atomic write per
-transition). The steps:
+The steps:
 
 1. Persist `stopping` plus the cleanup record (publisherId, account, token item, +2/+10 min
    deadlines).

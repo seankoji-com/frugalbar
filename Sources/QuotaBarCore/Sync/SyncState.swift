@@ -84,15 +84,23 @@ public struct SyncPersistentState: Codable, Sendable, Equatable {
     /// heartbeat counts from it, so uncertainty that persists past the 3
     /// forced publishes uploads every 15 minutes, not every 2.
     public var lastHeartbeatAttemptAt: Date?
+    /// Set by the checkpoint written before an attempt contacts Google, and
+    /// cleared when its outcome is saved. Found set at launch, the outcome
+    /// never reached disk (a crash, or a save that failed), so the upload is
+    /// treated as uncertain.
+    public var uploadStartedAt: Date?
+    /// An upload of this session may have reached Drive without being
+    /// confirmed: its outcome was uncertain, or never saved.
+    public var mayHavePublished: Bool?
     public var cleanup: SyncCleanupRecord?
     public var abandoned: SyncAbandonedData?
 
     public init() {}
 
-    /// This session confirmed an upload. `activate` starts every session from
-    /// a fresh state, so a confirmed publish time belongs to this session, and
-    /// a relaunch still knows that a foreign id is a takeover.
-    var publishedThisSession: Bool { lastSuccessfulPublishAt != nil }
+    /// This session confirmed an upload, or one may have landed. `activate`
+    /// starts every session from a fresh state, so both belong to this
+    /// session, and a relaunch still knows that a foreign id is a takeover.
+    var publishedThisSession: Bool { lastSuccessfulPublishAt != nil || mayHavePublished == true }
 }
 
 public protocol SyncStateStore: Sendable {
@@ -113,11 +121,19 @@ public struct FileSyncStateStore: SyncStateStore {
             .appendingPathComponent("sync-state.json")
     }
 
+    /// A missing file is a Mac that never turned sync on. Any other read or
+    /// decode failure throws: the file may hold a session or an unfinished
+    /// Stop, and must not be taken for `off`.
     public func load() throws -> SyncPersistentState {
-        guard FileManager.default.fileExists(atPath: file.path) else { return SyncPersistentState() }
+        let data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return SyncPersistentState()
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(SyncPersistentState.self, from: Data(contentsOf: file))
+        return try decoder.decode(SyncPersistentState.self, from: data)
     }
 
     public func save(_ state: SyncPersistentState) throws {

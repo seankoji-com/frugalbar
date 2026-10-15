@@ -59,6 +59,7 @@ struct SyncSettingsPane: View {
 
     private func symbol(for status: SyncStatus) -> String {
         switch status.phase {
+        case _ where status.stateUnreadable: "exclamationmark.triangle"
         case .off, .stopped: "iphone.slash"
         case .stopping: "hourglass"
         case .active:
@@ -83,6 +84,8 @@ struct SyncSettingsPane: View {
                     Button(SyncSettingsText.takeOverButton) { controller.takeOver() }
                 case .stop:
                     Button(SyncSettingsText.stopButton) { controller.stop() }
+                case .retryStateRead:
+                    Button(SyncSettingsText.retryStateButton) { controller.retryLoadingState() }
                 }
             }
         }

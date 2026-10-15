@@ -63,6 +63,16 @@ public enum SyncSettingsText {
     public static let labelTitle = "This Mac's name on your phone"
     public static let wrongAccount = "That was a different Google account. Sign in as the account sync uses."
     public static let signInFailed = "Sign-in didn't finish. Try again."
+    public static let stateNotSaved =
+        "FrugalBar couldn't save its sync settings on this Mac, so sync stayed as it was. Try again."
+
+    /// The saved sync state exists but can't be read (S2-R6).
+    public static let stateUnreadable = "Sync is paused"
+    public static let stateUnreadableDetail =
+        "FrugalBar couldn't read its saved sync settings on this Mac. Sync stays paused and can't be turned on "
+            + "until they can be read, so an unfinished Stop isn't lost. FrugalBar keeps trying; nothing in "
+            + "Google Drive changes meanwhile."
+    public static let retryStateButton = "Try Again"
 
     /// "Another Mac (label) is syncing — Take over?"
     public static func otherMacSyncing(label: String?) -> String {
@@ -95,7 +105,7 @@ public enum SyncSignInState: Equatable, Sendable {
 /// The sync pane, as data: which status, notices and actions apply.
 public struct SyncSettingsPresentation: Equatable {
     public enum Action: Equatable, Sendable {
-        case signIn, stop, signInAgain, takeOver, signInToFinishCleanup, finishWithoutDeleting
+        case signIn, stop, signInAgain, takeOver, signInToFinishCleanup, finishWithoutDeleting, retryStateRead
     }
 
     /// The headline under the toggle.
@@ -119,6 +129,10 @@ public struct SyncSettingsPresentation: Equatable {
         let statusLine: String
         var detail: String?
         switch status.phase {
+        case _ where status.stateUnreadable:
+            statusLine = SyncSettingsText.stateUnreadable
+            detail = SyncSettingsText.stateUnreadableDetail
+            actions.append(.retryStateRead)
         case .off, .stopped:
             statusLine = "Off"
             if signIn == .idle { actions.append(.signIn) }

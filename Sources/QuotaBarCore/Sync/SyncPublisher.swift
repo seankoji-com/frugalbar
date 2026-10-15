@@ -53,11 +53,14 @@ public struct SyncStatus: Sendable, Equatable {
     public var cleanupNeedsSignIn = false
     /// The "couldn't delete its sync data" notice, or nil while it is hidden.
     public var abandoned: SyncAbandonedData?
+    /// The saved sync state exists but could not be read. Nothing is known
+    /// about the last session, so sync cannot be turned on until it reads.
+    public var stateUnreadable = false
 
     public init() {}
 
     /// "Sync to phone & watch" can be turned on.
-    public var canStart: Bool { phase == .off || phase == .stopped }
+    public var canStart: Bool { (phase == .off || phase == .stopped) && !stateUnreadable }
 }
 
 /// The places the Stop protocol can be interrupted, one after each persisted
@@ -72,10 +75,15 @@ enum SyncStopGap: CaseIterable, Sendable {
 }
 
 public enum SyncActivationError: Error, Equatable, Sendable {
-    /// Sync is on, or Stop is still cleaning up.
+    /// Sync is on, Stop is still cleaning up, or the saved state can't be read.
     case unavailable
     case keychain
+    /// The sync state file could not be written: nothing changed.
+    case stateNotSaved
 }
+
+/// A save was refused because the state file on disk could not be read.
+struct SyncStateUnreadable: Error {}
 
 /// Publishes the snapshot document to Drive's app-data folder (D§2.2.C–D).
 ///
@@ -98,6 +106,11 @@ public enum SyncActivationError: Error, Equatable, Sendable {
 ///   verification read matches.
 /// - The 2-minute floor, the repair run and whether this session has
 ///   published are all persisted, so a relaunch keeps them.
+/// - Durable state fails closed. Activation, Take over, re-sign-in, Stop and
+///   the checkpoint before each attempt must reach disk before they take
+///   effect; an attempt whose checkpoint can't be saved does not contact
+///   Google. A state file that exists but can't be read is never taken for
+///   `off` or written over.
 /// - Stop persists `stopping` and a cleanup record before any network call,
 ///   then settles the in-flight upload, deletes this session's file, re-lists
 ///   at +2 and +10 minutes, deletes the token and sets `stopped`. It resumes
@@ -111,6 +124,8 @@ public actor SyncPublisher {
     public static let relistDelays: [TimeInterval] = [2 * 60, 10 * 60]
     static let backoffBase: TimeInterval = 120
     static let backoffCap: TimeInterval = 15 * 60
+    static let stateReadRetryInterval: TimeInterval = 60
+    static let stateNotSavedMessage = "Couldn't save sync state on this Mac"
 
     private let secrets: any SyncSecretStore
     private let stateStore: any SyncStateStore
@@ -136,6 +151,15 @@ public actor SyncPublisher {
     private var publishTask: Task<Void, Never>?
     private var publishing = false
     private var cleaning = false
+    /// The state file exists but did not read: nothing is saved over it and
+    /// nothing starts until a later read succeeds.
+    private var stateUnreadable = false
+    /// When the state file was last read: an unreadable one is read again a
+    /// minute later.
+    private var stateReadAt: Date
+    /// Stop was pressed but its `stopping` write failed: nothing publishes,
+    /// and the write is retried.
+    private var stopRequested = false
 
     /// Called after each persisted Stop step. Tests throw from it to stop the
     /// protocol there, as a crash would.
@@ -160,9 +184,23 @@ public actor SyncPublisher {
             secrets: secrets, clock: clock)
         self.tokens = tokens
         self.drive = SyncDriveClient(transport: transport, tokens: tokens, clock: clock)
-        var state = (try? stateStore.load()) ?? SyncPersistentState()
-        state.clampAttemptTimes(to: clock.now())
-        self.state = state
+        stateReadAt = clock.now()
+        do {
+            state = SyncPersistentState.recovered(try stateStore.load(), now: clock.now())
+        } catch {
+            state = SyncPersistentState()
+            stateUnreadable = true
+        }
+    }
+
+    /// Reads the state file again after it could not be read. `tick` and
+    /// `resume` call it; so does "Try Again".
+    public func retryLoadingState() {
+        guard stateUnreadable else { return }
+        stateReadAt = clock.now()
+        guard let loaded = try? stateStore.load() else { return }
+        state = .recovered(loaded, now: clock.now())
+        stateUnreadable = false
     }
 
     func setStopCheckpoint(_ checkpoint: (@Sendable (SyncStopGap) throws -> Void)?) {
@@ -181,6 +219,7 @@ public actor SyncPublisher {
         status.lastError = state.lastError
         status.exportMessage = exportState.settingsMessage
         status.cleanupNeedsSignIn = state.phase == .stopping && (state.cleanup?.authLost ?? false)
+        status.stateUnreadable = stateUnreadable
         // Hidden while this Mac publishes to that same account again:
         // following it would delete the new session's snapshot.
         if let abandoned = state.abandoned,
@@ -217,15 +256,17 @@ public actor SyncPublisher {
 
     /// When `tick()` next has work, or nil when nothing is scheduled.
     public func nextWakeup() -> Date? {
+        if stateUnreadable { return stateReadAt.addingTimeInterval(Self.stateReadRetryInterval) }
         switch state.phase {
-        case .active: return nextPublishDue()
+        case .active: return stopRequested ? (retryAt ?? clock.now()) : nextPublishDue()
         case .stopping: return nextCleanupDue()
         case .off, .stopped: return nil
         }
     }
 
     func nextPublishDue() -> Date? {
-        guard state.phase == .active, !state.needsSignIn, state.ownership == nil, source != nil else { return nil }
+        guard state.phase == .active, !stopRequested, !state.needsSignIn, state.ownership == nil, source != nil
+        else { return nil }
         let slot = state.lastAttemptAt.map { $0.addingTimeInterval(Self.minimumInterval) } ?? clock.now()
         var due = publishWaitsForHeartbeat ? max(slot, heartbeatDue) : slot
         if let retryAt { due = max(due, retryAt) }
@@ -269,10 +310,16 @@ public actor SyncPublisher {
     /// Does whatever is due now: cleanup while stopping, a publish while
     /// active. One run at a time.
     public func tick() async {
+        retryLoadingState()
+        if stateUnreadable { return }
         switch state.phase {
         case .stopping:
             await runCleanup()
         case .active:
+            if stopRequested {
+                if (retryAt ?? .distantPast) <= clock.now() { await stop() }
+                return
+            }
             guard !publishing, let due = nextPublishDue(), due <= clock.now() else { return }
             publishing = true
             let task = Task { await self.publish() }
@@ -287,28 +334,43 @@ public actor SyncPublisher {
 
     /// At launch: an unfinished Stop resumes from its first incomplete step.
     public func resume() async {
-        if state.phase == .stopping { await runCleanup() }
+        retryLoadingState()
+        if !stateUnreadable, state.phase == .stopping { await runCleanup() }
     }
 
     // MARK: Session
 
     /// Turns sync on after a sign-in stored its refresh token. Every session
     /// gets a fresh `publisherId`, kept in the Keychain until Stop finishes.
+    ///
+    /// Sync is on only once the active record, with its account, is on disk:
+    /// that record is what lets Stop find and delete this session's data
+    /// after a relaunch. If it can't be saved, this throws, sync stays as it
+    /// was, and the sign-in's Keychain items are removed again.
     public func activate(account: SyncAccount) throws {
-        guard state.canStart else { throw SyncActivationError.unavailable }
+        guard !stateUnreadable, state.canStart else { throw SyncActivationError.unavailable }
         let publisherId = UUID().uuidString.lowercased()
         do {
             try secrets.write(publisherId, account: SyncSecretAccount.publisherId)
             guard try secrets.read(SyncSecretAccount.publisherId) == publisherId else { throw SyncActivationError.keychain }
         } catch {
+            discardSignIn()
             throw SyncActivationError.keychain
         }
         var fresh = SyncPersistentState()
         fresh.phase = .active
         fresh.account = account
         fresh.abandoned = state.abandoned
+        do {
+            try save(fresh)
+        } catch {
+            // A write can fail after the file was replaced; put back what it held.
+            try? save(state)
+            discardSignIn()
+            state.lastError = Self.stateNotSavedMessage
+            throw SyncActivationError.stateNotSaved
+        }
         state = fresh
-        persist()
         publisherIdCache = publisherId
         source = nil
         sourceMaterial = nil
@@ -321,34 +383,57 @@ public actor SyncPublisher {
         exportState = SnapshotExportState()
     }
 
+    /// Removes what a sign-in stored when sync did not turn on with it. Off
+    /// or stopped, no session needs either item.
+    private func discardSignIn() {
+        try? secrets.delete(SyncSecretAccount.publisherId)
+        try? secrets.delete(SyncSecretAccount.refreshToken)
+    }
+
     /// A sign-in for the same account restored access: "Sign in again" while
     /// active, or "Sign in to finish cleanup" while stopping. Publishing
     /// stays forbidden during cleanup and the cleanup keeps its own
-    /// `publisherId`.
+    /// `publisherId`. Nothing resumes unless that is saved.
     public func reauthorized(account: SyncAccount) throws {
+        guard !stateUnreadable else { throw SyncActivationError.unavailable }
         let expected = state.phase == .stopping ? state.cleanup?.account : state.account
         guard expected?.permissionId == account.permissionId else { throw SyncSignInError.wrongAccount }
-        failures = 0
-        retryAt = nil
+        var next = state
         switch state.phase {
         case .active:
-            state.needsSignIn = false
-            state.lastError = nil
+            next.needsSignIn = false
+            next.lastError = nil
         case .stopping:
-            state.cleanup?.authLost = false
-            state.lastError = nil
+            next.cleanup?.authLost = false
+            next.lastError = nil
         case .off, .stopped:
             return
         }
-        persist()
+        do {
+            try save(next)
+        } catch {
+            state.lastError = Self.stateNotSavedMessage
+            throw SyncActivationError.stateNotSaved
+        }
+        state = next
+        failures = 0
+        retryAt = nil
     }
 
     /// "Take over": the next upload writes this Mac's id over the other one.
+    /// The prompt stays until clearing it is saved.
     public func takeOver() {
         guard state.phase == .active, state.ownership != nil else { return }
-        state.ownership = nil
+        var next = state
+        next.ownership = nil
+        do {
+            try save(next)
+        } catch {
+            state.lastError = Self.stateNotSavedMessage
+            return
+        }
+        state = next
         takeOverRequested = true
-        persist()
     }
 
     /// Hands a sign-in's fresh access token to Drive calls.
@@ -369,18 +454,32 @@ public actor SyncPublisher {
         let version = sourceVersion
         let started = clock.now()
         let heartbeat = publishWaitsForHeartbeat
-        state.lastAttemptAt = started
 
         // An export failure withholds the publish before Google is contacted;
         // the last good remote document stays in place.
-        guard exportState.prepare(exportInput(source, publishedAt: started)) != nil else { return }
-
-        if state.repairPending && state.forcedPublishes < Self.maxForcedPublishes {
-            state.forcedPublishes += 1
+        guard exportState.prepare(exportInput(source, publishedAt: started)) != nil else {
+            state.lastAttemptAt = started
+            return
         }
-        // The floor and the repair count are on disk before Google hears of
-        // this attempt, so a relaunch mid-upload cannot reset either.
-        persist()
+
+        // The floor, the repair count and the open attempt are on disk before
+        // Google hears of this attempt, so a relaunch mid-upload cannot reset
+        // them. If they can't be saved, Google is not contacted at all.
+        var checkpoint = state
+        checkpoint.lastAttemptAt = started
+        checkpoint.uploadStartedAt = started
+        if checkpoint.repairPending && checkpoint.forcedPublishes < Self.maxForcedPublishes {
+            checkpoint.forcedPublishes += 1
+        }
+        do {
+            try save(checkpoint)
+        } catch {
+            failures += 1
+            retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
+            state.lastError = Self.stateNotSavedMessage
+            return
+        }
+        state = checkpoint
         do {
             let publisherId = try sessionPublisherId()
             let discovery = try await drive.discover()
@@ -399,12 +498,17 @@ public actor SyncPublisher {
                 if let foreign = metadata.publisherId, foreign != publisherId, !takeOverRequested {
                     if state.publishedThisSession {
                         state.ownership = .tookOver(label: await foreignLabel(fileId))
+                        state.uploadStartedAt = nil
                         persist()
                         return
                     }
-                    if let modified = metadata.modifiedTime,
-                       clock.now().timeIntervalSince(modified) < Self.foreignWindow {
+                    // Drive's clock on both sides: the file's modifiedTime
+                    // against this response's Date header. With either one
+                    // missing the age is unknown, and the file is not taken.
+                    let age = metadata.serverDate.flatMap { now in metadata.modifiedTime.map { now.timeIntervalSince($0) } }
+                    if age.map({ $0 < Self.foreignWindow }) ?? true {
                         state.ownership = .otherMacSyncing(label: await foreignLabel(fileId))
+                        state.uploadStartedAt = nil
                         persist()
                         return
                     }
@@ -418,7 +522,10 @@ public actor SyncPublisher {
             clockSample = (offset, offset == nil ? nil : sampledAt)
             if clockTrust.sample(offsetMs: offset, retaining: source.snapshots) { clockDiscontinuities += 1 }
 
-            guard let document = exportState.prepare(exportInput(source, publishedAt: sampledAt)) else { return }
+            guard let document = exportState.prepare(exportInput(source, publishedAt: sampledAt)) else {
+                state.uploadStartedAt = nil
+                return
+            }
             let bytes = document.data
             let request = fileId.map { drive.updateRequest(fileId: $0, content: bytes, publisherId: publisherId) }
                 ?? drive.createRequest(content: bytes, publisherId: publisherId)
@@ -426,6 +533,10 @@ public actor SyncPublisher {
             // Stop arrived meanwhile: no verification and no repair.
             guard state.phase == .active else { return }
 
+            // If the outcome below fails to save, the checkpoint's
+            // `uploadStartedAt` stays on disk and a relaunch treats this
+            // upload as uncertain.
+            state.uploadStartedAt = nil
             switch outcome {
             case .confirmed(let id):
                 state.fileId = id
@@ -449,6 +560,7 @@ public actor SyncPublisher {
             case .uncertain:
                 if heartbeat { state.lastHeartbeatAttemptAt = started }
                 state.repairPending = true
+                state.mayHavePublished = true
                 state.lastError = "The last upload's outcome is unknown; publishing again"
             case .failed(let error):
                 throw error
@@ -478,6 +590,9 @@ public actor SyncPublisher {
             }
         } catch SyncDriveError.http(let status) where (500...599).contains(status) {
             return .uncertain
+        } catch SyncDriveError.malformed {
+            // Drive answered 2xx, so the upload landed, but not with a file id.
+            return .uncertain
         } catch SyncDriveError.notFound {
             // The file went away (a takeover's Stop): rediscover next time.
             state.fileId = nil
@@ -489,6 +604,10 @@ public actor SyncPublisher {
 
     private func failed(_ error: Error) {
         guard state.phase == .active else { return }
+        // Nothing of this attempt can have landed unconfirmed: the failure
+        // came before the upload, the upload was refused, or it was
+        // confirmed and that is already in `state`.
+        state.uploadStartedAt = nil
         if case SyncAuthError.refresh(let failure) = error, failure.isTerminal {
             state.needsSignIn = true
             state.lastError = "Google stopped accepting FrugalBar's sign-in"
@@ -564,11 +683,22 @@ public actor SyncPublisher {
             notificationPrefs: source.notificationPrefs)
     }
 
+    /// Every write of the state file. Refused while the file on disk could
+    /// not be read, so an unreadable record is never replaced.
+    private func save(_ next: SyncPersistentState) throws {
+        guard !stateUnreadable else { throw SyncStateUnreadable() }
+        try stateStore.save(next)
+    }
+
+    /// A best-effort write, only for outcomes whose loss fails closed: what
+    /// stays on disk is the checkpoint written before the attempt (a relaunch
+    /// treats its upload as uncertain), a cleanup step that is retried, or a
+    /// stop condition that is found again.
     private func persist() {
         do {
-            try stateStore.save(state)
+            try save(state)
         } catch {
-            state.lastError = "Couldn't save sync state"
+            state.lastError = Self.stateNotSavedMessage
         }
     }
 
@@ -577,10 +707,23 @@ public actor SyncPublisher {
     /// "Stop syncing". Step 1 is one atomic write of `stopping` and the
     /// cleanup record, before any network call; from then on nothing
     /// publishes or repairs. The rest runs now and on later ticks.
+    ///
+    /// If step 1 can't be written, or the session's `publisherId` can't be
+    /// read for the record, nothing more is published and step 1 is retried.
+    /// The durable state is still `active`, so a relaunch shows Stop again.
     public func stop() async {
         switch state.phase {
         case .active:
-            let publisherId = (try? sessionPublisherId()) ?? ""
+            let publisherId: String
+            do {
+                publisherId = try sessionPublisherId()
+            } catch SyncAuthError.notSignedIn {
+                // The session never stored one: nothing remote carries it.
+                publisherId = ""
+            } catch {
+                stopNotSaved()
+                return
+            }
             let now = clock.now()
             var next = state
             next.phase = .stopping
@@ -598,11 +741,12 @@ public actor SyncPublisher {
                 authLost: false,
                 publishedThisSession: state.fileId != nil && state.lastSuccessfulPublishAt != nil)
             do {
-                try stateStore.save(next)
+                try save(next)
             } catch {
-                state.lastError = "Couldn't save sync state"
+                stopNotSaved()
                 return
             }
+            stopRequested = false
             state = next
             source = nil
             sourceMaterial = nil
@@ -615,6 +759,13 @@ public actor SyncPublisher {
             return
         }
         await runCleanup()
+    }
+
+    private func stopNotSaved() {
+        stopRequested = true
+        failures += 1
+        retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
+        state.lastError = Self.stateNotSavedMessage
     }
 
     /// "Finish without deleting": stop now, leave the data, and keep a notice
@@ -635,9 +786,9 @@ public actor SyncPublisher {
         do {
             try secrets.delete(record.refreshTokenAccount)
             try secrets.delete(SyncSecretAccount.publisherId)
-            try stateStore.save(next)
+            try save(next)
         } catch {
-            state.lastError = "Couldn't save sync state"
+            state.lastError = Self.stateNotSavedMessage
             return
         }
         state = next
@@ -684,7 +835,7 @@ public actor SyncPublisher {
                abandoned.account.permissionId == record.account?.permissionId {
                 next.abandoned = nil
             }
-            try stateStore.save(next)
+            try save(next)
             state = next
             publisherIdCache = nil
             failures = 0
@@ -721,7 +872,7 @@ public actor SyncPublisher {
     private func complete(_ step: SyncStopStep, gap: SyncStopGap) throws {
         var next = state
         next.cleanup?.completed.append(step)
-        try stateStore.save(next)
+        try save(next)
         state = next
         do {
             try stopCheckpoint?(gap)
@@ -736,6 +887,21 @@ struct SyncStopInterrupted: Error {}
 
 extension SyncPersistentState {
     var canStart: Bool { phase == .off || phase == .stopped }
+
+    /// The state as a launch finds it. An attempt whose outcome never reached
+    /// disk is treated as an uncertain upload: it may have landed, so the
+    /// next publish is forced and verified, and a foreign id found later is
+    /// a takeover.
+    static func recovered(_ loaded: SyncPersistentState, now: Date) -> SyncPersistentState {
+        var state = loaded
+        state.clampAttemptTimes(to: now)
+        if state.phase == .active, state.uploadStartedAt != nil {
+            state.uploadStartedAt = nil
+            state.repairPending = true
+            state.mayHavePublished = true
+        }
+        return state
+    }
 
     /// An attempt time the wall clock has since gone back past counts from
     /// now, so it cannot hold publishing back indefinitely.

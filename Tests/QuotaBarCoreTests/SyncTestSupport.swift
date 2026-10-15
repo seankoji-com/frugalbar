@@ -128,6 +128,8 @@ actor FakeGoogle: SyncTransport {
         /// Commits, then never answers until cancelled.
         case commitThenHang
         case status(Int)
+        /// Commits, then answers 200 with a body that has no file id.
+        case commitMalformed
     }
 
     let clock: FakeSyncClock
@@ -280,6 +282,7 @@ actor FakeGoogle: SyncTransport {
             id = seed(publisherId: publisherId, created: clock.now(), content: content)
         }
         if case .commitThenHang = mode { try await hold() }
+        if case .commitMalformed = mode { return respond(200, "<html></html>") }
         return respond(200, #"{"id":"\#(id)"}"#)
     }
 
@@ -357,24 +360,47 @@ actor FakeGoogle: SyncTransport {
     }
 }
 
-/// The sync state file, in memory, whose writes can be made to fail.
+/// The sync state file, in memory, whose writes and reads can be made to fail.
 final class FlakySyncStateStore: SyncStateStore {
     private struct Value {
         var saved = SyncPersistentState()
         var failing = false
+        /// Writes that still succeed before `failing` takes over.
+        var writesBeforeFailing = 0
+        var loadFails = false
+        var saves = 0
     }
     struct WriteFailed: Error {}
+    struct ReadFailed: Error {}
     private let value = Mutex(Value())
 
-    func load() throws -> SyncPersistentState { value.withLock { $0.saved } }
+    func load() throws -> SyncPersistentState {
+        try value.withLock { value in
+            if value.loadFails { throw ReadFailed() }
+            return value.saved
+        }
+    }
     func save(_ state: SyncPersistentState) throws {
         try value.withLock { value in
-            if value.failing { throw WriteFailed() }
+            if value.failing {
+                guard value.writesBeforeFailing > 0 else { throw WriteFailed() }
+                value.writesBeforeFailing -= 1
+            }
             value.saved = state
+            value.saves += 1
         }
     }
     /// Every later write throws, and the file keeps what it held.
-    func failWrites(_ failing: Bool = true) { value.withLock { $0.failing = failing } }
+    func failWrites(_ failing: Bool = true) { value.withLock { $0.failing = failing; $0.writesBeforeFailing = 0 } }
+    /// The next `count` writes succeed, then every one throws.
+    func failWrites(after count: Int) { value.withLock { $0.failing = true; $0.writesBeforeFailing = count } }
+    /// Reads throw while the record stays as it was, like a file that
+    /// exists but can't be read or decoded.
+    func failLoads(_ failing: Bool = true) { value.withLock { $0.loadFails = failing } }
+    /// Successful writes so far.
+    var saves: Int { value.withLock { $0.saves } }
+    /// What the file holds, read past any load failure.
+    var saved: SyncPersistentState { value.withLock { $0.saved } }
 }
 
 /// A fresh publisher, signed in and active, over `google`.

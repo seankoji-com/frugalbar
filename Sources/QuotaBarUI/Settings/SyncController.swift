@@ -142,8 +142,15 @@ public final class SyncController {
         let publisher = self.publisher
         let flow = self.flow
         let makeListener = self.makeListener
-        let current = status
         signInTask = Task { [weak self] in
+            // The publisher's own status, not the pane's last copy: a sign-in
+            // stores its refresh token before activation can refuse it.
+            let current = await publisher.status()
+            guard !current.stateUnreadable else {
+                self?.signIn = .failed(SyncSettingsText.signInFailed)
+                await self?.refresh()
+                return
+            }
             let expected: SyncAccount? = current.canStart ? nil : current.account
             do {
                 let listener = try makeListener()
@@ -171,6 +178,8 @@ public final class SyncController {
                 self?.signIn = .idle
             } catch SyncSignInError.wrongAccount {
                 self?.signIn = .failed(SyncSettingsText.wrongAccount)
+            } catch SyncActivationError.stateNotSaved {
+                self?.signIn = .failed(SyncSettingsText.stateNotSaved)
             } catch {
                 self?.signIn = .failed(SyncSettingsText.signInFailed)
             }
@@ -200,6 +209,15 @@ public final class SyncController {
         let publisher = self.publisher
         Task { [weak self] in
             await publisher.takeOver()
+            await self?.refresh()
+        }
+    }
+
+    /// "Try Again" after the saved sync state could not be read.
+    public func retryLoadingState() {
+        let publisher = self.publisher
+        Task { [weak self] in
+            await publisher.retryLoadingState()
             await self?.refresh()
         }
     }

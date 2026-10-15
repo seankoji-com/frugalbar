@@ -118,6 +118,20 @@ struct SyncSettingsPresentationTests {
         #expect(stopping.lastPublishedLine == nil)
     }
 
+    @Test("an unreadable saved state offers only Try Again: no sign-in, no disclosure, and it says why")
+    func unreadableStateOffersOnlyRetry() {
+        for phase in [SyncPhase.off, .stopped] {
+            let unreadable = presentation { $0.phase = phase; $0.stateUnreadable = true }
+            #expect(unreadable.statusLine == SyncSettingsText.stateUnreadable)
+            #expect(unreadable.detail == SyncSettingsText.stateUnreadableDetail)
+            #expect(unreadable.actions == [.retryStateRead])
+            #expect(!unreadable.showsDisclosure)
+        }
+        var status = SyncStatus()
+        status.stateUnreadable = true
+        #expect(!status.canStart)
+    }
+
     @Test("a terminal auth failure during cleanup offers Sign in to finish cleanup and Finish without deleting")
     func cleanupAuthLostOffersTwoChoices() {
         let paused = presentation {
