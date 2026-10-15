@@ -121,7 +121,10 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                 usedText: "\(money(creditsUsed))/\(plain(creditsLimit)) credits used",
                 resetText: renewal.map(Self.renewalText(for:)),
                 resetsAt: renewal,
-                windowLength: windowLength
+                windowLength: windowLength,
+                quantityUsed: creditsUsed,
+                quantityLimit: creditsLimit,
+                quantityUnit: "credits"
             ),
             row2: nil,
             badgeText: badgeText(remaining: key.devPlanCreditsRemaining.flatMap(\.decimalValue), fraction: planFraction),
@@ -155,7 +158,9 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                 row1: DualBarMetrics(
                     primaryFraction: nil,
                     label: "SP",
-                    usedText: "\(money(usage)) spent (no key limit set)"
+                    usedText: "\(money(usage)) spent (no key limit set)",
+                    quantityUsed: usage,
+                    quantityUnit: "USD"
                 ),
                 badgeText: money(usage),
                 planName: nil
@@ -177,7 +182,10 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
             row1: DualBarMetrics(
                 primaryFraction: spentFraction,
                 label: "SP",
-                usedText: "\(money(usage))/\(plain(limit)) key limit used"
+                usedText: "\(money(usage))/\(plain(limit)) key limit used",
+                quantityUsed: usage,
+                quantityLimit: limit,
+                quantityUnit: "USD"
             ),
             badgeText: money(limit - usage) + " left",
             planName: nil,

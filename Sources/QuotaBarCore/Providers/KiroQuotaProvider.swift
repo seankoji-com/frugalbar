@@ -147,7 +147,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 usedText: "\(format(planUsed))/\(format(planLimit)) credits used",
                 resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: resetsAt, relativeTo: now))",
                 resetsAt: resetsAt,
-                windowLength: windowLength
+                windowLength: windowLength,
+                quantityUsed: Decimal(planUsed),
+                quantityLimit: Decimal(planLimit),
+                quantityUnit: "credits"
             ),
             badgeText: fraction >= 1.0 ? "Exhausted" : "\(format(remaining)) left",
             planName: planName,
@@ -170,7 +173,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 resetText: expiry.map {
                     "Expires \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
                 },
-                resetsAt: expiry
+                resetsAt: expiry,
+                quantityUsed: Decimal(bonusUsed),
+                quantityLimit: Decimal(bonusLimit),
+                quantityUnit: "credits"
             )
         }
 
@@ -190,7 +196,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 usedText: "\(format(overageUsed))/\(format(cap)) overage credits\(rateText)",
                 resetText: credit.overageCharges.map {
                     "\(SubscriptionCycle.formatCost(Decimal($0), currencyCode: credit.currency ?? "USD")) charged"
-                }
+                },
+                quantityUsed: Decimal(overageUsed),
+                quantityLimit: Decimal(cap),
+                quantityUnit: "credits"
             )
         }
 
