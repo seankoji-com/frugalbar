@@ -84,6 +84,29 @@ jobs:
       - name: Run tests
         run: swift test -c debug --parallel
 
+      # Sync to phone & watch signs in as FrugalBar's Google Desktop OAuth
+      # client. Its values are never committed: they come from Actions secrets
+      # and are stamped into the source here, after the tests (which run on the
+      # unstamped tree) and before the build, as the version is. Without both
+      # secrets the release builds with no sync client, which hides the sync
+      # setting. perl reads the values from the environment, so they never
+      # appear in a command line or the log.
+      - name: Stamp sync client
+        env:
+          FRUGALBAR_GOOGLE_SYNC_CLIENT_ID: ${{ secrets.FRUGALBAR_GOOGLE_SYNC_CLIENT_ID }}
+          FRUGALBAR_GOOGLE_SYNC_CLIENT_SECRET: ${{ secrets.FRUGALBAR_GOOGLE_SYNC_CLIENT_SECRET }}
+        run: |
+          FILE=Sources/QuotaBarCore/Sync/SyncClientConfiguration.swift
+          if [ -z "${FRUGALBAR_GOOGLE_SYNC_CLIENT_ID}" ] || [ -z "${FRUGALBAR_GOOGLE_SYNC_CLIENT_SECRET}" ]; then
+            echo "::notice::sync client secrets are not set; this release has no sync setting"
+            exit 0
+          fi
+          perl -pi -e 's/"__FRUGALBAR_SYNC_CLIENT_ID__"/"$ENV{FRUGALBAR_GOOGLE_SYNC_CLIENT_ID}"/; s/"__FRUGALBAR_SYNC_CLIENT_SECRET__"/"$ENV{FRUGALBAR_GOOGLE_SYNC_CLIENT_SECRET}"/' "$FILE"
+          if grep -q '"__FRUGALBAR_SYNC_CLIENT_' "$FILE"; then
+            echo "::error::sync client stamp did not apply"
+            exit 1
+          fi
+
       - name: Build Release (ARM64)
         run: |
           # The release ships a bare executable, so Bundle.main carries no
