@@ -299,7 +299,9 @@ public enum SnapshotExporter {
             || !snapshot.apiCredits.isEmpty
         // A DevPass spend figure the vendor did not report: its currency
         // primary was built from that default, so it has no value either.
-        let usageUnreported = windows.contains(where: \.usageUnreported)
+        let usageUnreported = windows.contains {
+            $0.usageUnreported && SnapshotExportTable.primaryIsBuiltFrom(snapshot.vendorId, windowID: $0.id)
+        }
 
         let credits = snapshot.apiCredits.prefix(maxAPICreditsPerProvider)
         let instance = Identity(snapshot.id, identity: identity)

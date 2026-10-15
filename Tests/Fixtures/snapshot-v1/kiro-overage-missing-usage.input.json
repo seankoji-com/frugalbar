@@ -1,0 +1,75 @@
+{
+  "description": "Kiro with overage ENABLED and a cap, where the vendor sent no currentOveragesWithPrecision: the provider still draws 0 overage from its default, but row3 quantityUsed is nil, so the overage window exports unavailable {noReading} with no fraction or quantity and is not eligible. The plan row and the percentage primary are a reading of their own and export unchanged.",
+  "covers": [
+    "branch:kiro-overage-missing-usage"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "Kiro",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": "2026-10-31T00:00:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 0.3686,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-31T00:00:00.000Z",
+        "windowLength": 2592000,
+        "quantityUsed": "18.43",
+        "quantityLimit": "50",
+        "quantityUnit": "credits"
+      },
+      "row2": {
+        "label": "BN",
+        "primaryFraction": 0.59188,
+        "usedText": "USEDTEXT-MARKER BN",
+        "resetText": "RESETTEXT-MARKER BN",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-11-29T00:00:00.000Z",
+        "quantityUsed": "295.94",
+        "quantityLimit": "500",
+        "quantityUnit": "credits"
+      },
+      "row3": {
+        "label": "OV",
+        "primaryFraction": 0.0,
+        "usedText": "USEDTEXT-MARKER OV",
+        "resetText": "RESETTEXT-MARKER OV",
+        "expectedPaceFraction": 0.3,
+        "quantityLimit": "10000",
+        "quantityUnit": "credits"
+      },
+      "planName": "KIRO FREE"
+    }
+  ],
+  "events": []
+}

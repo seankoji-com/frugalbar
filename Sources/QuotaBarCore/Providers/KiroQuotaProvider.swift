@@ -197,7 +197,7 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 resetText: credit.overageCharges.map {
                     "\(SubscriptionCycle.formatCost(Decimal($0), currencyCode: credit.currency ?? "USD")) charged"
                 },
-                quantityUsed: Decimal(overageUsed),
+                quantityUsed: credit.currentOveragesWithPrecision.map { Decimal($0) },
                 quantityLimit: Decimal(cap),
                 quantityUnit: "credits"
             )

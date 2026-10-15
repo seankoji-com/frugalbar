@@ -68,6 +68,9 @@ struct ProviderQuantityFillTests {
         #expect(bonus.quantityUsed == 25 && bonus.quantityLimit == 100 && bonus.quantityUnit == "credits")
         #expect(overage.quantityUsed == 10.5 && overage.quantityLimit == 1000 && overage.quantityUnit == "credits")
         for row in [plan, bonus, overage] { #expect(row.quantityRemaining == nil) }
+        // An overage figure the vendor did not send stays nil in the quantity, beside the cap it did send.
+        let unreported = try #require(try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil).row3)
+        #expect(unreported.quantityUsed == nil && unreported.quantityLimit == 1000 && unreported.quantityUnit == "credits")
     }
 
     @Test("Grok fills the on-demand row's used and cap in USD, and nothing on the plan row")
@@ -142,7 +145,7 @@ enum ProviderBranchSnapshots {
     static let now = Date(timeIntervalSince1970: 1_792_022_400)
 
     static func all() throws -> [QuotaSnapshot] {
-        try kiro() + grok() + devPass() + commandCode()
+        try kiro() + [kiroEnabledOverage(reported: nil)] + grok() + devPass() + commandCode()
     }
 
     static func kiro(overage: Bool = true) throws -> [QuotaSnapshot] {
@@ -156,6 +159,22 @@ enum ProviderBranchSnapshots {
         """
         let response = try JSONDecoder().decode(KiroQuotaProvider.UsageLimitsResponse.self, from: Data(body.utf8))
         return [KiroQuotaProvider.snapshot(from: response, provider: KiroQuotaProvider(), now: now)]
+    }
+
+    /// Overage switched on with a cap, and `currentOveragesWithPrecision` as
+    /// given, or absent when nil: the live body sends `0.0` when there is no
+    /// overage, so absence is not a zero.
+    static func kiroEnabledOverage(reported currentOverages: String?) throws -> QuotaSnapshot {
+        let overages = currentOverages.map { #""currentOveragesWithPrecision":\#($0),"# } ?? ""
+        let body = """
+        {"nextDateReset":1793404800,"overageConfiguration":{"overageStatus":"ENABLED"},
+         "subscriptionInfo":{"subscriptionTitle":"KIRO PRO"},
+         "usageBreakdownList":[{"resourceType":"CREDIT","currentUsageWithPrecision":40,
+           "usageLimitWithPrecision":50,\(overages)"overageCapWithPrecision":1000,
+           "overageRate":0.04,"currency":"USD","nextDateReset":1793404800}]}
+        """
+        let response = try JSONDecoder().decode(KiroQuotaProvider.UsageLimitsResponse.self, from: Data(body.utf8))
+        return KiroQuotaProvider.snapshot(from: response, provider: KiroQuotaProvider(), now: now)
     }
 
     static func grok() throws -> [QuotaSnapshot] {

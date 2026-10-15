@@ -50,6 +50,7 @@ struct SnapshotExportFixtureTests {
             "branch:commandcode-total", "branch:commandcode-remaining-positive",
             "branch:commandcode-remaining-zero", "branch:missing-basis", "branch:unmapped-row",
             "branch:devpass-capped-missing-usage", "branch:devpass-uncapped-missing-usage",
+            "branch:kiro-overage-missing-usage",
             // Regressions: a failed first read that QuotaManager gave a billing cycle.
             "regression:never-measured-with-cycle",
         ]
@@ -172,7 +173,7 @@ struct SnapshotExportFixtureTests {
         #expect(try provider("gemini")["tightestWindowId"] as? String == "w2")
     }
 
-    @Test("missing DevPass usage and a cycle-only placeholder export no reading, not a zero or a plan")
+    @Test("missing DevPass usage, missing Kiro overage and a cycle-only placeholder export no reading, not a zero or a plan")
     func fixturesWithoutAReadingExportNoReading() throws {
         for name in ["devpass-capped-missing-usage", "devpass-uncapped-missing-usage"] {
             let spend = try window(name, "spend")
@@ -186,6 +187,16 @@ struct SnapshotExportFixtureTests {
         }
         // The key itself was read: the capped key is measured and keeps its time.
         #expect(try provider("devpass-capped-missing-usage")["measuredAt"] as? String == "2026-10-14T23:58:00.000Z")
+
+        // Missing Kiro overage: that window has no reading; the plan and its primary still do.
+        let overage = try window("kiro-overage-missing-usage", "overage")
+        #expect(overage["usedFraction"] is NSNull)
+        #expect(overage["quantity"] == nil)
+        #expect(overage["unavailable"] as? [String: String] == ["reason": "noReading"])
+        #expect(overage["eligibleForTightest"] as? Bool == false)
+        #expect(quantity(try window("kiro-overage-missing-usage", "monthly")) == ["used": "18.43", "limit": "50", "unit": "credits"])
+        #expect((try provider("kiro-overage-missing-usage")["primary"] as? [String: Any])?["type"] as? String == "percentage")
+        #expect(quantity(try window("kiro", "overage")) == ["used": "0", "limit": "10000", "unit": "credits"])
 
         let cycleOnly = try provider("never-measured-with-cycle")
         #expect(cycleOnly["measuredAt"] is NSNull)

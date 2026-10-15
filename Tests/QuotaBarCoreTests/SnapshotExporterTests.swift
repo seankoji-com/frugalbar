@@ -356,6 +356,41 @@ struct SnapshotExporterTests {
         }
     }
 
+    @Test("Kiro overage the vendor did not send exports as no reading, not 0 used; the plan and the Mac's own output are unchanged")
+    func kiroMissingOverageExportsNoReading() throws {
+        let missing = try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil)
+        let zero = try ProviderBranchSnapshots.kiroEnabledOverage(reported: "0.0")
+        // The Mac draws exactly what it drew before; only the passive quantity keeps the absence.
+        #expect(missing.row3?.quantityUsed == nil)
+        #expect(zero.row3?.quantityUsed == 0)
+        #expect(missing.row3?.usedText == "0/1000 overage credits @ $0.04/credit")
+        var unchanged = missing
+        unchanged.row3?.quantityUsed = 0
+        #expect(unchanged == zero)
+
+        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
+            try #require(try windows(provider).first { $0["windowId"] as? String == id })
+        }
+        let absent = try providers(try exported([missing]))[0]
+        let overage = try window(absent, "overage")
+        #expect(overage["usedFraction"] is NSNull)
+        #expect(overage["quantity"] == nil)
+        #expect(overage["unavailable"] as? [String: String] == ["reason": "noReading"])
+        #expect(overage["eligibleForTightest"] as? Bool == false)
+        // The plan is a reading of its own: its window and the percentage primary stay.
+        let monthly = try window(absent, "monthly")
+        #expect(monthly["quantity"] as? [String: String] == ["used": "40", "limit": "50", "unit": "credits"])
+        #expect(monthly["unavailable"] == nil)
+        #expect((absent["primary"] as? [String: Any])?["type"] as? String == "percentage")
+        #expect(absent["tightestWindowId"] as? String == "monthly")
+
+        // A zero the vendor did send is a reading, and exports as one.
+        let reported = try window(try providers(try exported([zero]))[0], "overage")
+        #expect(reported["quantity"] as? [String: String] == ["used": "0", "limit": "1000", "unit": "credits"])
+        #expect(reported["unavailable"] == nil)
+        #expect(reported["eligibleForTightest"] as? Bool == true)
+    }
+
     @Test("measuredAt is null for unavailableSnapshot placeholders, and set for a real or retained read")
     func measuredAtIsNullForUnavailablePlaceholders() throws {
         let placeholder = GrokQuotaProvider(accessToken: nil).unavailable(.notConfigured)

@@ -19,7 +19,7 @@ nothing on the Mac reads them:
 | GitHub REST (consolidated) | REST, GraphQL | remaining and limit, `req/hr` and `pts/hr` |
 | GitHub GraphQL (standalone) | the one row | remaining and limit, `pts/hr` |
 | Grok | on-demand | used and cap, `USD` |
-| Kiro | monthly, bonus, overage | used and limit, `credits` |
+| Kiro | monthly, bonus, overage | used and limit, `credits`. Overage `used` is the vendor's own `currentOveragesWithPrecision`, nil when it sent none; the Mac's text still prints its default `0` |
 | DevPass | plan / spend | used and limit in `credits`; used (and limit when capped) in `USD`. `used` is the vendor's own `usage`, nil when it sent none; the Mac's text still prints its default `$0.00` |
 | Command Code | 5h, weekly, credits | used and limit in `credits`; remaining only on the remaining-only credits row |
 
@@ -46,6 +46,12 @@ the export.
   `usedFraction: null`, no `quantity`, `unavailable: {reason: noReading}`, and is not eligible;
   the `currency` primary, built from that default, exports `unavailable {reason: noReading}`. A
   `usage` of `"0"` the vendor did send exports as `used: "0"`.
+- **Missing Kiro overage.** The same rule holds for Kiro's `overage` window when overage is
+  enabled and the response carries no `currentOveragesWithPrecision`: the window exports
+  `unavailable: {reason: noReading}` with no fraction or quantity and is not eligible. The live
+  body sends `0.0` when there is no overage, so an absent figure is not read as zero. The plan
+  is a reading of its own, so `monthly` and the `percentage` primary are unchanged
+  (`kiro-overage-missing-usage`).
 - **Out of range.** A `primary` or API-credit value outside its domain becomes
   `unavailable {reason: outOfRange}`. A window whose fraction or quantity is outside its domain
   exports `usedFraction: null`, no `quantity`, and `unavailable: {reason: outOfRange}`; it stays
@@ -86,8 +92,8 @@ Measured on 2026-10-15 at the stage head, with
 
 | Figure | Encoded provider size |
 |---|---|
-| Typical: median across the fixtures, leaving out the synthetic max-size sets | 611 bytes (57 providers) |
-| Median across every fixture provider, max-size copies included | 5,738 bytes (133 providers) |
+| Typical: median across the fixtures, leaving out the synthetic max-size sets | 615.5 bytes (58 providers) |
+| Median across every fixture provider, max-size copies included | 5,738 bytes (134 providers) |
 | Worst case: every field at its limit, 3 windows and 8 API credits (`events-overflow`, `providers-overflow`) | 5,738 bytes |
 
 At the worst case, 45 providers fit in the 256 KB budget with no events (`providers-overflow`
