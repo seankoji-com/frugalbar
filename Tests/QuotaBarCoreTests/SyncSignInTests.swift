@@ -428,6 +428,55 @@ struct SyncRefreshFailureTests {
         #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == nil)
     }
 
+    /// A recent foreign file whose label read answers `readStatus`; a refresh
+    /// after a 401 gets `tokenAnswer`, if any.
+    private static func foreignLabelHarness(readStatus: Int, tokenAnswer: SyncHTTPResponse?) async throws -> SyncHarness {
+        let harness = try await SyncHarness.active()
+        await harness.publisher.primeAccessToken("fake-access-token", expiresIn: 3600)
+        await harness.google.seed(
+            publisherId: "other-macs-publisher-id", created: SyncFakes.start.addingTimeInterval(-86_400),
+            modified: SyncFakes.start.addingTimeInterval(-30 * 60),
+            content: Data(#"{"publisherLabel":"Office Mac","providers":[]}"#.utf8))
+        await harness.google.configure {
+            $0.readStatuses = [readStatus]
+            $0.tokenResponses = tokenAnswer.map { [$0] } ?? []
+        }
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+        return harness
+    }
+
+    @Test("a terminal refresh answer during the optional foreign-label read says Sign in again, not Take over")
+    func terminalRefreshDuringForeignLabelSaysSignInAgain() async throws {
+        let harness = try await Self.foreignLabelHarness(
+            readStatus: 401, tokenAnswer: SyncHTTPResponse(status: 400, body: Self.body("invalid_grant")))
+
+        let status = await harness.publisher.status()
+        #expect(status.needsSignIn)
+        #expect(status.ownership == nil)
+        #expect(status.lastError == "Google stopped accepting FrugalBar's sign-in")
+        #expect(harness.store.saved.needsSignIn)
+        #expect(harness.store.saved.ownership == nil)
+        #expect(await harness.publisher.nextWakeup() == nil)
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == nil)
+        #expect(await harness.google.tokenRequests == 1)
+        #expect(await harness.google.uploads.isEmpty)
+    }
+
+    @Test("a foreign label that cannot be read for any other reason is just missing", arguments: [
+        (500, nil), (404, nil), (401, 503),
+    ] as [(Int, Int?)])
+    func unreadableForeignLabelStillOffersTakeOver(readStatus: Int, tokenStatus: Int?) async throws {
+        let harness = try await Self.foreignLabelHarness(
+            readStatus: readStatus, tokenAnswer: tokenStatus.map { SyncHTTPResponse(status: $0, body: Data("{}".utf8)) })
+
+        let status = await harness.publisher.status()
+        #expect(status.ownership == .otherMacSyncing(label: nil))
+        #expect(!status.needsSignIn)
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) != nil)
+        #expect(await harness.google.uploads.isEmpty)
+    }
+
     @Test("signing in again as the same account resumes publishing with the same session")
     func signInAgainResumes() async throws {
         let harness = try await SyncHarness.active()

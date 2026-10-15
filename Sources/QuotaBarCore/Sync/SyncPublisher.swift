@@ -549,7 +549,7 @@ public actor SyncPublisher {
                     // missing the age is unknown, and the file is not taken.
                     let age = metadata.serverDate.flatMap { now in metadata.modifiedTime.map { now.timeIntervalSince($0) } }
                     if state.publishedThisSession || age.map({ $0 < Self.foreignWindow }) ?? true {
-                        let label = await foreignLabel(fileId)
+                        let label = try await foreignLabel(fileId)
                         guard state.phase == .active else { return }
                         state.ownership = state.publishedThisSession
                             ? .tookOver(label: label) : .otherMacSyncing(label: label)
@@ -668,13 +668,9 @@ public actor SyncPublisher {
         // came before the upload, the upload was refused or withheld, or it
         // was confirmed and that is already in `state`.
         closeUnsentAttempt(heartbeatBefore: heartbeatBefore)
-        if case SyncAuthError.refresh(let failure) = error, failure.isTerminal {
-            // The token is already deleted (`SyncAccessTokens`), so a lost
-            // write of this cannot lead to it being sent again.
-            state.needsSignIn = true
-            state.lastError = "Google stopped accepting FrugalBar's sign-in"
-            retryAt = nil
-        } else if case SyncAuthError.notSignedIn = error {
+        if let auth = error as? SyncAuthError, auth.endsSession {
+            // A terminal answer already deleted the token (`SyncAccessTokens`),
+            // so a lost write of this cannot lead to it being sent again.
             state.needsSignIn = true
             state.lastError = "Google stopped accepting FrugalBar's sign-in"
             retryAt = nil
@@ -717,10 +713,18 @@ public actor SyncPublisher {
     }
 
     /// The other publisher's label, read from its document; nil when it
-    /// cannot be read.
-    private func foreignLabel(_ fileId: String) async -> String? {
-        guard let data = try? await drive.download(fileId: fileId),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+    /// cannot be read. A lost sign-in is not a missing label: it throws, so
+    /// `failed()` shows Sign in again instead of an ownership prompt.
+    private func foreignLabel(_ fileId: String) async throws -> String? {
+        let data: Data
+        do {
+            data = try await drive.download(fileId: fileId)
+        } catch let error as SyncAuthError where error.endsSession {
+            throw error
+        } catch {
+            return nil
+        }
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let label = root["publisherLabel"] as? String, !label.isEmpty
         else { return nil }
         return label

@@ -151,6 +151,8 @@ actor FakeGoogle: SyncTransport {
     var tokenRequests = 0
     /// The next N verification reads find older bytes: a late write landed.
     var staleReads = 0
+    /// Answers for the next `alt=media` reads, before any normal one.
+    var readStatuses: [Int] = []
     /// The next N `files.get` metadata reads are held until `releaseAll`.
     var metadataHolds = 0
     var aboutAccount = SyncFakes.account
@@ -223,6 +225,7 @@ actor FakeGoogle: SyncTransport {
             let id = String(path.dropFirst("/drive/v3/files/".count))
             guard var file = files[id] else { return respond(404, "{}") }
             if query["alt"] == "media" {
+                if !readStatuses.isEmpty { return respond(readStatuses.removeFirst(), "{}") }
                 if staleReads > 0 {
                     staleReads -= 1
                     file.content = Data(#"{"stale":true}"#.utf8)

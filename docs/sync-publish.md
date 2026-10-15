@@ -47,7 +47,7 @@ once; `SyncController.start` runs the ticks in their own task.
 | Heartbeat, full document | when the last successful publish is 15 min old |
 | Request timeout | 20 s, every Google request |
 | Uncertain upload (timeout, cancel, lost connection, 5xx, a 2xx answer without a file id) | forced publish at the next slot, then a SHA-256 verification read; at most 3 forced per run, then only the heartbeat, even with a material change pending. A heartbeat that is itself uncertain moves the next one 15 min on |
-| Foreign `publisherId` modified < 1 h ago by Drive's clock (its `modifiedTime` against the same response's `Date` header), or of unknown age | stop, "Another Mac (label) is syncing — Take over?" |
+| Foreign `publisherId` modified < 1 h ago by Drive's clock (its `modifiedTime` against the same response's `Date` header), or of unknown age | stop, "Another Mac (label) is syncing — Take over?". The label is read from that file and is optional: a failed read leaves it out, but a terminal sign-in answer during the read shows "Sign in again" instead |
 | Foreign id after this session published | stop, "Another Mac took over syncing" |
 
 The last attempt time, the repair run and whether this session has published are persisted, so a
@@ -95,9 +95,14 @@ safe:
 
 What remains is the window every design has: the process dies after Google answered and before
 anything was recorded, or the Keychain delete and the state write both fail. Then the relaunch acts as
-if the answer never came. That can mean one more refresh with a token Google already rejected; it
-fails the same way and stops. Separately, a request the gate passed an instant before Stop was pressed
-counts as already sent, and Stop's settle step handles it.
+if the answer never came, and sends one more refresh with the token Google rejected. The running
+process sends no second one. A crash is a single extra refresh. If both stores keep failing, though,
+the bound is one refresh per relaunch whose pre-attempt checkpoint saves, not one in total. Nothing is
+uploaded meanwhile. The resend usually fails the same way, but not always: `invalid_client` and
+similar answers describe the OAuth client, and can stop applying once its configuration is fixed.
+Overwriting the token instead of deleting it would not close this, because the Keychain store's
+`write` deletes first and fails with it. Separately, a request the gate passed an instant before Stop
+was pressed counts as already sent, and Stop's settle step handles it.
 `clockDidChange` clamps attempt times in memory only; `recovered` applies the same clamp at launch.
 
 A missing state file means sync was never turned on. A file that exists but can't be read or

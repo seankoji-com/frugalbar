@@ -220,6 +220,14 @@ struct SyncTokenEndpoint: Sendable {
 public enum SyncAuthError: Error, Equatable, Sendable {
     case notSignedIn
     case refresh(SyncRefreshFailure)
+
+    /// No token is left to send: only a new sign-in can continue.
+    var endsSession: Bool {
+        switch self {
+        case .notSignedIn: return true
+        case .refresh(let failure): return failure.isTerminal
+        }
+    }
 }
 
 /// Turns the Keychain's refresh token into short-lived access tokens. The
