@@ -11,7 +11,11 @@ but itself) is what both sides check.
 | `<name>.expected-error.json` | A local exporter failure instead: no document is published. Exporter-only. |
 
 `covers` in each input names the D§2.2.E fixture or the export-adapter table line and branch it
-exercises; `fixturesCoverEveryTableLineAndBranch` checks that the set is complete.
+exercises, or a `regression:` it pins; `fixturesCoverEveryTableLineAndBranch` checks that the set
+is complete.
+
+`macClockOffsetMs` is an integer in the input and a decimal string (or null) in the expected
+documents: it is signed, and the schema's integers are 0…2^53 − 1.
 
 ## Input format
 

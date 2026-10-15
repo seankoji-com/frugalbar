@@ -60,6 +60,14 @@ public enum SnapshotExportTable {
         vendor == .gemini && windowID == "w3"
     }
 
+    /// Windows whose figure is the vendor's reported usage. DevPass's spend
+    /// row draws its fraction from `usage`, defaulting it to 0 when the
+    /// vendor sent none, and leaves `quantityUsed` nil in that case; such a
+    /// window exports `unavailable {noReading}` rather than 0 used.
+    public static func figureIsReportedUsage(_ vendor: VendorIdentifier, windowID: String) -> Bool {
+        vendor == .devpass && windowID == "spend"
+    }
+
     /// Every branch the table distinguishes, for the uniqueness and coverage
     /// tests: each vendor once, DevPass once per metric branch.
     public static var branches: [(vendor: VendorIdentifier, metric: MetricType)] {

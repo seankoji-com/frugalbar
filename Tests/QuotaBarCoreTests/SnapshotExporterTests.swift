@@ -58,6 +58,14 @@ private func event(
             url: url.flatMap(URL.init(string:)))
 }
 
+/// A Grok provider whose every read fails offline, for the store path.
+private struct OfflineGrokProvider: QuotaProvider {
+    let vendorId: VendorIdentifier = .grok
+    let displayName = "Grok"
+    let category: MetricCategory = .aiSubscriptions
+    func fetchSnapshot() async throws -> QuotaSnapshot { throw ProviderError(.offline) }
+}
+
 private let sourceDirectory = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .appendingPathComponent("Sources/QuotaBarCore")
@@ -248,6 +256,106 @@ struct SnapshotExporterTests {
         #expect(state.settingsMessage == "Sync export error: identity collision")
     }
 
+    @Test("an event's instance reference is checked against every identity, and may repeat")
+    func eventReferencesTakePartInCollisionChecks() throws {
+        let kiro = snapshot(.kiro, rows: [bar(0.2, label: "MO")])
+        func reference(_ id: String, to instance: String) -> AIEvent {
+            AIEvent(id: id, kind: .usageRestored, vendorId: .kiro, instanceId: instance, title: "t", detail: nil,
+                    occurredAt: now, observedAt: now, source: .quotaPoll)
+        }
+        let digest = SnapshotExportIdentity.digest
+        // A different source forced onto the provider's digest is refused,
+        // though the provider and event ids themselves stay distinct.
+        let ontoProvider: (String) -> String = { $0 == "different-source" ? digest("kiro") : digest($0) }
+        #expect(SnapshotExporter.export(input([kiro], events: [reference("e1", to: "different-source")]),
+                                        identity: ontoProvider) == .failure(.identityCollision))
+        // Two different references to absent providers, forced onto one digest.
+        let shared: (String) -> String = { $0.hasPrefix("absent-") ? "0123456789abcdef0123456789abcdef" : digest($0) }
+        #expect(SnapshotExporter.export(input([], events: [reference("e1", to: "absent-a"), reference("e2", to: "absent-b")]),
+                                        identity: shared) == .failure(.identityCollision))
+        // A reference forced onto another event's id.
+        let ontoEvent: (String) -> String = { $0 == "absent-a" ? digest("e2") : digest($0) }
+        #expect(SnapshotExporter.export(input([], events: [reference("e1", to: "absent-a"), reference("e2", to: "kiro")]),
+                                        identity: ontoEvent) == .failure(.identityCollision))
+
+        // Repeated references to one source publish, the provider's own and an absent one alike.
+        let repeated = [reference("e1", to: "kiro"), reference("e2", to: "kiro"),
+                        reference("e3", to: "absent-a"), reference("e4", to: "absent-a")]
+        for identity in [ontoProvider, shared, digest] {
+            let document = try #require(try JSONSerialization.jsonObject(
+                with: try SnapshotExporter.export(input([kiro], events: repeated), identity: identity).get().data) as? [String: Any])
+            let references = try #require(document["events"] as? [[String: Any]]).compactMap { $0["instanceId"] as? String }
+            #expect(references.count == 4)
+            #expect(Set(references).count == 2)
+            #expect(references.contains(try providers(document)[0]["instanceId"] as? String ?? ""))
+        }
+    }
+
+    @Test("a failed first read that QuotaManager gave a billing cycle exports no measurement and no plan")
+    func failedFirstReadWithACycleExportsNoReading() async throws {
+        let cycle = SubscriptionCycle(anchorDate: Date().addingTimeInterval(-40 * 86400), cadence: .monthly)
+        let manager = QuotaManager(providerFactory: { [OfflineGrokProvider()] }, cycleLookup: { _ in cycle })
+        let stored = try #require(await manager.refresh()["grok"])
+        // The store really attached the user's cycle to its placeholder.
+        #expect(stored.status == .unavailable(.offline))
+        #expect(stored.row1?.measuresElapsedTimeOnly == true)
+        #expect(stored.row2 == nil && stored.row3 == nil && stored.apiCredits.isEmpty && stored.staleReading == nil)
+
+        let provider = try providers(try exported([stored]))[0]
+        #expect(provider["measuredAt"] is NSNull)
+        #expect(provider["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
+        #expect((provider["status"] as? [String: String])?["reason"] == "offline")
+        #expect(try windows(provider).map { $0["kind"] as? String } == ["billingCycle"])
+        #expect(provider["tightestWindowId"] is NSNull)
+
+        // never-measured-with-cycle is this same snapshot, so its fixture pins the bytes.
+        let fixture = try SnapshotFixtures.input("never-measured-with-cycle").snapshots[0]
+        #expect(fixture.vendorId == stored.vendorId && fixture.id == stored.id)
+        #expect(fixture.metric == stored.metric)
+        #expect(fixture.status == stored.status)
+        #expect(fixture.row1?.label == stored.row1?.label && fixture.row1?.measuresElapsedTimeOnly == true)
+        #expect(fixture.row2 == nil && fixture.row3 == nil && fixture.apiCredits.isEmpty && fixture.staleReading == nil)
+
+        // A vendor row beside the same cycle is a reading again.
+        var measured = stored
+        measured.row2 = bar(0.4, label: "OD")
+        let read = try providers(try exported([measured]))[0]
+        #expect(read["measuredAt"] as? String == ExportText.timestamp(stored.lastUpdated))
+    }
+
+    @Test("DevPass usage the vendor did not send exports as no reading, not 0 used; the Mac's own output is unchanged")
+    func devPassMissingUsageExportsNoReading() throws {
+        func build(_ body: String) throws -> QuotaSnapshot {
+            let key = try JSONDecoder().decode(DevPassQuotaProvider.KeyData.self, from: Data(body.utf8))
+            return DevPassQuotaProvider.snapshot(from: key, provider: DevPassQuotaProvider(), now: now)
+        }
+        for limit in ["null", "\"25\""] {
+            let missing = try build(#"{"label":"key","limit":\#(limit),"devPlan":"none"}"#)
+            let zero = try build(#"{"label":"key","usage":"0","limit":\#(limit),"devPlan":"none"}"#)
+            // The Mac draws exactly what it drew before; only the passive quantity keeps the absence.
+            #expect(missing.row1?.quantityUsed == nil)
+            #expect(zero.row1?.quantityUsed == 0)
+            var unchanged = missing
+            unchanged.row1?.quantityUsed = 0
+            #expect(unchanged == zero)
+
+            let absent = try providers(try exported([missing]))[0]
+            let spend = try windows(absent)[0]
+            #expect(spend["windowId"] as? String == "spend")
+            #expect(spend["usedFraction"] is NSNull)
+            #expect(spend["quantity"] == nil)
+            #expect(spend["unavailable"] as? [String: String] == ["reason": "noReading"])
+            #expect(spend["eligibleForTightest"] as? Bool == false)
+            #expect(absent["tightestWindowId"] is NSNull)
+            #expect(absent["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
+
+            // A zero the vendor did send is a reading, and exports as one.
+            let reported = try providers(try exported([zero]))[0]
+            #expect((try windows(reported)[0]["quantity"] as? [String: String])?["used"] == "0")
+            #expect((reported["primary"] as? [String: Any])?["type"] as? String == "currency")
+        }
+    }
+
     @Test("measuredAt is null for unavailableSnapshot placeholders, and set for a real or retained read")
     func measuredAtIsNullForUnavailablePlaceholders() throws {
         let placeholder = GrokQuotaProvider(accessToken: nil).unavailable(.notConfigured)
@@ -332,6 +440,28 @@ struct SnapshotExporterTests {
         let urls = (few["events"] as? [[String: Any]])?.map { $0["url"] as? String }
         #expect(urls == ["https://example.com/a", nil])
         #expect(try exported([])["notificationPrefs"] != nil)
+    }
+
+    @Test("events: occurredAt from publishedAt − 7 days to publishedAt, both ends included, nothing after")
+    func eventWindowIsBoundedAtBothEnds() throws {
+        let horizon = SnapshotExporter.eventHorizon
+        func at(_ id: String, _ offset: TimeInterval) -> AIEvent {
+            AIEvent(id: id, kind: .vendorReset, vendorId: .openai, title: "OpenAI usage reset", detail: nil,
+                    occurredAt: now.addingTimeInterval(offset), observedAt: now, source: .resetTracker(name: "codex-reset"))
+        }
+        let events = [
+            at("oldest-kept", -horizon), at("just-too-old", -horizon - 0.001), at("published", 0),
+            at("just-after", 0.001), at("tomorrow", 86400), at("next-year", 365 * 86400), at("recent", -3600),
+        ]
+        let kept = try #require(try exported([snapshot(.openai, rows: [bar(0.1)])], events: events.shuffled())["events"]
+            as? [[String: Any]])
+        #expect(kept.map { $0["id"] as? String } == ["published", "recent", "oldest-kept"].map(SnapshotExportIdentity.digest))
+
+        // Future events cannot fill the cap and push out a real one.
+        let flood = (0..<150).map { at("future\($0)", Double($0 + 1) * 60) } + [at("real", -60)]
+        let document = try exported([snapshot(.openai, rows: [bar(0.1)])], events: flood)
+        #expect((document["events"] as? [[String: Any]])?.map { $0["id"] as? String } == [SnapshotExportIdentity.digest("real")])
+        #expect(document["eventsTruncated"] as? Bool == false)
     }
 
     // MARK: - [REQ-MAC-BOUNDS](b), (c), (d)

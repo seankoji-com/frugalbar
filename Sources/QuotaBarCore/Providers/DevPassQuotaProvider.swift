@@ -159,7 +159,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                     primaryFraction: nil,
                     label: "SP",
                     usedText: "\(money(usage)) spent (no key limit set)",
-                    quantityUsed: usage,
+                    quantityUsed: key.usage.flatMap(\.decimalValue),
                     quantityUnit: "USD"
                 ),
                 badgeText: money(usage),
@@ -183,7 +183,7 @@ public final class DevPassQuotaProvider: QuotaProvider, Sendable {
                 primaryFraction: spentFraction,
                 label: "SP",
                 usedText: "\(money(usage))/\(plain(limit)) key limit used",
-                quantityUsed: usage,
+                quantityUsed: key.usage.flatMap(\.decimalValue),
                 quantityLimit: limit,
                 quantityUnit: "USD"
             ),

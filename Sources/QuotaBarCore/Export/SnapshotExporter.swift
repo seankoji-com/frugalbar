@@ -64,7 +64,8 @@ public struct SnapshotExportInput: Sendable {
 public enum SnapshotExportError: Error, Equatable, Sendable {
     /// A non-nil row the table has no entry for.
     case unmappedRow(vendorId: VendorIdentifier, position: SnapshotExportTable.Position)
-    /// Two exported identities in one document share a digest.
+    /// Two different source identities in one document share a digest, or
+    /// one provider, credit or event appears twice.
     case identityCollision
 
     /// The line Mac Settings shows.
@@ -174,8 +175,7 @@ public enum SnapshotExporter {
         }
 
         let kept = Array(providers.prefix(providerCount)) + Array(events.prefix(eventCount))
-        let ids = kept.flatMap(\.identities)
-        guard Set(ids).count == ids.count else { return .failure(.identityCollision) }
+        guard identitiesAreConsistent(kept.flatMap(\.identities)) else { return .failure(.identityCollision) }
 
         let document = skeleton(
             input,
@@ -196,13 +196,42 @@ public enum SnapshotExporter {
     struct Fragment {
         let json: ExportJSON
         let bytes: Data
-        let identities: [String]
+        let identities: [Identity]
 
-        init(_ json: ExportJSON, identities: [String]) {
+        init(_ json: ExportJSON, identities: [Identity]) {
             self.json = json
             self.bytes = json.encoded()
             self.identities = identities
         }
+    }
+
+    /// An exported digest and the full source identity it was made from. A
+    /// reference (an event's `instanceId`) points at an identity and may
+    /// repeat; anything else names a provider, credit or event of its own.
+    struct Identity {
+        let source: String
+        let digest: String
+        let isReference: Bool
+
+        init(_ source: String, identity: (String) -> String, isReference: Bool = false) {
+            self.source = source
+            self.digest = identity(source)
+            self.isReference = isReference
+        }
+    }
+
+    /// Every digest in a document stands for exactly one source identity,
+    /// references included, and nothing but a reference appears twice.
+    static func identitiesAreConsistent(_ identities: [Identity]) -> Bool {
+        var sources: [String: String] = [:]
+        var named: Set<String> = []
+        for identity in identities {
+            if let known = sources.updateValue(identity.source, forKey: identity.digest), known != identity.source {
+                return false
+            }
+            if !identity.isReference, !named.insert(identity.digest).inserted { return false }
+        }
+        return true
     }
 
     static func skeleton(
@@ -231,10 +260,11 @@ public enum SnapshotExporter {
         ])
     }
 
-    /// The Mac's clock offset is the one signed integer: it says which way the
-    /// clock was off. Its magnitude keeps the same 2^53 − 1 bound.
+    /// The Mac's clock offset is signed (the sign says which way the clock
+    /// was off), and integers are 0…2^53 − 1, so it is exported as a decimal
+    /// string. Its magnitude keeps the 2^53 − 1 bound; past it, null.
     static func clockOffset(_ value: Int) -> ExportJSON? {
-        Int64(value).magnitude <= UInt64(ExportText.maxInteger) ? .int(Int64(value)) : nil
+        Int64(value).magnitude <= UInt64(ExportText.maxInteger) ? .string(String(value)) : nil
     }
 
     // MARK: Providers
@@ -259,13 +289,22 @@ public enum SnapshotExporter {
         }
         windows = Array(windows.prefix(maxWindowsPerProvider))
 
-        // A placeholder from a failed first read carries no figures at all:
-        // no measurement time, and no primary value to show.
+        // A reading is a measured status, or rows or credit entries a provider
+        // built from a response. A placeholder from a failed first read has
+        // none of those: no measurement time and no primary value. A billing
+        // cycle is not evidence of a reading either: it is the user's own
+        // date, which `QuotaManager` attaches to a failed read too.
         let hasReading = snapshot.status.confidence == .measured
-            || !windows.isEmpty || !snapshot.apiCredits.isEmpty
+            || rows.contains { $0.1.map { !$0.measuresElapsedTimeOnly } ?? false }
+            || !snapshot.apiCredits.isEmpty
+        // A DevPass spend figure the vendor did not report: its currency
+        // primary was built from that default, so it has no value either.
+        let usageUnreported = windows.contains(where: \.usageUnreported)
 
         let credits = snapshot.apiCredits.prefix(maxAPICreditsPerProvider)
-        let instanceID = identity(snapshot.id)
+        let instance = Identity(snapshot.id, identity: identity)
+        let creditIdentities = credits.map { Identity($0.id, identity: identity) }
+        let instanceID = instance.digest
         var fields: [(String, ExportJSON)] = [
             ("instanceId", .string(instanceID)),
             ("vendorId", .string(snapshot.vendorId.rawValue)),
@@ -287,14 +326,14 @@ public enum SnapshotExporter {
             ])))
         }
         fields += [
-            ("primary", hasReading
+            ("primary", hasReading && !usageUnreported
                 ? metric(snapshot.metric, basis: primaryBasis(snapshot))
                 : unavailableMetric("noReading")),
             ("windows", .array(windows.map(\.json))),
             ("tightestWindowId", tightest(windows).map { .string($0) } ?? .null),
-            ("apiCredits", .array(credits.map { entry in
+            ("apiCredits", .array(zip(credits, creditIdentities).map { entry, id in
                 var credit: [(String, ExportJSON)] = [
-                    ("id", .string(identity(entry.id))),
+                    ("id", .string(id.digest)),
                     ("label", .string(ExportText.truncate(entry.label, limit: .name))),
                     ("metric", metric(entry.metric, basis: entry.currencyBasis)),
                     ("basis", entry.currencyBasis.map { .string($0.rawValue) } ?? .null),
@@ -305,7 +344,7 @@ public enum SnapshotExporter {
                 return .object(credit)
             })),
         ]
-        return Fragment(.object(fields), identities: [instanceID] + credits.map { identity($0.id) })
+        return Fragment(.object(fields), identities: [instance] + creditIdentities)
     }
 
     /// The exported `currency.basis`: the snapshot's own; DevPass's uncapped
@@ -416,6 +455,7 @@ public enum SnapshotExporter {
         let blocked: Bool
         let resetsAt: Date?
         let eligible: Bool
+        let usageUnreported: Bool
         let json: ExportJSON
     }
 
@@ -450,7 +490,7 @@ public enum SnapshotExporter {
             }
             fields.append(("eligibleForTightest", .bool(false)))
             return Window(id: id, position: index, usedFraction: nil, blocked: false,
-                          resetsAt: nil, eligible: false, json: .object(fields))
+                          resetsAt: nil, eligible: false, usageUnreported: false, json: .object(fields))
         }
 
         var outOfRange = false
@@ -471,7 +511,12 @@ public enum SnapshotExporter {
                 quantity.append(("unit", .string(ExportText.truncate(unit, limit: .unit))))
             }
         }
-        if outOfRange {
+        // A window whose figure is the vendor's usage, with no usage reported:
+        // the provider drew it from a default, and a default is not a reading.
+        let usageUnreported = SnapshotExportTable.figureIsReportedUsage(snapshot.vendorId, windowID: id)
+            && row.quantityUsed == nil
+        let unavailable = usageUnreported ? "noReading" : outOfRange ? "outOfRange" : nil
+        if unavailable != nil {
             usedFraction = nil
             quantity = []
         }
@@ -501,7 +546,7 @@ public enum SnapshotExporter {
             ("usedFraction", usedFraction.map { .fraction($0) } ?? .null),
         ]
         if !quantity.isEmpty { fields.append(("quantity", .object(quantity))) }
-        if outOfRange { fields.append(("unavailable", .object([("reason", .string("outOfRange"))]))) }
+        if let unavailable { fields.append(("unavailable", .object([("reason", .string(unavailable))]))) }
         fields += [
             ("blocked", .bool(row.isBlocked)),
             ("resetsAt", resetsAt.map { .string(ExportText.timestamp($0)) } ?? .null),
@@ -510,7 +555,7 @@ public enum SnapshotExporter {
             ("eligibleForTightest", .bool(eligible)),
         ]
         return Window(id: id, position: index, usedFraction: usedFraction, blocked: row.isBlocked,
-                      resetsAt: resetsAt, eligible: eligible, json: .object(fields))
+                      resetsAt: resetsAt, eligible: eligible, usageUnreported: usageUnreported, json: .object(fields))
     }
 
     /// D§2.2.G: blocked first, then the largest used fraction, then the
@@ -532,24 +577,28 @@ public enum SnapshotExporter {
 
     // MARK: Events
 
-    /// Surfaced events from the seven days before `publishedAt`, newest
-    /// first. Retired kinds are never surfaced.
+    /// Surfaced events from the seven days up to `publishedAt`, both ends
+    /// included, newest first. An event dated after `publishedAt` is left out:
+    /// it would sort ahead of every real one and use up the cap. Retired kinds
+    /// are never surfaced.
     static func surfacedEvents(_ input: SnapshotExportInput) -> [AIEvent] {
-        let cutoff = input.publishedAt.addingTimeInterval(-eventHorizon)
+        let window = input.publishedAt.addingTimeInterval(-eventHorizon)...input.publishedAt
         return input.events
-            .filter { $0.isSurfaced && $0.occurredAt >= cutoff }
+            .filter { $0.isSurfaced && window.contains($0.occurredAt) }
             .sorted { $0.occurredAt != $1.occurredAt ? $0.occurredAt > $1.occurredAt : $0.id < $1.id }
     }
 
     static func event(_ event: AIEvent, identity: (String) -> String) -> Fragment {
-        let id = identity(event.id)
+        var identities = [Identity(event.id, identity: identity)]
         var fields: [(String, ExportJSON)] = [
-            ("id", .string(id)),
+            ("id", .string(identities[0].digest)),
             ("kind", .string(event.kind.rawValue)),
             ("vendorId", .string(event.vendorId.rawValue)),
         ]
         if let instance = event.instanceId {
-            fields.append(("instanceId", .string(identity(instance))))
+            let reference = Identity(instance, identity: identity, isReference: true)
+            identities.append(reference)
+            fields.append(("instanceId", .string(reference.digest)))
         }
         fields.append(("title", .string(ExportText.truncate(event.title, limit: .message))))
         if let detail = event.detail {
@@ -565,7 +614,7 @@ public enum SnapshotExporter {
            ExportText.escapedByteCount(url.absoluteString) <= ExportText.Limit.url.rawValue {
             fields.append(("url", .string(url.absoluteString)))
         }
-        return Fragment(.object(fields), identities: [id])
+        return Fragment(.object(fields), identities: identities)
     }
 
     /// The evidence behind an event, as a closed kind and a fixed caption.

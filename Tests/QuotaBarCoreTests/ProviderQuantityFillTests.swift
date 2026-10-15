@@ -98,6 +98,10 @@ struct ProviderQuantityFillTests {
         // Basis handling is the exporter's: the uncapped snapshot keeps a nil basis.
         #expect(uncapped.currencyBasis == nil)
         #expect(capped.currencyBasis == .keySpendCap)
+        // Usage the vendor did not send stays nil in the quantity, beside the limit it did send.
+        let unreported = Array(try ProviderBranchSnapshots.devPass().suffix(2))
+        #expect(unreported[0].row1?.quantityUsed == nil && unreported[0].row1?.quantityLimit == 25)
+        #expect(unreported[1].row1?.quantityUsed == nil && unreported[1].row1?.quantityUnit == "USD")
     }
 
     @Test("Command Code fills capped windows and the total, and only remaining on the remaining-only row")
@@ -176,6 +180,9 @@ enum ProviderBranchSnapshots {
             #"{"label":"key","usage":"0","limit":null,"devPlan":"lite","devPlanCreditsUsed":"20.00","devPlanCreditsLimit":"80.00","devPlanCreditsRemaining":"60.00"}"#,
             #"{"label":"key","usage":"10","limit":"25","devPlan":"none"}"#,
             #"{"label":"key","usage":"3.5","limit":null,"devPlan":"none"}"#,
+            // The vendor sent no usage: capped, then uncapped.
+            #"{"label":"key","limit":"25","devPlan":"none"}"#,
+            #"{"label":"key","limit":null,"devPlan":"none"}"#,
         ]
         return try bodies.map {
             let key = try JSONDecoder().decode(DevPassQuotaProvider.KeyData.self, from: Data($0.utf8))

@@ -49,6 +49,9 @@ struct SnapshotExportFixtureTests {
             "branch:devpass-capped", "branch:devpass-uncapped", "branch:commandcode-capped",
             "branch:commandcode-total", "branch:commandcode-remaining-positive",
             "branch:commandcode-remaining-zero", "branch:missing-basis", "branch:unmapped-row",
+            "branch:devpass-capped-missing-usage", "branch:devpass-uncapped-missing-usage",
+            // Regressions: a failed first read that QuotaManager gave a billing cycle.
+            "regression:never-measured-with-cycle",
         ]
         var covered: Set<String> = []
         for name in Self.fixtureNames {
@@ -169,6 +172,29 @@ struct SnapshotExportFixtureTests {
         #expect(try provider("gemini")["tightestWindowId"] as? String == "w2")
     }
 
+    @Test("missing DevPass usage and a cycle-only placeholder export no reading, not a zero or a plan")
+    func fixturesWithoutAReadingExportNoReading() throws {
+        for name in ["devpass-capped-missing-usage", "devpass-uncapped-missing-usage"] {
+            let spend = try window(name, "spend")
+            #expect(spend["usedFraction"] is NSNull, "\(name)")
+            #expect(spend["quantity"] == nil, "\(name)")
+            #expect(spend["unavailable"] as? [String: String] == ["reason": "noReading"], "\(name)")
+            #expect(spend["eligibleForTightest"] as? Bool == false, "\(name)")
+            let exported = try provider(name)
+            #expect(exported["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"], "\(name)")
+            #expect(exported["tightestWindowId"] is NSNull, "\(name)")
+        }
+        // The key itself was read: the capped key is measured and keeps its time.
+        #expect(try provider("devpass-capped-missing-usage")["measuredAt"] as? String == "2026-10-14T23:58:00.000Z")
+
+        let cycleOnly = try provider("never-measured-with-cycle")
+        #expect(cycleOnly["measuredAt"] is NSNull)
+        #expect(cycleOnly["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
+        #expect((cycleOnly["status"] as? [String: String])?["reason"] == "offline")
+        #expect(try window("never-measured-with-cycle", "cycle")["kind"] as? String == "billingCycle")
+        #expect(cycleOnly["tightestWindowId"] is NSNull)
+    }
+
     @Test("fixtures assert each window's exact windowSeconds")
     func fixtureWindowSeconds() throws {
         let cases: [(String, Int, String, Int?)] = [
@@ -236,6 +262,46 @@ struct SnapshotExportFixtureTests {
         #expect(walker.longestByLimit[.message] == 160)
         #expect(walker.longestByLimit[.eventDetail] == 280)
         #expect(walker.longestByLimit[.url] == 512)
+    }
+
+    @Test("macClockOffsetMs is a signed decimal string, and the walker holds every integer to 0…2^53−1")
+    func clockOffsetIsASignedDecimalString() throws {
+        // stale-retained's Mac clock is 1.5 s behind; the sign survives as text.
+        #expect(try SnapshotFixtures.input("stale-retained").macClockOffsetMs == -1500)
+        #expect(try SnapshotFixtures.document("stale-retained")["macClockOffsetMs"] as? String == "-1500")
+        #expect(try SnapshotFixtures.document("billing-cycle")["macClockOffsetMs"] as? String == "250")
+        #expect(try SnapshotFixtures.document("never-measured")["macClockOffsetMs"] is NSNull)
+        // Every fixture with a sample exports it as a string.
+        for name in Self.fixtureNames where SnapshotFixtures.expectedDocument(name) != nil {
+            let offset = try SnapshotFixtures.document(name)["macClockOffsetMs"]
+            #expect(offset is NSNull || offset is String, "\(name): \(String(describing: offset))")
+        }
+        // The walker has no exemption: a signed integer here is a domain violation,
+        // and a string must match the decimal pattern.
+        func problems(_ offset: Any) throws -> [String] {
+            var document = try SnapshotFixtures.document("stale-retained")
+            document["macClockOffsetMs"] = offset
+            var walker = DocumentWalker(fixture: "offset")
+            walker.walkDocument(document)
+            return walker.problems
+        }
+        #expect(try problems(-1500).count == 1)
+        #expect(try problems("-1500").isEmpty)
+        #expect(try problems("-1.5e3").count == 1)
+        #expect(try problems(NSNull()).isEmpty)
+        // Past 2^53 − 1 in either direction there is no offset to export.
+        let base = SnapshotExportInput(publisherId: "00000000-0000-4000-8000-000000000001", publisherLabel: "Mac",
+                                       publishedAt: Date(timeIntervalSince1970: 1_792_022_400), snapshots: [])
+        func exportedOffset(_ value: Int) throws -> Any? {
+            var input = base
+            input.macClockOffsetMs = value
+            let data = try SnapshotExporter.export(input).get().data
+            return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])["macClockOffsetMs"]
+        }
+        #expect(try exportedOffset(-9_007_199_254_740_991) as? String == "-9007199254740991")
+        #expect(try exportedOffset(9_007_199_254_740_991) as? String == "9007199254740991")
+        #expect(try exportedOffset(-9_007_199_254_740_992) is NSNull)
+        #expect(try exportedOffset(0) as? String == "0")
     }
 
     @Test("cardinality never exceeds 6 windows, 8 API credits per provider, or 100 events")
@@ -435,9 +501,7 @@ struct DocumentWalker {
                 return
             }
             let integer = number.int64Value
-            if key == "macClockOffsetMs" {
-                if integer.magnitude > UInt64(ExportText.maxInteger) { problem("\(path) out of range") }
-            } else if !(0...ExportText.maxInteger).contains(integer) {
+            if !(0...ExportText.maxInteger).contains(integer) {
                 problem("\(path) = \(integer) is outside 0…2^53−1")
             }
             return
@@ -484,7 +548,7 @@ struct DocumentWalker {
              (_, "observedAt"):
             matches(text, Self.timestamp, path: path)
         case (.metric, "balance"), (.metric, "limit"), (.metric, "spent"),
-             (.quantity, "used"), (.quantity, "remaining"), (.quantity, "limit"):
+             (.quantity, "used"), (.quantity, "remaining"), (.quantity, "limit"), (.top, "macClockOffsetMs"):
             matches(text, Self.decimal, path: path)
         case (.top, "publisherId"):
             matches(text, Self.uuid, path: path)
