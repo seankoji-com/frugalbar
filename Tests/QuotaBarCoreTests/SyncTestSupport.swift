@@ -357,18 +357,38 @@ actor FakeGoogle: SyncTransport {
     }
 }
 
+/// The sync state file, in memory, whose writes can be made to fail.
+final class FlakySyncStateStore: SyncStateStore {
+    private struct Value {
+        var saved = SyncPersistentState()
+        var failing = false
+    }
+    struct WriteFailed: Error {}
+    private let value = Mutex(Value())
+
+    func load() throws -> SyncPersistentState { value.withLock { $0.saved } }
+    func save(_ state: SyncPersistentState) throws {
+        try value.withLock { value in
+            if value.failing { throw WriteFailed() }
+            value.saved = state
+        }
+    }
+    /// Every later write throws, and the file keeps what it held.
+    func failWrites(_ failing: Bool = true) { value.withLock { $0.failing = failing } }
+}
+
 /// A fresh publisher, signed in and active, over `google`.
 struct SyncHarness {
     let clock: FakeSyncClock
     let google: FakeGoogle
     let secrets: InMemorySyncSecrets
-    let store: InMemorySyncStateStore
+    let store: FlakySyncStateStore
     let publisher: SyncPublisher
 
     init(
         clock: FakeSyncClock = FakeSyncClock(),
         secrets: InMemorySyncSecrets? = nil,
-        store: InMemorySyncStateStore = InMemorySyncStateStore(),
+        store: FlakySyncStateStore = FlakySyncStateStore(),
         google: FakeGoogle? = nil
     ) {
         self.clock = clock

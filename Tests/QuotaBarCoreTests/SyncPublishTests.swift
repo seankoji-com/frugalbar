@@ -39,6 +39,64 @@ struct SyncPublishTests {
         #expect(gaps(times).allSatisfy { $0 >= SyncPublisher.minimumInterval })
     }
 
+    @Test("a relaunch keeps the 2-minute floor from the last attempt")
+    func relaunchKeepsTheTwoMinuteFloor() async throws {
+        let harness = try await SyncHarness.active()
+        let t0 = harness.clock.now()
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        harness.clock.advance(by: 1)
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.9)]))
+        await relaunched.publisher.tick()
+        #expect(await harness.google.uploads.count == 1)
+        #expect(await relaunched.publisher.nextWakeup() == t0.addingTimeInterval(SyncPublisher.minimumInterval))
+
+        // The run ticks every 10 s from t0+1, so the slot is taken at t0+121.
+        let times = await relaunched.run(for: 3 * 60)
+        #expect(times == [t0.addingTimeInterval(SyncPublisher.minimumInterval + 1)])
+    }
+
+    @Test("a relaunch while an upload is still in flight keeps the 2-minute floor from that attempt")
+    func relaunchMidUploadKeepsTheTwoMinuteFloor() async throws {
+        let harness = try await SyncHarness.active()
+        let t0 = harness.clock.now()
+        await harness.google.configure { $0.uploadModes = [.hang] }
+        await harness.publisher.submit(SyncFakes.source())
+        let first = Task { await harness.publisher.tick() }
+        #expect(await eventually { await harness.google.heldCount == 1 })
+
+        // The process dies with the upload unanswered.
+        harness.clock.advance(by: 1)
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.9)]))
+        await relaunched.publisher.tick()
+        #expect(await harness.google.uploads.count == 1)
+        #expect(await relaunched.publisher.nextWakeup() == t0.addingTimeInterval(SyncPublisher.minimumInterval))
+
+        first.cancel()
+        await harness.google.releaseAll()
+        await first.value
+    }
+
+    @Test("an attempt time the wall clock has gone back past counts from now, at relaunch and on a clock change")
+    func floorCountsFromNowAfterClockGoesBack() async throws {
+        let harness = try await SyncHarness.active()
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        let back = harness.clock.now().addingTimeInterval(-3600)
+        harness.clock.set(back)
+        await harness.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.7)]))
+        await harness.publisher.clockDidChange()
+        #expect(await harness.publisher.nextWakeup() == back.addingTimeInterval(SyncPublisher.minimumInterval))
+
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.9)]))
+        #expect(await relaunched.publisher.nextWakeup() == back.addingTimeInterval(SyncPublisher.minimumInterval))
+    }
+
     @Test("a material change publishes at the next 2-minute slot, not at the heartbeat")
     func materialChangePublishesAtNextSlot() async throws {
         let harness = try await SyncHarness.active()

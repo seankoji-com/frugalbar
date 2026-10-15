@@ -164,7 +164,56 @@ struct SyncFileProtocolTests {
             #expect(reads == forced)
         }
         let lastSuccess = try #require(await harness.publisher.status().lastSuccessfulPublishAt)
-        #expect(await harness.publisher.nextWakeup() == lastSuccess.addingTimeInterval(SyncPublisher.heartbeatInterval))
+        let heartbeat = lastSuccess.addingTimeInterval(SyncPublisher.heartbeatInterval)
+        #expect(await harness.publisher.nextWakeup() == heartbeat)
+
+        // A material change does not reopen the exhausted repair run.
+        await harness.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.9)]))
+        #expect(await harness.publisher.nextWakeup() == heartbeat)
+        let uploads = await harness.google.uploads.count
+        harness.clock.set(slot.addingTimeInterval(SyncPublisher.minimumInterval))
+        await harness.publisher.tick()
+        #expect(await harness.google.uploads.count == uploads)
+    }
+
+    @Test("repeated uncertain uploads with a material change pending stop after 3 forced publishes and wait for the heartbeat, across a relaunch too")
+    func repeatedUncertainUploadsWaitForHeartbeat() async throws {
+        let harness = try await SyncHarness.active()
+        let t0 = harness.clock.now()
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+        #expect(await harness.google.uploads.count == 1)
+
+        // Changed readings, and Drive answers 500 to every upload.
+        await harness.google.configure { $0.uploadModes = Array(repeating: .status(500), count: 10) }
+        await harness.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.9)]))
+        for minute in [2, 4, 6, 8] {
+            harness.clock.set(t0.addingTimeInterval(Double(minute * 60)))
+            await harness.publisher.tick()
+        }
+        // One material upload, then the 3 forced ones.
+        #expect(await harness.google.uploads.count == 5)
+        #expect(try harness.store.load().forcedPublishes == SyncPublisher.maxForcedPublishes)
+        let heartbeat = t0.addingTimeInterval(SyncPublisher.heartbeatInterval)
+        #expect(await harness.publisher.nextWakeup() == heartbeat)
+
+        // Nothing more before the heartbeat, even after a relaunch.
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.95)]))
+        #expect(await relaunched.publisher.nextWakeup() == heartbeat)
+        harness.clock.set(t0.addingTimeInterval(8 * 60))
+        let early = await relaunched.run(for: SyncPublisher.heartbeatInterval - 8 * 60 - 10)
+        #expect(early.isEmpty)
+        #expect(await harness.google.uploads.count == 5)
+
+        // The heartbeat goes out; still uncertain, so the next waits for the
+        // following heartbeat, not the 2-minute slot.
+        harness.clock.set(heartbeat)
+        await relaunched.publisher.tick()
+        #expect(await harness.google.uploads.count == 6)
+        #expect(await relaunched.publisher.nextWakeup() == heartbeat.addingTimeInterval(SyncPublisher.heartbeatInterval))
+        let later = await relaunched.run(for: SyncPublisher.heartbeatInterval - 10)
+        #expect(later.isEmpty)
     }
 
     @Test("a verification read compares SHA-256 against the exact bytes published, and a match ends the repair")
@@ -240,6 +289,28 @@ struct SyncFileProtocolTests {
         }
         #expect(await harness.google.uploads.count == 1)
         #expect(await harness.publisher.nextWakeup() == nil)
+    }
+
+    @Test("a former publisher relaunched after the takeover is an hour old still stops instead of overwriting")
+    func formerPublisherStopsOnTakeoverAfterRelaunch() async throws {
+        let harness = try await SyncHarness.active()
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+        let fileId = try #require(await harness.google.files.keys.first)
+        await harness.google.setPublisherId("another-mac-took-over", of: fileId, modified: harness.clock.now())
+
+        harness.clock.advance(by: SyncPublisher.foreignWindow + 60)
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.submit(SyncFakes.source([SyncFakes.snapshot(used: 0.8)]))
+        await relaunched.publisher.tick()
+
+        guard case .tookOver = await relaunched.publisher.status().ownership else {
+            Issue.record("expected the relaunched former publisher to stop")
+            return
+        }
+        #expect(await harness.google.uploads.count == 1)
+        #expect(await harness.google.files[fileId]?.publisherId == "another-mac-took-over")
+        #expect(await relaunched.publisher.nextWakeup() == nil)
     }
 
     @Test("every session gets a fresh publisherId")

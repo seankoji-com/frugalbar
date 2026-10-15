@@ -77,10 +77,22 @@ public struct SyncPersistentState: Codable, Sendable, Equatable {
     public var repairPending = false
     /// Forced publishes in the current repair run (at most 3).
     public var forcedPublishes = 0
+    /// Start of the last publish attempt: the 2-minute floor counts from it,
+    /// across relaunches too.
+    public var lastAttemptAt: Date?
+    /// Start of the last heartbeat whose outcome was uncertain. The next
+    /// heartbeat counts from it, so uncertainty that persists past the 3
+    /// forced publishes uploads every 15 minutes, not every 2.
+    public var lastHeartbeatAttemptAt: Date?
     public var cleanup: SyncCleanupRecord?
     public var abandoned: SyncAbandonedData?
 
     public init() {}
+
+    /// This session confirmed an upload. `activate` starts every session from
+    /// a fresh state, so a confirmed publish time belongs to this session, and
+    /// a relaunch still knows that a foreign id is a takeover.
+    var publishedThisSession: Bool { lastSuccessfulPublishAt != nil }
 }
 
 public protocol SyncStateStore: Sendable {

@@ -93,7 +93,11 @@ public enum SyncActivationError: Error, Equatable, Sendable {
 ///   header) and check its `publisherId`.
 /// - An uncertain upload (timeout, cancel, lost connection, 5xx) forces the
 ///   next publish at the next 2-minute slot, followed by a verification read;
-///   a mismatch forces another, up to 3 in a run, then the heartbeat takes over.
+///   a mismatch or another uncertain outcome forces another, up to 3 in a run.
+///   Then only the heartbeat publishes, material change or not, until a
+///   verification read matches.
+/// - The 2-minute floor, the repair run and whether this session has
+///   published are all persisted, so a relaunch keeps them.
 /// - Stop persists `stopping` and a cleanup record before any network call,
 ///   then settles the in-flight upload, deletes this session's file, re-lists
 ///   at +2 and +10 minutes, deletes the token and sets `stopped`. It resumes
@@ -122,15 +126,12 @@ public actor SyncPublisher {
     /// The material key of the newest input, and of the last confirmed upload.
     private var sourceMaterial: Data?
     private var publishedMaterial: Data?
-    /// Start of the last publish attempt: the 2-minute floor counts from it.
-    private var lastAttemptAt: Date?
     private var failures = 0
     private var retryAt: Date?
     private var exportState = SnapshotExportState()
     private var clockTrust = SyncClockTrust()
     private var clockSample: (offsetMs: Int?, sampledAt: Date?) = (nil, nil)
     private var publisherIdCache: String?
-    private var publishedThisRun = false
     private var takeOverRequested = false
     private var publishTask: Task<Void, Never>?
     private var publishing = false
@@ -159,7 +160,9 @@ public actor SyncPublisher {
             secrets: secrets, clock: clock)
         self.tokens = tokens
         self.drive = SyncDriveClient(transport: transport, tokens: tokens, clock: clock)
-        self.state = (try? stateStore.load()) ?? SyncPersistentState()
+        var state = (try? stateStore.load()) ?? SyncPersistentState()
+        state.clampAttemptTimes(to: clock.now())
+        self.state = state
     }
 
     func setStopCheckpoint(_ checkpoint: (@Sendable (SyncStopGap) throws -> Void)?) {
@@ -205,6 +208,7 @@ public actor SyncPublisher {
     /// exported untrusted until it is measured again.
     public func clockDidChange() {
         clockTrust.discontinuity(retaining: source?.snapshots ?? [])
+        state.clampAttemptTimes(to: clock.now())
         clockDiscontinuities += 1
         if let source { submit(source) }
     }
@@ -222,19 +226,29 @@ public actor SyncPublisher {
 
     func nextPublishDue() -> Date? {
         guard state.phase == .active, !state.needsSignIn, state.ownership == nil, source != nil else { return nil }
-        let now = clock.now()
-        let slot = lastAttemptAt.map { $0.addingTimeInterval(Self.minimumInterval) } ?? now
-        let forced = state.repairPending && state.forcedPublishes < Self.maxForcedPublishes
-        let material = publishedMaterial == nil || sourceMaterial != publishedMaterial
-        var due: Date
-        if forced || material {
-            due = slot
-        } else {
-            let heartbeat = (state.lastSuccessfulPublishAt ?? .distantPast).addingTimeInterval(Self.heartbeatInterval)
-            due = max(slot, heartbeat)
-        }
+        let slot = state.lastAttemptAt.map { $0.addingTimeInterval(Self.minimumInterval) } ?? clock.now()
+        var due = publishWaitsForHeartbeat ? max(slot, heartbeatDue) : slot
         if let retryAt { due = max(due, retryAt) }
         return due
+    }
+
+    /// The 3 forced publishes of this repair run are spent.
+    private var repairExhausted: Bool {
+        state.repairPending && state.forcedPublishes >= Self.maxForcedPublishes
+    }
+
+    /// Neither a forced repair nor a material change is due, or the repair
+    /// run is exhausted: then only the heartbeat publishes.
+    private var publishWaitsForHeartbeat: Bool {
+        if state.repairPending { return repairExhausted }
+        return publishedMaterial != nil && sourceMaterial == publishedMaterial
+    }
+
+    /// 15 minutes after the last success, or after the last heartbeat whose
+    /// outcome was uncertain.
+    private var heartbeatDue: Date {
+        max(state.lastSuccessfulPublishAt ?? .distantPast, state.lastHeartbeatAttemptAt ?? .distantPast)
+            .addingTimeInterval(Self.heartbeatInterval)
     }
 
     private func nextCleanupDue() -> Date? {
@@ -299,10 +313,8 @@ public actor SyncPublisher {
         source = nil
         sourceMaterial = nil
         publishedMaterial = nil
-        lastAttemptAt = nil
         failures = 0
         retryAt = nil
-        publishedThisRun = false
         takeOverRequested = false
         clockTrust = SyncClockTrust()
         clockSample = (nil, nil)
@@ -356,7 +368,8 @@ public actor SyncPublisher {
         guard state.phase == .active, let source else { return }
         let version = sourceVersion
         let started = clock.now()
-        lastAttemptAt = started
+        let heartbeat = publishWaitsForHeartbeat
+        state.lastAttemptAt = started
 
         // An export failure withholds the publish before Google is contacted;
         // the last good remote document stays in place.
@@ -365,6 +378,9 @@ public actor SyncPublisher {
         if state.repairPending && state.forcedPublishes < Self.maxForcedPublishes {
             state.forcedPublishes += 1
         }
+        // The floor and the repair count are on disk before Google hears of
+        // this attempt, so a relaunch mid-upload cannot reset either.
+        persist()
         do {
             let publisherId = try sessionPublisherId()
             let discovery = try await drive.discover()
@@ -381,7 +397,7 @@ public actor SyncPublisher {
                 guard state.phase == .active else { return }
                 serverDate = metadata.serverDate
                 if let foreign = metadata.publisherId, foreign != publisherId, !takeOverRequested {
-                    if publishedThisRun {
+                    if state.publishedThisSession {
                         state.ownership = .tookOver(label: await foreignLabel(fileId))
                         persist()
                         return
@@ -418,7 +434,6 @@ public actor SyncPublisher {
                 failures = 0
                 retryAt = nil
                 takeOverRequested = false
-                publishedThisRun = true
                 publishedMaterial = SyncMaterial.key(bytes)
                 if version == sourceVersion { sourceMaterial = publishedMaterial }
                 if state.repairPending {
@@ -432,6 +447,7 @@ public actor SyncPublisher {
                     }
                 }
             case .uncertain:
+                if heartbeat { state.lastHeartbeatAttemptAt = started }
                 state.repairPending = true
                 state.lastError = "The last upload's outcome is unknown; publishing again"
             case .failed(let error):
@@ -603,19 +619,29 @@ public actor SyncPublisher {
 
     /// "Finish without deleting": stop now, leave the data, and keep a notice
     /// naming the account so the owner can delete it in Drive.
+    ///
+    /// As in cleanup, the token goes first and `stopped` with the notice is
+    /// one write after it. Nothing shows `stopped` or offers Start until that
+    /// write lands; if it fails, cleanup stays paused with both choices, and
+    /// a relaunch finds the same.
     public func finishWithoutDeleting() {
         guard state.phase == .stopping, let record = state.cleanup, record.authLost else { return }
-        try? secrets.delete(record.refreshTokenAccount)
-        try? secrets.delete(SyncSecretAccount.publisherId)
         var next = state
         next.phase = .stopped
         next.cleanup = nil
         next.fileId = nil
         next.lastError = nil
         if let account = record.account { next.abandoned = SyncAbandonedData(account: account) }
+        do {
+            try secrets.delete(record.refreshTokenAccount)
+            try secrets.delete(SyncSecretAccount.publisherId)
+            try stateStore.save(next)
+        } catch {
+            state.lastError = "Couldn't save sync state"
+            return
+        }
         state = next
         publisherIdCache = nil
-        persist()
     }
 
     private func runCleanup() async {
@@ -710,4 +736,11 @@ struct SyncStopInterrupted: Error {}
 
 extension SyncPersistentState {
     var canStart: Bool { phase == .off || phase == .stopped }
+
+    /// An attempt time the wall clock has since gone back past counts from
+    /// now, so it cannot hold publishing back indefinitely.
+    mutating func clampAttemptTimes(to now: Date) {
+        if let at = lastAttemptAt, at > now { lastAttemptAt = now }
+        if let at = lastHeartbeatAttemptAt, at > now { lastHeartbeatAttemptAt = now }
+    }
 }

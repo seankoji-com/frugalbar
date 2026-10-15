@@ -45,9 +45,13 @@ once; `SyncController.start` runs the ticks in their own task.
 | Material change (D§2.2.D, `SyncMaterial`) | next 2-minute slot |
 | Heartbeat, full document | when the last successful publish is 15 min old |
 | Request timeout | 20 s, every Google request |
-| Uncertain upload (timeout, cancel, lost connection, 5xx) | forced publish at the next slot, then a SHA-256 verification read; at most 3 forced per run, then the heartbeat |
+| Uncertain upload (timeout, cancel, lost connection, 5xx) | forced publish at the next slot, then a SHA-256 verification read; at most 3 forced per run, then only the heartbeat, even with a material change pending. A heartbeat that is itself uncertain moves the next one 15 min on |
 | Foreign `publisherId` modified < 1 h ago | stop, "Another Mac (label) is syncing — Take over?" |
 | Foreign id after this session published | stop, "Another Mac took over syncing" |
+
+The last attempt time, the repair run and whether this session has published are persisted, so a
+relaunch keeps the 2-minute floor and the 3-publish cap, and a former publisher still stops on a
+takeover however old it is.
 
 `measuredAtTrusted` and `providersOmitted` count as material on top of the D§2.2.D list, so a
 distrusted reading or a dropped provider reaches the phone before the heartbeat.
@@ -80,7 +84,8 @@ transition). The steps:
 Each step is persisted. A relaunch resumes at the first incomplete step. Nothing uploads or
 repairs while `stopping`. If auth fails terminally during cleanup, the pane offers "Sign in to
 finish cleanup" (same account, same publisherId, never publishes) and "Finish without deleting".
-The second sets `stopped` and keeps a notice naming the account's email. The notice is hidden while
+The second deletes the token, then writes `stopped` with a notice naming the account's email; until
+that write lands, the pane stays on the two choices and Start stays unavailable. The notice is hidden while
 this Mac publishes to that account again.
 
 ## Not covered here

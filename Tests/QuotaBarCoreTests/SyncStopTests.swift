@@ -310,6 +310,48 @@ struct SyncStopTests {
         #expect(await other.publisher.status().abandoned?.account.email == "owner@example.test")
     }
 
+    @Test("Finish without deleting keeps Stop recoverable when its final write fails, and Start stays unavailable")
+    func finishWithoutDeletingWriteFailureStaysStopping() async throws {
+        let (harness, ownFile) = try await pausedCleanup()
+        harness.store.failWrites()
+        await harness.publisher.finishWithoutDeleting()
+
+        var status = await harness.publisher.status()
+        #expect(status.phase == .stopping)
+        #expect(!status.canStart)
+        #expect(status.cleanupNeedsSignIn)
+        #expect(status.abandoned == nil)
+        #expect(status.lastError != nil)
+        let persisted = try harness.store.load()
+        #expect(persisted.phase == .stopping)
+        #expect(persisted.cleanup?.authLost == true)
+        await #expect(throws: SyncActivationError.unavailable) {
+            try await harness.publisher.activate(account: SyncFakes.account)
+        }
+
+        // A relaunch still offers the two choices and resumes nothing.
+        let relaunched = harness.relaunched()
+        await relaunched.publisher.resume()
+        status = await relaunched.publisher.status()
+        #expect(status.phase == .stopping)
+        #expect(status.cleanupNeedsSignIn)
+        #expect(!status.canStart)
+        #expect(await relaunched.publisher.nextWakeup() == nil)
+        #expect(await harness.google.files[ownFile] != nil)
+
+        // Once the write succeeds, the choice completes and is durable.
+        harness.store.failWrites(false)
+        await relaunched.publisher.finishWithoutDeleting()
+        status = await relaunched.publisher.status()
+        #expect(status.phase == .stopped)
+        #expect(status.canStart)
+        #expect(status.abandoned?.account.email == "owner@example.test")
+        #expect(try harness.store.load().phase == .stopped)
+        #expect(try harness.store.load().abandoned?.account.email == "owner@example.test")
+        #expect(try harness.secrets.read(SyncSecretAccount.refreshToken) == nil)
+        #expect(await harness.google.files[ownFile] != nil)
+    }
+
     // MARK: (e)
 
     @Test("no code path calls Google's revoke endpoint")
