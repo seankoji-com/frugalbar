@@ -391,6 +391,70 @@ struct SnapshotExporterTests {
         #expect(reported["eligibleForTightest"] as? Bool == true)
     }
 
+    @Test("a Kiro bonus pool missing its usage or limit exports the bonus as no reading, not a partial sum")
+    func kiroIncompleteBonusExportsNoReading() throws {
+        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
+            try #require(try windows(provider).first { $0["windowId"] as? String == id })
+        }
+        // Absent usage (0/100 on the Mac), partial usage (25/300) and mismatched pools (125/100).
+        for (index, snapshot) in try ProviderBranchSnapshots.kiroBonuses().enumerated() {
+            let provider = try providers(try exported([snapshot]))[0]
+            let bonus = try window(provider, "bonus")
+            #expect(bonus["usedFraction"] is NSNull, "\(index)")
+            #expect(bonus["quantity"] == nil, "\(index)")
+            #expect(bonus["unavailable"] as? [String: String] == ["reason": "noReading"], "\(index)")
+            #expect(bonus["eligibleForTightest"] as? Bool == false, "\(index)")
+            // The plan is a reading of its own: its window, the primary and tightest stay on it.
+            #expect(try window(provider, "monthly")["quantity"] as? [String: String]
+                    == ["used": "40", "limit": "50", "unit": "credits"], "\(index)")
+            #expect((provider["primary"] as? [String: Any])?["type"] as? String == "percentage", "\(index)")
+            #expect(provider["tightestWindowId"] as? String == "monthly", "\(index)")
+        }
+
+        // Every active pool reporting both figures, a zero usage included, is a reading.
+        let complete = try ProviderBranchSnapshots.kiroBonuses([
+            #"[{"currentUsage":0,"usageLimit":100,"status":"ACTIVE"},{"currentUsage":30,"usageLimit":200,"status":"ACTIVE"}]"#,
+        ])[0]
+        let bonus = try window(try providers(try exported([complete]))[0], "bonus")
+        #expect(bonus["quantity"] as? [String: String] == ["used": "30", "limit": "300", "unit": "credits"])
+        #expect(bonus["usedFraction"] as? Double == 0.1)
+        #expect(bonus["unavailable"] == nil)
+        #expect(bonus["eligibleForTightest"] as? Bool == true)
+    }
+
+    @Test("Kiro plan usage above the limit with the overage unreported exports as no reading, not the total")
+    func kiroUnknownPlanSplitExportsNoReading() throws {
+        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
+            try #require(try windows(provider).first { $0["windowId"] as? String == id })
+        }
+        let missing = try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 100)
+        let absent = try providers(try exported([missing]))[0]
+        for id in ["monthly", "overage"] {
+            let unknown = try window(absent, id)
+            #expect(unknown["usedFraction"] is NSNull, "\(id)")
+            #expect(unknown["quantity"] == nil, "\(id)")
+            #expect(unknown["unavailable"] as? [String: String] == ["reason": "noReading"], "\(id)")
+            #expect(unknown["eligibleForTightest"] as? Bool == false, "\(id)")
+        }
+        // The percentage primary is the plan fraction, built from the same default.
+        #expect(absent["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
+        #expect(absent["tightestWindowId"] is NSNull)
+        #expect(absent["measuredAt"] as? String == ExportText.timestamp(missing.lastUpdated))
+
+        // A reported overage splits the same total: 50 on the plan, 50 over it.
+        let reported = try providers(try exported([
+            try ProviderBranchSnapshots.kiroEnabledOverage(reported: "50.0", total: 100),
+        ]))[0]
+        #expect(try window(reported, "monthly")["quantity"] as? [String: String]
+                == ["used": "50", "limit": "50", "unit": "credits"])
+        #expect(try window(reported, "monthly")["usedFraction"] as? Double == 1)
+        #expect(try window(reported, "overage")["quantity"] as? [String: String]
+                == ["used": "50", "limit": "1000", "unit": "credits"])
+        let primary = try #require(reported["primary"] as? [String: Any])
+        #expect(primary["type"] as? String == "percentage" && primary["usedFraction"] as? Double == 1)
+        #expect(reported["tightestWindowId"] as? String == "monthly")
+    }
+
     @Test("measuredAt is null for unavailableSnapshot placeholders, and set for a real or retained read")
     func measuredAtIsNullForUnavailablePlaceholders() throws {
         let placeholder = GrokQuotaProvider(accessToken: nil).unavailable(.notConfigured)

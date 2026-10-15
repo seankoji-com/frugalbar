@@ -1,0 +1,65 @@
+{
+  "description": "Control for kiro-plan-split-unknown: the same total of 100 with currentOveragesWithPrecision 50 reported splits into 50/50 on the plan and 50/1000 overage, all a reading; the plan is tightest and the primary is its percentage.",
+  "covers": [
+    "branch:kiro-plan-split-reported"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "Kiro",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 1.0
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "critical"
+      },
+      "resetsAt": "2026-10-31T00:00:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 1.0,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-31T00:00:00.000Z",
+        "windowLength": 2592000,
+        "quantityUsed": "50",
+        "quantityLimit": "50",
+        "quantityUnit": "credits"
+      },
+      "row3": {
+        "label": "OV",
+        "primaryFraction": 0.05,
+        "usedText": "USEDTEXT-MARKER OV",
+        "resetText": "RESETTEXT-MARKER OV",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "50",
+        "quantityLimit": "1000",
+        "quantityUnit": "credits"
+      },
+      "planName": "KIRO PRO"
+    }
+  ],
+  "events": []
+}

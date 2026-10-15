@@ -50,7 +50,9 @@ struct SnapshotExportFixtureTests {
             "branch:commandcode-total", "branch:commandcode-remaining-positive",
             "branch:commandcode-remaining-zero", "branch:missing-basis", "branch:unmapped-row",
             "branch:devpass-capped-missing-usage", "branch:devpass-uncapped-missing-usage",
-            "branch:kiro-overage-missing-usage",
+            "branch:kiro-overage-missing-usage", "branch:kiro-bonus-missing-usage",
+            "branch:kiro-bonus-partial-usage", "branch:kiro-bonus-mismatched-pools",
+            "branch:kiro-plan-split-unknown", "branch:kiro-plan-split-reported",
             // Regressions: a failed first read that QuotaManager gave a billing cycle.
             "regression:never-measured-with-cycle",
         ]
@@ -204,6 +206,52 @@ struct SnapshotExportFixtureTests {
         #expect((cycleOnly["status"] as? [String: String])?["reason"] == "offline")
         #expect(try window("never-measured-with-cycle", "cycle")["kind"] as? String == "billingCycle")
         #expect(cycleOnly["tightestWindowId"] is NSNull)
+    }
+
+    @Test("incomplete Kiro bonus pools and an unknown Kiro plan split export no reading, as the Kiro builder fills them")
+    func kiroIncompleteFiguresExportNoReading() throws {
+        let noReading = ["reason": "noReading"]
+        let bonusNames = ["kiro-bonus-missing-usage", "kiro-bonus-partial-usage", "kiro-bonus-mismatched-pools"]
+        for name in bonusNames {
+            let bonus = try window(name, "bonus")
+            #expect(bonus["usedFraction"] is NSNull, "\(name)")
+            #expect(bonus["quantity"] == nil, "\(name)")
+            #expect(bonus["unavailable"] as? [String: String] == noReading, "\(name)")
+            #expect(bonus["eligibleForTightest"] as? Bool == false, "\(name)")
+            #expect(quantity(try window(name, "monthly")) == ["used": "40", "limit": "50", "unit": "credits"], "\(name)")
+            #expect((try provider(name)["primary"] as? [String: Any])?["type"] as? String == "percentage", "\(name)")
+            #expect(try provider(name)["tightestWindowId"] as? String == "monthly", "\(name)")
+        }
+
+        // Above the plan limit with no overage figure: neither the plan nor the overage is known.
+        for id in ["monthly", "overage"] {
+            let unknown = try window("kiro-plan-split-unknown", id)
+            #expect(unknown["usedFraction"] is NSNull, "\(id)")
+            #expect(unknown["quantity"] == nil, "\(id)")
+            #expect(unknown["unavailable"] as? [String: String] == noReading, "\(id)")
+            #expect(unknown["eligibleForTightest"] as? Bool == false, "\(id)")
+        }
+        #expect(try provider("kiro-plan-split-unknown")["primary"] as? [String: String]
+                == ["type": "unavailable", "reason": "noReading"])
+        #expect(try provider("kiro-plan-split-unknown")["tightestWindowId"] is NSNull)
+        // The control's reported overage splits the same total.
+        #expect(quantity(try window("kiro-plan-split-reported", "monthly")) == ["used": "50", "limit": "50", "unit": "credits"])
+        #expect(quantity(try window("kiro-plan-split-reported", "overage")) == ["used": "50", "limit": "1000", "unit": "credits"])
+        #expect(try provider("kiro-plan-split-reported")["tightestWindowId"] as? String == "monthly")
+
+        // Each fixture row carries the quantities the Kiro builder fills for that response.
+        let built = try ProviderBranchSnapshots.kiroBonuses() + [
+            try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 100),
+            try ProviderBranchSnapshots.kiroEnabledOverage(reported: "50.0", total: 100),
+        ]
+        for (name, snapshot) in zip(bonusNames + ["kiro-plan-split-unknown", "kiro-plan-split-reported"], built) {
+            let fixture = try SnapshotFixtures.input(name).snapshots[0]
+            for (fixtureRow, builtRow) in [(fixture.row1, snapshot.row1), (fixture.row2, snapshot.row2), (fixture.row3, snapshot.row3)] {
+                #expect(fixtureRow?.quantityUsed == builtRow?.quantityUsed, "\(name)")
+                #expect(fixtureRow?.quantityLimit == builtRow?.quantityLimit, "\(name)")
+                #expect(fixtureRow?.quantityUnit == builtRow?.quantityUnit, "\(name)")
+            }
+        }
     }
 
     @Test("fixtures assert each window's exact windowSeconds")

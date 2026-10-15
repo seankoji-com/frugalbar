@@ -297,7 +297,7 @@ public enum SnapshotExporter {
         let hasReading = snapshot.status.confidence == .measured
             || rows.contains { $0.1.map { !$0.measuresElapsedTimeOnly } ?? false }
             || !snapshot.apiCredits.isEmpty
-        // A DevPass spend figure the vendor did not report: its currency
+        // A DevPass spend or Kiro plan figure the vendor did not report: the
         // primary was built from that default, so it has no value either.
         let usageUnreported = windows.contains {
             $0.usageUnreported && SnapshotExportTable.primaryIsBuiltFrom(snapshot.vendorId, windowID: $0.id)
@@ -513,10 +513,12 @@ public enum SnapshotExporter {
                 quantity.append(("unit", .string(ExportText.truncate(unit, limit: .unit))))
             }
         }
-        // A window whose figure is the vendor's usage, with no usage reported:
-        // the provider drew it from a default, and a default is not a reading.
-        let usageUnreported = SnapshotExportTable.figureIsReportedUsage(snapshot.vendorId, windowID: id)
-            && row.quantityUsed == nil
+        // A window whose figure is the vendor's usage or limit, with that
+        // figure unreported: the provider drew it from a default, and a
+        // default is not a reading.
+        let usageUnreported =
+            (SnapshotExportTable.figureIsReportedUsage(snapshot.vendorId, windowID: id) && row.quantityUsed == nil)
+            || (SnapshotExportTable.limitIsReported(snapshot.vendorId, windowID: id) && row.quantityLimit == nil)
         let unavailable = usageUnreported ? "noReading" : outOfRange ? "outOfRange" : nil
         if unavailable != nil {
             usedFraction = nil

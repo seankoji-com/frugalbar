@@ -63,20 +63,32 @@ public enum SnapshotExportTable {
     /// Windows whose figure is the vendor's reported usage. DevPass's spend
     /// row draws its fraction from `usage` and Kiro's overage row from
     /// `currentOveragesWithPrecision`, each defaulting it to 0 when the
-    /// vendor sent none, and each leaves `quantityUsed` nil in that case;
-    /// such a window exports `unavailable {noReading}` rather than 0 used.
+    /// vendor sent none; Kiro's plan row subtracts that same default above the
+    /// plan limit, and its bonus row sums the pools that sent a usage. Each
+    /// leaves `quantityUsed` nil in that case; such a window exports
+    /// `unavailable {noReading}` rather than a used figure.
     public static func figureIsReportedUsage(_ vendor: VendorIdentifier, windowID: String) -> Bool {
         switch (vendor, windowID) {
-        case (.devpass, "spend"), (.kiro, "overage"): true
+        case (.devpass, "spend"), (.kiro, "monthly"), (.kiro, "bonus"), (.kiro, "overage"): true
         default: false
         }
+    }
+
+    /// Windows whose limit is the vendor's reported figure. Kiro's bonus row
+    /// sums the pools that sent a limit and leaves `quantityLimit` nil when
+    /// any did not; that window exports `unavailable {noReading}` too.
+    public static func limitIsReported(_ vendor: VendorIdentifier, windowID: String) -> Bool {
+        vendor == .kiro && windowID == "bonus"
     }
 
     /// Windows the snapshot's `metric` is built from, so an unreported usage
     /// there leaves `primary` without a value too. DevPass's currency metric
     /// is its spend; Kiro's percentage is the plan row, never the overage.
     public static func primaryIsBuiltFrom(_ vendor: VendorIdentifier, windowID: String) -> Bool {
-        vendor == .devpass && windowID == "spend"
+        switch (vendor, windowID) {
+        case (.devpass, "spend"), (.kiro, "monthly"): true
+        default: false
+        }
     }
 
     /// Every branch the table distinguishes, for the uniqueness and coverage
