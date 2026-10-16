@@ -90,7 +90,7 @@ public enum SyncSettingsText {
 
 /// Where the privacy policy lives.
 public enum SyncLinks {
-    public static let privacyPolicy = URL(string: "https://github.com/seankoji-com/frugalbar/blob/main/docs/privacy.md")!
+    public static let privacyPolicy = URL(string: "https://seankoji.com/frugalbar/privacy")!
 }
 
 /// Where the interactive sign-in is.
