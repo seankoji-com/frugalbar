@@ -822,6 +822,46 @@ struct ProviderHTTPTests {
         #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.75) < 0.000_01)
     }
 
+    /// A rejected credential is the one verdict that overrules an earlier
+    /// host's transport failure. Left standing, the stale timeout would be
+    /// thrown and the row would read "Vendor slow — will retry" for a token the
+    /// vendor just refused — sending the user to check a connection that is
+    /// fine, and losing the poll-floor exemption a corrected credential needs.
+    @Test("an earlier host's transport failure does not mask a later host's credential rejection")
+    func geminiRejectionOutranksStaleTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ _ in
+            // The first host never reaches the handler: `failNextRequest` fails
+            // it at the transport layer. The second one refuses the token.
+            canned(status: 401, body: "{}")
+        }) {
+            URLProtocolStub.nextFailureCode = .timedOut
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    /// The other half of that asymmetry: a 200 without a Gemini group does *not*
+    /// overrule a host that never answered, because which host publishes the
+    /// windows is exactly what differs between accounts — so it cannot stand in
+    /// for one that timed out.
+    @Test("a content-less answer does not overrule a host that never answered")
+    func geminiContentLessAnswerDoesNotMaskTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        await #expect(throws: URLError.self) {
+            try await withStubbedHTTP({ _ in
+                canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
+            }) {
+                URLProtocolStub.nextFailureCode = .timedOut
+                URLProtocolStub.failNextRequest = true
+                return try await provider.fetchSnapshot()
+            }
+        }
+    }
+
     /// The response also carries a "Claude and GPT models" group — a separate
     /// Antigravity allowance. Averaging it into a row labelled Gemini would
     /// report a number for a pool the row does not name.

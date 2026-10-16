@@ -138,9 +138,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var lastFailure: UnavailableReason?
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
-        // than turned into a reason here. It outranks a "no Gemini quota"
-        // answer only because it is the one outcome that says the vendor was
-        // never reached at all.
+        // than turned into a reason here. It stands only while no host has
+        // spoken, and a credential rejection below is the one verdict allowed
+        // to overrule it.
         var transportFailure: Error?
         for base in bases {
             do {
@@ -155,7 +155,16 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     // answer the same way. Everything else — a route missing on
                     // this host, a 5xx, a 429 — may be this host's own trouble,
                     // so the walk continues.
-                    if reason == .credentialRejected { break }
+                    if reason == .credentialRejected {
+                        // The vendor just spoke about the credential itself, and
+                        // that outranks an earlier host's transport failure:
+                        // reporting `.timedOut` for a token the vendor refused
+                        // sends the user to check a connection that is fine, and
+                        // only `credentialRejected` is exempt from the poll floor
+                        // — so a re-sign-in would not even take effect at once.
+                        transportFailure = nil
+                        break
+                    }
                     continue
                 }
                 guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
@@ -185,6 +194,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
 
         guard let base = resolvedBase, let group = resolvedGroup, !readings.isEmpty else {
+            // A host that never answered outranks the content verdict of one
+            // that did, and that asymmetry is deliberate: a 200 without a Gemini
+            // group says "this *host* does not publish them", and which host
+            // publishes them is exactly what differs between accounts here. So
+            // it cannot stand in for a host that timed out and never said
+            // anything. A credential rejection is the exception, cleared above,
+            // because the token is the same wherever it is presented.
             if let transportFailure { throw transportFailure }
             return unavailable(lastFailure ?? .badResponse)
         }

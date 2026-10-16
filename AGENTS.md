@@ -57,8 +57,10 @@ vendor every cycle *and* told the user to check a key that was working. So
 serves its throttle with `Retry-After: 0`, which `retryAfterDate` reads as "no
 instruction", so the row then carried no instant at all and the 120 s loop kept
 re-asking through the whole ~40-minute window; the cooldown is therefore
-`min(vendor's figure, 1 h)` with a **5-minute floor**, which is exactly the
-policy Claude Code applies to the same endpoint. That lives in
+`min(vendor's figure, 1 h)` when the vendor named a positive interval, and a
+**5-minute cooldown** when it named nothing — which is exactly the policy Claude
+Code applies to the same endpoint. Use the vendor's figure when it is smaller: a
+`Retry-After: 30` buys 30 s, not the floor. That lives in
 `CLIProxyClient.claudeUsageCooldown`/`claudeUsageFailureReason` and is used on
 both Claude paths, direct and relayed, because it is Anthropic's answer either
 way. `retryAfterDate` itself and its tests are unchanged.
