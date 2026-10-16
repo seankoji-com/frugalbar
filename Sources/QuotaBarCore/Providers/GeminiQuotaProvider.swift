@@ -3,10 +3,12 @@ import Foundation
 /// Antigravity subscription quota from the Google Cloud Code API.
 ///
 /// Reads `v1internal:retrieveUserQuotaSummary`, the same source the `agy` CLI
-/// uses. It returns the real windows the vendor meters — a five-hour and a
-/// weekly bucket per model group — where `fetchAvailableModels` exposes only a
-/// single `remainingFraction` per model. Using the latter showed one bar and
-/// silently omitted the weekly limit, which was the binding constraint.
+/// uses, from whichever of the two Cloud Code hosts publishes Gemini's windows
+/// (`productionAPIHosts`). It returns the real windows the vendor meters — a
+/// five-hour and a weekly bucket per model group — where `fetchAvailableModels`
+/// exposes only a single `remainingFraction` per model. Using the latter showed
+/// one bar and silently omitted the weekly limit, which was the binding
+/// constraint.
 public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public let vendorId: VendorIdentifier = .gemini
     public var displayName: String { vendorId.displayName }
@@ -17,6 +19,21 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     private let configuredAPIBase: (value: String?, invalid: Bool)
 
     static let productionAPIBase = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+
+    /// The hosts to ask, in order, when no base was configured.
+    ///
+    /// Neither host is authoritative on its own. For some accounts the daily
+    /// host's summary carries only the "Claude and GPT models" group while the
+    /// plain host carries Gemini's windows too, and for others it is the
+    /// reverse — the account this was diagnosed on got `200` with just
+    /// `["Claude and GPT models"]` from `daily-` and both groups from the plain
+    /// host. The `agy` CLI walks the same pair, and so does T3 Code's
+    /// Antigravity probe, which is where this order comes from. A host whose
+    /// summary yields a Gemini window ends the walk.
+    static let productionAPIHosts = [
+        productionAPIBase,
+        "https://cloudcode-pa.googleapis.com/v1internal:"
+    ]
 
     static func apiBase(from rawValue: String?) -> (value: String?, invalid: Bool) {
         guard let value = rawValue, !value.isEmpty else { return (nil, false) }
@@ -73,6 +90,10 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             let window: String?
             let resetTime: String?
             let remainingFraction: Double?
+            /// The vendor switching a bucket off. A disabled bucket keeps its
+            /// last `remainingFraction`, and drawing that would report a window
+            /// nobody is being metered against. Absent means enabled.
+            let disabled: Bool?
         }
         let groups: [Group]?
     }
@@ -100,30 +121,72 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             return unavailable(.notConfigured)
         }
 
-        let base = apiBaseOverride ?? configured.value ?? Self.productionAPIBase
-        let group: QuotaSummary.Group
-        do {
-            let (data, http) = try await QuotaHTTP.post(
-                url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
-                headers: ["User-Agent": "antigravity"], auth: .bearer(token)
-            )
-            if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
-            guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
-                return unavailable(.badResponse)
-            }
-            guard let decodedGroup = Self.geminiGroup(in: summary) else {
-                return unavailable(.unsupported("Antigravity reported no Gemini quota"))
-            }
-            group = decodedGroup
-        } catch {
-            NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
-            throw error
-        }
+        // A configured base is the operator's answer: one host, and its failure
+        // is this provider's answer. Otherwise both production hosts are asked,
+        // because either can be the one that publishes Gemini's windows.
+        let bases = apiBaseOverride.map { [$0] }
+            ?? configured.value.map { [$0] }
+            ?? Self.productionAPIHosts
 
         let now = Date()
-        let readings = (group.buckets ?? []).compactMap { Self.reading($0, now: now) }
-        guard !readings.isEmpty else {
-            return unavailable(.unsupported("Antigravity reported no Gemini quota"))
+        var resolvedBase: String?
+        var resolvedGroup: QuotaSummary.Group?
+        var readings: [Reading] = []
+        // What the last host to answer said, when none of them published a
+        // Gemini window. Kept so the row names the real reason rather than a
+        // generic one.
+        var lastFailure: UnavailableReason?
+        // A transport failure is the engine's to map — it alone knows the
+        // difference between `offline` and `timedOut` — so it is held rather
+        // than turned into a reason here. It outranks a "no Gemini quota"
+        // answer only because it is the one outcome that says the vendor was
+        // never reached at all.
+        var transportFailure: Error?
+        for base in bases {
+            do {
+                let (data, http) = try await QuotaHTTP.post(
+                    url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
+                    headers: ["User-Agent": "antigravity"], auth: .bearer(token)
+                )
+                if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
+                    lastFailure = reason
+                    // A rejected credential is a verdict on the token, not on
+                    // the host: the next host would receive the same token and
+                    // answer the same way. Everything else — a route missing on
+                    // this host, a 5xx, a 429 — may be this host's own trouble,
+                    // so the walk continues.
+                    if reason == .credentialRejected { break }
+                    continue
+                }
+                guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
+                    lastFailure = .badResponse
+                    continue
+                }
+                guard let group = Self.geminiGroup(in: summary) else {
+                    lastFailure = .unsupported("Antigravity reported no Gemini quota")
+                    continue
+                }
+                // Counted after the disabled filter: a group whose every bucket
+                // the vendor switched off is no reading, so the next host is
+                // still worth asking.
+                let read = (group.buckets ?? []).compactMap { Self.reading($0, now: now) }
+                guard !read.isEmpty else {
+                    lastFailure = .unsupported("Antigravity reported no Gemini quota")
+                    continue
+                }
+                resolvedBase = base
+                resolvedGroup = group
+                readings = read
+                break
+            } catch {
+                NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
+                transportFailure = error
+            }
+        }
+
+        guard let base = resolvedBase, let group = resolvedGroup, !readings.isEmpty else {
+            if let transportFailure { throw transportFailure }
+            return unavailable(lastFailure ?? .badResponse)
         }
 
         // Shortest window first, so the row reads 5H then WK like every other
@@ -136,7 +199,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // not cost us a reading we already hold.
         let plan = await Self.plan(token: token, bases: [base])
         let sourceHost = URL(string: base)?.host ?? base
-        let sourceSuffix = base == Self.productionAPIBase ? "" : " · Source: \(sourceHost)"
+        let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
@@ -170,6 +233,10 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     private static func reading(_ bucket: QuotaSummary.Bucket, now: Date) -> Reading? {
+        // A bucket the vendor switched off keeps whatever fraction it last
+        // published; drawing it would report a window nothing is metered
+        // against. T3 Code's Antigravity probe skips the same flag.
+        guard bucket.disabled != true else { return nil }
         guard let remaining = bucket.remainingFraction, (0...1).contains(remaining) else { return nil }
         let used = 1 - remaining
         let reset = bucket.resetTime.flatMap(parseDate)

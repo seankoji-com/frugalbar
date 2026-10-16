@@ -484,6 +484,60 @@ public enum CLIProxyClient {
     /// flag, not a credential, so it may travel in the query string.
     public static let claudeOAuthUsageWithGrantsURL = claudeOAuthUsageURL + "?cedar_ember=1"
 
+    /// How long to hold off the automatic poll after Anthropic throttles the
+    /// usage endpoint without saying for how long.
+    ///
+    /// Anthropic answers a throttle with `Retry-After: 0`, and a non-positive
+    /// delta is "no instruction" to `QuotaHTTP.retryAfterDate` — so the poll
+    /// loop re-asked every 120 s for the whole ~40-minute window the account
+    /// spends throttled, and each ask is itself a request against a budget the
+    /// account shares with Claude Code. Claude Code, the client whose own reads
+    /// this endpoint serves, answers the same status with a five-minute
+    /// cooldown; this is that figure, not a guess.
+    public static let claudeUsageRateLimitFloor: TimeInterval = 300
+
+    /// The ceiling on a vendor-requested cooldown. Claude Code clamps the same
+    /// way, so an hour-long `Retry-After` cannot park the row for a day.
+    public static let claudeUsageCooldownCap: TimeInterval = 3600
+
+    /// When the usage endpoint may be asked again after a throttle.
+    ///
+    /// The vendor's own `Retry-After` wins when it asked for a positive
+    /// interval, clamped to `claudeUsageCooldownCap`; otherwise the floor
+    /// applies. Either way the answer is a real instant, which is what gives
+    /// `QuotaManager` something to hold the *automatic* poll behind — the user's
+    /// own ⟳ still goes out, because swallowing their click is the dead-button
+    /// bug #90 fixed.
+    public static func claudeUsageCooldown(retryAfter raw: String?, now: Date = Date()) -> Date {
+        let asked = QuotaHTTP.retryAfterDate(secondsHeader: raw, now: now)
+            .map { $0.timeIntervalSince(now) } ?? 0
+        let seconds = asked > 0 ? min(asked, claudeUsageCooldownCap) : claudeUsageRateLimitFloor
+        return now.addingTimeInterval(seconds)
+    }
+
+    /// Maps the usage endpoint's status to a failure reason, under Claude
+    /// Code's own policy.
+    ///
+    /// Deliberately not `QuotaHTTP.failureReason`, which is the right rule for
+    /// an *API key* surface: there a 403 is a key that cannot call the endpoint
+    /// and 401/403 both mean "fix the credential". Anthropic's OAuth usage
+    /// endpoint instead uses 403 as a throttle — a working token being held
+    /// back — and `QuotaManager` exempts `credentialRejected` from the poll
+    /// floor, so reading a throttle as a bad credential re-asked forever and
+    /// told the user to check a key that was fine. Both 403 and 429 are
+    /// therefore rate limits here, carrying a cooldown from
+    /// `claudeUsageCooldown`.
+    public static func claudeUsageFailureReason(
+        for status: Int, retryAfter raw: String? = nil, now: Date = Date()
+    ) -> UnavailableReason? {
+        switch status {
+        case 200...299: nil
+        case 401:       .credentialRejected
+        case 403, 429:  .rateLimited(retryAfter: claudeUsageCooldown(retryAfter: raw, now: now))
+        default:        .badResponse
+        }
+    }
+
     public static func base64url(string: String) -> String {
         Data(string.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -667,7 +721,10 @@ public enum CLIProxyClient {
 
     public static func decodeClaudeUsage(from data: Data, now: Date = Date()) throws -> ClaudeOAuthUsageResponse {
         if let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) {
-            if let reason = QuotaHTTP.failureReason(
+            // The wrapper carries Anthropic's own answer to the usage request,
+            // so it is read under Claude's policy rather than the API-key one:
+            // a relayed 403 is a throttle, not a rejected credential.
+            if let reason = claudeUsageFailureReason(
                 for: wrapper.statusCode, retryAfter: wrapper.retryAfterHeader, now: now) {
                 throw ProviderError(reason)
             }

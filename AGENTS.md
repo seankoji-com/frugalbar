@@ -47,6 +47,37 @@ the direct token cannot answer either. A 429 that carried `Retry-After` keeps it
 *automatic* poll for that long (`CacheEntry.vendorRetryAfter`) while the user's ⟳
 still goes out — swallowing their click is the dead-button bug #90 fixed.
 
+**Claude's usage endpoint is read under Claude Code's policy, not the API-key
+one.** `QuotaHTTP.failureReason` is right for a key surface, where 401 and 403
+both mean "fix the credential". Anthropic's OAuth usage endpoint instead uses
+403 as a throttle, and — because `QuotaManager` exempts `credentialRejected`
+from the poll floor — reading one as a bad credential re-asked the throttling
+vendor every cycle *and* told the user to check a key that was working. So
+401 is `credentialRejected` and 403/429 are `rateLimited` there. Anthropic
+serves its throttle with `Retry-After: 0`, which `retryAfterDate` reads as "no
+instruction", so the row then carried no instant at all and the 120 s loop kept
+re-asking through the whole ~40-minute window; the cooldown is therefore
+`min(vendor's figure, 1 h)` with a **5-minute floor**, which is exactly the
+policy Claude Code applies to the same endpoint. That lives in
+`CLIProxyClient.claudeUsageCooldown`/`claudeUsageFailureReason` and is used on
+both Claude paths, direct and relayed, because it is Anthropic's answer either
+way. `retryAfterDate` itself and its tests are unchanged.
+
+**Neither Cloud Code host is authoritative for Antigravity's Gemini windows.**
+`GeminiQuotaProvider` walks `productionAPIHosts` — `daily-` first, then the
+plain host, the order `agy` and T3 Code's Antigravity probe use — and takes the
+first summary that yields a Gemini window. The account this was diagnosed on got
+`200` with only a "Claude and GPT models" group from `daily-` and both groups
+from the plain host, so a single hard-coded host reported "Antigravity reported
+no Gemini quota" while the windows were there to be read. A credential rejection
+ends the walk (the same token would be rejected identically), a transport
+failure is rethrown for the engine to map, and every other failure — 404, 5xx,
+429 — falls through to the next host, which may simply not be the one in
+trouble. A bucket the vendor marked `disabled` is not a reading: it keeps its
+last published fraction, and drawing it would report a window nothing is
+metered against. A configured `FRUGALBAR_GEMINI_API_BASE` is the operator's
+answer and is asked alone, so its failure stays this provider's answer.
+
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
 
