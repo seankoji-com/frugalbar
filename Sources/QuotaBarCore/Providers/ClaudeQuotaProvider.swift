@@ -106,7 +106,11 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
             auth: .bearer(token)
         )
-        if let reason = QuotaHTTP.failureReason(
+        // Claude's own policy, not the API-key one: against this endpoint a 403
+        // is a throttle rather than a bad token, and a 429 with no usable
+        // `Retry-After` still buys a five-minute cooldown. See
+        // `CLIProxyClient.claudeUsageFailureReason`.
+        if let reason = CLIProxyClient.claudeUsageFailureReason(
             for: response.statusCode,
             retryAfter: response.value(forHTTPHeaderField: "Retry-After"), now: now) {
             NSLog("frugalbar: Claude OAuth usage request returned %ld (%@)",

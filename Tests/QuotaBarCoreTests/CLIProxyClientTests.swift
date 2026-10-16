@@ -243,16 +243,82 @@ struct CLIProxyClientTests {
         }
 
         // An unexpected header shape costs the retry time, never the status:
-        // the 429 is still reported.
+        // the 429 is still reported. It costs the *floor*, not nothing —
+        // Anthropic answers this endpoint's throttle with `Retry-After: 0`, so
+        // "no usable header" is the normal case and must still produce an
+        // instant for the poll loop to back off against.
         let unreadable = #"""
         {"status_code": 429, "header": {"Retry-After": {"seconds": 60}}, "body": "{}"}
         """#
         do {
-            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(unreadable.utf8))
+            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(unreadable.utf8), now: now)
             Issue.record("expected a rateLimited ProviderError")
         } catch let error as ProviderError {
-            #expect(error.reason == .rateLimited(retryAfter: nil))
+            #expect(error.reason == .rateLimited(retryAfter: now.addingTimeInterval(300)))
         }
+    }
+
+    /// Anthropic's usage endpoint uses 403 as a throttle, unlike an API-key
+    /// surface where it means the key cannot call the endpoint. Read as
+    /// `credentialRejected` it was exempt from the poll floor, so the row was
+    /// re-asked every cycle and told the user to check a working key.
+    @Test("a relayed 403 is a throttle under Claude's policy, and a 401 is the rejected credential")
+    func decodeClaudeUsageThrottleStatuses() throws {
+        let now = Date()
+        for status in [403, 429] {
+            let wrapped = #"""
+            {"status_code": \#(status), "body": "{\"error\":{\"type\":\"permission_error\"}}"}
+            """#
+            do {
+                _ = try CLIProxyClient.decodeClaudeUsage(from: Data(wrapped.utf8), now: now)
+                Issue.record("expected a rateLimited ProviderError for \(status)")
+            } catch let error as ProviderError {
+                #expect(error.reason == .rateLimited(retryAfter: now.addingTimeInterval(300)))
+            }
+        }
+
+        let rejected = #"""
+        {"status_code": 401, "body": "unauthorized"}
+        """#
+        do {
+            _ = try CLIProxyClient.decodeClaudeUsage(from: Data(rejected.utf8), now: now)
+            Issue.record("expected a credentialRejected ProviderError")
+        } catch let error as ProviderError {
+            #expect(error.reason == .credentialRejected)
+        }
+    }
+
+    /// The cooldown Claude Code applies to this endpoint, ported: the vendor's
+    /// own figure when it asked for one, capped at an hour, and a five-minute
+    /// floor when it did not — which is the case Anthropic actually serves.
+    @Test("the Claude usage cooldown takes the vendor's figure, capped, or a five-minute floor")
+    func claudeUsageCooldownPolicy() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: nil, now: now)
+                == now.addingTimeInterval(300))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "0", now: now)
+                == now.addingTimeInterval(300))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "  ", now: now)
+                == now.addingTimeInterval(300))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "not-a-number", now: now)
+                == now.addingTimeInterval(300))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "2377", now: now)
+                == now.addingTimeInterval(2377))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "7200", now: now)
+                == now.addingTimeInterval(3600))
+        #expect(CLIProxyClient.claudeUsageCooldown(retryAfter: "-30", now: now)
+                == now.addingTimeInterval(300))
+
+        // 401 is the only status that means the credential itself. Anything
+        // else non-2xx is the vendor's answer, not the user's misconfiguration.
+        #expect(CLIProxyClient.claudeUsageFailureReason(for: 200, now: now) == nil)
+        #expect(CLIProxyClient.claudeUsageFailureReason(for: 401, now: now) == .credentialRejected)
+        #expect(CLIProxyClient.claudeUsageFailureReason(for: 403, now: now)
+                == .rateLimited(retryAfter: now.addingTimeInterval(300)))
+        #expect(CLIProxyClient.claudeUsageFailureReason(for: 429, now: now)
+                == .rateLimited(retryAfter: now.addingTimeInterval(300)))
+        #expect(CLIProxyClient.claudeUsageFailureReason(for: 500, now: now) == .badResponse)
     }
 
     @Test("decodeCodexUsage decodes API-call wrapper body string and raw JSON")

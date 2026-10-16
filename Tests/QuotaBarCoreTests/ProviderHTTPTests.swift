@@ -698,6 +698,170 @@ struct ProviderHTTPTests {
         #expect(snap.planName == "Google AI Pro")
     }
 
+    /// The reported bug: `daily-cloudcode-pa.googleapis.com` answered 200 with
+    /// only the "Claude and GPT models" group, so the row read "Antigravity
+    /// reported no Gemini quota" while the plain host served Gemini's windows
+    /// for the same token. Neither host is authoritative, so both are asked —
+    /// in the order the `agy` CLI and T3 Code's Antigravity probe use — and the
+    /// first summary carrying a Gemini window ends the walk.
+    @Test("Gemini falls through to the second host when the first has no Gemini group")
+    func geminiFallsThroughToSecondHost() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+            }
+            if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
+                // Exactly what the daily host returned for the reporting account.
+                return canned(body: #"""
+                {"groups":[{"displayName":"Claude and GPT models","buckets":[
+                  {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.31},
+                  {"bucketId":"3p-5h","window":"5h","remainingFraction":0.44}]}]}
+                """#)
+            }
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-weekly","window":"weekly","resetTime":"2099-01-04T00:00:00Z","remainingFraction":0.28312185},
+                {"bucketId":"gemini-5h","window":"5h","resetTime":"2099-01-01T00:00:00Z","remainingFraction":0.845952}]},
+              {"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.31}]}]}
+            """#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(URLProtocolStub.capturedRequests.map(\.url?.host) == [
+            "daily-cloudcode-pa.googleapis.com",
+            "cloudcode-pa.googleapis.com",
+            "cloudcode-pa.googleapis.com"
+        ])
+        #expect(snap.status == .measured(.warning))
+        // Gemini's own windows, not the third-party group's.
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2?.label == "WK")
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.154048) < 0.000_01)
+        #expect(abs((snap.row2?.primaryFraction ?? 0) - 0.71687815) < 0.000_01)
+        // A production host is the normal case, so neither one is named as a
+        // source — the plain host's windows are no more "the source" than the
+        // daily host's.
+        #expect(snap.cliSource == "Google OAuth")
+        #expect(snap.auxiliaryInfo == "Live Antigravity subscription quota")
+    }
+
+    /// A host that fails outright does not end the walk either.
+    @Test("Gemini tries the next host after a failed one")
+    func geminiContinuesAfterFailedHost() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
+                return canned(status: 503, body: "")
+            }
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.90}]}]}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .measured(.none))
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.10) < 0.000_01)
+        #expect(URLProtocolStub.capturedRequests.count == 3)
+    }
+
+    /// Neither host publishing a Gemini window is the one case that still reads
+    /// "no Gemini quota" — and it names that, not a generic bad response.
+    @Test("Gemini names the missing window only when no host publishes it")
+    func geminiNeitherHostHasGemini() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            return canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
+        // Two summary requests, and no plan lookup for a row that has no reading.
+        #expect(URLProtocolStub.requestCount == 2)
+    }
+
+    /// A bucket the vendor switched off keeps whatever fraction it last
+    /// published; drawing it would report a window nothing is metered against.
+    @Test("Gemini skips a disabled bucket rather than drawing its stale fraction")
+    func geminiSkipsDisabledBucket() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            return canned(body: #"""
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.845952},
+              {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.10,"disabled":true}]}]}
+            """#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.bars.count == 1)
+        #expect(snap.row1?.label == "5H")
+        #expect(snap.row2 == nil)
+    }
+
+    /// A group whose every bucket is switched off is no reading either, so the
+    /// next host is still worth asking.
+    @Test("Gemini treats an all-disabled group as no reading and asks the next host")
+    func geminiAllDisabledGroupFallsThrough() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("loadCodeAssist") == true {
+                return canned(body: "{}")
+            }
+            if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
+                return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5,"disabled":true}]}]}"#)
+            }
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.25}]}]}"#)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status.confidence == .measured)
+        #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.75) < 0.000_01)
+    }
+
+    /// A rejected credential is the one verdict that overrules an earlier
+    /// host's transport failure. Left standing, the stale timeout would be
+    /// thrown and the row would read "Vendor slow — will retry" for a token the
+    /// vendor just refused — sending the user to check a connection that is
+    /// fine, and losing the poll-floor exemption a corrected credential needs.
+    @Test("an earlier host's transport failure does not mask a later host's credential rejection")
+    func geminiRejectionOutranksStaleTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ _ in
+            // The first host never reaches the handler: `failNextRequest` fails
+            // it at the transport layer. The second one refuses the token.
+            canned(status: 401, body: "{}")
+        }) {
+            URLProtocolStub.nextFailureCode = .timedOut
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot()
+        }
+
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snap.status == .unavailable(.credentialRejected))
+    }
+
+    /// The other half of that asymmetry: a 200 without a Gemini group does *not*
+    /// overrule a host that never answered, because which host publishes the
+    /// windows is exactly what differs between accounts — so it cannot stand in
+    /// for one that timed out.
+    @Test("a content-less answer does not overrule a host that never answered")
+    func geminiContentLessAnswerDoesNotMaskTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        await #expect(throws: URLError.self) {
+            try await withStubbedHTTP({ _ in
+                canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
+            }) {
+                URLProtocolStub.nextFailureCode = .timedOut
+                URLProtocolStub.failNextRequest = true
+                return try await provider.fetchSnapshot()
+            }
+        }
+    }
+
     /// The response also carries a "Claude and GPT models" group — a separate
     /// Antigravity allowance. Averaging it into a row labelled Gemini would
     /// report a number for a pool the row does not name.
@@ -1284,6 +1448,33 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(2377))))
     }
 
+    /// A relayed throttle is Anthropic's own answer, so the same policy applies
+    /// through the proxy: a 403 is the vendor holding a working token back, not
+    /// a key to go and check, and a 429 with no usable `Retry-After` still
+    /// carries the five-minute cooldown.
+    @Test("a proxy-relayed Claude throttle is reported as a rate limit, not a bad credential")
+    func claudeProxyRelayed403IsAThrottle() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key"
+        )
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config, directCredential: { nil })
+        let now = Date()
+
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"claude_idx"}]}"#)
+            }
+            return canned(body: #"""
+            {"status_code":403,"header":{"Retry-After":["0"]},"body":"{\"error\":{\"type\":\"permission_error\"}}"}
+            """#)
+        }) {
+            try await provider.fetchSnapshot(now: now)
+        }
+
+        #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(300))))
+    }
+
     /// A 429 direct from Anthropic carries the same instruction, and it was
     /// dropped on this path too — the Claude provider is one of the few that
     /// reads the header at all.
@@ -1299,6 +1490,71 @@ struct ProviderHTTPTests {
         }
 
         #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(90))))
+    }
+
+    /// Anthropic answers this endpoint's throttle with `Retry-After: 0`, and a
+    /// non-positive delta is "no instruction" to `QuotaHTTP.retryAfterDate` —
+    /// so the row carried no instant at all and the poll loop re-asked every
+    /// 120 s for the whole ~40-minute window the account spends throttled.
+    /// Claude Code, the client this endpoint exists for, holds off five minutes
+    /// in exactly that case; the row must carry an instant again so
+    /// `QuotaManager` has something to gate the automatic poll behind.
+    @Test("a Claude 429 with no usable Retry-After buys the five-minute cooldown")
+    func claudeDirectRateLimitUsesFiveMinuteFloor() async throws {
+        let now = Date()
+        for headers in [[String: String](), ["Retry-After": "0"], ["Retry-After": ""]] {
+            let snap = try await withStubbedHTTP({ _ in
+                canned(status: 429, body: #"{"error":{"type":"rate_limit_error"}}"#, headers: headers)
+            }) {
+                try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+            }
+            #expect(snap.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(300))))
+        }
+        // And the user sees the window rather than "will retry". 300 s is five
+        // minutes whatever the wall clock says when the remedy is built.
+        let snap = try await withStubbedHTTP({ _ in canned(status: 429, body: "{}") }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+        }
+        #expect(snap.status.unavailableReason?.remedy == "Vendor throttling — retry in 5 min")
+    }
+
+    /// When the vendor does say, its figure is an instruction — clamped to the
+    /// hour Claude Code clamps to, so a day-long value cannot park the row.
+    @Test("a Claude 429 honours the vendor's Retry-After up to the one-hour cap")
+    func claudeDirectRateLimitHonoursRetryAfterUpToCap() async throws {
+        let now = Date()
+        let asked = try await withStubbedHTTP({ _ in
+            canned(status: 429, body: "{}", headers: ["Retry-After": "2377"])
+        }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+        }
+        #expect(asked.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(2377))))
+
+        let capped = try await withStubbedHTTP({ _ in
+            canned(status: 429, body: "{}", headers: ["Retry-After": "7200"])
+        }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+        }
+        #expect(capped.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(3600))))
+    }
+
+    /// Anthropic throttles this endpoint with 403 as well as 429. Read as
+    /// `credentialRejected` it was exempt from the poll floor, so a throttle
+    /// was re-asked on every cycle *and* the row told the user to check a key
+    /// that was working. 401 is still the rejected credential, and still
+    /// exempt from the floor, because re-signing-in can fix it instantly.
+    @Test("a 403 from the Claude usage endpoint is a throttle, not a rejected credential")
+    func claudeDirect403IsAThrottle() async throws {
+        let now = Date()
+        let throttled = try await withStubbedHTTP({ _ in canned(status: 403, body: "{}") }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+        }
+        #expect(throttled.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(300))))
+
+        let rejected = try await withStubbedHTTP({ _ in canned(status: 401, body: "{}") }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot(now: now)
+        }
+        #expect(rejected.status == .unavailable(.credentialRejected))
     }
 
     @Test("OpenAI queries CLIProxyAPI management endpoints and parses live usage")
