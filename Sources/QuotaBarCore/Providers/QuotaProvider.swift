@@ -201,10 +201,23 @@ public enum QuotaHTTP {
     /// a date into "retry now" or "retry tomorrow" — a wrong instant is worse
     /// than no instant, as everywhere else in this codebase. A non-positive
     /// delta is no instruction at all.
+    ///
+    /// Delta-seconds is digits and nothing else (RFC 9110 §10.2.3).
+    /// `TimeInterval(_:)` also reads "inf", "1e999", "0x1p70", "-5" and "2.5",
+    /// and an infinite or 21-digit delay trapped the app: the row's remedy
+    /// converts the wait to whole minutes with `Int(_:)`, which crashes past
+    /// `Int.max`, and the instant held the automatic poll back for good. A
+    /// longer delay than `maximumRetryAfter` is honoured as that cap, so a
+    /// vendor asking for a long wait still gets one.
     public static func retryAfterDate(secondsHeader raw: String?, now: Date = Date()) -> Date? {
-        guard let raw, let seconds = TimeInterval(raw.trimmed), seconds > 0 else { return nil }
-        return now.addingTimeInterval(seconds)
+        guard let text = raw?.trimmed, !text.isEmpty else { return nil }
+        guard text.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }) else { return nil }
+        guard let seconds = TimeInterval(text), seconds > 0 else { return nil }
+        return now.addingTimeInterval(seconds > maximumRetryAfter ? maximumRetryAfter : seconds)
     }
+
+    /// The longest backoff `retryAfterDate` honours: one day.
+    public static let maximumRetryAfter: TimeInterval = 86_400
 }
 
 #if DEBUG

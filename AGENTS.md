@@ -63,7 +63,10 @@ Code applies to the same endpoint. Use the vendor's figure when it is smaller: a
 `Retry-After: 30` buys 30 s, not the floor. That lives in
 `CLIProxyClient.claudeUsageCooldown`/`claudeUsageFailureReason` and is used on
 both Claude paths, direct and relayed, because it is Anthropic's answer either
-way. `retryAfterDate` itself and its tests are unchanged.
+way. `retryAfterDate` itself accepts only ASCII-digit delay-seconds and caps
+them at a day (`maximumRetryAfter`): `TimeInterval("inf")` parses, and an
+infinite or 21-digit wait parked the automatic poll for good and trapped
+`remedy`'s `Int(_:)` conversion.
 
 **Neither Cloud Code host is authoritative for Antigravity's Gemini windows.**
 `GeminiQuotaProvider` walks `productionAPIHosts` — `daily-` first, then the
