@@ -156,6 +156,45 @@ struct ProviderStatusTests {
         // gates a retry.
         #expect(QuotaHTTP.retryAfterDate(secondsHeader: "Wed, 21 Oct 2026 07:28:00 GMT", now: now) == nil)
     }
+
+    /// `TimeInterval(_:)` reads all of these as numbers. "inf" became an
+    /// instant that never arrives, so the automatic poll stopped for good, and
+    /// the row's remedy trapped converting an infinite wait to whole minutes.
+    @Test("Retry-After accepts only delay-seconds digits, never inf, exponents or signs")
+    func retryAfterDateRejectsNonDelaySeconds() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for raw in ["inf", "infinity", "nan", "1e999", "1e3", "0x1p70", "-5", "+30", "2.5", "30s", "٣٠"] {
+            #expect(QuotaHTTP.retryAfterDate(secondsHeader: raw, now: now) == nil, "\(raw)")
+        }
+    }
+
+    /// A 21-digit delay is finite but past `Int.max` minutes, which trapped the
+    /// remedy just as "inf" did, and it parked the automatic poll for longer
+    /// than the Mac will run. A long wait is still a wait: it is honoured up to
+    /// the cap rather than dropped.
+    @Test("a Retry-After longer than a day holds the automatic poll for a day, not forever")
+    func retryAfterDateClampsToADay() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let cap = now.addingTimeInterval(QuotaHTTP.maximumRetryAfter)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "86400", now: now) == cap)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "86401", now: now) == cap)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: "999999999999999999999", now: now) == cap)
+        #expect(QuotaHTTP.retryAfterDate(secondsHeader: String(repeating: "9", count: 400), now: now) == cap)
+    }
+
+    /// End to end through the generic 429 mapping: the remedy the row prints
+    /// for the headers that used to crash it.
+    @Test("a 429 with an absurd Retry-After still renders a remedy")
+    func absurdRetryAfterRendersARemedy() {
+        // The remedy measures from the wall clock, so `now` must be the real one.
+        let now = Date()
+        for raw in ["inf", "1e999"] {
+            #expect(QuotaHTTP.failureReason(for: 429, retryAfter: raw, now: now)?.remedy
+                    == "Vendor throttling — will retry")
+        }
+        #expect(QuotaHTTP.failureReason(for: 429, retryAfter: "999999999999999999999", now: now)?.remedy
+                == "Vendor throttling — retry in 1440 min")
+    }
 }
 
 @Suite("Dual-bar never-coerced invariant")
