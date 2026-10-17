@@ -7,11 +7,13 @@
 # deadline must return within 1.5s while a thread sleeps for 3s, and 0.05s of
 # blocking work must beat a 2s deadline. Both depend on the concurrency pool
 # reaching the timeout and work tasks promptly. In the main --parallel run that
-# pool (one thread per core) is shared with every other test, so on hosted CI
-# the suite measured the queue in front of withDeadline instead: green runs
-# took 0.76s and 1.03s, and red ones 1.82s and over 2s. Here the suite gets a
-# process of its own and the rest of the suite runs in parallel as before. No
-# assertion is changed and nothing is retried.
+# pool (one thread per core) is shared with every other test. The suite flaked
+# there on hosted CI (green runs took 0.76s and 1.03s, red ones 1.82s and over
+# 2s), and those logs are consistent with it waiting in that queue, though
+# general host contention would look the same and a repeated isolated-versus-
+# full comparison under load has not been run. Here the suite gets a process of
+# its own and the rest of the suite runs in parallel as before. No assertion is
+# changed and nothing is retried.
 #
 # Both invocations use one regex, as --filter and as --skip, so they cannot
 # overlap or leave a gap. `swift test list` then proves the regex selects at

@@ -14,10 +14,11 @@ swift build -Xswiftc -warnings-as-errors && scripts/run-swift-tests.sh
 
 CI runs exactly this, then re-runs the tests once more to catch flakes. The
 script is `swift test -c debug --parallel` split in two: the real-clock
-`DeadlineUncancellableTests` suite runs in its own invocation, because in the
-full parallel run its timeout task queued behind every other test for the
-concurrency pool and missed the deadline, and the rest runs in parallel as
-before. The script checks that the two selections cover the whole suite. Don't
+`DeadlineUncancellableTests` suite runs in its own invocation and the rest
+runs in parallel as before. The suite missed its deadline in the full parallel
+run on hosted CI; the logs are consistent with its timeout task queueing behind
+other tests for the concurrency pool, though host contention has not been ruled
+out. The script checks that the two selections cover the whole suite. Don't
 fold the suite back into the parallel run, and don't add a retry or loosen its
 timing to get it green there.
 
