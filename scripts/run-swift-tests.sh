@@ -15,8 +15,9 @@
 #
 # Both invocations use one regex, as --filter and as --skip, so they cannot
 # overlap or leave a gap. `swift test list` then proves the regex selects at
-# least one test and not every test, and the isolated run must report exactly
-# the listed count, so a renamed suite cannot make it silently run nothing.
+# least one test and not every test, and each run must report exactly its
+# listed count (swift-testing counts trait-skipped tests as run), so together
+# they ran the whole suite and a renamed suite cannot silently run nothing.
 #
 # Coverage: SwiftPM clears its coverage data at the start of each invocation,
 # so with --enable-code-coverage the report is the second (main) invocation's.
@@ -71,6 +72,7 @@ echo "==> isolated run reported ${ran_isolated:-no} tests; parallel run reported
 [ "$remaining" -ge 1 ] || fail "'$isolated' matches every listed test"
 [ "${ran_isolated:-}" = "$selected" ] \
   || fail "isolated run reported ${ran_isolated:-no} tests, expected the $selected listed"
-[ "${ran_parallel:-0}" -ge 1 ] || fail "parallel run reported no tests"
+[ "${ran_parallel:-}" = "$remaining" ] \
+  || fail "parallel run reported ${ran_parallel:-no} tests, expected the $remaining listed"
 
 exit "$status"
