@@ -186,8 +186,8 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 # Build with zero-warning tolerance
 swift build -Xswiftc -warnings-as-errors
 
-# Run full test suite in parallel
-swift test -c debug --parallel
+# Run full test suite (the real-clock deadline suite alone, the rest in parallel)
+scripts/run-swift-tests.sh
 ```
 
 CI runs on GitHub-hosted `macos-15` (Apple Silicon) with Xcode 16.

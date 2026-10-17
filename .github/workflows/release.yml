@@ -82,7 +82,7 @@ jobs:
       # and the tests assume the development label. Same invocation as CI, so a
       # dispatch can no longer ship a commit that never passed the suite.
       - name: Run tests
-        run: swift test -c debug --parallel
+        run: scripts/run-swift-tests.sh
 
       - name: Build Release (ARM64)
         run: |

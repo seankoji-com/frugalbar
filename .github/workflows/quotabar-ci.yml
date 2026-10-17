@@ -71,8 +71,10 @@ jobs:
             --version-text "FrugalBar development build" \
             --usage QuotaBar
 
+      # The real-clock deadline suite runs in its own invocation, the rest in
+      # parallel; the script checks the two selections cover the whole suite.
       - name: Run tests
-        run: swift test -c debug --parallel --enable-code-coverage
+        run: scripts/run-swift-tests.sh --enable-code-coverage
 
       # Keep the first run's report before the separate flake check rebuilds
       # without instrumentation. Report publication starts advisory.
@@ -128,7 +130,7 @@ jobs:
       # dependence — a formatter that truncated instead of rounding used to
       # fail roughly one run in four.
       - name: Re-run tests (flake check)
-        run: swift test -c debug --parallel
+        run: scripts/run-swift-tests.sh
 
   # Early warning for the next toolchain. Swift 6.4 turned an implicit strong
   # capture and a redundant Sendable conformance into errors under
@@ -151,4 +153,4 @@ jobs:
         run: swift build -c debug --build-tests -Xswiftc -warnings-as-errors
 
       - name: Run tests
-        run: swift test -c debug --parallel
+        run: scripts/run-swift-tests.sh
