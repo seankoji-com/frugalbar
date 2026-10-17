@@ -82,7 +82,7 @@ jobs:
       # and the tests assume the development label. Same invocation as CI, so a
       # dispatch can no longer ship a commit that never passed the suite.
       - name: Run tests
-        run: swift test -c debug --parallel
+        run: scripts/run-swift-tests.sh
 
       # Sync to phone & watch signs in as FrugalBar's Google Desktop OAuth
       # client. Its values are never committed: they come from Actions secrets

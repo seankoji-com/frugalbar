@@ -9,10 +9,22 @@ what has actually gone wrong before.
 ## Commands
 
 ```bash
-swift build -Xswiftc -warnings-as-errors && swift test -c debug --parallel
+swift build -Xswiftc -warnings-as-errors && scripts/run-swift-tests.sh
 ```
 
-CI runs exactly this, then re-runs the tests once more to catch flakes.
+CI runs exactly this, then re-runs the tests once more to catch flakes. That
+whole-suite CI re-run includes the deadline suite; do not add a per-suite retry. The
+script is `swift test -c debug --parallel` split in two: the real-clock
+`DeadlineUncancellableTests` suite runs in its own invocation and the rest
+runs in parallel as before. The suite missed its deadline in the full parallel
+run on hosted CI; the logs are consistent with its timeout task queueing behind
+other tests for the concurrency pool, though host contention has not been ruled
+out. The script confirms the isolated suite still appears in the test list. The
+matching `--filter` and `--skip` expressions divide the suite between the two
+successful invocations. Their summary counts cannot be compared with the test
+list because parameterized cases are counted differently. Don't
+fold the suite back into the parallel run, and don't add a retry or loosen its
+timing to get it green there.
 
 ## Invariants
 
