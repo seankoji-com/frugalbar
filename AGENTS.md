@@ -12,13 +12,17 @@ what has actually gone wrong before.
 swift build -Xswiftc -warnings-as-errors && scripts/run-swift-tests.sh
 ```
 
-CI runs exactly this, then re-runs the tests once more to catch flakes. The
+CI runs exactly this, then re-runs the tests once more to catch flakes. That
+whole-suite CI re-run includes the deadline suite; do not add a per-suite retry. The
 script is `swift test -c debug --parallel` split in two: the real-clock
 `DeadlineUncancellableTests` suite runs in its own invocation and the rest
 runs in parallel as before. The suite missed its deadline in the full parallel
 run on hosted CI; the logs are consistent with its timeout task queueing behind
 other tests for the concurrency pool, though host contention has not been ruled
-out. The script checks that the two selections cover the whole suite. Don't
+out. The script confirms the isolated suite still appears in the test list. The
+matching `--filter` and `--skip` expressions divide the suite between the two
+successful invocations. Their summary counts cannot be compared with the test
+list because parameterized cases are counted differently. Don't
 fold the suite back into the parallel run, and don't add a retry or loosen its
 timing to get it green there.
 
@@ -71,7 +75,10 @@ Code applies to the same endpoint. Use the vendor's figure when it is smaller: a
 `Retry-After: 30` buys 30 s, not the floor. That lives in
 `CLIProxyClient.claudeUsageCooldown`/`claudeUsageFailureReason` and is used on
 both Claude paths, direct and relayed, because it is Anthropic's answer either
-way. `retryAfterDate` itself and its tests are unchanged.
+way. `retryAfterDate` itself accepts only ASCII-digit delay-seconds and caps
+them at a day (`maximumRetryAfter`): `TimeInterval("inf")` parses, and an
+infinite or 21-digit wait parked the automatic poll for good and trapped
+`remedy`'s `Int(_:)` conversion.
 
 **Neither Cloud Code host is authoritative for Antigravity's Gemini windows.**
 `GeminiQuotaProvider` walks `productionAPIHosts` — `daily-` first, then the

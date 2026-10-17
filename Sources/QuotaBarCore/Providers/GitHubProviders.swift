@@ -101,7 +101,10 @@ private func rateLimitSnapshot(
         secondaryFraction: 0.0,
         label: "REST",
         usedText: "\(rate.remaining) / \(rate.limit) req/hr",
-        resetText: minsRemaining > 0 ? "Resets in \(minsRemaining)m" : "Resets shortly"
+        resetText: minsRemaining > 0 ? "Resets in \(minsRemaining)m" : "Resets shortly",
+        quantityRemaining: Decimal(rate.remaining),
+        quantityLimit: Decimal(rate.limit),
+        quantityUnit: unitName
     )
 
     var r2: DualBarMetrics? = nil
@@ -114,7 +117,10 @@ private func rateLimitSnapshot(
             secondaryFraction: 0.0,
             label: "GraphQL",
             usedText: "\(actualGql.remaining) / \(actualGql.limit) pts/hr",
-            resetText: gqlMins > 0 ? "Resets in \(gqlMins)m" : "Hourly roll at :00"
+            resetText: gqlMins > 0 ? "Resets in \(gqlMins)m" : "Hourly roll at :00",
+            quantityRemaining: Decimal(actualGql.remaining),
+            quantityLimit: Decimal(actualGql.limit),
+            quantityUnit: "pts/hr"
         )
         auxInfo = "REST: \(rate.remaining)/\(rate.limit) • GraphQL: \(actualGql.remaining)/\(actualGql.limit)"
     }

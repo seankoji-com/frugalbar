@@ -1,0 +1,51 @@
+{
+  "description": "A failed first read that QuotaManager gave the user's billing cycle (unavailableSnapshot + attachingCycleRow): the cycle row is the user's date, not a reading, so measuredAt stays null and primary is unavailable {noReading}; the placeholder tier is not a plan.",
+  "covers": [
+    "regression:never-measured-with-cycle"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "grok",
+      "vendorId": "grok",
+      "displayName": "Grok",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "subscription",
+        "tierName": "Offline"
+      },
+      "status": {
+        "kind": "unavailable",
+        "reason": "offline"
+      },
+      "resetsAt": "2026-10-18T00:00:00.000Z",
+      "lastUpdated": "2026-10-14T23:59:30.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER grok",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "CYCLE",
+        "primaryFraction": 0.9,
+        "usedText": "USEDTEXT-MARKER CYCLE",
+        "resetText": "RESETTEXT-MARKER CYCLE",
+        "resetsAt": "2026-10-18T00:00:00.000Z",
+        "windowLength": 2592000,
+        "measuresElapsedTimeOnly": true
+      }
+    }
+  ],
+  "events": []
+}

@@ -8,7 +8,7 @@
     },
     {
       "name": "Tests",
-      "command": "swift test -c debug --parallel",
+      "command": "scripts/run-swift-tests.sh",
       "icon": "test"
     }
   ]

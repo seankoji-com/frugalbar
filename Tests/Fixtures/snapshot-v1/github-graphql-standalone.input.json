@@ -1,0 +1,55 @@
+{
+  "description": "Standalone GitHub GraphQL: its one row is labelled REST, which is copied and never used for identity; resetSource provider.",
+  "covers": [
+    "table:github_graphql"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "github_graphql",
+      "vendorId": "github_graphql",
+      "displayName": "GitHub GraphQL",
+      "category": "Developer Limits",
+      "metric": {
+        "type": "count",
+        "remaining": 1000,
+        "limit": 5000,
+        "unitName": "pts/hr"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": "2026-10-15T00:48:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER github_graphql",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "REST",
+        "primaryFraction": 0.8,
+        "usedText": "USEDTEXT-MARKER REST",
+        "resetText": "RESETTEXT-MARKER REST",
+        "expectedPaceFraction": 0.3,
+        "quantityRemaining": "1000",
+        "quantityLimit": "5000",
+        "quantityUnit": "pts/hr"
+      },
+      "planName": "GitHub API"
+    }
+  ],
+  "events": []
+}

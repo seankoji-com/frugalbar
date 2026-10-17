@@ -1,0 +1,57 @@
+{
+  "description": "DevPass capped spend: the sole quota window is tightest; basis keySpendCap.",
+  "covers": [
+    "table:devpass-currency",
+    "branch:devpass-capped"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "devpass",
+      "vendorId": "devpass",
+      "displayName": "DevPass",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "currency",
+        "balance": "15",
+        "limit": "25",
+        "spent": "10",
+        "currencyCode": "USD"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER devpass",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "SP",
+        "primaryFraction": 0.4,
+        "usedText": "USEDTEXT-MARKER SP",
+        "resetText": "RESETTEXT-MARKER SP",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "10",
+        "quantityLimit": "25",
+        "quantityUnit": "USD"
+      },
+      "currencyBasis": "keySpendCap"
+    }
+  ],
+  "events": []
+}

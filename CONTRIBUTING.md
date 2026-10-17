@@ -37,8 +37,8 @@ FrugalBar is structured into modular Swift targets:
 # Build with zero-warning tolerance
 swift build -Xswiftc -warnings-as-errors
 
-# Run full test suite in parallel
-swift test -c debug --parallel
+# Run the full suite with the real-clock deadline tests isolated
+scripts/run-swift-tests.sh
 ```
 
 ---

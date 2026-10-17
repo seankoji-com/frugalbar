@@ -15,6 +15,7 @@ SCHEDULER = "Sources/QuotaBarCore/Engine/BackgroundScheduler.swift"
 OAUTH = "Sources/QuotaBarCore/Providers/GeminiOAuthLogin.swift"
 QUOTA_MANAGER = "Sources/QuotaBarCore/Engine/QuotaManager.swift"
 DEADLINE = "Sources/QuotaBarCore/Engine/Deadline.swift"
+QUOTA_HTTP = "Sources/QuotaBarCore/Providers/QuotaProvider.swift"
 CASES = [
     ("overlap-guard", SCHEDULER, "        guard !isRefreshing else { return }\n",
      "BackgroundSchedulerTests/refreshDoesNotOverlap", "an overlapping refresh is skipped and the next cycle still runs"),
@@ -38,6 +39,15 @@ CASES = [
     ("deadline-preempts", DEADLINE, "        await gate.offer(.failure(.timedOut))\n",
      "DeadlineUncancellableTests/timesOutUncancellableWork",
      "the deadline fires even though the operation ignores cancellation"),
+    # `TimeInterval("inf")` parses; an infinite Retry-After parked the poll for
+    # good and trapped the remedy's `Int(_:)` conversion.
+    ("retry-after-digits", QUOTA_HTTP,
+     '        guard text.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }) else { return nil }\n',
+     "ProviderStatusTests/retryAfterDateRejectsNonDelaySeconds",
+     "Retry-After accepts only delay-seconds digits, never inf, exponents or signs"),
+    ("retry-after-cap", QUOTA_HTTP, "seconds > maximumRetryAfter ? maximumRetryAfter : ",
+     "ProviderStatusTests/retryAfterDateClampsToADay",
+     "a Retry-After longer than a day holds the automatic poll for a day, not forever"),
 ]
 
 

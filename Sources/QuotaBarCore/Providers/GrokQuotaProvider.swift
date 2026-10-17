@@ -178,7 +178,10 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
                     + " of \(SubscriptionCycle.formatCost(Decimal(cap), currencyCode: "USD")) cap used",
                 resetText: resetText,
                 resetsAt: periodEnd,
-                windowLength: windowLength
+                windowLength: windowLength,
+                quantityUsed: Decimal(used),
+                quantityLimit: Decimal(cap),
+                quantityUnit: "USD"
             )
         }()
 

@@ -1,0 +1,56 @@
+{
+  "description": "DevPass uncapped spend: the adapter exports basis lifetimeSpend; the source snapshot has no currencyBasis. No eligible window.",
+  "covers": [
+    "table:devpass-currency",
+    "branch:devpass-uncapped"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "devpass",
+      "vendorId": "devpass",
+      "displayName": "DevPass",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "currency",
+        "balance": "3.5",
+        "limit": null,
+        "spent": "3.5",
+        "currencyCode": "USD"
+      },
+      "status": {
+        "kind": "unavailable",
+        "reason": "unsupported",
+        "message": "No DevPass plan on this key"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER devpass",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "SP",
+        "primaryFraction": null,
+        "usedText": "USEDTEXT-MARKER SP",
+        "resetText": "RESETTEXT-MARKER SP",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "3.5",
+        "quantityUnit": "USD"
+      }
+    }
+  ],
+  "events": []
+}

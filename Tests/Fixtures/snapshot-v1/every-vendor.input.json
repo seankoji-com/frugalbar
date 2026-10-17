@@ -1,0 +1,484 @@
+{
+  "description": "Every vendor once, in Mac order.",
+  "covers": [
+    "fixture:every-vendor"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "claude",
+      "vendorId": "claude",
+      "displayName": "Claude",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER claude",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "openai",
+      "vendorId": "openai",
+      "displayName": "OpenAI",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER openai",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "gemini",
+      "vendorId": "gemini",
+      "displayName": "Gemini",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER gemini",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "opencode",
+      "vendorId": "opencode",
+      "displayName": "OpenCode",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER opencode",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "copilot",
+      "vendorId": "copilot",
+      "displayName": "GitHub Copilot",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER copilot",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "openrouter",
+      "vendorId": "openrouter",
+      "displayName": "OpenRouter",
+      "category": "API Spend & Credits",
+      "metric": {
+        "type": "currency",
+        "balance": "20",
+        "limit": null,
+        "spent": null,
+        "currencyCode": "USD"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER openrouter",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "currencyBasis": "accountCredit"
+    },
+    {
+      "id": "deepseek",
+      "vendorId": "deepseek",
+      "displayName": "DeepSeek",
+      "category": "API Spend & Credits",
+      "metric": {
+        "type": "currency",
+        "balance": "20",
+        "limit": null,
+        "spent": null,
+        "currencyCode": "USD"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER deepseek",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "currencyBasis": "accountCredit"
+    },
+    {
+      "id": "grok",
+      "vendorId": "grok",
+      "displayName": "Grok",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER grok",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "WK",
+        "primaryFraction": 0.3,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-18T00:00:00.000Z",
+        "windowLength": 604800
+      }
+    },
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "Kiro",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-31T00:00:00.000Z",
+        "quantityUsed": "10",
+        "quantityLimit": "50",
+        "quantityUnit": "credits"
+      }
+    },
+    {
+      "id": "devpass",
+      "vendorId": "devpass",
+      "displayName": "DevPass",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.5
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER devpass",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-31T00:00:00.000Z",
+        "quantityUsed": "40",
+        "quantityLimit": "80",
+        "quantityUnit": "credits"
+      }
+    },
+    {
+      "id": "commandcode",
+      "vendorId": "commandcode",
+      "displayName": "Command Code",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "subscription",
+        "tierName": "Go"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER commandcode",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.1,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000,
+        "quantityUsed": "0.5",
+        "quantityLimit": "5",
+        "quantityUnit": "credits"
+      }
+    },
+    {
+      "id": "clinepass",
+      "vendorId": "clinepass",
+      "displayName": "ClinePass",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER clinepass",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "muse",
+      "vendorId": "muse",
+      "displayName": "Muse",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER muse",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    },
+    {
+      "id": "github_rest",
+      "vendorId": "github_rest",
+      "displayName": "GitHub API",
+      "category": "Developer Limits",
+      "metric": {
+        "type": "count",
+        "remaining": 4000,
+        "limit": 5000,
+        "unitName": "req/hr"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": "2026-10-15T00:30:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER github_rest",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "REST",
+        "primaryFraction": 0.2,
+        "usedText": "USEDTEXT-MARKER REST",
+        "resetText": "RESETTEXT-MARKER REST",
+        "expectedPaceFraction": 0.3,
+        "quantityRemaining": "4000",
+        "quantityLimit": "5000",
+        "quantityUnit": "req/hr"
+      },
+      "row2": {
+        "label": "GraphQL",
+        "primaryFraction": 0.1,
+        "usedText": "USEDTEXT-MARKER GraphQL",
+        "resetText": "RESETTEXT-MARKER GraphQL",
+        "expectedPaceFraction": 0.3,
+        "quantityRemaining": "4500",
+        "quantityLimit": "5000",
+        "quantityUnit": "pts/hr"
+      }
+    },
+    {
+      "id": "github_graphql",
+      "vendorId": "github_graphql",
+      "displayName": "GitHub GraphQL",
+      "category": "Developer Limits",
+      "metric": {
+        "type": "count",
+        "remaining": 4500,
+        "limit": 5000,
+        "unitName": "pts/hr"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": "2026-10-15T00:30:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER github_graphql",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "REST",
+        "primaryFraction": 0.1,
+        "usedText": "USEDTEXT-MARKER REST",
+        "resetText": "RESETTEXT-MARKER REST",
+        "expectedPaceFraction": 0.3,
+        "quantityRemaining": "4500",
+        "quantityLimit": "5000",
+        "quantityUnit": "pts/hr"
+      }
+    }
+  ],
+  "events": []
+}

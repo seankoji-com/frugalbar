@@ -1,0 +1,63 @@
+{
+  "description": "Providers never read: unavailableSnapshot placeholders export measuredAt null and primary unavailable {noReading}; no Mac clock sample.",
+  "covers": [
+    "fixture:never-measured"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": null,
+  "macClockSampledAt": null,
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "claude",
+      "vendorId": "claude",
+      "displayName": "Claude",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "subscription",
+        "tierName": "Not configured"
+      },
+      "status": {
+        "kind": "unavailable",
+        "reason": "notConfigured"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:59:30.000Z",
+      "auxiliaryInfo": "Add a key in Settings",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER"
+    },
+    {
+      "id": "gemini",
+      "vendorId": "gemini",
+      "displayName": "Gemini",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "subscription",
+        "tierName": "Rate limited"
+      },
+      "status": {
+        "kind": "unavailable",
+        "reason": "rateLimited"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:59:30.000Z",
+      "auxiliaryInfo": "Vendor throttling — will retry",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER"
+    }
+  ],
+  "events": []
+}

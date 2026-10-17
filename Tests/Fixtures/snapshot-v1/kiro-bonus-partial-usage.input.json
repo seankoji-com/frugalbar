@@ -1,0 +1,65 @@
+{
+  "description": "Kiro with two ACTIVE bonuses, 25/100 and a 200 limit with no currentUsage: the Mac draws 25/300, but the usage sum is unknown, so row2 quantityUsed is nil and the bonus window exports unavailable {noReading}. The plan row and the percentage primary export unchanged.",
+  "covers": [
+    "branch:kiro-bonus-partial-usage"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "Kiro",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.8
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "warning"
+      },
+      "resetsAt": "2026-10-31T00:00:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 0.8,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-31T00:00:00.000Z",
+        "windowLength": 2592000,
+        "quantityUsed": "40",
+        "quantityLimit": "50",
+        "quantityUnit": "credits"
+      },
+      "row2": {
+        "label": "BN",
+        "primaryFraction": 0.08333333333333333,
+        "usedText": "USEDTEXT-MARKER BN",
+        "resetText": "RESETTEXT-MARKER BN",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-11-29T00:00:00.000Z",
+        "quantityLimit": "300",
+        "quantityUnit": "credits"
+      },
+      "planName": "KIRO PRO"
+    }
+  ],
+  "events": []
+}

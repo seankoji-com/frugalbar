@@ -15,11 +15,11 @@
 # its own and the rest of the suite runs in parallel as before. No assertion is
 # changed and nothing is retried.
 #
-# Both invocations use one regex, as --filter and as --skip, so they cannot
-# overlap or leave a gap. `swift test list` then proves the regex selects at
-# least one test and not every test, and each run must report exactly its
-# listed count (swift-testing counts trait-skipped tests as run), so together
-# they ran the whole suite and a renamed suite cannot silently run nothing.
+# Both invocations use the same regex as --filter and --skip, so they select
+# complementary parts of the suite. `swift test list` confirms the suite still
+# exists and is not the whole suite. Its output expands parameterized cases,
+# while the test-run summary counts logical tests, so those counts are not
+# comparable.
 #
 # Coverage: SwiftPM clears its coverage data at the start of each invocation,
 # so with --enable-code-coverage the report is the second (main) invocation's.
@@ -32,6 +32,7 @@ set -uo pipefail
 isolated='DeadlineUncancellableTests'
 args=(-c debug "$@")
 logs=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/swift-tests.XXXXXX")
+trap 'rm -rf -- "$logs"' EXIT
 status=0
 
 fail() {
@@ -52,29 +53,41 @@ echo "==> parallel: --skip $isolated"
 swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log" \
   || fail "parallel invocation failed"
 
-# --skip-build lists the binary just built rather than rebuilding without the
-# caller's flags; an instrumented binary would otherwise drop default.profraw
-# into the checkout.
+# Listing builds the test executable when needed. Keep any coverage output out
+# of the checkout, including when this is the first command after a clean build.
 if ! LLVM_PROFILE_FILE="$logs/list-%p.profraw" \
-    swift test list -c debug --skip-build > "$logs/list.txt" 2> "$logs/list.err"; then
+    swift test list -c debug > "$logs/list.txt" 2> "$logs/list.err"; then
   cat "$logs/list.err" >&2
   fail "swift test list failed"
+  exit "$status"
 fi
 
-total=$(grep -c . "$logs/list.txt")
-selected=$(grep -cE "$isolated" "$logs/list.txt")
+if [ ! -f "$logs/list.txt" ]; then
+  fail "test listing output is missing"
+  exit "$status"
+fi
+if ! grep -q . "$logs/list.txt"; then
+  fail "test listing is empty"
+  exit "$status"
+fi
+# swift test list emits ModuleSuite/testName entries. Anchor the suite name so
+# similarly named suites and diagnostic lines cannot inflate its count.
+total=$(grep -c . "$logs/list.txt" || true)
+selected=$(grep -cE "(^|[./])$isolated/" "$logs/list.txt" || true)
 remaining=$((total - selected))
 ran_isolated=$(ran "$logs/isolated.log")
 ran_parallel=$(ran "$logs/parallel.log")
 
-echo "==> listed $total tests: $selected isolated, $remaining in the parallel run"
+echo "==> listed $total test identifiers; $selected match $isolated"
 echo "==> isolated run reported ${ran_isolated:-no} tests; parallel run reported ${ran_parallel:-no} tests"
 
 [ "$selected" -ge 1 ] || fail "'$isolated' matches no listed test; the isolated run would test nothing"
 [ "$remaining" -ge 1 ] || fail "'$isolated' matches every listed test"
-[ "${ran_isolated:-}" = "$selected" ] \
-  || fail "isolated run reported ${ran_isolated:-no} tests, expected the $selected listed"
-[ "${ran_parallel:-}" = "$remaining" ] \
-  || fail "parallel run reported ${ran_parallel:-no} tests, expected the $remaining listed"
+if [ -z "$ran_isolated" ]; then
+  fail "isolated invocation produced no swift-testing summary"
+fi
+if [ -z "$ran_parallel" ]; then
+  fail "parallel invocation produced no swift-testing summary"
+fi
 
 exit "$status"

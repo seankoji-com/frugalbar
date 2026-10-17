@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let activityEngine: ActivityIngestionEngine
     private let store: QuotaStore
     private let eventEngine: AIEventEngine
+    /// Sync to phone & watch. nil in a build with no sync client, which then
+    /// never contacts Google and shows no sync setting.
+    private let sync: SyncController?
 
     override init() {
         let hStore = QuotaHistoryStore()
@@ -104,6 +107,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             activityStatusLoader: { await aEngine.status() }
         )
+        // Seven days of surfaced events, the window the export reads.
+        self.sync = SyncController.makeIfAvailable(eventsLoader: {
+            do {
+                return try await hStore.fetchEvents(
+                    kinds: Set(AIEventKind.surfaced), since: Date().addingTimeInterval(-SnapshotExporter.eventHorizon))
+            } catch {
+                return []
+            }
+        })
         super.init()
     }
     private var schedulerToken: UUID?
@@ -179,14 +191,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Capture `store` rather than `self`: an implicit strong `self` here
         // makes the handler's `[weak self]` meaningless (and is an error under
         // Swift 6.4 with warnings-as-errors).
+        // Resumes an unfinished Stop and publishes off the poll path; it does
+        // nothing until the owner turns sync on.
+        sync?.start()
+
         Task { [weak self, store] in
             await store.load()
+            self?.sync?.submit(snapshots: store.snapshots)
             if CredentialStore.isDesktopWidgetVisible { DesktopWidgetWindow.show() }
             await BackgroundScheduler.shared.start(interval: 120)
             // One handler for both jobs: adding a second would make the
             // recovery check race the refresh it depends on for no reason.
             let token = await BackgroundScheduler.shared.addHandler { [weak self] in
                 await self?.store.load()
+                // Hands the poll to sync and returns; the upload runs elsewhere.
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.sync?.submit(snapshots: self.store.snapshots)
+                }
                 await self?.checkForQuotaTransitions()
             }
             self?.schedulerToken = token
@@ -334,7 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Sized by the view, which fixes its own frame; a fixed content rect
         // used to clip it. The store lets each provider show what the last
         // poll made of it.
-        let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
+        let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store, sync: sync)))
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.title = "FrugalBar Preferences"
         window.center()

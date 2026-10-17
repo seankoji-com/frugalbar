@@ -1,0 +1,103 @@
+{
+  "description": "Blocked with no percentage: the blocked window is eligible and tightest even though another window has a larger fraction.",
+  "covers": [
+    "fixture:blocked-no-percentage"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "opencode",
+      "vendorId": "opencode",
+      "displayName": "OpenCode",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER opencode",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": null,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000,
+        "isBlocked": true,
+        "blockedColor": "#e5484d"
+      },
+      "row2": {
+        "label": "WK",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-17T00:00:00.000Z",
+        "windowLength": 604800
+      }
+    },
+    {
+      "id": "commandcode",
+      "vendorId": "commandcode",
+      "displayName": "Command Code",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "subscription",
+        "tierName": "Pro"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "critical"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER commandcode",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": null,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000,
+        "isBlocked": true
+      },
+      "row2": {
+        "label": "WK",
+        "primaryFraction": null,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-18T00:00:00.000Z",
+        "windowLength": 604800,
+        "isBlocked": true
+      }
+    }
+  ],
+  "events": []
+}

@@ -128,6 +128,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
             : .none
 
         let remaining = max(planLimit - planUsed, 0)
+        // Above the plan limit, the plan-only share depends on the overage
+        // figure; with none reported, the split above is a default, not a
+        // reading, so the passive quantity keeps it unknown.
+        let planUsedIsReported = credit.currentOveragesWithPrecision != nil || totalUsed <= planLimit
         var snapshot = QuotaSnapshot(
             id: provider.vendorId.rawValue,
             vendorId: provider.vendorId,
@@ -147,7 +151,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 usedText: "\(format(planUsed))/\(format(planLimit)) credits used",
                 resetText: "Resets \(RelativeDateTimeFormatter().localizedString(for: resetsAt, relativeTo: now))",
                 resetsAt: resetsAt,
-                windowLength: windowLength
+                windowLength: windowLength,
+                quantityUsed: planUsedIsReported ? Decimal(planUsed) : nil,
+                quantityLimit: Decimal(planLimit),
+                quantityUnit: "credits"
             ),
             badgeText: fraction >= 1.0 ? "Exhausted" : "\(format(remaining)) left",
             planName: planName,
@@ -170,7 +177,12 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 resetText: expiry.map {
                     "Expires \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
                 },
-                resetsAt: expiry
+                resetsAt: expiry,
+                // A pool missing a figure leaves that sum unknown, not short
+                // by that pool, so the passive quantity keeps it nil.
+                quantityUsed: activeBonuses.allSatisfy { $0.currentUsage != nil } ? Decimal(bonusUsed) : nil,
+                quantityLimit: activeBonuses.allSatisfy { $0.usageLimit != nil } ? Decimal(bonusLimit) : nil,
+                quantityUnit: "credits"
             )
         }
 
@@ -190,7 +202,10 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
                 usedText: "\(format(overageUsed))/\(format(cap)) overage credits\(rateText)",
                 resetText: credit.overageCharges.map {
                     "\(SubscriptionCycle.formatCost(Decimal($0), currencyCode: credit.currency ?? "USD")) charged"
-                }
+                },
+                quantityUsed: credit.currentOveragesWithPrecision.map { Decimal($0) },
+                quantityLimit: Decimal(cap),
+                quantityUnit: "credits"
             )
         }
 

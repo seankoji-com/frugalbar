@@ -279,6 +279,15 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// invented.
     public var resetsAt: Date?
     public var windowLength: TimeInterval?
+    /// The figures behind `usedText`, as structured values in `quantityUnit`,
+    /// so the sync export never has to parse display text. Each is filled
+    /// only from a number the provider already computed for that text, and
+    /// left nil when it published none — never a 0 standing in for "not
+    /// reported". Nothing on the Mac reads them.
+    public var quantityUsed: Decimal?
+    public var quantityRemaining: Decimal?
+    public var quantityLimit: Decimal?
+    public var quantityUnit: String?
 
     public init(
         primaryFraction: Double?,
@@ -291,7 +300,11 @@ public struct DualBarMetrics: Sendable, Equatable {
         usedText: String? = nil,
         resetText: String? = nil,
         resetsAt: Date? = nil,
-        windowLength: TimeInterval? = nil
+        windowLength: TimeInterval? = nil,
+        quantityUsed: Decimal? = nil,
+        quantityRemaining: Decimal? = nil,
+        quantityLimit: Decimal? = nil,
+        quantityUnit: String? = nil
     ) {
         self.primaryFraction = primaryFraction
         self.expectedPaceFraction = expectedPaceFraction
@@ -304,6 +317,10 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.resetText = resetText
         self.resetsAt = resetsAt
         self.windowLength = windowLength
+        self.quantityUsed = quantityUsed
+        self.quantityRemaining = quantityRemaining
+        self.quantityLimit = quantityLimit
+        self.quantityUnit = quantityUnit
     }
 
     /// Difference between actual consumption and pro-rata expected target, or
