@@ -1,0 +1,6 @@
+{
+  "error" : "unmappedRow",
+  "message" : "Sync export error: unmapped row (claude, row3)",
+  "position" : "row3",
+  "vendorId" : "claude"
+}

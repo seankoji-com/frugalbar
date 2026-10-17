@@ -171,7 +171,10 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
                 "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
             },
             resetsAt: reset,
-            windowLength: length
+            windowLength: length,
+            quantityUsed: Decimal(used),
+            quantityLimit: Decimal(cap),
+            quantityUnit: "credits"
         )
     }
 
@@ -197,7 +200,9 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
             return DualBarMetrics(
                 primaryFraction: nil,
                 label: "MO",
-                usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left"
+                usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left",
+                quantityRemaining: Decimal(remaining),
+                quantityUnit: "credits"
             )
         }
 
@@ -214,7 +219,10 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         return DualBarMetrics(
             primaryFraction: used / total,
             label: "MO",
-            usedText: "\(money(used))/\(money(total)) credits used"
+            usedText: "\(money(used))/\(money(total)) credits used",
+            quantityUsed: Decimal(used),
+            quantityLimit: Decimal(total),
+            quantityUnit: "credits"
         )
     }
 

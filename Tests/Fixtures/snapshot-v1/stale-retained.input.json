@@ -1,0 +1,96 @@
+{
+  "description": "A retained reading after a failed poll: measuredAt is the original measurement, lastAttemptAt and lastPollFailure the failed poll; a clock discontinuity marks it untrusted.",
+  "covers": [
+    "fixture:stale-retained"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": -1500,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [
+    "claude"
+  ],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "claude",
+      "vendorId": "claude",
+      "displayName": "Claude",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T22:00:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER claude",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.7,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      },
+      "row2": {
+        "label": "WK",
+        "primaryFraction": 0.4,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-18T00:00:00.000Z",
+        "windowLength": 604800
+      },
+      "staleReading": {
+        "reason": "offline",
+        "at": "2026-10-14T23:59:00.000Z"
+      }
+    },
+    {
+      "id": "openai",
+      "vendorId": "openai",
+      "displayName": "OpenAI",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:59:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER openai",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 0.1,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      }
+    }
+  ],
+  "events": []
+}

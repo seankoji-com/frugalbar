@@ -1,0 +1,161 @@
+{
+  "description": "Values outside their domains: each turns only its own metric into unavailable {outOfRange}; sibling windows and credits still export.",
+  "covers": [
+    "fixture:out-of-range"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "claude",
+      "vendorId": "claude",
+      "displayName": "Claude",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 1.5
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER claude",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "5H",
+        "primaryFraction": 1.2,
+        "usedText": "USEDTEXT-MARKER 5H",
+        "resetText": "RESETTEXT-MARKER 5H",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-15T01:00:00.000Z",
+        "windowLength": 18000
+      },
+      "row2": {
+        "label": "WK",
+        "primaryFraction": 0.4,
+        "usedText": "USEDTEXT-MARKER WK",
+        "resetText": "RESETTEXT-MARKER WK",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-17T00:00:00.000Z",
+        "windowLength": 604800
+      }
+    },
+    {
+      "id": "kiro",
+      "vendorId": "kiro",
+      "displayName": "Kiro",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "count",
+        "remaining": -1,
+        "limit": 10,
+        "unitName": "credits"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "MO",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER MO",
+        "resetText": "RESETTEXT-MARKER MO",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-16T00:00:00.000Z",
+        "quantityUsed": "1234567890123456789",
+        "quantityLimit": "2",
+        "quantityUnit": "credits"
+      },
+      "row2": {
+        "label": "BN",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER BN",
+        "resetText": "RESETTEXT-MARKER BN",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "0.123456789",
+        "quantityLimit": "1",
+        "quantityUnit": "credits"
+      },
+      "row3": {
+        "label": "OV",
+        "primaryFraction": 0.1,
+        "usedText": "USEDTEXT-MARKER OV",
+        "resetText": "RESETTEXT-MARKER OV",
+        "expectedPaceFraction": 0.3,
+        "quantityUsed": "1",
+        "quantityLimit": "10",
+        "quantityUnit": "credits"
+      }
+    },
+    {
+      "id": "openrouter",
+      "vendorId": "openrouter",
+      "displayName": "OpenRouter",
+      "category": "API Spend & Credits",
+      "metric": {
+        "type": "currency",
+        "balance": "1234567890123456789.5",
+        "limit": null,
+        "spent": null,
+        "currencyCode": "USD"
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": null,
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER openrouter",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "currencyBasis": "accountCredit",
+      "apiCredits": [
+        {
+          "id": "openrouter.c1",
+          "vendorId": "openrouter",
+          "label": "Too many",
+          "metric": {
+            "type": "credits",
+            "remaining": 9007199254740992,
+            "unit": "credits"
+          }
+        },
+        {
+          "id": "openrouter.c2",
+          "vendorId": "openrouter",
+          "label": "Fine",
+          "metric": {
+            "type": "credits",
+            "remaining": 5,
+            "unit": "credits"
+          }
+        }
+      ]
+    }
+  ],
+  "events": []
+}

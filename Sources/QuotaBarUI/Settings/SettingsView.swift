@@ -12,9 +12,15 @@ public struct SettingsView: View {
 
     /// The sidebar's sections, in reading order.
     public enum Pane: String, CaseIterable, Identifiable, Sendable {
-        case providers, credentials, workspaces, display, notifications, cycles, data, about
+        case providers, credentials, workspaces, display, notifications, cycles, sync, data, about
 
         public var id: String { rawValue }
+
+        /// The panes the sidebar lists. Phone & Watch only exists in a build
+        /// with a sync client: without one there is nothing to turn on.
+        public static func visible(syncAvailable: Bool) -> [Pane] {
+            allCases.filter { $0 != .sync || syncAvailable }
+        }
 
         public var title: String {
             switch self {
@@ -24,6 +30,7 @@ public struct SettingsView: View {
             case .display: "Display"
             case .notifications: "Notifications"
             case .cycles: "Billing Cycles"
+            case .sync: "Phone & Watch"
             case .data: "History & Data"
             case .about: "About"
             }
@@ -38,6 +45,7 @@ public struct SettingsView: View {
             case .display: "The desktop widget, and how to read the popover and usage details."
             case .notifications: "What FrugalBar tells you about, and when."
             case .cycles: "Renewal dates for vendors that publish none."
+            case .sync: "Optional: show this Mac's readings on your Android phone and watch."
             case .data: "What FrugalBar records, and where it is kept."
             case .about: "Version and links."
             }
@@ -51,6 +59,7 @@ public struct SettingsView: View {
             case .display: "paintbrush"
             case .notifications: "bell.badge"
             case .cycles: "calendar"
+            case .sync: "arrow.triangle.2.circlepath"
             case .data: "cylinder.split.1x2"
             case .about: "info.circle"
             }
@@ -115,6 +124,8 @@ public struct SettingsView: View {
     /// The running app's store, for live connection states. nil in the
     /// standalone Settings scene.
     private let store: QuotaStore?
+    /// Sync to phone & watch; nil when this build has no sync client.
+    private let sync: SyncController?
     @State private var cycles: [VendorIdentifier: SubscriptionCycle] = [:]
     @State private var entered: [VendorIdentifier: String] = [:]
     @State private var loaded: [VendorIdentifier: String] = [:]
@@ -162,12 +173,13 @@ public struct SettingsView: View {
     /// Taller only in the render harness, so one image shows a whole pane.
     private let height: CGFloat
 
-    public init(store: QuotaStore? = nil, initialPane: Pane = .providers) {
-        self.init(store: store, initialPane: initialPane, readsCredentials: true)
+    public init(store: QuotaStore? = nil, sync: SyncController? = nil, initialPane: Pane = .providers) {
+        self.init(store: store, sync: sync, initialPane: initialPane, readsCredentials: true)
     }
 
-    init(store: QuotaStore?, initialPane: Pane, readsCredentials: Bool, height: CGFloat = 580) {
+    init(store: QuotaStore?, sync: SyncController? = nil, initialPane: Pane, readsCredentials: Bool, height: CGFloat = 580) {
         self.store = store
+        self.sync = sync
         self.readsCredentials = readsCredentials
         self.height = height
         _selection = State(initialValue: initialPane)
@@ -202,7 +214,7 @@ public struct SettingsView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            List(Pane.allCases, selection: $selection) { pane in
+            List(Pane.visible(syncAvailable: sync != nil), selection: $selection) { pane in
                 Label(pane.title, systemImage: pane.symbol)
                     .tag(pane)
                     .accessibilityLabel(pane.title)
@@ -265,6 +277,8 @@ public struct SettingsView: View {
             notificationsPane
         case .cycles:
             cyclesTab
+        case .sync:
+            if let sync { SyncSettingsPane(controller: sync) }
         case .data:
             dataPane
         case .about:

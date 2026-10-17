@@ -1,0 +1,64 @@
+{
+  "description": "Grok: a plan with no published period length (windowSeconds null) and on-demand.",
+  "covers": [
+    "table:grok",
+    "branch:grok-unknown-length",
+    "branch:grok-on-demand"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "id": "grok",
+      "vendorId": "grok",
+      "displayName": "Grok",
+      "category": "AI Subscriptions",
+      "metric": {
+        "type": "percentage",
+        "usedFraction": 0.4
+      },
+      "status": {
+        "kind": "measured",
+        "urgency": "none"
+      },
+      "resetsAt": "2026-10-20T00:00:00.000Z",
+      "lastUpdated": "2026-10-14T23:58:00.000Z",
+      "auxiliaryInfo": "AUXINFO-MARKER grok",
+      "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+      "keyMasked": "KEYMASK-MARKER-4f2a",
+      "latencyMs": 4321,
+      "badgeText": "BADGE-MARKER",
+      "row1": {
+        "label": "PLAN",
+        "primaryFraction": 0.7,
+        "usedText": "USEDTEXT-MARKER PLAN",
+        "resetText": "RESETTEXT-MARKER PLAN",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-20T00:00:00.000Z"
+      },
+      "row2": {
+        "label": "OD",
+        "primaryFraction": 0.5,
+        "usedText": "USEDTEXT-MARKER OD",
+        "resetText": "RESETTEXT-MARKER OD",
+        "expectedPaceFraction": 0.3,
+        "resetsAt": "2026-10-20T00:00:00.000Z",
+        "quantityUsed": "10.5",
+        "quantityLimit": "21",
+        "quantityUnit": "USD"
+      },
+      "planName": "SuperGrok Heavy"
+    }
+  ],
+  "events": []
+}

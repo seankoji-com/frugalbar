@@ -1,0 +1,219 @@
+{
+  "description": "Size overflow: events are dropped oldest first until the document fits in 256 KB; every provider stays.",
+  "covers": [
+    "fixture:events-overflow"
+  ],
+  "publisherId": "7d3c1a52-9b0e-4c8e-a1f4-2b6d9e0c5a31",
+  "publisherLabel": "Sean's MacBook Pro",
+  "publishedAt": "2026-10-15T00:00:00.000Z",
+  "macClockOffsetMs": 250,
+  "macClockSampledAt": "2026-10-14T23:59:59.000Z",
+  "untrustedInstanceIds": [],
+  "notificationPrefs": {
+    "disabledKinds": [],
+    "resetAlertVendors": [
+      "claude"
+    ]
+  },
+  "snapshots": [
+    {
+      "repeat": 30,
+      "snapshot": {
+        "id": "kiro:instance-{n}",
+        "vendorId": "kiro",
+        "displayName": "Provider {n} ΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩ",
+        "category": "AI Subscriptions",
+        "metric": {
+          "type": "currency",
+          "balance": "123456789012345678.12345678",
+          "limit": "223456789012345678.12345678",
+          "spent": "100000000000000000.00000001",
+          "currencyCode": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+        },
+        "status": {
+          "kind": "unavailable",
+          "reason": "unsupported",
+          "message": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"
+        },
+        "resetsAt": null,
+        "lastUpdated": "2026-10-14T23:58:00.000Z",
+        "auxiliaryInfo": "AUXINFO-MARKER kiro",
+        "cliSource": "CLI Proxy (proxy-host.lan.internal)",
+        "keyMasked": "KEYMASK-MARKER-4f2a",
+        "latencyMs": 4321,
+        "badgeText": "BADGE-MARKER",
+        "row1": {
+          "label": "Label {n} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "primaryFraction": 0.5,
+          "usedText": "USEDTEXT-MARKER Label {n} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "resetText": "RESETTEXT-MARKER Label {n} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "expectedPaceFraction": 0.3,
+          "resetsAt": "2026-10-17T00:00:00.000Z",
+          "windowLength": 2592000,
+          "quantityUsed": "123456789012345678.12345678",
+          "quantityLimit": "223456789012345678.12345678",
+          "quantityUnit": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+        },
+        "row2": {
+          "label": "Bonus {n} yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "primaryFraction": 0.25,
+          "usedText": "USEDTEXT-MARKER Bonus {n} yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "resetText": "RESETTEXT-MARKER Bonus {n} yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "expectedPaceFraction": 0.3,
+          "resetsAt": "2026-10-24T00:00:00.000Z",
+          "quantityUsed": "1.5",
+          "quantityLimit": "2",
+          "quantityUnit": "credits"
+        },
+        "row3": {
+          "label": "Overage {n} zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+          "primaryFraction": 0.75,
+          "usedText": "USEDTEXT-MARKER Overage {n} zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+          "resetText": "RESETTEXT-MARKER Overage {n} zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+          "expectedPaceFraction": 0.3,
+          "quantityUsed": "3",
+          "quantityLimit": "4",
+          "quantityUnit": "credits"
+        },
+        "planName": "Plan {n} pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "currencyBasis": "accountCredit",
+        "staleReading": {
+          "reason": "timedOut",
+          "at": "2026-10-14T23:59:00.000Z"
+        },
+        "apiCredits": [
+          {
+            "id": "kiro:instance-{n}.credit-0",
+            "vendorId": "kiro",
+            "label": "Credit 0 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-1",
+            "vendorId": "kiro",
+            "label": "Credit 1 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-2",
+            "vendorId": "kiro",
+            "label": "Credit 2 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-3",
+            "vendorId": "kiro",
+            "label": "Credit 3 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-4",
+            "vendorId": "kiro",
+            "label": "Credit 4 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-5",
+            "vendorId": "kiro",
+            "label": "Credit 5 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-6",
+            "vendorId": "kiro",
+            "label": "Credit 6 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "id": "kiro:instance-{n}.credit-7",
+            "vendorId": "kiro",
+            "label": "Credit 7 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+            "metric": {
+              "type": "currency",
+              "balance": "123456789012345678.12345678",
+              "limit": "1",
+              "spent": "2",
+              "currencyCode": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+            },
+            "currencyBasis": "prepaidCredit",
+            "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "repeat": 100,
+      "stepSeconds": -600,
+      "event": {
+        "id": "outage_started|claude|incident-{n}",
+        "kind": "outage_started",
+        "vendorId": "claude",
+        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "detail": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "occurredAt": "2026-10-14T23:50:00.000Z",
+        "observedAt": "2026-10-14T23:55:00.000Z",
+        "source": "status:claude",
+        "url": "https://status.claude.com/incidents/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu{n}",
+        "instanceId": "kiro:instance-{n}"
+      }
+    }
+  ]
+}
