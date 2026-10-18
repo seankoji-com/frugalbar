@@ -25,6 +25,7 @@ struct SystemHealthSummaryTests {
         #expect(summary.unavailableCount == 0)
         #expect(summary.totalProviders == 0)
         #expect(summary.oldestReading == nil)
+        #expect(summary.lastAttemptAt == nil)
         #expect(summary.hasAnyReading == false)
     }
 
@@ -119,5 +120,33 @@ struct SystemHealthSummaryTests {
         ])
         #expect(summary.hasAnyReading == false)
         #expect(summary.unavailableCount == 2)
+    }
+
+    @Test("a failed poll updates the check time without changing the sixteen-hour-old reading")
+    func failedPollSeparatesCheckTimeFromReadingAge() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = now.addingTimeInterval(-16 * 3_600)
+        var stale = snapshot(vendor: .muse, status: .healthy, lastUpdated: old)
+        stale.staleReading = StaleReading(reason: .badResponse, at: now)
+        let summary = SystemHealthSummary.compute(from: [
+            stale,
+            snapshot(vendor: .claude, status: .healthy, lastUpdated: now.addingTimeInterval(-120)),
+            snapshot(vendor: .gemini, status: .unavailable(.offline), lastUpdated: now.addingTimeInterval(-60))
+        ])
+        #expect(summary.oldestReading == old)
+        #expect(summary.lastAttemptAt == now)
+        #expect(summary.staleCount == 1)
+        #expect(summary.unavailableCount == 1)
+    }
+
+    @Test("a failed first check has a check time even though there is no reading")
+    func unavailableCheckHasNoReadingAge() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let summary = SystemHealthSummary.compute(from: [
+            snapshot(vendor: .muse, status: .unavailable(.offline), lastUpdated: now)
+        ])
+        #expect(summary.lastAttemptAt == now)
+        #expect(summary.oldestReading == nil)
+        #expect(!summary.hasAnyReading)
     }
 }

@@ -34,9 +34,35 @@ struct UXRenderTests {
         }
         let snapshots = [snapshot(.claude, "Claude", 0.65), snapshot(.opencode, "OpenCode Go · Gamma workspace", 0.45),
                          snapshot(.commandcode, "Command Code", 0.9)] + soleMeters(now: now) + moneyRows(now: now)
+        let checkTime = Date()
+        var oldReading = QuotaSnapshot(id: "muse", vendorId: .muse, displayName: "Muse",
+            category: .aiSubscriptions, metric: .percentage(usedFraction: 0.95, displayDetails: nil),
+            status: .measured(.critical), resetsAt: nil,
+            lastUpdated: checkTime.addingTimeInterval(-16 * 3_600), auxiliaryInfo: nil)
+        oldReading.staleReading = StaleReading(reason: .badResponse, at: checkTime)
+        let failedCheck = SystemHealthSummary.compute(from: [oldReading])
+        try await save(VStack(spacing: 12) {
+            Text("Footer · checking, checked with stale figures, not checked").font(.caption)
+            FooterActionsView(summary: failedCheck, isRefreshing: true,
+                onOpenSettings: {}, onQuit: {}, onRefresh: {})
+            FooterActionsView(summary: failedCheck, isRefreshing: false,
+                onOpenSettings: {}, onQuit: {}, onRefresh: {})
+            FooterActionsView(summary: .compute(from: []), isRefreshing: false,
+                onOpenSettings: {}, onQuit: {}, onRefresh: {})
+        }.frame(width: 384).background(Theme.surface), name: "footer-refresh-stale", directory: directory)
+        var subscription = snapshot(.openai, "OpenAI", 1)
+        subscription.apiCredits = creditFixtures().filter(\.extendsSubscription)
+        var staleSubscription = subscription
+        staleSubscription.staleReading = StaleReading(
+            reason: .unsupported("OpenAI returned no usage window"), at: now)
+        try await save(VStack(spacing: 12) {
+            Text("Subscription credits · current and failed poll").font(.caption)
+            MetricRowView(snapshot: subscription)
+            MetricRowView(snapshot: staleSubscription)
+        }.padding(12).frame(width: 384).background(Theme.surface),
+            name: "subscription-credits", directory: directory)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
-            AdviceSectionView(advice: .evaluate(from: snapshots), onActionTap: {})
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
                               balanceSeries: balanceFixtures(now: now), onSelect: { _ in })
             APICreditSectionView(entries: creditFixtures(), balanceSeries: balanceFixtures(now: now))

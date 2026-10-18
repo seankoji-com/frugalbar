@@ -27,10 +27,7 @@ public struct PopoverRootView: View {
     /// Wide enough for the row budget in `MetricRowView` (324pt of content).
     public static let popoverWidth: CGFloat = Theme.popoverWidth
     public static let popoverHeight: CGFloat = 640
-    /// Only engaged when content genuinely cannot fit, e.g. accessibility sizes.
-    /// Raised from 580 with the comfortable row height: a full set of providers
-    /// plus the suggestion card lands near 670pt, which still clears the usable
-    /// height below the menu bar on a 13" display.
+    /// Only engaged when content cannot fit, e.g. accessibility sizes.
     public static let maxContentHeight: CGFloat = 760
 
     public init(
@@ -143,25 +140,8 @@ public struct PopoverRootView: View {
         }
     }
 
-    /// Launches the recommended agent, when the advice names a vendor that has
-    /// one. Advice about GitHub API limits names no tool to open, so the card
-    /// renders without a button rather than with a dead one.
-    private var adviceAction: (() -> Void)? {
-        guard let vendorId = store.advice.vendorId,
-              CLILauncher.command(for: vendorId) != nil
-        else { return nil }
-        return { Task { @MainActor in CLILauncher.launch(for: vendorId) } }
-    }
-
     private var sections: some View {
         VStack(spacing: Theme.sectionGap) {
-            // The recommendation leads. It is the one thing in the popover that
-            // answers the question the user opened it to ask; underneath five
-            // provider cards it was the last thing they reached.
-            if !store.snapshots.isEmpty {
-                AdviceSectionView(advice: store.advice, onActionTap: adviceAction)
-            }
-
             let popoverEvents = EventsPresentation.popoverEvents(store.recentEvents)
             if !popoverEvents.isEmpty {
                 EventsSectionView(events: popoverEvents)
@@ -209,11 +189,10 @@ public struct PopoverRootView: View {
                 }
             }
 
-            // Prepaid API credit balances, in one card of their own. They are
-            // not quotas — no window, no denominator — so they are drawn apart
-            // from the vendor cards rather than inside one, and the section is
-            // simply absent when no vendor published a figure.
-            let creditEntries = store.snapshots.flatMap(\.apiCredits)
+            // Credit pools with a separate card. Codex usage credits are
+            // already drawn with the subscription they extend. All balances
+            // stay outside quota maths regardless of where they are drawn.
+            let creditEntries = store.snapshots.flatMap(\.apiCredits).filter { !$0.extendsSubscription }
             if !creditEntries.isEmpty {
                 APICreditSectionView(
                     entries: creditEntries,

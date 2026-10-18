@@ -5,9 +5,8 @@ import QuotaBarCore
 /// footer indicators.
 ///
 /// The popover footer and the desktop widget header each render an aggregate
-/// health indicator (symbol, colour, text) and an "oldest reading" age. This
-/// type is the single source both read from, so they can never disagree about
-/// what a given summary means.
+/// health indicator (symbol, colour, text). The footer names the most recent
+/// check separately from the age of the figures retained after a failed poll.
 enum SystemHealthPresentation {
 
     // `nonisolated`: pure functions of their arguments, so synchronous,
@@ -63,5 +62,14 @@ enum SystemHealthPresentation {
         if interval < 60 { return "\(Int(interval.rounded()))s" }
         if interval < 3600 { return "\(Int((interval / 60).rounded()))m" }
         return "\(Int((interval / 3600).rounded()))h"
+    }
+
+    nonisolated static func pollStatus(
+        lastAttemptAt: Date?, isRefreshing: Bool, now: Date
+    ) -> String {
+        if isRefreshing { return "Checking…" }
+        guard let lastAttemptAt else { return "Not checked" }
+        if now.timeIntervalSince(lastAttemptAt) < 60 { return "Checked now" }
+        return "Checked \(elapsed(since: lastAttemptAt, now: now)) ago"
     }
 }

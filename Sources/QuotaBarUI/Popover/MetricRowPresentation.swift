@@ -77,6 +77,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// spoken in one breath and a reader has no way to notice an absence of
     /// change. Always set and cleared together with `staleNote`.
     public let staleSpoken: String?
+    public let subscriptionCredits: [APICreditEntryPresentation]
 
     /// A bar is only exhausted at the top of its range. `>= 1` would miss the
     /// floating-point residue of a percentage that arrived as 100.
@@ -90,6 +91,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
         self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable)
+        self.subscriptionCredits = snapshot.apiCredits.filter(\.extendsSubscription)
+            .map { APICreditEntryPresentation(entry: $0) }
 
         // An unreadable provider has no bars, so this reads false there — a
         // quota we could not fetch is not a quota we know is spent.
@@ -195,9 +198,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
     ) -> (visible: String, spoken: String)? {
         guard let reading else { return nil }
         let at = MetricDetailPresentation.clockText(figuresAt, now: now)
+        let reason: String
+        if case .unsupported(let detail) = reading.reason { reason = detail }
+        else { reason = reading.reason.headline }
         return (
-            "Stale — last poll failed (\(reading.reason.headline)), figures from \(at)",
-            "stale, the last poll failed (\(reading.reason.headline)), figures from \(at)"
+            "Stale — last poll failed (\(reason)), figures from \(at)",
+            "stale, the last poll failed (\(reason)), figures from \(at)"
         )
     }
 

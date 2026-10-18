@@ -469,7 +469,7 @@ struct QuotaManagerTests {
         #expect(during.staleCount == 1)
         #expect(during.unavailableCount == 0)
         #expect(during.worstUrgency == .warning)
-        // The staleness is what the footer counts its age from, so the age is
+        // The retained reading keeps its original age, so the age is
         // a fact about a provider rather than about the app.
         #expect(during.oldestReading == figuresAt)
 

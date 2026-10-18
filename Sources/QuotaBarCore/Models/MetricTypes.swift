@@ -134,7 +134,7 @@ public enum Confidence: Int, Sendable, Comparable, CaseIterable {
 public enum UnavailableReason: Sendable, Equatable {
     case notConfigured            // no credential present
     case credentialRejected       // vendor said 401/403
-    case unsupported(String)      // vendor exposes no usage API at all
+    case unsupported(String)      // this account/response publishes no usable quota
     case offline                  // transport failure
     case timedOut
     case badResponse              // non-2xx, or a body we could not parse
@@ -146,7 +146,7 @@ public enum UnavailableReason: Sendable, Equatable {
         switch self {
         case .notConfigured:      "Not configured"
         case .credentialRejected: "Credential rejected"
-        case .unsupported:        "No usage API"
+        case .unsupported:        "No quota reading"
         case .offline:            "Offline"
         case .timedOut:           "Timed out"
         case .badResponse:        "Unexpected response"
