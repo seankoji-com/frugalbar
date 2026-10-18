@@ -49,7 +49,6 @@ treat them as the review checklist, not hypotheticals.
 - Compiler warnings or formatting nits — CI builds with
   `-Xswiftc -warnings-as-errors`, so any warning already fails the build.
 - Generic injection/taint patterns — `codeql.yml` already scans every PR.
-- `.claude/imps/` — agent scratch notes, not shipped code.
 
 ## Comment style
 
