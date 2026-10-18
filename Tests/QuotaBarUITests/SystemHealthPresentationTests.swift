@@ -227,4 +227,16 @@ struct SystemHealthPresentationTests {
     func elapsedFutureDate() {
         #expect(ago(-300) == "0s")
     }
+
+    @Test("the footer names the check time independently of retained reading age")
+    func footerCheckStates() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: nil, isRefreshing: false, now: now) == "Not checked")
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: nil, isRefreshing: true, now: now) == "Checking…")
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: now, isRefreshing: false, now: now) == "Checked now")
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: now.addingTimeInterval(-120),
+            isRefreshing: false, now: now) == "Checked 2m ago")
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: now.addingTimeInterval(-16 * 3_600),
+            isRefreshing: true, now: now) == "Checking…")
+    }
 }

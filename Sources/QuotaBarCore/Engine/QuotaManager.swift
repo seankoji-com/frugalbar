@@ -693,6 +693,9 @@ public struct SystemHealthSummary: Sendable {
     public let staleCount: Int
     /// Oldest reading in the set — the honest "data as of" timestamp.
     public let oldestReading: Date?
+    /// Newest provider check, including failed polls that retained an older
+    /// reading. Reading age and check age answer different questions.
+    public let lastAttemptAt: Date?
     public let totalProviders: Int
 
     /// True when at least one provider was read successfully.
@@ -702,8 +705,11 @@ public struct SystemHealthSummary: Sendable {
         var healthy = 0, warning = 0, critical = 0, unavailable = 0, stale = 0
         var worst: Urgency = .none
         var oldest: Date?
+        var lastAttempt: Date?
 
         for snap in snapshots {
+            let attemptedAt = snap.staleReading?.at ?? snap.lastUpdated
+            if lastAttempt.map({ attemptedAt > $0 }) ?? true { lastAttempt = attemptedAt }
             switch snap.status.confidence {
             case .unavailable:
                 unavailable += 1
@@ -734,6 +740,7 @@ public struct SystemHealthSummary: Sendable {
             criticalCount: critical,
             staleCount: stale,
             oldestReading: oldest,
+            lastAttemptAt: lastAttempt,
             totalProviders: snapshots.count
         )
     }

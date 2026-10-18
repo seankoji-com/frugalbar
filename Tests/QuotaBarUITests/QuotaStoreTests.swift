@@ -31,6 +31,30 @@ private final class Recorded: @unchecked Sendable {
     var all: [[VendorIdentifier]] { lock.lock(); defer { lock.unlock() }; return batches }
 }
 
+private actor FirstPollGate {
+    private var started = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        guard !started else { return }
+        started = true
+        entered?.resume()
+        entered = nil
+        await withCheckedContinuation { release = $0 }
+    }
+
+    func waitForEntry() async {
+        guard !started else { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func resume() {
+        release?.resume()
+        release = nil
+    }
+}
+
 private struct StubProvider: QuotaProvider {
     let vendorId: VendorIdentifier
     let displayName = "Stub"
@@ -38,15 +62,20 @@ private struct StubProvider: QuotaProvider {
     let hits: Hits
     var status: ProviderStatus = .healthy
     var delay: Duration = .zero
+    var gate: FirstPollGate? = nil
+    var measuredAt: Date? = nil
+    var failureAfterFirst: ProviderError? = nil
 
     func fetchSnapshot() async throws -> QuotaSnapshot {
         hits.hit(vendorId)
+        if hits.count(vendorId) > 1, let failureAfterFirst { throw failureAfterFirst }
+        await gate?.run()
         if delay > .zero { try await Task.sleep(for: delay) }
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
             category: category,
             metric: .percentage(usedFraction: 0.1, displayDetails: nil),
-            status: status, resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
+            status: status, resetsAt: nil, lastUpdated: measuredAt ?? Date(), auxiliaryInfo: nil)
     }
 }
 
@@ -78,7 +107,7 @@ struct QuotaStoreTests {
         #expect(s.hasLoaded == false)
     }
 
-    @Test("load populates snapshots, summary and advice")
+    @Test("load populates snapshots and summary")
     func loadPopulates() async {
         let hits = Hits()
         let s = store([
@@ -115,16 +144,19 @@ struct QuotaStoreTests {
         #expect(hits.count(.claude) == 2)
     }
 
-    @Test("a refresh requested during a refresh is dropped, not doubled")
+    @Test("manual refresh during a poll queues one more pass")
     func overlappingRefreshesCollapse() async {
         let hits = Hits()
-        let s = store([StubProvider(vendorId: .claude, hits: hits, delay: .milliseconds(150))], cacheTTL: 0)
+        let gate = FirstPollGate()
+        let s = store([StubProvider(vendorId: .claude, hits: hits, gate: gate)], cacheTTL: 0)
         async let first: Void = s.load()
-        try? await Task.sleep(for: .milliseconds(30))
+        await gate.waitForEntry()
         #expect(s.isRefreshing)
-        await s.forceRefresh()   // returns at once: one is already in flight
+        await s.forceRefresh()
+        await s.forceRefresh()   // repeated clicks coalesce into one pass
+        await gate.resume()
         await first
-        #expect(hits.count(.claude) == 1)
+        #expect(hits.count(.claude) == 2)
         #expect(s.isRefreshing == false)
     }
 
@@ -149,6 +181,38 @@ struct QuotaStoreTests {
 
         await s.forceRefresh()    // the ⟳ clicked a moment later
         #expect(hits.count(.claude) == 2)
+    }
+
+    @Test("refreshing a failed provider advances check time while retaining its old figures")
+    func failedRefreshUpdatesCheckTime() async throws {
+        let old = Date(timeIntervalSince1970: 1_700_000_000)
+        let hits = Hits()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 30),
+            providerFactory: {
+                [StubProvider(vendorId: .muse, hits: hits, measuredAt: old, failureAfterFirst: .badResponse)]
+            })
+        let store = QuotaStore(manager: manager)
+        await store.load()
+        #expect(store.summary.lastAttemptAt == old)
+        await store.forceRefresh()
+        let retained = try #require(store.snapshots.first)
+        let failedAt = try #require(retained.staleReading?.at)
+        #expect(retained.lastUpdated == old)
+        #expect(store.summary.oldestReading == old)
+        #expect(store.summary.lastAttemptAt == failedAt)
+        #expect(store.summary.staleCount == 1)
+        #expect(!store.isRefreshing)
+        #expect(SystemHealthPresentation.pollStatus(lastAttemptAt: store.summary.lastAttemptAt,
+            isRefreshing: store.isRefreshing, now: failedAt) == "Checked now")
+
+        // Neither a cached popover load nor a second click inside the poll
+        // floor is a new check. Both must preserve the observed attempt time.
+        await store.load()
+        await store.forceRefresh()
+        #expect(hits.count(.muse) == 2)
+        #expect(store.summary.lastAttemptAt == failedAt)
     }
 
     @Test("every poll hands the history recorder the visible snapshots")

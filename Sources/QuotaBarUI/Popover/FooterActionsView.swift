@@ -14,6 +14,12 @@ struct FooterActionsView: View {
     @State private var isRefreshHovered = false
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            footer(now: context.date)
+        }
+    }
+
+    private func footer(now: Date) -> some View {
         HStack(spacing: 8) {
             // FrugalBar Branding + Live status dot
             HStack(spacing: 6) {
@@ -38,19 +44,15 @@ struct FooterActionsView: View {
                     .foregroundStyle(SystemHealthPresentation.color(for: summary))
                     .shadow(color: SystemHealthPresentation.color(for: summary).opacity(0.6), radius: 2)
 
-                if let oldest = summary.oldestReading {
-                    Text(SystemHealthPresentation.elapsed(since: oldest))
-                        .font(Theme.Typography.footerMeta)
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
-                        .help("Oldest reading in view")
-                }
+                Text(SystemHealthPresentation.pollStatus(
+                    lastAttemptAt: summary.lastAttemptAt, isRefreshing: isRefreshing, now: now))
+                    .font(Theme.Typography.footerMeta)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
+                    .lineLimit(1)
+                    .help("Most recent provider check. A failed check keeps the previous figures, marked stale on that provider's row.")
 
-                // An age alone reads as a stale clock rather than as a patch of
-                // stale data — the reported symptom was a footer "stuck on 57m"
-                // with every row still looking live. Naming the count tells the
-                // user the age is a fact about a provider, not about the app.
-                // Words, not colour alone: the same wording is what VoiceOver
-                // gets from `SystemHealthPresentation.text`.
+                // A completed check can still leave old figures. Keep that
+                // failure visible beside the check time.
                 if summary.staleCount > 0 {
                     Text("\(summary.staleCount) stale")
                         .font(Theme.Typography.footerMeta)
@@ -64,7 +66,7 @@ struct FooterActionsView: View {
             // children and then throws the status away, leaving VoiceOver with
             // a category name and no reading. Same wording as the header's own
             // label so the two announce consistently.
-            .accessibilityLabel(footerAccessibilityLabel)
+            .accessibilityLabel(footerAccessibilityLabel(now: now))
 
             Spacer()
 
@@ -163,19 +165,17 @@ struct FooterActionsView: View {
     }
 
     /// Spoken form of the branding group: the health text the dot only shows
-    /// in colour, plus the age of the oldest reading when there is one.
+    /// in colour, plus the most recent provider check.
     ///
     /// Derived from `SystemHealthPresentation` rather than a second copy of
     /// the mapping — the footer dot and the header dot must never be able to
     /// disagree about what a given summary means.
-    private var footerAccessibilityLabel: String {
+    private func footerAccessibilityLabel(now: Date) -> String {
         // The version token is on screen, so it is spoken too — in the long
         // form, since "vee one point four" is not how anyone says a version.
-        var label = "FrugalBar, \(AppInfo.versionDisplay). \(SystemHealthPresentation.text(for: summary))"
-        if let oldest = summary.oldestReading {
-            label += ". Oldest reading \(SystemHealthPresentation.elapsed(since: oldest)) ago"
-        }
-        return label
+        "FrugalBar, \(AppInfo.versionDisplay). \(SystemHealthPresentation.text(for: summary)). "
+            + SystemHealthPresentation.pollStatus(
+                lastAttemptAt: summary.lastAttemptAt, isRefreshing: isRefreshing, now: now)
     }
 }
 

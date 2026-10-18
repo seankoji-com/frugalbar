@@ -17,6 +17,7 @@ public enum MenuBarPresentation {
         /// nil means "no pressure from this vendor" — follow the menu bar's
         /// own label/template colour.
         public let recommendedTint: NSColor?
+        public let limitDescription: String?
 
         public init(
             vendorId: VendorIdentifier?,
@@ -25,7 +26,8 @@ public enum MenuBarPresentation {
             timeLeftText: String?,
             displayText: String?,
             isUrgent: Bool,
-            recommendedTint: NSColor? = nil
+            recommendedTint: NSColor? = nil,
+            limitDescription: String? = nil
         ) {
             self.vendorId = vendorId
             self.lowestRemainingFraction = lowestRemainingFraction
@@ -34,7 +36,59 @@ public enum MenuBarPresentation {
             self.displayText = displayText
             self.isUrgent = isUrgent
             self.recommendedTint = recommendedTint
+            self.limitDescription = limitDescription
         }
+    }
+
+    /// The tray warns about the next limit, independently of the advice card's
+    /// suggestion of where to work. A reset countdown is never a forecast.
+    public static func limitingDetails(
+        snapshots: [QuotaSnapshot], forecasts: [String: BurnRateForecast], now: Date
+    ) -> RecommendationDetails {
+        struct Candidate {
+            let snapshot: QuotaSnapshot
+            let bar: DualBarMetrics
+            let used: Double
+            let limitAt: Date?
+        }
+        let candidates = snapshots.filter {
+            $0.category == .aiSubscriptions && $0.status.confidence == .measured && $0.staleReading == nil
+        }.flatMap { snapshot in
+            snapshot.quotaBars.compactMap { bar -> Candidate? in
+                guard let used = bar.primaryFraction, used.isFinite,
+                      bar.resetsAt.map({ $0 > now }) ?? true else { return nil }
+                var limitAt: Date?
+                if let forecast = forecasts[snapshot.id], forecast.instanceID == snapshot.id,
+                   forecast.barLabel == bar.label, forecast.sampleCount >= BurnRateForecast.minimumSamples,
+                   forecast.fractionPerHour > 0, case .limitAt(let date) = forecast.outcome,
+                   date > now, bar.resetsAt.map({ date < $0 }) ?? true {
+                    limitAt = date
+                }
+                return Candidate(snapshot: snapshot, bar: bar, used: used, limitAt: limitAt)
+            }
+        }
+        let live = candidates.filter { !$0.bar.isBlocked && $0.used < QuotaSnapshot.exhaustionThreshold }
+        let pool = live.isEmpty ? candidates : live
+        let projected = pool.filter { $0.limitAt != nil }.min { $0.limitAt! < $1.limitAt! }
+        let target = projected ?? pool.max { $0.used < $1.used }
+        guard let target else {
+            return RecommendationDetails(vendorId: nil, lowestRemainingFraction: nil,
+                remainingPctText: nil, timeLeftText: nil, displayText: nil, isUrgent: false)
+        }
+        let remaining = max(0, min(1, 1 - target.used))
+        let percent = "\(Int((remaining * 100).rounded()))%"
+        let limitIn = target.limitAt.map { BurnRateForecast.formatDuration($0.timeIntervalSince(now)) }
+        let time = limitIn.map { "~\($0)" }
+        var spoken = "\(target.snapshot.displayName) \(target.bar.label), \(percent) remaining"
+        if target.bar.isBlocked { spoken += ", blocked" }
+        if let limitIn { spoken += ", at recent pace limit in \(limitIn)" }
+        let displayParts: [String?] = [target.bar.label, percent, time]
+        return RecommendationDetails(vendorId: target.snapshot.vendorId,
+            lowestRemainingFraction: remaining, remainingPctText: percent,
+            timeLeftText: time,
+            displayText: displayParts.compactMap { $0 }.joined(separator: " "),
+            isUrgent: target.snapshot.status.urgency != .none,
+            recommendedTint: tint(forUrgency: target.snapshot.status.urgency), limitDescription: spoken)
     }
 
     public static func recommendationDetails(
@@ -239,6 +293,10 @@ public enum MenuBarPresentation {
             parts.append("\(summary.unavailableCount) provider not readable")
         }
         if let recommendation {
+            if let description = recommendation.limitDescription {
+                parts.append(description)
+                return parts.joined(separator: ", ")
+            }
             if let percentage = recommendation.remainingPctText {
                 parts.append("\(recommendation.vendorId?.displayName ?? "Recommended provider") \(percentage) remaining")
             }

@@ -262,7 +262,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         return snapshot
     }
 
-    /// The API credit balance as its own entry, or none at all.
+    /// The usage credit balance carried by the subscription, or none at all.
     ///
     /// `credits.balance` arrives as a **count of credits**, which is the unit
     /// OpenAI's own console prints it in ("62,500 credits remaining · Current
@@ -285,7 +285,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             return [APICreditEntry(
                 id: "openai.api-credits",
                 vendorId: .openai,
-                label: "API credits",
+                label: "Usage credits",
                 metric: .credits(remaining: nil, unitName: "credits"),
                 source: "Codex usage payload · credits.unlimited"
             )]
@@ -297,7 +297,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         return [APICreditEntry(
             id: "openai.api-credits",
             vendorId: .openai,
-            label: "API credits",
+            label: "Usage credits",
             metric: .credits(remaining: count, unitName: "credits"),
             source: "Codex usage payload · credits.balance"
         )]

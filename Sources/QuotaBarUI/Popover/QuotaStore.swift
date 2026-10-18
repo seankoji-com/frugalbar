@@ -15,7 +15,6 @@ public final class QuotaStore {
 
     public private(set) var snapshots: [QuotaSnapshot] = []
     public private(set) var summary: SystemHealthSummary = .compute(from: [])
-    public private(set) var advice: QuotaAdvice = QuotaAdvice.evaluate(from: [])
     public private(set) var isRefreshing = false
     /// True once a poll has completed. Lets the popover tell "still loading"
     /// from "loaded, and every provider is hidden".
@@ -185,6 +184,10 @@ public final class QuotaStore {
 
     /// Explicit user action — bypasses the cache.
     public func forceRefresh() async {
+        if isRefreshing {
+            forcedRefreshPending = true
+            return
+        }
         await run { await self.manager.forceRefresh() }
     }
 
@@ -199,13 +202,13 @@ public final class QuotaStore {
     /// request.
     public func applyProviderPreferences() async {
         if isRefreshing {
-            preferenceRefreshPending = true
+            forcedRefreshPending = true
             return
         }
         await forceRefresh()
     }
 
-    private var preferenceRefreshPending = false
+    private var forcedRefreshPending = false
 
     private func run(_ fetch: @escaping @Sendable () async -> [String: QuotaSnapshot]) async {
         guard !isRefreshing else { return }
@@ -213,8 +216,8 @@ public final class QuotaStore {
         defer { isRefreshing = false }
         _ = await fetch()
         await reloadFromCache()
-        while preferenceRefreshPending {
-            preferenceRefreshPending = false
+        while forcedRefreshPending {
+            forcedRefreshPending = false
             _ = await manager.forceRefresh()
             await reloadFromCache()
         }
@@ -225,8 +228,6 @@ public final class QuotaStore {
         self.hasLoaded = true
         self.snapshots = snaps
         self.summary = SystemHealthSummary.compute(from: snaps)
-        self.advice = QuotaAdvice.evaluate(from: snaps)
-        onSummaryChange?(self.summary)
         if let historyRecorder {
             await historyRecorder(snaps)
         }
@@ -240,6 +241,9 @@ public final class QuotaStore {
             }
             self.forecasts = next
         }
+        // The tray also reads forecasts. Notify after this poll's history and
+        // forecasts are loaded, so it cannot render the previous poll's pace.
+        onSummaryChange?(self.summary)
         // After recording, so this poll's balance is the strip's right-hand end.
         // A read that fails leaves the last good series in place rather than
         // blanking every strip on a transient error; the next reload replaces it.

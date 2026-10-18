@@ -68,12 +68,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         self.configuredAPIBase = (nil, false)
     }
 
-    private struct CodeAssist: Decodable {
-        struct Plan: Decodable { let planType: String? }
-        struct Tier: Decodable { let id: String?; let name: String? }
+    private struct CodeAssist: Decodable, Sendable {
+        struct Plan: Decodable, Sendable { let planType: String? }
+        struct Tier: Decodable, Sendable { let id: String?; let name: String? }
         let planInfo: Plan?
         let currentTier: Tier?
         let paidTier: Tier?
+        let cloudaicompanionProject: String?
     }
 
     struct QuotaSummary: Decodable, Sendable {
@@ -144,10 +145,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var transportFailure: Error?
         for base in bases {
             do {
-                let (data, http) = try await QuotaHTTP.post(
-                    url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
-                    headers: ["User-Agent": "antigravity"], auth: .bearer(token)
-                )
+                let (data, http) = try await Self.quotaSummary(token: token, base: base, now: now)
                 if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
                     lastFailure = reason
                     // A rejected credential is a verdict on the token, not on
@@ -213,7 +211,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         // The plan is decoration, so it is fetched best-effort: losing it must
         // not cost us a reading we already hold.
-        let plan = await Self.plan(token: token, bases: [base])
+        let planResult = await withDeadline(seconds: 0.75) {
+            await Self.plan(token: token, bases: [base])
+        }
+        let plan: String?
+        if case .success(let value) = planResult { plan = value } else { plan = nil }
         let sourceHost = URL(string: base)?.host ?? base
         let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
@@ -239,6 +241,29 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             }
             return group.displayName?.lowercased().contains("gemini") == true
         }
+    }
+
+    /// Some accounts need the project selected by loadCodeAssist. An empty
+    /// project-less summary is not evidence that the account has no Gemini
+    /// allowance. Retry once with Google's project, never a guessed id.
+    private static func quotaSummary(
+        token: String, base: String, now: Date
+    ) async throws -> (Data, HTTPURLResponse) {
+        let initial = try await QuotaHTTP.post(
+            url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
+            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+        guard (200...299).contains(initial.1.statusCode),
+              let summary = try? JSONDecoder().decode(QuotaSummary.self, from: initial.0),
+              geminiGroup(in: summary)?.buckets?.contains(where: { reading($0, now: now) != nil }) != true
+        else { return initial }
+        let assistResult = await withDeadline(seconds: 2) { await codeAssist(token: token, base: base) }
+        guard case .success(let assist) = assistResult,
+              let project = assist?.cloudaicompanionProject?.trimmed, !project.isEmpty,
+              let body = try? JSONEncoder().encode(["project": project])
+        else { return initial }
+        return try await QuotaHTTP.post(
+            url: base + "retrieveUserQuotaSummary", body: body,
+            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
     }
 
     private struct Reading {
@@ -291,21 +316,26 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     private static func plan(token: String, bases: [String]) async -> String? {
-        let body = try? JSONEncoder().encode(
-            ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
-        guard let body else { return nil }
         for base in bases {
-            guard let (data, http) = try? await QuotaHTTP.post(
-                url: base + "loadCodeAssist", body: body,
-                headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
-                (200...299).contains(http.statusCode),
-                let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
-            else { continue }
+            guard let assist = await codeAssist(token: token, base: base) else { continue }
             if let name = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name {
                 return name
             }
         }
         return nil
+    }
+
+    private static func codeAssist(token: String, base: String) async -> CodeAssist? {
+        let body = try? JSONEncoder().encode(
+            ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
+        guard let body else { return nil }
+        guard let (data, http) = try? await QuotaHTTP.post(
+                url: base + "loadCodeAssist", body: body,
+                headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
+                (200...299).contains(http.statusCode),
+                let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
+        else { return nil }
+        return assist
     }
 
     private static func parseDate(_ text: String) -> Date? {

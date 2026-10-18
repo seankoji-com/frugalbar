@@ -120,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var schedulerToken: UUID?
     private var providerPreferencesObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     private let notificationObserver = QuotaNotificationObserver()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -186,6 +187,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: .frugalbarProviderPreferencesDidChange, object: nil, queue: .main
         ) { [store] _ in
             Task { @MainActor in await store.applyProviderPreferences() }
+        }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [store] _ in
+            // Use the automatic path so the vendor's Retry-After still holds.
+            Task { @MainActor in await store.load() }
         }
 
         // Capture `store` rather than `self`: an implicit strong `self` here
@@ -338,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         let token = schedulerToken
         Task {
             await BackgroundScheduler.shared.stop()
@@ -369,16 +378,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyStatusItemPresentation() {
         guard let button = statusItem?.button else { return }
         let summary = store.summary
-        let advice = store.advice
         let snapshots = store.snapshots
 
-        let rec = MenuBarPresentation.recommendationDetails(
-            advice: advice,
+        let rec = MenuBarPresentation.limitingDetails(
             snapshots: snapshots,
-            summary: summary
+            forecasts: store.forecasts,
+            now: Date()
         )
 
-        // 1. Set MenuBar Icon to recommended vendor logo or fallback gauge
+        // Show the vendor whose quota needs attention, or the fallback gauge.
         if let vendorId = rec.vendorId, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
             let icon = NSImage(size: NSSize(width: 18, height: 18))
             icon.isTemplate = false
@@ -431,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let description = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: rec)
-        button.toolTip = "\(description)\nRecommended: \(advice.headline)"
+        button.toolTip = description
         button.setAccessibilityLabel(description)
     }
 

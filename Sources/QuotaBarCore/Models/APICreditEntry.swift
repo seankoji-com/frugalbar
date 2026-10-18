@@ -23,6 +23,12 @@ import Foundation
 /// money with different expiry rules.
 public struct APICreditEntry: Sendable, Equatable, Identifiable {
 
+    /// Codex's credit pool extends the ChatGPT plan. Keep its stable history
+    /// identity while placing its figure beside that plan's windows.
+    public var extendsSubscription: Bool {
+        vendorId == .openai && id == "openai.api-credits"
+    }
+
     /// Stable id, built from the facts — the vendor and which of its pools —
     /// never a UUID or prose, so the same entry re-renders as the same row.
     public let id: String

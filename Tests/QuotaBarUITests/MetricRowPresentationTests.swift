@@ -37,10 +37,10 @@ struct MetricRowPresentationTests {
         )
         #expect(p.fraction == nil)
         #expect(p.isMeasured == false)
-        #expect(p.valueLabel == "No usage API")
+        #expect(p.valueLabel == "No quota reading")
         #expect(p.resetLabel == "—")
         #expect(p.accessibilityLabel.contains("Claude"))
-        #expect(p.accessibilityLabel.contains("No usage API"))
+        #expect(p.accessibilityLabel.contains("No quota reading"))
     }
 
     @Test("a not-configured provider offers a remedy, not a number")

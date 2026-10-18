@@ -89,6 +89,17 @@ struct MetricRowView: View {
             if let credits = p.resetCredits {
                 resetCreditRow(credits)
             }
+            ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "plus.circle")
+                    Text("Usage credits: \(credit.figure)")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .padding(.leading, Theme.gridLeadingInset)
+            }
         }
         .padding(.vertical, 8)
         .frame(minHeight: Theme.rowMinHeight)
@@ -141,6 +152,7 @@ struct MetricRowView: View {
         if let credits = presentation.resetCredits {
             parts.append(credits.spoken)
         }
+        parts += presentation.subscriptionCredits.map { $0.spoken(stale: snapshot.staleReading != nil) }
         return parts.joined(separator: ". ")
     }
 
@@ -210,19 +222,14 @@ struct MetricRowView: View {
             Text(text)
                 .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                // Two lines, not one: this is the only *visual* disclosure that
-                // the figures above are not current, and the tail is exactly
-                // where the reason and the age sit — the two things the line
-                // exists to say. Tail-truncated to a single line in a narrow
-                // popover it degraded to "Stale — last poll failed …", which
-                // names neither. The row is free to grow downwards; the card
-                // scrolls.
-                .lineLimit(2)
+                // Let the failure and reading time wrap in full. Both were
+                // clipped away in the narrow window grid's trailing column.
+                .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .padding(.leading, Theme.gridLeadingInset)
+        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
     }
 
     private func row(_ grid: WindowGridPresentation, presentation p: MetricRowPresentation) -> some View {
