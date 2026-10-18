@@ -587,6 +587,40 @@ struct ProviderHTTPTests {
         #expect(URLProtocolStub.capturedRequests.allSatisfy { $0.url?.host == "cloudcode-pa.googleapis.com" })
     }
 
+    @Test("a throwing Gemini project retry preserves the initial summary")
+    func geminiRetryFailurePreservesInitialSummary() async throws {
+        for code in [URLError.Code.timedOut, .cannotConnectToHost] {
+            let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+            let snap = try await withStubbedHTTP({ request in
+                if request.url?.path == "/v1internal:loadCodeAssist" {
+                    URLProtocolStub.nextFailureCode = code
+                    URLProtocolStub.failNextRequest = true
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }
+                return canned(body: #"{"groups":[]}"#)
+            }) { try await provider.fetchSnapshot() }
+            #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
+            #expect(snap.consumptionFraction == nil)
+            #expect(URLProtocolStub.requestCount == 3)
+        }
+    }
+
+    @Test("disabled or invalid Gemini buckets do not trigger project discovery")
+    func geminiPopulatedBucketsSkipProjectRetry() async throws {
+        for body in [
+            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5,"disabled":true}]}]}"#,
+            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":1.5}]}]}"#
+        ] {
+            let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+            let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+                try await provider.fetchSnapshot()
+            }
+            #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
+            #expect(URLProtocolStub.requestCount == 1)
+            #expect(URLProtocolStub.capturedRequests.first?.url?.path == "/v1internal:retrieveUserQuotaSummary")
+        }
+    }
+
     @Test("Gemini with no key short-circuits without issuing a request")
     func geminiNoKeyNoRequest() async throws {
         let provider = GeminiQuotaProvider(accessToken: "")

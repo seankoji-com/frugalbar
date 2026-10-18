@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove each scheduler/OAuth/poll-floor/deadline regression test rejects its defect, then restore.
+"""Prove regression tests reject independent defects, then restore.
 
 Run only in a clean disposable checkout. Every edit is reverted in a finally
 block, and a passing control run follows every rejected mutation. A compiler
@@ -16,6 +16,8 @@ OAUTH = "Sources/QuotaBarCore/Providers/GeminiOAuthLogin.swift"
 QUOTA_MANAGER = "Sources/QuotaBarCore/Engine/QuotaManager.swift"
 DEADLINE = "Sources/QuotaBarCore/Engine/Deadline.swift"
 QUOTA_HTTP = "Sources/QuotaBarCore/Providers/QuotaProvider.swift"
+GEMINI = "Sources/QuotaBarCore/Providers/GeminiQuotaProvider.swift"
+MENU_BAR = "Sources/QuotaBarUI/MenuBar/MenuBarStatusView.swift"
 CASES = [
     ("overlap-guard", SCHEDULER, "        guard !isRefreshing else { return }\n",
      "BackgroundSchedulerTests/refreshDoesNotOverlap", "an overlapping refresh is skipped and the next cycle still runs"),
@@ -48,6 +50,27 @@ CASES = [
     ("retry-after-cap", QUOTA_HTTP, "seconds > maximumRetryAfter ? maximumRetryAfter : ",
      "ProviderStatusTests/retryAfterDateClampsToADay",
      "a Retry-After longer than a day holds the automatic poll for a day, not forever"),
+    ("gemini-retry-failure", GEMINI, "            return initial\n",
+     "ProviderHTTPTests/geminiRetryFailurePreservesInitialSummary",
+     "a throwing Gemini project retry preserves the initial summary",
+     "            throw error\n"),
+    ("gemini-populated-buckets", GEMINI, "(geminiGroup(in: summary)?.buckets?.isEmpty ?? true)",
+     "ProviderHTTPTests/geminiPopulatedBucketsSkipProjectRetry",
+     "disabled or invalid Gemini buckets do not trigger project discovery", "true"),
+    ("tray-elapsed-window", MENU_BAR, "snapshot.quotaBars.compactMap",
+     "MenuBarLimitingTests/ignoresUnreadableAndElapsed",
+     "stale, unavailable and elapsed windows cannot supply the next limit", "snapshot.bars.compactMap"),
+    ("tray-earliest-limit", MENU_BAR, "let projected = pool.filter { $0.limitAt != nil }.min",
+     "MenuBarLimitingTests/earliestForecastWins",
+     "the earliest projected limit wins over more used and untouched workspaces",
+     "let projected = pool.filter { $0.limitAt != nil }.max"),
+    ("footer-check-time", QUOTA_MANAGER, "snap.staleReading?.at ?? snap.lastUpdated",
+     "SystemHealthSummaryTests/failedPollSeparatesCheckTimeFromReadingAge",
+     "a failed poll updates the check time without changing the sixteen-hour-old reading", "snap.lastUpdated"),
+    ("subscription-credit-placement", "Sources/QuotaBarCore/Models/APICreditEntry.swift",
+     'vendorId == .openai && id == "openai.api-credits"',
+     "SubscriptionCreditPlacementTests/creditsBelongToSubscription",
+     "Codex usage credits stay with the plan and leave its quota figures unchanged", "false"),
 ]
 
 
@@ -70,7 +93,7 @@ def main():
     if subprocess.check_output(["git", "diff", "--name-only", "HEAD", "--", "Sources", "Tests"], cwd=ROOT).strip():
         raise RuntimeError("Refusing to mutate a checkout with source/test edits")
     LOGS.mkdir(parents=True, exist_ok=True)
-    for name, relative, needle, selector, display in CASES:
+    for name, relative, needle, selector, display, *replacement in CASES:
         source = ROOT / relative
         original = source.read_bytes()
         text = original.decode()
@@ -78,7 +101,7 @@ def main():
             raise RuntimeError(f"{name}: mutation target is not unique")
         run_test(name, "baseline", selector, display)
         try:
-            source.write_text(text.replace(needle, "", 1))
+            source.write_text(text.replace(needle, replacement[0] if replacement else "", 1))
             run_test(name, "mutant", selector, display)
         finally:
             source.write_bytes(original)

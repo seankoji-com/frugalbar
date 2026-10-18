@@ -145,7 +145,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var transportFailure: Error?
         for base in bases {
             do {
-                let (data, http) = try await Self.quotaSummary(token: token, base: base, now: now)
+                let (data, http) = try await Self.quotaSummary(token: token, base: base)
                 if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
                     lastFailure = reason
                     // A rejected credential is a verdict on the token, not on
@@ -211,11 +211,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         // The plan is decoration, so it is fetched best-effort: losing it must
         // not cost us a reading we already hold.
-        let planResult = await withDeadline(seconds: 0.75) {
-            await Self.plan(token: token, bases: [base])
-        }
-        let plan: String?
-        if case .success(let value) = planResult { plan = value } else { plan = nil }
+        let plan = await Self.plan(token: token, bases: [base])
         let sourceHost = URL(string: base)?.host ?? base
         let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
@@ -247,23 +243,28 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     /// project-less summary is not evidence that the account has no Gemini
     /// allowance. Retry once with Google's project, never a guessed id.
     private static func quotaSummary(
-        token: String, base: String, now: Date
+        token: String, base: String
     ) async throws -> (Data, HTTPURLResponse) {
         let initial = try await QuotaHTTP.post(
             url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
             headers: ["User-Agent": "antigravity"], auth: .bearer(token))
         guard (200...299).contains(initial.1.statusCode),
               let summary = try? JSONDecoder().decode(QuotaSummary.self, from: initial.0),
-              geminiGroup(in: summary)?.buckets?.contains(where: { reading($0, now: now) != nil }) != true
+              (geminiGroup(in: summary)?.buckets?.isEmpty ?? true)
         else { return initial }
-        let assistResult = await withDeadline(seconds: 2) { await codeAssist(token: token, base: base) }
-        guard case .success(let assist) = assistResult,
-              let project = assist?.cloudaicompanionProject?.trimmed, !project.isEmpty,
+        guard let assist = await codeAssist(token: token, base: base),
+              let project = assist.cloudaicompanionProject?.trimmed, !project.isEmpty,
               let body = try? JSONEncoder().encode(["project": project])
         else { return initial }
-        return try await QuotaHTTP.post(
-            url: base + "retrieveUserQuotaSummary", body: body,
-            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+        do {
+            return try await QuotaHTTP.post(
+                url: base + "retrieveUserQuotaSummary", body: body,
+                headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+        } catch {
+            // Project discovery is an optional second chance, not a reason
+            // to discard a response the vendor already sent.
+            return initial
+        }
     }
 
     private struct Reading {
@@ -326,6 +327,16 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     private static func codeAssist(token: String, base: String) async -> CodeAssist? {
+        // Both plan decoration and project discovery use the same endpoint
+        // and budget. Neither may consume the whole provider deadline.
+        let result = await withDeadline(seconds: 2) {
+            await loadCodeAssist(token: token, base: base)
+        }
+        if case .success(let assist) = result { return assist }
+        return nil
+    }
+
+    private static func loadCodeAssist(token: String, base: String) async -> CodeAssist? {
         let body = try? JSONEncoder().encode(
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
         guard let body else { return nil }
