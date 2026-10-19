@@ -520,6 +520,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// urgency bands, exhaustion sorting, the advice engine, the menu-bar icon
     /// or the history recorder — all of which read snapshots.
     public var apiCredits: [APICreditEntry] = []
+    /// Independently observed linked Console entitlement, with its own reading time.
+    public var monthlyAPICredit: ClaudeMonthlyCredit? = nil
     /// Banked usage-reset credits the vendor says the user can redeem right
     /// now (OpenAI's `rate_limit_reset_credits.available_count`). `nil` when
     /// the vendor published no such figure — never 0 as a stand-in, since

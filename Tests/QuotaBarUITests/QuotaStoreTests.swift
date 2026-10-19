@@ -160,6 +160,28 @@ struct QuotaStoreTests {
         #expect(s.isRefreshing == false)
     }
 
+    @Test("a queued manual click bypasses the automatic floor and vendor backoff")
+    func queuedManualRefreshBypassesVendorBackoff() async {
+        let hits = Hits()
+        let gate = FirstPollGate()
+        let provider = StubProvider(vendorId: .claude, hits: hits,
+            status: .unavailable(.rateLimited(retryAfter: Date().addingTimeInterval(600))), gate: gate)
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 30), providerFactory: { [provider] })
+        let s = QuotaStore(manager: manager)
+        async let first: Void = s.load()
+        await gate.waitForEntry()
+        await s.forceRefresh()
+        await s.forceRefresh()
+        await gate.resume()
+        await first
+        #expect(hits.count(.claude) == 2)
+        // Manual joins manual are coalesced, and the user floor is now armed.
+        await s.forceRefresh()
+        #expect(hits.count(.claude) == 2)
+    }
+
     /// The reported bug, through the store the popover actually drives. Opening
     /// the popover runs `load()`; the ⟳ the user presses next used to be
     /// swallowed by the poll floor that load had just armed, so the click was a

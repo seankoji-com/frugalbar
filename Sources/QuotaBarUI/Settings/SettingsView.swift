@@ -133,6 +133,8 @@ public struct SettingsView: View {
     @State private var isVerifying = false
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
+    @State private var showClaudeMonthlyCredit = false
+    @State private var claudeMonthlyEnabled = false
     @State private var showGeminiClient = false
     @State private var isSigningInToGemini = false
     @State private var geminiSignInStatus: String?
@@ -299,6 +301,26 @@ public struct SettingsView: View {
     private var keysForm: some View {
         Form {
             credentialDiscoverySection
+            Section("Claude monthly API credit") {
+                Text("Connect Claude's billing page to read the linked Console monthly allowance and next credit date. This is separate from extra usage and is never shown as a remaining balance.")
+                    .font(.caption)
+                Button(claudeMonthlyEnabled ? "Open Claude billing connection" : "Connect Claude billing") {
+                    ClaudeMonthlyCreditSession.shared.connect()
+                    claudeMonthlyEnabled = true
+                    showClaudeMonthlyCredit = true
+                }
+                if claudeMonthlyEnabled {
+                    Button("Disconnect monthly credit") {
+                        ClaudeMonthlyCreditSession.shared.disconnect()
+                        claudeMonthlyEnabled = false
+                        Task { await store?.forceRefresh() }
+                    }
+                }
+            }
+            .onAppear { claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled }
+            .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
+                Task { await store?.forceRefresh() }
+            }) { ClaudeMonthlyCreditConnectionView() }
 
             Section {
                 ForEach(Self.slots) { slot in

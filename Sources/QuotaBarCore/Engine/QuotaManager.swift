@@ -32,7 +32,8 @@ public actor QuotaManager {
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
-    private var activeTaskHasUserRequest = false
+    private var activeTaskIsForced = false
+    private var forcedPassPending = false
 
     private struct CacheEntry: Sendable {
         let snapshot: QuotaSnapshot
@@ -280,7 +281,8 @@ public actor QuotaManager {
         return await fetchDeduplicated()
     }
 
-    /// Requests a fresh pass, sharing any pass already fetching. Used by the manual refresh button.
+    /// Requests a user pass. Concurrent manual callers share it; an automatic
+    /// pass already in flight is followed by one user pass.
     public func forceRefresh() async -> [String: QuotaSnapshot] {
         lastCompleteFetch = nil
         return await fetchDeduplicated(force: true)
@@ -289,23 +291,31 @@ public actor QuotaManager {
     // MARK: Private
 
     private func fetchDeduplicated(force: Bool = false) async -> [String: QuotaSnapshot] {
-        // A forced refresh must join too. Cancelling an in-flight pass does
-        // not retract HTTP requests already sent, and its cache clocks have
-        // not been committed yet. Replacing it let overlapping clicks send
-        // another request to every vendor before either floor could apply.
-        // The caller receives the in-flight result rather than abandoning it.
+        // A forced refresh must join too. Keep one owner of the in-flight
+        // pass, but queue a user-initiated pass if this one is automatic.
+        // Automatic selection may have skipped a vendor under Retry-After or
+        // the automatic floor, and cannot satisfy the person's click.
         if let existing = activeTask {
-            if force { activeTaskHasUserRequest = true }
+            if force && !activeTaskIsForced { forcedPassPending = true }
             return await existing.value
         }
 
-        activeTaskHasUserRequest = force
-        let task = Task { await self.parallelFetch(force: force) }
+        activeTaskIsForced = force
+        let task = Task {
+            var result = await self.parallelFetch(force: force)
+            if self.forcedPassPending {
+                self.forcedPassPending = false
+                self.activeTaskIsForced = true
+                result = await self.parallelFetch(force: true)
+            }
+            // Clear ownership before returning, while still on this actor.
+            // A caller arriving after completion must start a new pass rather
+            // than queue onto a task whose follow-up decision already ran.
+            self.activeTask = nil
+            return result
+        }
         activeTask = task
-        let result = await task.value
-        // A joined caller may resume after a newer pass has begun.
-        if activeTask == task { activeTask = nil }
-        return result
+        return await task.value
     }
 
     private func parallelFetch(force: Bool = false) async -> [String: QuotaSnapshot] {
@@ -480,6 +490,7 @@ public actor QuotaManager {
                 // reading froze for the whole outage, and the history re-stamped
                 // them with a fresh timestamp.
                 retained.staleReading = StaleReading(reason: reason, at: now)
+                retained.monthlyAPICredit = snap.monthlyAPICredit
                 displaySnapshot = retained
             } else {
                 displaySnapshot = snap
@@ -487,7 +498,7 @@ public actor QuotaManager {
             // A provider we attempted re-arms the floors it is supposed to:
             // `fetchedAt` always (so the automatic floor measures from the
             // attempt, not the outcome), and `lastUserFetchAt` when a user
-            // requested or joined this pass, so another ⟳ is served from
+            // requested this user-initiated pass, so another ⟳ is served from
             // cache rather than re-hitting the vendor. A provider never
             // fetched this round is not in this loop at all and keeps both
             // instants.
@@ -495,7 +506,7 @@ public actor QuotaManager {
             cache[id] = CacheEntry(
                 snapshot: displaySnapshot,
                 fetchedAt: now,
-                lastUserFetchAt: activeTaskHasUserRequest ? now : previous?.lastUserFetchAt,
+                lastUserFetchAt: force ? now : previous?.lastUserFetchAt,
                 vendorRetryAfter: Self.vendorRetryAfter(from: snap.status))
         }
         lastCompleteFetch = now

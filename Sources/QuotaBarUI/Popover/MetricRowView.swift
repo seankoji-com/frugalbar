@@ -89,6 +89,15 @@ struct MetricRowView: View {
             if let credits = p.resetCredits {
                 resetCreditRow(credits)
             }
+            if let monthly = p.monthlyCreditLine {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(monthly, systemImage: "calendar")
+                    if let detail = p.monthlyCreditDetail { Text(detail) }
+                }
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "plus.circle")
@@ -151,6 +160,10 @@ struct MetricRowView: View {
         }
         if let credits = presentation.resetCredits {
             parts.append(credits.spoken)
+        }
+        if let monthly = presentation.monthlyCreditLine {
+            parts.append(monthly)
+            if let detail = presentation.monthlyCreditDetail { parts.append(detail) }
         }
         parts += presentation.subscriptionCredits.map { $0.spoken(stale: snapshot.staleReading != nil) }
         return parts.joined(separator: ". ")

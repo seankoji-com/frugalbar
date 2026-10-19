@@ -114,6 +114,18 @@ jobs:
             coverage/swift.lcov
           if-no-files-found: error
 
+      - name: Render production SwiftUI credit rows
+        if: github.event_name == 'workflow_dispatch' && inputs.verify_mutations
+        run: FRUGALBAR_RENDER_DIR="$RUNNER_TEMP/frugalbar-renders" swift test -c debug --filter UXRenderTests
+
+      - name: Preserve SwiftUI renders
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_mutations
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: swiftui-credit-renders
+          path: ${{ runner.temp }}/frugalbar-renders/
+          if-no-files-found: error
+
       - name: Prove regression mutations
         if: github.event_name == 'workflow_dispatch' && inputs.verify_mutations
         run: python3 scripts/verify-regression-mutations.py

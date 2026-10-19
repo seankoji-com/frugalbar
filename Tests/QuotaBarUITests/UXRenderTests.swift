@@ -61,6 +61,21 @@ struct UXRenderTests {
             MetricRowView(snapshot: staleSubscription)
         }.padding(12).frame(width: 384).background(Theme.surface),
             name: "subscription-credits", directory: directory)
+        var claudeMonthly = snapshot(.claude, "Claude", 0.65)
+        claudeMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date())
+        var staleMonthly = claudeMonthly
+        staleMonthly.staleReading = StaleReading(reason: .rateLimited(
+            retryAfter: Date().addingTimeInterval(300)), at: Date())
+        staleMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date().addingTimeInterval(-600))
+        try await save(VStack(spacing: 12) {
+            Text("Monthly entitlement · current and throttled").font(.caption)
+            MetricRowView(snapshot: claudeMonthly)
+            MetricRowView(snapshot: staleMonthly)
+            MetricRowView(snapshot: subscription)
+        }.padding(14).padding(12).frame(width: 384).background(Theme.surface),
+            name: "monthly-credit-and-openai", directory: directory)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
@@ -168,7 +183,7 @@ struct UXRenderTests {
             metric: .credits(remaining: 62_500, unitName: "credits"),
             source: "Codex usage payload · credits.balance"),
          APICreditEntry(
-            id: "claude.extra-usage", vendorId: .claude, label: "API credits",
+            id: "claude.extra-usage", vendorId: .claude, label: "Extra usage",
             metric: .currency(balance: Decimal(string: "179.50")!,
                               limit: Decimal(string: "200.00")!, spent: nil, currencyCode: "USD"),
             currencyBasis: .prepaidCredit, detail: "$200.00 monthly limit",

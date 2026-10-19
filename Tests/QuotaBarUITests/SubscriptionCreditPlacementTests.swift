@@ -23,6 +23,9 @@ struct SubscriptionCreditPlacementTests {
         #expect(presentation.subscriptionCredits.count == 1)
         let digits = presentation.subscriptionCredits.first?.figure.filter(\.isNumber)
         #expect(digits == "62500")
+        #expect(presentation.subscriptionCredits.first?.figure.hasSuffix("credits") == true)
+        #expect(presentation.subscriptionCredits.first?.figure.contains("$") == false)
+        #expect(presentation.subscriptionCredits.first?.detail == nil)
         #expect(presentation.subscriptionCredits.first?.spoken.contains("Usage credits") == true)
         #expect(snap.consumptionFraction == originalFraction)
         #expect(presentation.isExhausted)
@@ -32,6 +35,26 @@ struct SubscriptionCreditPlacementTests {
         #expect(stale.subscriptionCredits == presentation.subscriptionCredits)
         #expect(stale.subscriptionCredits.first?.spoken(stale: true).contains("stale") == true)
         #expect(stale.staleNote != nil)
+    }
+
+    @Test("Claude monthly entitlement is a separate line with no balance or quota")
+    func monthlyEntitlementPlacement() throws {
+        let grant = try #require(ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now).monthlyCreditLine == nil)
+        snapshot.monthlyAPICredit = grant
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.monthlyCreditLine == "Monthly API credit: $123.45 per month")
+        #expect(p.monthlyCreditDetail?.contains("Next credit") == true)
+        #expect(p.subscriptionCredits.isEmpty)
+        #expect(snapshot.apiCredits.isEmpty)
+        #expect(snapshot.consumptionFraction == nil)
+        #expect(snapshot.quotaBars.isEmpty)
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now.addingTimeInterval(300))
+            .monthlyCreditDetail?.contains("Stale monthly credit") == true)
     }
 
     @Test("other credit pools remain separate and missing credits draw nothing")

@@ -78,6 +78,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// change. Always set and cleared together with `staleNote`.
     public let staleSpoken: String?
     public let subscriptionCredits: [APICreditEntryPresentation]
+    public let monthlyCreditLine: String?
+    public let monthlyCreditDetail: String?
 
     /// A bar is only exhausted at the top of its range. `>= 1` would miss the
     /// floating-point residue of a percentage that arrived as 100.
@@ -86,6 +88,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
     static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
+        self.monthlyCreditLine = snapshot.monthlyAPICredit?.line
+        self.monthlyCreditDetail = snapshot.monthlyAPICredit?.detail(now: now)
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured

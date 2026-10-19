@@ -1589,6 +1589,66 @@ struct ProviderHTTPTests {
         #expect(await backoff.retryAfter(config: config, now: now) == nil)
     }
 
+    @Test("a failed manual proxy probe preserves the earlier throttle")
+    func claudeFailedProbeRetainsThrottle() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let backoff = ClaudeProxyBackoff()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let until = now.addingTimeInterval(600)
+        await backoff.record(.rateLimited(retryAfter: until), config: config)
+        await backoff.record(.badResponse, config: config)
+        #expect(await backoff.retryAfter(config: config, now: now) == until)
+        await backoff.record(.credentialRejected, config: config)
+        #expect(await backoff.retryAfter(config: config, now: now) == until)
+        await backoff.record(.rateLimited(retryAfter: now.addingTimeInterval(30)), config: config)
+        #expect(await backoff.retryAfter(config: config, now: now) == until)
+        #expect(await backoff.retryAfter(config: config, now: until) == nil)
+        await backoff.record(nil, config: config)
+        #expect(await backoff.retryAfter(config: config, now: now) == nil)
+    }
+
+    @Test("a direct throttle survives an earlier proxy retry deadline")
+    func claudeDirectCooldownIndependentOfProxy() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let backoff = ClaudeProxyBackoff()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config,
+            directCredential: { "direct-test-token" }, proxyBackoff: backoff)
+        try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"test-index"}]}"#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                return canned(body: #"{"status_code":429,"header":{"Retry-After":["30"]},"body":"{}"}"#)
+            }
+            return canned(status: 429, body: "{}", headers: ["Retry-After": "600"])
+        }) {
+            _ = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await provider.fetchSnapshot(now: now)
+            }
+            #expect(URLProtocolStub.requestCount == 3)
+            _ = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await provider.fetchSnapshot(now: now.addingTimeInterval(30))
+            }
+            // Proxy is due, direct is still cooling down. Repeated sync or
+            // popover loads cannot issue the direct OAuth request early.
+            #expect(URLProtocolStub.requestCount == 5)
+            _ = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await provider.fetchSnapshot(now: now.addingTimeInterval(31))
+            }
+            #expect(URLProtocolStub.requestCount == 5)
+            _ = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await provider.fetchSnapshot(now: now.addingTimeInterval(600))
+            }
+            #expect(URLProtocolStub.requestCount == 8)
+            _ = try await provider.fetchSnapshot(now: now.addingTimeInterval(601))
+            #expect(URLProtocolStub.requestCount == 11)
+        }
+        #expect(await backoff.directRetryAfter(token: "replacement-token", now: now) == nil)
+    }
+
     /// The other half of the same rule: when there is no second credential to
     /// try, the proxy's own reason is the honest one to report — and it now
     /// carries the vendor's Retry-After instead of an unquantified "will retry".
@@ -2046,6 +2106,7 @@ struct ProviderHTTPTests {
     func twoPoolsTwoEntries() async throws {
         let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"},"iguana_necktie":{"remaining_dollars":150}"#)
         #expect(snap.apiCredits.map(\.id) == ["claude.extra-usage", "claude.promo-credit"])
+        #expect(snap.apiCredits.first?.label == "Extra usage")
     }
 
     /// Credits never become quota: no window, no fraction, no reset.

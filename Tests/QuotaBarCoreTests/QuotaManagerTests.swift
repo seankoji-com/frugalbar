@@ -170,7 +170,7 @@ struct QuotaManagerTests {
         #expect(counter.value == 1)
     }
 
-    @Test("a forced refresh joins an automatic fetch and arms the user floor")
+    @Test("a forced refresh follows an automatic fetch and arms the user floor")
     func forcedRefreshJoinsAutomaticFetch() async throws {
         let counter = InvocationCounter()
         let manager = QuotaManager(
@@ -187,10 +187,10 @@ struct QuotaManagerTests {
         try #require(counter.value == 1)
         let manual = await manager.forceRefresh()
         let original = await automatic.value
-        #expect(counter.value == 1)
+        #expect(counter.value == 2)
         #expect(manual["claude"]?.lastUpdated == original["claude"]?.lastUpdated)
         _ = await manager.forceRefresh()
-        #expect(counter.value == 1)
+        #expect(counter.value == 2)
     }
 
     @Test("isCacheFresh starts stale before any fetch")
