@@ -162,6 +162,11 @@ jobs:
       - name: Verify mutation partition
         run: python3 scripts/test_verify_regression_mutations.py
 
+      # Match run_test's debug configuration so cold compilation stays outside
+      # its 180-second per-case budget. The required job checks warnings.
+      - name: Build mutation test baseline
+        run: swift build -c debug --build-tests
+
       - name: Prove regression mutations
         run: python3 scripts/verify-regression-mutations.py --shard-index ${{ matrix.shard-index }} --shard-count 2
 
