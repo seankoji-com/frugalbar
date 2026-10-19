@@ -69,12 +69,13 @@ struct UXRenderTests {
             retryAfter: Date().addingTimeInterval(300)), at: Date())
         staleMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date().addingTimeInterval(-600))
+        // Use the actual card so the 384pt popover's 12pt margins and
+        // 14pt card padding leave exactly 332pt for each production row.
         try await save(VStack(spacing: 12) {
             Text("Monthly entitlement · current and throttled").font(.caption)
-            MetricRowView(snapshot: claudeMonthly)
-            MetricRowView(snapshot: staleMonthly)
-            MetricRowView(snapshot: subscription)
-        }.padding(14).padding(12).frame(width: 384).background(Theme.surface),
+            MetricSectionView(category: .aiSubscriptions, snapshots: [claudeMonthly, subscription])
+            MetricSectionView(category: .aiSubscriptions, snapshots: [staleMonthly, staleSubscription])
+        }.padding(12).frame(width: 384).background(Theme.surface),
             name: "monthly-credit-and-openai", directory: directory)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
@@ -734,6 +735,23 @@ struct UXRenderTests {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let data = try #require(bitmap.representation(using: .png, properties: [:]))
         try data.write(to: directory.appendingPathComponent("\(name).png"))
+        let accessibility = accessibilityDump(host).joined(separator: "\n")
+        try accessibility.write(to: directory.appendingPathComponent("\(name)-accessibility.txt"),
+                                atomically: true, encoding: .utf8)
         window.close()
+    }
+
+    /// Read the hosted AppKit accessibility tree, including SwiftUI's combined
+    /// row labels. This artifact is separate from the screenshot and can be
+    /// inspected even when the hosted runner has no Accessibility Inspector.
+    private func accessibilityDump(_ object: Any, depth: Int = 0) -> [String] {
+        guard depth < 16, let element = object as? NSAccessibilityProtocol else { return [] }
+        let role = element.accessibilityRole()?.rawValue ?? "unknown"
+        let label = element.accessibilityLabel() ?? ""
+        var lines = [String(repeating: "  ", count: depth) + role + ": " + label]
+        for child in element.accessibilityChildren() ?? [] {
+            lines += accessibilityDump(child, depth: depth + 1)
+        }
+        return lines
     }
 }

@@ -524,6 +524,45 @@ struct QuotaManagerTests {
         #expect(SystemHealthSummary.compute(from: Array(third.values)).staleCount == 0)
     }
 
+    @Test("quota retention replaces monthly credit with its independent read outcome")
+    func monthlyCreditFreshnessIsIndependentOfQuotaFailure() async throws {
+        struct SnapshotProvider: QuotaProvider {
+            let snapshot: QuotaSnapshot
+            var vendorId: VendorIdentifier { .claude }
+            var displayName: String { "Claude" }
+            var category: MetricCategory { .aiSubscriptions }
+            func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grant = try #require(ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
+        let updated = try #require(ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"50.00"}"#.utf8), now: now.addingTimeInterval(400)))
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                let pass = counter.increment()
+                var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+                    category: .aiSubscriptions, metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+                    status: pass == 1 ? .measured(.warning) : .unavailable(.offline),
+                    resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+                snapshot.monthlyAPICredit = pass == 1 ? grant : (pass == 2 ? updated : nil)
+                return [SnapshotProvider(snapshot: snapshot)]
+            })
+        let first = await manager.forceRefresh()
+        #expect(first["claude"]?.monthlyAPICredit == grant)
+        let second = await manager.forceRefresh()
+        #expect(second["claude"]?.staleReading?.reason == .offline)
+        #expect(second["claude"]?.consumptionFraction == 0.5)
+        #expect(second["claude"]?.monthlyAPICredit == updated)
+        #expect(second["claude"]?.monthlyAPICredit?.detail(now: now.addingTimeInterval(400)) == nil)
+        let third = await manager.forceRefresh()
+        #expect(third["claude"]?.staleReading?.reason == .offline)
+        #expect(third["claude"]?.monthlyAPICredit == nil)
+    }
+
     /// Two failures in a row report the newest reason. Retention exists to keep
     /// *figures*, and a placeholder carries none, so freezing the first failure's
     /// reason would leave a provider whose key was rejected reading "Not

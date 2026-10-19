@@ -157,6 +157,23 @@ private let githubPayload = #"""
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
 
+    @Test("a quota transport failure preserves an independently read monthly entitlement")
+    func claudeMonthlyCreditSurvivesQuotaTransportFailure() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grant = try #require(ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
+        let provider = ClaudeQuotaProvider(apiKey: "test-token", monthlyCredit: { _ in grant })
+        let snapshot = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot(now: now)
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+        #expect(snapshot.status == .unavailable(.offline))
+        #expect(snapshot.monthlyAPICredit == grant)
+        #expect(snapshot.consumptionFraction == nil)
+        #expect(snapshot.apiCredits.isEmpty)
+    }
+
     // MARK: Stub sanity
 
     @Test("the URLProtocol stub is actually invoked by requests")

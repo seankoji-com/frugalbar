@@ -41,8 +41,31 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     }
 
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
-        var snapshot = try await fetchUsageSnapshot(now: now)
-        snapshot.monthlyAPICredit = await monthlyCredit(now)
+        // Billing is independent of OAuth usage. Read it concurrently so a
+        // slow web process cannot add its entire wait to the quota request,
+        // and a quota transport failure does not erase a fresh entitlement.
+        async let credit = monthlyCredit(now)
+        var snapshot: QuotaSnapshot
+        do {
+            snapshot = try await fetchUsageSnapshot(now: now)
+        } catch let error as ProviderError {
+            snapshot = unavailable(error.reason)
+        } catch let error as URLError {
+            switch error.code {
+            case .timedOut:
+                snapshot = unavailable(.timedOut)
+            case .notConnectedToInternet, .networkConnectionLost,
+                 .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+                snapshot = unavailable(.offline)
+            default:
+                snapshot = unavailable(.badResponse)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            snapshot = unavailable(.badResponse)
+        }
+        snapshot.monthlyAPICredit = await credit
         return snapshot
     }
 
