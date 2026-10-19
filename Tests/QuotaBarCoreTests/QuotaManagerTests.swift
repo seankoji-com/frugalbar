@@ -67,6 +67,32 @@ private struct StubProvider: QuotaProvider {
     }
 }
 
+/// Holds the first provider call until the test has queued a manual refresh.
+/// Later calls return immediately, including an unwanted follow-up in a mutant.
+private actor AutomaticFetchGate {
+    private var started = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        guard !started else { return }
+        started = true
+        entered?.resume()
+        entered = nil
+        await withCheckedContinuation { release = $0 }
+    }
+
+    func waitForEntry() async {
+        guard !started else { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func resume() {
+        release?.resume()
+        release = nil
+    }
+}
+
 // MARK: - Suite
 
 struct QuotaManagerTests {
@@ -191,6 +217,49 @@ struct QuotaManagerTests {
         #expect(manual["claude"]?.lastUpdated == original["claude"]?.lastUpdated)
         _ = await manager.forceRefresh()
         #expect(counter.value == 1)
+    }
+
+    @Test("a queued manual refresh excludes successful automatic reads even with no poll floor")
+    func queuedManualRefreshExcludesSuccessfulReadWithoutFloor() async throws {
+        struct GatedProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let calls: InvocationCounter
+            let userCalls: InvocationCounter
+            let gate: AutomaticFetchGate
+
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                calls.increment()
+                if QuotaFetchContext.isUserInitiated { userCalls.increment() }
+                await gate.run()
+                return try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+            }
+        }
+        let calls = InvocationCounter()
+        let userCalls = InvocationCounter()
+        let gate = AutomaticFetchGate()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 5, minPollInterval: 0),
+            providerFactory: { [GatedProvider(calls: calls, userCalls: userCalls, gate: gate)] })
+        let automatic = Task { await manager.refresh() }
+        await gate.waitForEntry()
+        // Register the same intent as a click in QuotaStore while its automatic
+        // refresh is pending. The gate, rather than a sleep, orders the click.
+        let queued = await manager.queueUserRefreshIfActive()
+        await gate.resume()
+        let result = await automatic.value
+        #expect(queued)
+        #expect(result["claude"]?.status == .measured(.none))
+        #expect(calls.value == 1)
+        #expect(userCalls.value == 0)
+
+        // Zero floor really permits another explicit fetch. Only the exclusion
+        // above can prevent the queued follow-up from repeating the first read.
+        _ = await manager.forceRefresh()
+        #expect(calls.value == 2)
+        #expect(userCalls.value == 1)
     }
 
     @Test("a queued manual refresh re-asks a vendor skipped under Retry-After with user intent")

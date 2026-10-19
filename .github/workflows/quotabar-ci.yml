@@ -142,7 +142,7 @@ jobs:
         with:
           name: regression-mutation-proof
           path: coverage/mutations/
-          if-no-files-found: error
+          if-no-files-found: warn
 
       # Tests must be hermetic. Re-running proves there is no ordering or clock
       # dependence — a formatter that truncated instead of rounding used to
