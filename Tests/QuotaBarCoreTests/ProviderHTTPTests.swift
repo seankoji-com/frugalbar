@@ -1477,6 +1477,118 @@ struct ProviderHTTPTests {
         #expect(snap.row2?.primaryFraction == 0.08)
     }
 
+    @Test("a direct success retains the proxy throttle across automatic provider rebuilds")
+    func claudeProxyCooldownSurvivesDirectSuccess() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let backoff = ClaudeProxyBackoff()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"test-index"}]}"#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                return canned(body: #"{"status_code":429,"header":{"Retry-After":["90"]},"body":"{}"}"#)
+            }
+            #expect(request.url?.host == "api.anthropic.com")
+            return canned(body: #"{"five_hour":{"utilization":53},"seven_day":{"utilization":8}}"#)
+        }) {
+            // Rebuild, just as QuotaManager's factory does on each pass.
+            let first = ClaudeQuotaProvider(cliProxyConfig: config,
+                directCredential: { "direct-test-token" }, proxyBackoff: backoff)
+            let initial = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await first.fetchSnapshot(now: now)
+            }
+            #expect(initial.status == .measured(.none))
+            #expect(URLProtocolStub.requestCount == 3)
+            let rebuilt = ClaudeQuotaProvider(cliProxyConfig: config,
+                directCredential: { "direct-test-token" }, proxyBackoff: backoff)
+            let second = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await rebuilt.fetchSnapshot(now: now.addingTimeInterval(60))
+            }
+            #expect(second.status == .measured(.none))
+            #expect(second.staleReading == nil)
+            #expect(URLProtocolStub.requestCount == 4)
+            // At the exact vendor deadline, the proxy becomes eligible again.
+            _ = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await rebuilt.fetchSnapshot(now: now.addingTimeInterval(90))
+            }
+            #expect(URLProtocolStub.requestCount == 7)
+            // A person can probe again during the renewed cooldown.
+            _ = try await rebuilt.fetchSnapshot(now: now.addingTimeInterval(91))
+            #expect(URLProtocolStub.requestCount == 10)
+        }
+    }
+
+    @Test("manager automatic passes retain proxy backoff while manual refresh can probe it")
+    func claudeManagerPropagatesRefreshIntent() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let backoff = ClaudeProxyBackoff()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                [ClaudeQuotaProvider(cliProxyConfig: config,
+                    directCredential: { "direct-test-token" }, proxyBackoff: backoff)]
+            })
+        try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"test-index"}]}"#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                return canned(body: #"{"status_code":429,"header":{"Retry-After":["90"]},"body":"{}"}"#)
+            }
+            #expect(request.url?.host == "api.anthropic.com")
+            return canned(body: #"{"five_hour":{"utilization":53}}"#)
+        }) {
+            _ = await manager.refresh()
+            #expect(URLProtocolStub.requestCount == 3)
+            let next = await manager.refresh()
+            #expect(URLProtocolStub.requestCount == 4)
+            #expect(next["claude"]?.status == .measured(.none))
+            _ = await manager.forceRefresh()
+            #expect(URLProtocolStub.requestCount == 7)
+        }
+    }
+
+    @Test("a remembered proxy throttle still permits independent direct fallback and reports failure")
+    func claudeRememberedThrottleDoesNotClaimHealth() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let backoff = ClaudeProxyBackoff()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        await backoff.record(.rateLimited(retryAfter: now.addingTimeInterval(90)), config: config)
+        let provider = ClaudeQuotaProvider(cliProxyConfig: config,
+            directCredential: { "direct-test-token" }, proxyBackoff: backoff)
+        let snapshot = try await withStubbedHTTP({ request in
+            #expect(request.url?.host == "api.anthropic.com")
+            return canned(status: 500, body: "{}")
+        }) {
+            try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await provider.fetchSnapshot(now: now)
+            }
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+        #expect(snapshot.status == .unavailable(.rateLimited(retryAfter: now.addingTimeInterval(90))))
+        #expect(snapshot.row1 == nil)
+    }
+
+    @Test("a proxy configuration change does not inherit another proxy's throttle")
+    func claudeProxyCooldownConfigurationBoundary() async throws {
+        let config = CLIProxyConfig(url: try #require(URL(string: "http://hub.test:8317")),
+                                    managementKey: "test-management")
+        let changed = CLIProxyConfig(url: config.url, managementKey: "replacement-test-management")
+        let backoff = ClaudeProxyBackoff()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        await backoff.record(.rateLimited(retryAfter: now.addingTimeInterval(90)), config: config)
+        #expect(await backoff.retryAfter(config: changed, now: now) == nil)
+        #expect(await backoff.retryAfter(config: config, now: now) == now.addingTimeInterval(90))
+        #expect(await backoff.retryAfter(config: config, now: now.addingTimeInterval(90)) == nil)
+        await backoff.record(nil, config: config)
+        #expect(await backoff.retryAfter(config: config, now: now) == nil)
+    }
+
     /// The other half of the same rule: when there is no second credential to
     /// try, the proxy's own reason is the honest one to report — and it now
     /// carries the vendor's Retry-After instead of an unquantified "will retry".

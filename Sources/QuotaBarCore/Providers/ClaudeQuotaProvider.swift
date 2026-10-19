@@ -9,6 +9,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
     private let apiKey: String?
     private let cliProxyConfig: CLIProxyConfig?
+    private let proxyBackoff: ClaudeProxyBackoff
     /// Resolves the *direct* Claude Code OAuth token — the one this Mac's own
     /// `claude` login holds, as opposed to whatever the proxy holds.
     private let directCredential: @Sendable () async -> String?
@@ -19,10 +20,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // Injectable so a test can drive the proxy-failure fall-through below
         // without reading the developer's own Claude login out of the Keychain.
         // Nil means the production path: this Mac's Claude Code credential.
-        directCredential: (@Sendable () async -> String?)? = nil
+        directCredential: (@Sendable () async -> String?)? = nil,
+        proxyBackoff: ClaudeProxyBackoff? = nil
     ) {
         self.apiKey = apiKey
         self.cliProxyConfig = cliProxyConfig
+        self.proxyBackoff = proxyBackoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .claude) }
     }
@@ -47,14 +50,23 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // about a different credential.
         var proxyFailure: UnavailableReason?
         if let proxyConfig {
-            do {
-                return try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
-            } catch let error as ProviderError {
-                proxyFailure = error.reason
-            } catch {
-                // Transport or connection failure: nothing about either
-                // credential has been established, so fall through to the
-                // direct token with nothing to report yet.
+            // A healthy direct token must not erase the proxy token's throttle.
+            // Providers are rebuilt each pass, so this state outlives this
+            // instance. Manual refresh deliberately probes the proxy again.
+            if !QuotaFetchContext.isUserInitiated,
+               let until = await proxyBackoff.retryAfter(config: proxyConfig, now: now) {
+                proxyFailure = .rateLimited(retryAfter: until)
+            } else {
+                do {
+                    let snapshot = try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
+                    await proxyBackoff.record(nil, config: proxyConfig)
+                    return snapshot
+                } catch let error as ProviderError {
+                    proxyFailure = error.reason
+                    await proxyBackoff.record(error.reason, config: proxyConfig)
+                } catch {
+                    // Transport failure establishes nothing about either token.
+                }
             }
         }
 
@@ -311,5 +323,32 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                        usedText: "\(Int((reading.used * 100).rounded()))% used",
                        resetText: resetText,
                        resetsAt: reading.reset, windowLength: window)
+    }
+}
+
+/// A relayed throttle belongs to the proxy credential even when the direct
+/// credential succeeds. In-memory only, with one configured proxy retained;
+/// neither configuration nor credentials are written to logs or preferences.
+public actor ClaudeProxyBackoff {
+    static let shared = ClaudeProxyBackoff()
+    private var configuration: CLIProxyConfig?
+    private var until: Date?
+
+    public init() {}
+
+    func retryAfter(config: CLIProxyConfig, now: Date) -> Date? {
+        guard configuration?.url == config.url,
+              configuration?.managementKey == config.managementKey,
+              let until, now < until else { return nil }
+        return until
+    }
+
+    func record(_ reason: UnavailableReason?, config: CLIProxyConfig) {
+        configuration = config
+        if case .rateLimited(let retryAfter)? = reason {
+            until = retryAfter
+        } else {
+            until = nil
+        }
     }
 }
