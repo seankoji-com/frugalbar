@@ -29,6 +29,7 @@ public actor QuotaManager {
     private var instanceOrder: [String] = []
     private var lastCompleteFetch: Date?
     private let cachePolicy: CachePolicy
+    private let clock: @Sendable () -> Date
     private let providerFactory: @Sendable () -> [any QuotaProvider]
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
@@ -85,9 +86,13 @@ public actor QuotaManager {
         displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default },
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
-        monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" }
+        monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
+        // Cache policy time is injectable independently of vendor observations
+        // and real elapsed deadlines, so tests never race the scheduler.
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.cachePolicy = cachePolicy
+        self.clock = clock
         self.providerFactory = providerFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
@@ -280,7 +285,7 @@ public actor QuotaManager {
     /// Returns true if cache is still fresh.
     public func isCacheFresh() -> Bool {
         guard let last = lastCompleteFetch else { return false }
-        return Date().timeIntervalSince(last) < cachePolicy.cacheTTL
+        return clock().timeIntervalSince(last) < cachePolicy.cacheTTL
     }
 
     /// Worst quota pressure across providers we could actually read.
@@ -345,7 +350,7 @@ public actor QuotaManager {
                 // provider looked identical from the outside. Providers this
                 // click satisfied keep the reading they were served and are
                 // marked as user-fetched from this instant.
-                let satisfiedAt = Date()
+                let satisfiedAt = self.clock()
                 for id in satisfied {
                     if let entry = self.cache[id] {
                         self.cache[id] = CacheEntry(snapshot: entry.snapshot, fetchedAt: entry.fetchedAt,
@@ -390,7 +395,7 @@ public actor QuotaManager {
         instanceOrder = providers.map(\.instanceID)
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
-        let startNow = Date()
+        let startNow = clock()
 
         // Per-vendor poll floor: a vendor fetched more recently than
         // minPollInterval is served its cached snapshot instead of being
@@ -507,7 +512,7 @@ public actor QuotaManager {
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })
-        let now = Date()
+        let now = clock()
         for provider in providersToFetch {
             let id = provider.instanceID
             guard var snap = results[id] else { continue }

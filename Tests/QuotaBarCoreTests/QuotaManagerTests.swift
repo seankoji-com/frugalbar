@@ -25,6 +25,24 @@ private final class InvocationCounter: @unchecked Sendable {
     }
 }
 
+/// Only cache-policy time advances; provider deadlines still use real time.
+private final class CacheTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        instant = instant.addingTimeInterval(seconds)
+    }
+}
+
 /// A `QuotaProvider` whose entire behaviour is dictated by the test: succeed
 /// with a given urgency, throw a given error, or hang for a given duration
 /// (to be cut off by `QuotaManager`'s per-provider deadline).
@@ -520,10 +538,7 @@ struct QuotaManagerTests {
         // actually proves whether the vendor was hit over the network.
         let factoryCallCount = InvocationCounter()
         let fetchCounter = InvocationCounter()
-        // A short floor so the test can genuinely let it expire once (via a
-        // real sleep) before the outage, then prove the failed attempt
-        // re-arms a fresh window rather than leaving fetchedAt frozen at
-        // the last success.
+        let clock = CacheTestClock()
         let manager = QuotaManager(
             cachePolicy: CachePolicy(
                 cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
@@ -536,25 +551,45 @@ struct QuotaManagerTests {
                 } else {
                     return [StubProvider(vendorId: .claude, counter: fetchCounter, behavior: .throwError(.badResponse))]
                 }
-            }
+            },
+            clock: { clock.now() }
         )
         let first = await manager.forceRefresh()
         #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
         #expect(fetchCounter.value == 1)
 
-        // Let the floor expire before the vendor starts failing.
-        try? await Task.sleep(for: .seconds(0.1))
+        // Advance past both floors without sleeping, then hold policy time
+        // constant regardless of how long actor scheduling takes.
+        clock.advance(by: 0.1)
 
         let second = await manager.forceRefresh()
         #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.warning)) // stale reading preserved
         #expect(fetchCounter.value == 2)
 
-        // Immediately re-refresh, well within a fresh floor window measured
-        // from the failed attempt above. Without re-arming fetchedAt on
-        // failure, this would incorrectly re-hit the vendor a third time.
+        #expect(second[VendorIdentifier.claude.rawValue]?.metric == first[VendorIdentifier.claude.rawValue]?.metric)
+        #expect(second[VendorIdentifier.claude.rawValue]?.lastUpdated == first[VendorIdentifier.claude.rawValue]?.lastUpdated)
+        #expect(second[VendorIdentifier.claude.rawValue]?.staleReading == StaleReading(reason: .badResponse, at: clock.now()))
+
+        // A failed user attempt must re-arm the user clock. Removing only
+        // that write must cause a third request here.
         let third = await manager.forceRefresh()
         #expect(third[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
-        #expect(fetchCounter.value == 2) // still 2 — the floor re-armed on the failed attempt above
+        #expect(fetchCounter.value == 2)
+
+        // Independently check the automatic clock: the user floor cannot
+        // mask a missing fetchedAt write on the failed attempt.
+        let fourth = await manager.refresh()
+        #expect(fourth[VendorIdentifier.claude.rawValue]?.metric == first[VendorIdentifier.claude.rawValue]?.metric)
+        #expect(fourth[VendorIdentifier.claude.rawValue]?.staleReading == second[VendorIdentifier.claude.rawValue]?.staleReading)
+        #expect(fetchCounter.value == 2)
+
+        // The re-armed floor must expire again, rather than holding the
+        // vendor indefinitely during an outage.
+        clock.advance(by: 0.1)
+        _ = await manager.refresh()
+        #expect(fetchCounter.value == 3)
+        _ = await manager.refresh()
+        #expect(fetchCounter.value == 3)
     }
 
     @Test("transient provider error preserves existing measured cache entry")

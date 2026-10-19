@@ -36,6 +36,16 @@ CASES = [
     ("vendor-retry-after", QUOTA_MANAGER, " || withinVendorBackoff",
      "QuotaManagerTests/vendorRetryAfterGatesAutomaticPollOnly",
      "a vendor's Retry-After gates the automatic poll, not the user's ⟳"),
+    ("failed-attempt-user-floor", QUOTA_MANAGER,
+     "lastUserFetchAt: force ? now : previous?.lastUserFetchAt,",
+     "QuotaManagerTests/minPollIntervalReArmsDuringOutage",
+     "minPollInterval re-arms during an outage instead of re-hitting a failing vendor every cycle",
+     "lastUserFetchAt: force && snap.status.confidence == .measured ? now : previous?.lastUserFetchAt,"),
+    ("failed-attempt-automatic-floor", QUOTA_MANAGER,
+     "                fetchedAt: now,",
+     "QuotaManagerTests/minPollIntervalReArmsDuringOutage",
+     "minPollInterval re-arms during an outage instead of re-hitting a failing vendor every cycle",
+     "                fetchedAt: snap.status.confidence == .measured ? now : (previous?.fetchedAt ?? now),"),
     # Without the timeout's offer only the work can win the race, so a 0.2s
     # deadline waits out 3s of blocking work and returns its success instead.
     ("deadline-preempts", DEADLINE, "        await gate.offer(.failure(.timedOut))\n",
