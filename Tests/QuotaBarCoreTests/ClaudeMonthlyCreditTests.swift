@@ -14,8 +14,8 @@ struct ClaudeMonthlyCreditTests {
         #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2027-02-15T14:49:22Z"))
         #expect(credit.measuredAt == now)
         #expect(credit.line == "Monthly API credit: $123.45 per month")
-        #expect(credit.detail(now: now)?.contains("Next credit") == true)
-        #expect(credit.detail(now: now.addingTimeInterval(330))?.contains("Stale") != true)
+        #expect(credit.detail()?.contains("Next credit") == true)
+        #expect(credit.detail()?.contains("Stale") != true)
         let provider = ClaudeQuotaProvider(apiKey: "", monthlyCredit: { _ in credit })
         let snapshot = try await provider.fetchSnapshot(now: now)
         #expect(snapshot.monthlyAPICredit == credit)
@@ -41,7 +41,7 @@ struct ClaudeMonthlyCreditTests {
             Data(#"{"status":"linked","monthly_credit_usd":"0.00"}"#.utf8), now: now))
         #expect(noDate.amountUSD == 0)
         #expect(noDate.nextGrantAt == nil)
-        #expect(noDate.detail(now: now) == nil)
+        #expect(noDate.detail() == nil)
         let due = try #require(try ClaudeMonthlyCredit.decode(Data(#"{"status":"linked","monthly_credit_usd":"25","grant_due":true,"next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
         #expect(due.nextGrantAt == nil)
     }
@@ -72,6 +72,32 @@ struct ClaudeMonthlyCreditTests {
         #expect(state.credit == nil)
     }
 
+    @Test("opening an enabled billing connection preserves its reading and query")
+    func reopeningPreservesConnection() throws {
+        var state = ClaudeMonthlyCreditSessionState()
+        let query = "/api/quirky-lollipop/link-state?organization_uuid=fixture&include_candidates=false"
+        state.observe(text: #"{"status":"linked","monthly_credit_usd":"25.00"}"#,
+            query: query, retryAfter: "600", now: now)
+        let generation = state.generation
+        let credit = try #require(state.credit)
+        #expect(!state.openConnection(alreadyEnabled: true, hasPage: true))
+        #expect(state.generation == generation)
+        #expect(state.credit == credit)
+        #expect(state.query == query)
+        #expect(state.retryNotBefore == now.addingTimeInterval(600))
+        #expect(state.attemptedAt == now)
+        // A missing page needs loading, but the same enabled connection survives.
+        #expect(state.openConnection(alreadyEnabled: true, hasPage: false))
+        #expect(state.generation == generation)
+        #expect(state.credit == credit)
+        #expect(state.query == query)
+        // First enablement starts a new connection with no inherited reading.
+        #expect(state.openConnection(alreadyEnabled: false, hasPage: true))
+        #expect(state.generation != generation)
+        #expect(state.credit == nil)
+        #expect(state.query == nil)
+    }
+
     @Test("failed billing reads retain a stale entitlement and keep Retry-After")
     func failedReadMarksMonthlyCreditStale() {
         var state = ClaudeMonthlyCreditSessionState()
@@ -84,7 +110,7 @@ struct ClaudeMonthlyCreditTests {
         #expect(state.credit?.amountUSD == 25)
         #expect(state.credit?.refreshFailed == true)
         #expect(state.credit?.measuredAt == now)
-        #expect(state.credit?.detail(now: now)?.contains("Stale") == true)
+        #expect(state.credit?.detail()?.contains("Stale") == true)
         #expect(state.retryNotBefore == now.addingTimeInterval(960))
         state.observe(text: #"{"status":"linked","monthly_credit_usd":"25.00"}"#,
                       query: query, retryAfter: nil, now: now)

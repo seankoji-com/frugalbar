@@ -182,6 +182,11 @@ public final class QuotaStore {
         await run { await self.manager.refresh() }
     }
 
+    public func clearMonthlyCredit() async {
+        await manager.clearMonthlyCredit()
+        await reloadFromCache()
+    }
+
     /// Explicit user action — bypasses the cache.
     public func forceRefresh() async {
         if isRefreshing {

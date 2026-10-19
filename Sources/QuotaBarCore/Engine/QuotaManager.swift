@@ -16,7 +16,8 @@ public actor QuotaManager {
             // is no UI left to clear it from.
             vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
         },
-        displayPreferences: { CredentialStore.providerDisplayPreferences })
+        displayPreferences: { CredentialStore.providerDisplayPreferences },
+        monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
 
     // --- State ---
     /// Keyed by each provider's stable `instanceID`, not by vendor: one vendor
@@ -32,6 +33,8 @@ public actor QuotaManager {
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
+    private let monthlyCreditConnection: @Sendable () async -> String?
+    private var monthlyCreditInvalidation = 0
     private var activeTaskIsForced = false
     private var forcedPassPending = false
 
@@ -79,12 +82,16 @@ public actor QuotaManager {
         // Same rule as `cycleLookup`: the default shows every provider in
         // canonical order and reads no preference store, so a test sees
         // exactly the providers its factory serves.
-        displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default }
+        displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default },
+        // Isolated managers use an injected connection lifetime, never the
+        // real web session or preference store. The app opts in above.
+        monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" }
     ) {
         self.cachePolicy = cachePolicy
         self.providerFactory = providerFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
+        self.monthlyCreditConnection = monthlyCreditConnection
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -122,6 +129,19 @@ public actor QuotaManager {
     }
 
     // MARK: Public accessors
+
+    /// Disconnect is a local state change, not a reason to poll quota. Also
+    /// invalidate results from a pass already awaiting a provider or deadline.
+    public func clearMonthlyCredit() {
+        monthlyCreditInvalidation += 1
+        for id in Array(cache.keys) {
+            guard let entry = cache[id] else { continue }
+            var snapshot = entry.snapshot
+            snapshot.monthlyAPICredit = nil
+            cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
+    }
 
     /// Returns cached snapshots immediately (fast path for UI), keyed by each
     /// provider instance's stable id.
@@ -446,6 +466,8 @@ public actor QuotaManager {
         var results: [String: QuotaSnapshot] = [:]
         let cycleLookup = self.cycleLookup
 
+        let creditInvalidation = monthlyCreditInvalidation
+        let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
         await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
             for provider in providersToFetch {
@@ -479,6 +501,9 @@ public actor QuotaManager {
             }
         }
 
+        let currentCreditConnection = await monthlyCreditConnection()
+        let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
+            && creditInvalidation == monthlyCreditInvalidation
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })
@@ -490,6 +515,7 @@ public actor QuotaManager {
                 snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
                 snap.monthlyAPICredit?.refreshFailed = true
             }
+            if !acceptsMonthlyCredit { snap.monthlyAPICredit = nil }
             // Keep the old cache entry's snapshot if a previously successful
             // provider now fails transiently, so we don't wipe out the
             // measured reading the UI is showing. But always bump fetchedAt

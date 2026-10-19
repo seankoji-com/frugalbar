@@ -313,7 +313,7 @@ public struct SettingsView: View {
                     Button("Disconnect monthly credit") {
                         ClaudeMonthlyCreditSession.shared.disconnect()
                         claudeMonthlyEnabled = false
-                        Task { await store?.load() }
+                        Task { await store?.clearMonthlyCredit() }
                     }
                 }
             }

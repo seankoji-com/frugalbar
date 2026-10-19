@@ -12,6 +12,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
     public private(set) var webView: WKWebView!
     private var state = ClaudeMonthlyCreditSessionState()
     private var pendingRead: ClaudeMonthlyCreditEvaluation?
+    public var connectionGeneration: String? { isEnabled ? state.generation.uuidString : nil }
     public var isEnabled: Bool { CredentialStore.preferences.bool(forKey: Self.preferenceKey) }
 
     private override init() {
@@ -29,9 +30,13 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
     }
 
     public func connect() {
+        let connectionWasEnabled = isEnabled
         CredentialStore.preferences.set(true, forKey: Self.preferenceKey)
-        reset()
-        webView.load(URLRequest(url: URL(string: "https://claude.ai/settings/billing")!))
+        let shouldLoad = state.openConnection(alreadyEnabled: connectionWasEnabled, hasPage: webView.url != nil)
+        if !connectionWasEnabled { resetScripts() }
+        if shouldLoad {
+            webView.load(URLRequest(url: URL(string: "https://claude.ai/settings/billing")!))
+        }
     }
 
     public func disconnect() {
@@ -50,6 +55,10 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
         pendingRead?.finish(nil)
         pendingRead = nil
         state.reset()
+        resetScripts()
+    }
+
+    private func resetScripts() {
         let content = webView.configuration.userContentController
         content.removeAllUserScripts()
         content.addUserScript(WKUserScript(source: observerSource,
@@ -158,6 +167,12 @@ struct ClaudeMonthlyCreditSessionState {
     var retryNotBefore: Date?
 
     mutating func reset() { self = Self() }
+
+    /// Opening an enabled connection is inspection, not reconnection.
+    mutating func openConnection(alreadyEnabled: Bool, hasPage: Bool) -> Bool {
+        if !alreadyEnabled { reset() }
+        return !alreadyEnabled || !hasPage
+    }
 
     mutating func observe(text: String, query: String, retryAfter: String?, now: Date) {
         if self.query != query { credit = nil }

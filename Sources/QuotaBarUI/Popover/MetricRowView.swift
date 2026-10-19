@@ -146,27 +146,8 @@ struct MetricRowView: View {
     private func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
-        // Every countdown in the label, including the headline's own, is
-        // measured from the grid's instant: the same one the cells draw.
-        let windows = grid.spokenSummary()
-        // With the grid speaking each window, the headline percentage would
-        // be the same figure twice.
-        var parts = [windows == nil ? presentation.accessibilityLabel : presentation.accessibilityLabelOmittingPercentage]
-        if let windows {
-            parts.append(windows)
-        }
-        if let forecastText = forecastText(now: grid.now) {
-            parts.append(forecastText)
-        }
-        if let credits = presentation.resetCredits {
-            parts.append(credits.spoken)
-        }
-        if let monthly = presentation.monthlyCreditLine {
-            parts.append(monthly)
-            if let detail = presentation.monthlyCreditDetail { parts.append(detail) }
-        }
-        parts += presentation.subscriptionCredits.map { $0.spoken(stale: snapshot.staleReading != nil) }
-        return parts.joined(separator: ". ")
+        presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
+            forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
     }
 
     /// Only for a provider we are currently reading: a forecast under an

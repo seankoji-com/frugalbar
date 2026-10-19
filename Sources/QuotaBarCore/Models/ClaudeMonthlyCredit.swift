@@ -35,7 +35,7 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
     }
 
     public var line: String { "Monthly API credit: \(MoneyText.format(amountUSD, code: "USD")) per month" }
-    public func detail(now: Date) -> String? {
+    public func detail() -> String? {
         var parts: [String] = []
         if let nextGrantAt {
             parts.append("Next credit \(nextGrantAt.formatted(date: .abbreviated, time: .omitted))")

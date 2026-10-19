@@ -667,7 +667,7 @@ struct QuotaManagerTests {
         #expect(second["claude"]?.staleReading?.reason == .offline)
         #expect(second["claude"]?.consumptionFraction == 0.5)
         #expect(second["claude"]?.monthlyAPICredit == updated)
-        #expect(second["claude"]?.monthlyAPICredit?.detail(now: now.addingTimeInterval(400)) == nil)
+        #expect(second["claude"]?.monthlyAPICredit?.detail() == nil)
         let third = await manager.forceRefresh()
         #expect(third["claude"]?.staleReading?.reason == .offline)
         #expect(third["claude"]?.monthlyAPICredit == nil)
@@ -689,6 +689,102 @@ struct QuotaManagerTests {
         let removed = QuotaManager.removingStaleCycleRow(from: attached)
         #expect(removed.resetsAt == nil)
         #expect(removed.monthlyAPICredit == grant)
+    }
+
+    @Test("disconnect clears a fresh cached monthly credit without polling quota")
+    func disconnectClearsCachedMonthlyCredit() async throws {
+        struct CreditProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let grant: ClaudeMonthlyCredit
+            let calls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                calls.increment()
+                var snapshot = try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.monthlyAPICredit = grant
+                return snapshot
+            }
+        }
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: Date(timeIntervalSince1970: 1_800_000_000)))
+        let calls = InvocationCounter()
+        let manager = QuotaManager(providerFactory: { [CreditProvider(grant: grant, calls: calls)] })
+        #expect(await manager.refresh()["claude"]?.monthlyAPICredit == grant)
+        await manager.clearMonthlyCredit()
+        #expect(await manager.cachedSnapshots()["claude"]?.monthlyAPICredit == nil)
+        #expect(await manager.refresh()["claude"]?.monthlyAPICredit == nil)
+        #expect(await manager.sortedSnapshots().first?.monthlyAPICredit == nil)
+        #expect(calls.value == 1)
+    }
+
+    @Test("disconnect rejects pending monthly results and deadline carry-forward")
+    func disconnectRejectsPendingMonthlyCredit() async throws {
+        actor Connection {
+            var generation: String? = "first"
+            func value() -> String? { generation }
+            func set(_ value: String?) { generation = value }
+        }
+        struct PendingProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let grant: ClaudeMonthlyCredit
+            let calls: InvocationCounter
+            let gate: AutomaticFetchGate
+            let timesOut: Bool
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                if calls.increment() > 1 {
+                    await gate.run()
+                    if timesOut { try await Task.sleep(for: .seconds(60)) }
+                }
+                var snapshot = try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.monthlyAPICredit = grant
+                return snapshot
+            }
+        }
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: Date(timeIntervalSince1970: 1_800_000_000)))
+        // Test both a completed provider and the engine's real deadline. Do
+        // not clear the cache here: independently test the source-lifetime guard.
+        for timesOut in [false, true] {
+            let connection = Connection()
+            let gate = AutomaticFetchGate()
+            let calls = InvocationCounter()
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                    perProviderTimeout: 2, minPollInterval: 0),
+                providerFactory: { [PendingProvider(grant: grant, calls: calls, gate: gate, timesOut: timesOut)] },
+                monthlyCreditConnection: { await connection.value() })
+            #expect(await manager.refresh()["claude"]?.monthlyAPICredit == grant)
+            let pending = Task { await manager.refresh() }
+            await gate.waitForEntry()
+            await connection.set(nil)
+            await gate.resume()
+            let result = await pending.value
+            #expect(result["claude"]?.monthlyAPICredit == nil)
+            #expect(await manager.cachedSnapshots()["claude"]?.monthlyAPICredit == nil)
+            if timesOut { #expect(result["claude"]?.staleReading?.reason == .timedOut) }
+        }
+        // Independently exercise a generation change and explicit local
+        // invalidation, so neither guard can mask the other's regression.
+        for reconnect in [false, true] {
+            let connection = Connection()
+            let gate = AutomaticFetchGate()
+            let calls = InvocationCounter()
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                    perProviderTimeout: 2, minPollInterval: 0),
+                providerFactory: { [PendingProvider(grant: grant, calls: calls, gate: gate, timesOut: false)] },
+                monthlyCreditConnection: { await connection.value() })
+            _ = await manager.refresh()
+            let pending = Task { await manager.refresh() }
+            await gate.waitForEntry()
+            if reconnect { await connection.set("second") }
+            else { await manager.clearMonthlyCredit() }
+            await gate.resume()
+            #expect(await pending.value["claude"]?.monthlyAPICredit == nil)
+        }
     }
 
     @Test("a whole-provider timeout retains the monthly entitlement as stale")

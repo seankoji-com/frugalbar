@@ -60,6 +60,31 @@ struct SubscriptionCreditPlacementTests {
             .monthlyCreditDetail?.contains("Stale monthly credit") == true)
     }
 
+    @Test("the row speaks monthly allowance, next credit and failed refresh state")
+    func monthlyCreditSpokenLabel() throws {
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        func spoken(_ snapshot: QuotaSnapshot) -> String {
+            MetricRowPresentation(snapshot: snapshot, now: now).combinedAccessibilityLabel(
+                windows: nil, forecast: nil, creditsStale: false)
+        }
+        #expect(!spoken(snapshot).contains("Monthly API credit"))
+        snapshot.monthlyAPICredit = grant
+        let next = "Next credit " + (try #require(grant.nextGrantAt)).formatted(date: .abbreviated, time: .omitted)
+        let current = spoken(snapshot)
+        #expect(current.contains("Monthly API credit: $123.45 per month"))
+        #expect(current.contains(next))
+        #expect(!current.contains("Stale monthly credit reading"))
+        snapshot.monthlyAPICredit?.refreshFailed = true
+        let stale = spoken(snapshot)
+        #expect(stale.contains("Monthly API credit: $123.45 per month"))
+        #expect(stale.contains(next))
+        #expect(stale.contains("Stale monthly credit reading"))
+    }
+
     @Test("other credit pools remain separate and missing credits draw nothing")
     func otherPoolsRemainSeparate() {
         let credit = APICreditEntry(id: "claude.extra-usage", vendorId: .claude,
