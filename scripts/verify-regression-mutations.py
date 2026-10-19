@@ -5,6 +5,7 @@ Run only in a clean disposable checkout. Every edit is reverted in a finally
 block, and a passing control run follows every rejected mutation. A compiler
 failure or a filter that selects zero tests never counts as proof.
 """
+import argparse
 from pathlib import Path
 import re
 import subprocess
@@ -242,11 +243,32 @@ def run_test(name, phase, selector, display):
         raise RuntimeError(f"{name}: process failure is not an assertion failure")
 
 
-def main():
+def partition_cases(cases, shard_index=0, shard_count=1):
+    """Assign each case once, rejecting configurations with empty shards."""
+    if not 1 <= shard_count <= len(cases):
+        raise ValueError(f"shard count must be between 1 and {len(cases)}")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError("shard index must be nonnegative and less than shard count")
+    return cases[shard_index::shard_count]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--shard-index", type=int, default=0, help="zero-based shard index (default: 0)")
+    parser.add_argument("--shard-count", type=int, default=1, help="number of nonempty shards (default: 1)")
+    parser.add_argument("--list", action="store_true", help="list selected case names without launching Swift or editing files")
+    args = parser.parse_args(argv)
+    try:
+        cases = partition_cases(CASES, args.shard_index, args.shard_count)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.list:
+        print("\n".join(case[0] for case in cases))
+        return
     if subprocess.check_output(["git", "diff", "--name-only", "HEAD", "--", "Sources", "Tests"], cwd=ROOT).strip():
         raise RuntimeError("Refusing to mutate a checkout with source/test edits")
     LOGS.mkdir(parents=True, exist_ok=True)
-    for name, relative, needle, selector, display, *replacement in CASES:
+    for name, relative, needle, selector, display, *replacement in cases:
         source = ROOT / relative
         original = source.read_bytes()
         text = original.decode()
@@ -261,7 +283,7 @@ def main():
         run_test(name, "restored", selector, display)
         print(f"PROVED {name}: baseline passed, mutant assertion failed, restored passed", flush=True)
     subprocess.run(["git", "diff", "--exit-code", "HEAD", "--", "Sources", "Tests"], cwd=ROOT, check=True)
-    print(f"All {len(CASES)} independent mutations rejected; production sources restored.")
+    print(f"All {len(cases)} selected independent mutations rejected; production sources restored.")
 
 
 if __name__ == "__main__":

@@ -132,23 +132,46 @@ jobs:
           path: ${{ runner.temp }}/frugalbar-renders/
           if-no-files-found: error
 
-      - name: Prove regression mutations
-        if: (github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff')
-        run: python3 scripts/verify-regression-mutations.py
-
-      - name: Preserve mutation proof logs
-        if: always() && ((github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff'))
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: regression-mutation-proof
-          path: coverage/mutations/
-          if-no-files-found: warn
-
       # Tests must be hermetic. Re-running proves there is no ordering or clock
       # dependence — a formatter that truncated instead of rounding used to
       # fail roughly one run in four.
       - name: Re-run tests (flake check)
         run: scripts/run-swift-tests.sh
+
+  # Each independent shard retains baseline/assertion-red/restored proof.
+  # Keep failures blocking, and finish both inventories even if one fails.
+  regression-mutations:
+    name: Regression mutations (macOS, shard ${{ matrix.shard-index }})
+    if: (github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff')
+    runs-on: macos-15
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard-index: [0, 1]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Match the build job's event revision, including the PR merge ref.
+          ref: ${{ github.sha }}
+
+      - name: Select Xcode 16
+        run: scripts/select-xcode.sh 16
+
+      - name: Verify mutation partition
+        run: python3 scripts/test_verify_regression_mutations.py
+
+      - name: Prove regression mutations
+        run: python3 scripts/verify-regression-mutations.py --shard-index ${{ matrix.shard-index }} --shard-count 2
+
+      - name: Preserve mutation proof logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: regression-mutation-proof-shard-${{ matrix.shard-index }}
+          path: coverage/mutations/
+          if-no-files-found: warn
 
   # Early warning for the next toolchain. Swift 6.4 turned an implicit strong
   # capture and a redundant Sendable conformance into errors under
