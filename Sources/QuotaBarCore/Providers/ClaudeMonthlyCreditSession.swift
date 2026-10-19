@@ -58,7 +58,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
 
     public func read(now: Date) async -> ClaudeMonthlyCredit? {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else { return nil }
-        if let retryNotBefore = state.retryNotBefore, now < retryNotBefore { return nil }
+        if let retryNotBefore = state.retryNotBefore, now < retryNotBefore { return state.credit }
         if let attemptedAt = state.attemptedAt, now.timeIntervalSince(attemptedAt) < 300 { return state.credit }
         guard pendingRead == nil else { return state.credit }
         state.attemptedAt = now
@@ -69,8 +69,8 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
             return state.credit
         }
         guard webView.url?.scheme == "https", webView.url?.host == "claude.ai" else {
-            state.credit = nil
-            return nil
+            state.credit?.refreshFailed = true
+            return state.credit
         }
         let generation = state.generation
         let evaluation = ClaudeMonthlyCreditEvaluation()
@@ -138,7 +138,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
                 next_grant_at: p.next_grant_at, grant_due: p.grant_due, grants_held_reason: p.grants_held_reason});
               window.webkit.messageHandlers.monthlyCredit.postMessage({generation, query: u.pathname + u.search, payload});
             } else {
-              window.webkit.messageHandlers.monthlyCredit.postMessage({generation, query: u.pathname + u.search, payload: '{}', retryAfter: response.headers.get('Retry-After') || ''});
+              window.webkit.messageHandlers.monthlyCredit.postMessage({generation, query: u.pathname + u.search, payload: '{"_failed":true}', retryAfter: response.headers.get('Retry-After') || ''});
             }
           }
         } catch (_) {}
@@ -160,10 +160,11 @@ struct ClaudeMonthlyCreditSessionState {
     mutating func reset() { self = Self() }
 
     mutating func observe(text: String, query: String, retryAfter: String?, now: Date) {
+        if self.query != query { credit = nil }
         self.query = query
         attemptedAt = now
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
-        credit = text.data(using: .utf8).flatMap { try? ClaudeMonthlyCredit.decode($0, now: now) }
+        apply(text: text, now: now)
     }
 
     mutating func completeRead(text: String?, query: String, generation: UUID, now: Date) {
@@ -171,7 +172,18 @@ struct ClaudeMonthlyCreditSessionState {
         let data = text?.data(using: .utf8)
         let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: body?["_retryAfter"] as? String, now: now)
-        credit = data.flatMap { try? ClaudeMonthlyCredit.decode($0, now: now) }
+        apply(text: text, now: now)
+    }
+
+    private mutating func apply(text: String?, now: Date) {
+        guard let data = text?.data(using: .utf8),
+              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              body["_retryAfter"] == nil, body["_failed"] == nil else {
+            credit?.refreshFailed = true
+            return
+        }
+        do { credit = try ClaudeMonthlyCredit.decode(data, now: now) }
+        catch { credit?.refreshFailed = true }
     }
 }
 

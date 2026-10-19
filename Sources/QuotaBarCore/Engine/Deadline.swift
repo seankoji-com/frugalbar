@@ -31,22 +31,8 @@ func withDeadline<Value: Sendable>(
         let outcome: DeadlineOutcome<Value>
         do {
             outcome = .success(try await operation())
-        } catch let error as ProviderError {
-            outcome = .failure(error.reason)
-        } catch let urlError as URLError {
-            switch urlError.code {
-            case .timedOut:
-                outcome = .failure(.timedOut)
-            case .notConnectedToInternet, .networkConnectionLost,
-                 .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
-                outcome = .failure(.offline)
-            default:
-                outcome = .failure(.badResponse)
-            }
-        } catch is CancellationError {
-            outcome = .failure(.timedOut)
         } catch {
-            outcome = .failure(.badResponse)
+            outcome = .failure(unavailableReason(for: error))
         }
         await gate.offer(outcome)
     }
@@ -60,6 +46,21 @@ func withDeadline<Value: Sendable>(
     work.cancel()
     timeout.cancel()
     return result
+}
+
+/// Shared closed mapping. Error descriptions can contain credential-bearing URLs.
+func unavailableReason(for error: any Error) -> UnavailableReason {
+    if let error = error as? ProviderError { return error.reason }
+    if let error = error as? URLError {
+        switch error.code {
+        case .timedOut: return .timedOut
+        case .notConnectedToInternet, .networkConnectionLost,
+             .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed: return .offline
+        default: return .badResponse
+        }
+    }
+    if error is CancellationError { return .timedOut }
+    return .badResponse
 }
 
 /// Resolves once, with whichever value arrives first.

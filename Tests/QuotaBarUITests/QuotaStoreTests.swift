@@ -144,7 +144,7 @@ struct QuotaStoreTests {
         #expect(hits.count(.claude) == 2)
     }
 
-    @Test("manual refresh during a poll queues one more pass")
+    @Test("manual refresh during a successful poll shares its request")
     func overlappingRefreshesCollapse() async {
         let hits = Hits()
         let gate = FirstPollGate()
@@ -156,7 +156,7 @@ struct QuotaStoreTests {
         await s.forceRefresh()   // repeated clicks coalesce into one pass
         await gate.resume()
         await first
-        #expect(hits.count(.claude) == 2)
+        #expect(hits.count(.claude) == 1)
         #expect(s.isRefreshing == false)
     }
 

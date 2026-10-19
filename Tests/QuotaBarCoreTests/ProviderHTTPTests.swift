@@ -160,7 +160,7 @@ struct ProviderHTTPTests {
     @Test("a quota transport failure preserves an independently read monthly entitlement")
     func claudeMonthlyCreditSurvivesQuotaTransportFailure() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let grant = try #require(ClaudeMonthlyCredit.decode(Data(
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
         let provider = ClaudeQuotaProvider(apiKey: "test-token", monthlyCredit: { _ in grant })
         let snapshot = try await withStubbedHTTP({ _ in canned(body: "{}") }) {

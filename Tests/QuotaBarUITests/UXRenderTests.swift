@@ -69,6 +69,7 @@ struct UXRenderTests {
             retryAfter: Date().addingTimeInterval(300)), at: Date())
         staleMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date().addingTimeInterval(-600))
+        staleMonthly.monthlyAPICredit?.refreshFailed = true
         // Use the actual card so the 384pt popover's 12pt margins and
         // 14pt card padding leave exactly 332pt for each production row.
         try await save(VStack(spacing: 12) {

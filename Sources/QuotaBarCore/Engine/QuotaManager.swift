@@ -288,6 +288,14 @@ public actor QuotaManager {
         return await fetchDeduplicated(force: true)
     }
 
+    /// Lets a UI already awaiting this pass register a click without waiting
+    /// for the same task twice. Its original caller receives the final result.
+    public func queueUserRefreshIfActive() -> Bool {
+        guard activeTask != nil else { return false }
+        if !activeTaskIsForced { forcedPassPending = true }
+        return true
+    }
+
     // MARK: Private
 
     private func fetchDeduplicated(force: Bool = false) async -> [String: QuotaSnapshot] {
@@ -306,7 +314,16 @@ public actor QuotaManager {
             if self.forcedPassPending {
                 self.forcedPassPending = false
                 self.activeTaskIsForced = true
-                result = await self.parallelFetch(force: true)
+                // A successful in-flight read already satisfies the click.
+                // Retry only skipped providers and unavailable outcomes.
+                let satisfied = self.successfulPassIDs
+                for id in satisfied {
+                    if let entry = self.cache[id] {
+                        self.cache[id] = CacheEntry(snapshot: entry.snapshot, fetchedAt: entry.fetchedAt,
+                            lastUserFetchAt: Date(), vendorRetryAfter: entry.vendorRetryAfter)
+                    }
+                }
+                result = await self.parallelFetch(force: true, excluding: satisfied)
             }
             // Clear ownership before returning, while still on this actor.
             // A caller arriving after completion must start a new pass rather
@@ -318,7 +335,9 @@ public actor QuotaManager {
         return await task.value
     }
 
-    private func parallelFetch(force: Bool = false) async -> [String: QuotaSnapshot] {
+    private var successfulPassIDs: Set<String> = []
+
+    private func parallelFetch(force: Bool = false, excluding: Set<String> = []) async -> [String: QuotaSnapshot] {
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at
@@ -362,6 +381,7 @@ public actor QuotaManager {
         var providersToFetch: [any QuotaProvider] = []
         var throttledOnForce: [String] = []
         for provider in providers {
+            if excluding.contains(provider.instanceID) { continue }
             let shouldThrottle: Bool
             if let entry = cache[provider.instanceID] {
                 let measuredFrom = force ? entry.lastUserFetchAt : entry.fetchedAt
@@ -418,7 +438,8 @@ public actor QuotaManager {
         var results: [String: QuotaSnapshot] = [:]
         let cycleLookup = self.cycleLookup
 
-        await withTaskGroup(of: (String, QuotaSnapshot).self) { group in
+        var deadlineFailures: Set<String> = []
+        await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
             for provider in providersToFetch {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
@@ -437,22 +458,30 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle), false)
                     case .failure(let reason):
                         let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
-                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle), reason == .timedOut)
                     }
                 }
             }
-            for await (instanceID, snapshot) in group {
+            for await (instanceID, snapshot, deadlineFailed) in group {
                 results[instanceID] = snapshot
+                if deadlineFailed { deadlineFailures.insert(instanceID) }
             }
         }
 
+        successfulPassIDs = Set(results.compactMap { id, snapshot in
+            snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
+        })
         let now = Date()
         for provider in providersToFetch {
             let id = provider.instanceID
-            guard let snap = results[id] else { continue }
+            guard var snap = results[id] else { continue }
+            if deadlineFailures.contains(id) {
+                snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
+                snap.monthlyAPICredit?.refreshFailed = true
+            }
             // Keep the old cache entry's snapshot if a previously successful
             // provider now fails transiently, so we don't wipe out the
             // measured reading the UI is showing. But always bump fetchedAt
@@ -583,6 +612,7 @@ public actor QuotaManager {
             // entries ride this snapshot, and losing them here would make
             // them flicker out whenever a hand-entered cycle row is attached.
             rebuilt.apiCredits = updated.apiCredits
+            rebuilt.monthlyAPICredit = updated.monthlyAPICredit
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             // A fact about the poll, not a figure that was re-fetched: the
@@ -648,6 +678,7 @@ public actor QuotaManager {
             currencyBasis: updated.currencyBasis
         )
         rebuilt.apiCredits = updated.apiCredits
+        rebuilt.monthlyAPICredit = updated.monthlyAPICredit
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         // Same rule as the catalog failure above: this snapshot's figures are

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Claude subscription quota from Anthropic's OAuth usage endpoint, read via
 /// CLI Proxy or directly with the Claude Code OAuth token. Derived from
@@ -48,22 +49,10 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         var snapshot: QuotaSnapshot
         do {
             snapshot = try await fetchUsageSnapshot(now: now)
-        } catch let error as ProviderError {
-            snapshot = unavailable(error.reason)
-        } catch let error as URLError {
-            switch error.code {
-            case .timedOut:
-                snapshot = unavailable(.timedOut)
-            case .notConnectedToInternet, .networkConnectionLost,
-                 .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
-                snapshot = unavailable(.offline)
-            default:
-                snapshot = unavailable(.badResponse)
-            }
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            snapshot = unavailable(.badResponse)
+            snapshot = unavailable(unavailableReason(for: error))
         }
         snapshot.monthlyAPICredit = await credit
         return snapshot
@@ -374,7 +363,7 @@ public actor ClaudeProxyBackoff {
     static let shared = ClaudeProxyBackoff()
     private var configuration: CLIProxyConfig?
     private var until: Date?
-    private var directToken: String?
+    private var directTokenDigest: SHA256.Digest?
     private var directUntil: Date?
 
     public init() {}
@@ -387,13 +376,14 @@ public actor ClaudeProxyBackoff {
     }
 
     func directRetryAfter(token: String, now: Date) -> Date? {
-        guard directToken == token, let directUntil, now < directUntil else { return nil }
+        guard directTokenDigest == SHA256.hash(data: Data(token.utf8)), let directUntil, now < directUntil else { return nil }
         return directUntil
     }
 
     func recordDirect(_ reason: UnavailableReason?, token: String) {
-        if directToken != token { directUntil = nil }
-        directToken = token
+        let digest = SHA256.hash(data: Data(token.utf8))
+        if directTokenDigest != digest { directUntil = nil }
+        directTokenDigest = digest
         if case .rateLimited(let retryAfter)? = reason {
             if let retryAfter { directUntil = max(directUntil ?? retryAfter, retryAfter) }
         } else if reason == nil {

@@ -9,13 +9,13 @@ struct ClaudeMonthlyCreditTests {
     @Test("monthly grant preserves entitlement and next date without inventing a balance")
     func publishedGrant() async throws {
         let data = Data(#"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z","granted_total_usd":"999.00","grant_count":9}"#.utf8)
-        let credit = try #require(ClaudeMonthlyCredit.decode(data, now: now))
+        let credit = try #require(try ClaudeMonthlyCredit.decode(data, now: now))
         #expect(credit.amountUSD == Decimal(string: "123.45"))
         #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2027-02-15T14:49:22Z"))
         #expect(credit.measuredAt == now)
         #expect(credit.line == "Monthly API credit: $123.45 per month")
         #expect(credit.detail(now: now)?.contains("Next credit") == true)
-        #expect(credit.detail(now: now.addingTimeInterval(300))?.contains("Stale") == true)
+        #expect(credit.detail(now: now.addingTimeInterval(330))?.contains("Stale") != true)
         let provider = ClaudeQuotaProvider(apiKey: "", monthlyCredit: { _ in credit })
         let snapshot = try await provider.fetchSnapshot(now: now)
         #expect(snapshot.monthlyAPICredit == credit)
@@ -37,12 +37,12 @@ struct ClaudeMonthlyCreditTests {
                      #"{"status":"linked","granted_total_usd":"999"}"#] {
             #expect(try ClaudeMonthlyCredit.decode(Data(body.utf8), now: now) == nil)
         }
-        let noDate = try #require(ClaudeMonthlyCredit.decode(
+        let noDate = try #require(try ClaudeMonthlyCredit.decode(
             Data(#"{"status":"linked","monthly_credit_usd":"0.00"}"#.utf8), now: now))
         #expect(noDate.amountUSD == 0)
         #expect(noDate.nextGrantAt == nil)
         #expect(noDate.detail(now: now) == nil)
-        let due = try #require(ClaudeMonthlyCredit.decode(Data(#"{"status":"linked","monthly_credit_usd":"25","grant_due":true,"next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
+        let due = try #require(try ClaudeMonthlyCredit.decode(Data(#"{"status":"linked","monthly_credit_usd":"25","grant_due":true,"next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
         #expect(due.nextGrantAt == nil)
     }
 
@@ -67,24 +67,48 @@ struct ClaudeMonthlyCreditTests {
         // prior query's completion without throwing away the new reading.
         state.completeRead(text: old, query: query + "-old", generation: state.generation, now: now)
         #expect(state.credit?.amountUSD == 25)
+        // A failure for a different organisation cannot display the old one's entitlement.
+        state.observe(text: #"{"_failed":true}"#, query: query + "-new", retryAfter: nil, now: now)
+        #expect(state.credit == nil)
     }
 
-    @Test("failed billing reads remove the entitlement and keep Retry-After")
-    func failedReadClearsMonthlyCredit() {
+    @Test("failed billing reads retain a stale entitlement and keep Retry-After")
+    func failedReadMarksMonthlyCreditStale() {
         var state = ClaudeMonthlyCreditSessionState()
         let query = "/api/quirky-lollipop/link-state?organization_uuid=fixture&include_candidates=false"
         state.observe(text: #"{"status":"linked","monthly_credit_usd":"25.00"}"#,
                       query: query, retryAfter: nil, now: now)
         #expect(state.credit != nil)
         state.completeRead(text: #"{"_retryAfter":"600"}"#, query: query,
-                           generation: state.generation, now: now)
-        #expect(state.credit == nil)
-        #expect(state.retryNotBefore == now.addingTimeInterval(600))
+                           generation: state.generation, now: now.addingTimeInterval(360))
+        #expect(state.credit?.amountUSD == 25)
+        #expect(state.credit?.refreshFailed == true)
+        #expect(state.credit?.measuredAt == now)
+        #expect(state.credit?.detail(now: now)?.contains("Stale") == true)
+        #expect(state.retryNotBefore == now.addingTimeInterval(960))
         state.observe(text: #"{"status":"linked","monthly_credit_usd":"25.00"}"#,
                       query: query, retryAfter: nil, now: now)
+        #expect(state.credit?.refreshFailed == false)
         state.completeRead(text: nil, query: query, generation: state.generation, now: now)
-        #expect(state.credit == nil)
+        #expect(state.credit?.refreshFailed == true)
         #expect(state.retryNotBefore == nil)
+        state.observe(text: #"{"_failed":true}"#, query: query, retryAfter: "600", now: now)
+        #expect(state.credit?.amountUSD == 25)
+        #expect(state.credit?.refreshFailed == true)
+        // A valid response reporting no entitlement is authoritative.
+        state.observe(text: #"{"status":"unlinked"}"#, query: query, retryAfter: nil, now: now)
+        #expect(state.credit == nil)
+    }
+
+    @Test("fractional grant timestamps preserve the next credit date")
+    func fractionalGrantDate() throws {
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25","next_grant_at":"2027-02-15T14:49:22.123Z"}"#.utf8), now: now))
+        let plain = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
+        let fractionalDate = try #require(grant.nextGrantAt)
+        let plainDate = try #require(plain.nextGrantAt)
+        #expect(abs(fractionalDate.timeIntervalSince(plainDate) - 0.123) < 0.0001)
     }
 
     @Test("a missing WebKit callback reaches the injected timeout and rejects late results")

@@ -35,7 +35,7 @@ for (const url of [
 assert.equal(messages.length, 1);
 await window.fetch(response(endpoint, false));
 assert.equal(messages[1].retryAfter, '600');
-assert.equal(messages[1].payload, '{}');
+assert.deepEqual(JSON.parse(messages[1].payload), { _failed: true });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction('fetch', 'query', 'AbortController', 'setTimeout', 'clearTimeout', refresh);

@@ -6,6 +6,7 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
     public let amountUSD: Decimal
     public let nextGrantAt: Date?
     public let measuredAt: Date
+    public var refreshFailed = false
 
     public static func decode(_ data: Data, now: Date) throws -> Self? {
         let payload = try JSONDecoder().decode(Payload.self, from: data)
@@ -15,8 +16,14 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
               let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")),
               amount >= 0 else { return nil }
         return Self(amountUSD: amount,
-            nextGrantAt: (payload.grant_due == true ? nil : payload.next_grant_at).flatMap { ISO8601DateFormatter().date(from: $0) },
+            nextGrantAt: (payload.grant_due == true ? nil : payload.next_grant_at).flatMap(Self.parseDate),
             measuredAt: now)
+    }
+
+    private static func parseDate(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
     private struct Payload: Decodable {
@@ -33,7 +40,7 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
         if let nextGrantAt {
             parts.append("Next credit \(nextGrantAt.formatted(date: .abbreviated, time: .omitted))")
         }
-        if now.timeIntervalSince(measuredAt) >= 300 { parts.append("Stale monthly credit reading") }
+        if refreshFailed { parts.append("Stale monthly credit reading") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

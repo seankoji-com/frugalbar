@@ -120,11 +120,12 @@ jobs:
       # This task's same-repository PR must produce proof artifacts without
       # workflow_dispatch permission. Other PRs retain the ordinary test path.
       - name: Render production SwiftUI credit rows
+        id: credit-renders
         if: (github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff')
         run: FRUGALBAR_RENDER_DIR="$RUNNER_TEMP/frugalbar-renders" swift test -c debug --filter UXRenderTests
 
       - name: Preserve SwiftUI renders
-        if: always() && ((github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff'))
+        if: always() && steps.credit-renders.outcome == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.verify_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/monthly-credits-openai-balance-poll-backoff'))
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: swiftui-credit-renders

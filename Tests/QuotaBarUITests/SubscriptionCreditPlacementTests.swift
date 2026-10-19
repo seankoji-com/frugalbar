@@ -39,7 +39,7 @@ struct SubscriptionCreditPlacementTests {
 
     @Test("Claude monthly entitlement is a separate line with no balance or quota")
     func monthlyEntitlementPlacement() throws {
-        let grant = try #require(ClaudeMonthlyCredit.decode(Data(
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
         var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
@@ -53,7 +53,10 @@ struct SubscriptionCreditPlacementTests {
         #expect(snapshot.apiCredits.isEmpty)
         #expect(snapshot.consumptionFraction == nil)
         #expect(snapshot.quotaBars.isEmpty)
-        #expect(MetricRowPresentation(snapshot: snapshot, now: now.addingTimeInterval(300))
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now.addingTimeInterval(330))
+            .monthlyCreditDetail?.contains("Stale monthly credit") != true)
+        snapshot.monthlyAPICredit?.refreshFailed = true
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now)
             .monthlyCreditDetail?.contains("Stale monthly credit") == true)
     }
 

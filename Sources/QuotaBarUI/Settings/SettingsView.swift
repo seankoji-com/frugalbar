@@ -313,14 +313,10 @@ public struct SettingsView: View {
                     Button("Disconnect monthly credit") {
                         ClaudeMonthlyCreditSession.shared.disconnect()
                         claudeMonthlyEnabled = false
-                        Task { await store?.forceRefresh() }
+                        Task { await store?.load() }
                     }
                 }
             }
-            .onAppear { claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled }
-            .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
-                Task { await store?.forceRefresh() }
-            }) { ClaudeMonthlyCreditConnectionView() }
 
             Section {
                 ForEach(Self.slots) { slot in
@@ -399,6 +395,10 @@ public struct SettingsView: View {
 
         }
         .formStyle(.grouped)
+        .onAppear { claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled }
+        .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
+            Task { await store?.load() }
+        }) { ClaudeMonthlyCreditConnectionView() }
     }
 
     /// Pinned below the form rather than appended to it. As the last row of a
