@@ -70,7 +70,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
         let text: String? = await withCheckedContinuation { continuation in
             webView.callAsyncJavaScript(
                 "const r = await fetch(query, {credentials: 'same-origin'}); if (!r.ok) return JSON.stringify({_retryAfter:r.headers.get('Retry-After')}); const p = await r.json(); return JSON.stringify({status:p.status,monthly_credit_usd:p.monthly_credit_usd,next_grant_at:p.next_grant_at,grant_due:p.grant_due,grants_held_reason:p.grants_held_reason});",
-                arguments: ["query": query], in: nil, contentWorld: .page) { result in
+                arguments: ["query": query], in: nil, in: .page) { result in
                     if case .success(let value) = result { continuation.resume(returning: value as? String) }
                     else { continuation.resume(returning: nil) }
                 }
