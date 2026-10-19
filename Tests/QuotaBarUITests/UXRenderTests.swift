@@ -61,6 +61,23 @@ struct UXRenderTests {
             MetricRowView(snapshot: staleSubscription)
         }.padding(12).frame(width: 384).background(Theme.surface),
             name: "subscription-credits", directory: directory)
+        var claudeMonthly = snapshot(.claude, "Claude", 0.65)
+        claudeMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date())
+        var staleMonthly = claudeMonthly
+        staleMonthly.staleReading = StaleReading(reason: .rateLimited(
+            retryAfter: Date().addingTimeInterval(300)), at: Date())
+        staleMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date().addingTimeInterval(-600))
+        staleMonthly.monthlyAPICredit?.refreshFailed = true
+        // Use the actual card so the 384pt popover's 12pt margins and
+        // 14pt card padding leave exactly 332pt for each production row.
+        try await save(VStack(spacing: 12) {
+            Text("Monthly entitlement · current and throttled").font(.caption)
+            MetricSectionView(category: .aiSubscriptions, snapshots: [claudeMonthly, subscription])
+            MetricSectionView(category: .aiSubscriptions, snapshots: [staleMonthly, staleSubscription])
+        }.padding(12).frame(width: 384).background(Theme.surface),
+            name: "monthly-credit-and-openai", directory: directory)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
@@ -168,7 +185,7 @@ struct UXRenderTests {
             metric: .credits(remaining: 62_500, unitName: "credits"),
             source: "Codex usage payload · credits.balance"),
          APICreditEntry(
-            id: "claude.extra-usage", vendorId: .claude, label: "API credits",
+            id: "claude.extra-usage", vendorId: .claude, label: "Extra usage",
             metric: .currency(balance: Decimal(string: "179.50")!,
                               limit: Decimal(string: "200.00")!, spent: nil, currencyCode: "USD"),
             currencyBasis: .prepaidCredit, detail: "$200.00 monthly limit",
@@ -719,6 +736,23 @@ struct UXRenderTests {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let data = try #require(bitmap.representation(using: .png, properties: [:]))
         try data.write(to: directory.appendingPathComponent("\(name).png"))
+        let accessibility = accessibilityDump(host).joined(separator: "\n")
+        try accessibility.write(to: directory.appendingPathComponent("\(name)-accessibility.txt"),
+                                atomically: true, encoding: .utf8)
         window.close()
+    }
+
+    /// Read the hosted AppKit accessibility tree, including SwiftUI's combined
+    /// row labels. This artifact is separate from the screenshot and can be
+    /// inspected even when the hosted runner has no Accessibility Inspector.
+    private func accessibilityDump(_ object: Any, depth: Int = 0) -> [String] {
+        guard depth < 16, let element = object as? NSAccessibilityProtocol else { return [] }
+        let role = element.accessibilityRole()?.rawValue ?? "unknown"
+        let label = element.accessibilityLabel() ?? ""
+        var lines = [String(repeating: "  ", count: depth) + role + ": " + label]
+        for child in element.accessibilityChildren() ?? [] {
+            lines += accessibilityDump(child, depth: depth + 1)
+        }
+        return lines
     }
 }

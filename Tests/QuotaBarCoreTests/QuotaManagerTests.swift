@@ -25,6 +25,24 @@ private final class InvocationCounter: @unchecked Sendable {
     }
 }
 
+/// Only cache-policy time advances; provider deadlines still use real time.
+private final class CacheTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        instant = instant.addingTimeInterval(seconds)
+    }
+}
+
 /// A `QuotaProvider` whose entire behaviour is dictated by the test: succeed
 /// with a given urgency, throw a given error, or hang for a given duration
 /// (to be cut off by `QuotaManager`'s per-provider deadline).
@@ -64,6 +82,32 @@ private struct StubProvider: QuotaProvider {
                 resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
             )
         }
+    }
+}
+
+/// Holds the first provider call until the test has queued a manual refresh.
+/// Later calls return immediately, including an unwanted follow-up in a mutant.
+private actor AutomaticFetchGate {
+    private var started = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        guard !started else { return }
+        started = true
+        entered?.resume()
+        entered = nil
+        await withCheckedContinuation { release = $0 }
+    }
+
+    func waitForEntry() async {
+        guard !started else { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func resume() {
+        release?.resume()
+        release = nil
     }
 }
 
@@ -147,6 +191,134 @@ struct QuotaManagerTests {
         _ = await (a, b, c)
         let count = counter.value
         #expect(count == 1)
+    }
+
+    @Test("concurrent forced refreshes share a fetch before the cache floor is written")
+    func concurrentForcedRefreshesCollapseIntoOneFetch() async {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 30),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .hang(seconds: 0.2))]
+            })
+        async let a = manager.forceRefresh()
+        async let b = manager.forceRefresh()
+        async let c = manager.forceRefresh()
+        let results = await (a, b, c)
+        #expect(counter.value == 1)
+        #expect(results.0["claude"]?.status == .measured(.none))
+        #expect(results.1["claude"]?.status == .measured(.none))
+        #expect(results.2["claude"]?.status == .measured(.none))
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 1)
+    }
+
+    @Test("a forced refresh joins a successful automatic fetch and arms the user floor")
+    func forcedRefreshJoinsSuccessfulAutomaticFetch() async throws {
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 30),
+            providerFactory: {
+                [StubProvider(vendorId: .claude, counter: counter, behavior: .hang(seconds: 0.2))]
+            })
+        let automatic = Task { await manager.refresh() }
+        for _ in 0..<10_000 {
+            if counter.value > 0 { break }
+            await Task.yield()
+        }
+        try #require(counter.value == 1)
+        let manual = await manager.forceRefresh()
+        let original = await automatic.value
+        #expect(counter.value == 1)
+        #expect(manual["claude"]?.lastUpdated == original["claude"]?.lastUpdated)
+        _ = await manager.forceRefresh()
+        #expect(counter.value == 1)
+    }
+
+    @Test("a queued manual refresh excludes successful automatic reads even with no poll floor")
+    func queuedManualRefreshExcludesSuccessfulReadWithoutFloor() async throws {
+        struct GatedProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let calls: InvocationCounter
+            let userCalls: InvocationCounter
+            let gate: AutomaticFetchGate
+
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                calls.increment()
+                if QuotaFetchContext.isUserInitiated { userCalls.increment() }
+                await gate.run()
+                return try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+            }
+        }
+        let calls = InvocationCounter()
+        let userCalls = InvocationCounter()
+        let gate = AutomaticFetchGate()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 5, minPollInterval: 0),
+            providerFactory: { [GatedProvider(calls: calls, userCalls: userCalls, gate: gate)] })
+        let automatic = Task { await manager.refresh() }
+        await gate.waitForEntry()
+        // Register the same intent as a click in QuotaStore while its automatic
+        // refresh is pending. The gate, rather than a sleep, orders the click.
+        let queued = await manager.queueUserRefreshIfActive()
+        await gate.resume()
+        let result = await automatic.value
+        #expect(queued)
+        #expect(result["claude"]?.status == .measured(.none))
+        #expect(calls.value == 1)
+        #expect(userCalls.value == 0)
+
+        // Zero floor really permits another explicit fetch. Only the exclusion
+        // above can prevent the queued follow-up from repeating the first read.
+        _ = await manager.forceRefresh()
+        #expect(calls.value == 2)
+        #expect(userCalls.value == 1)
+    }
+
+    @Test("a queued manual refresh re-asks a vendor skipped under Retry-After with user intent")
+    func forcedRefreshJoinsAutomaticFetch() async throws {
+        struct IntentProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let calls: InvocationCounter
+            let userCalls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                let call = calls.increment()
+                if QuotaFetchContext.isUserInitiated { userCalls.increment() }
+                if call == 1 { throw ProviderError(.rateLimited(retryAfter: Date().addingTimeInterval(600))) }
+                return try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+            }
+        }
+        let calls = InvocationCounter()
+        let userCalls = InvocationCounter()
+        let blockers = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                [IntentProvider(calls: calls, userCalls: userCalls),
+                 StubProvider(vendorId: .openrouter, counter: blockers, behavior: .hang(seconds: 0.2))]
+            })
+        _ = await manager.refresh() // Seed Claude's vendorRetryAfter without arming the user clock.
+        #expect(calls.value == 1)
+        let automatic = Task { await manager.refresh() }
+        for _ in 0..<10_000 {
+            if blockers.value == 2 { break }
+            await Task.yield()
+        }
+        try #require(blockers.value == 2)
+        let manual = await manager.forceRefresh()
+        _ = await automatic.value
+        #expect(calls.value == 2)
+        #expect(userCalls.value == 1)
+        #expect(blockers.value == 2) // Successful in-flight providers are not re-fetched.
+        #expect(manual["claude"]?.status == .measured(.none))
     }
 
     @Test("isCacheFresh starts stale before any fetch")
@@ -366,10 +538,7 @@ struct QuotaManagerTests {
         // actually proves whether the vendor was hit over the network.
         let factoryCallCount = InvocationCounter()
         let fetchCounter = InvocationCounter()
-        // A short floor so the test can genuinely let it expire once (via a
-        // real sleep) before the outage, then prove the failed attempt
-        // re-arms a fresh window rather than leaving fetchedAt frozen at
-        // the last success.
+        let clock = CacheTestClock()
         let manager = QuotaManager(
             cachePolicy: CachePolicy(
                 cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2,
@@ -382,25 +551,45 @@ struct QuotaManagerTests {
                 } else {
                     return [StubProvider(vendorId: .claude, counter: fetchCounter, behavior: .throwError(.badResponse))]
                 }
-            }
+            },
+            clock: { clock.now() }
         )
         let first = await manager.forceRefresh()
         #expect(first[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
         #expect(fetchCounter.value == 1)
 
-        // Let the floor expire before the vendor starts failing.
-        try? await Task.sleep(for: .seconds(0.1))
+        // Advance past both floors without sleeping, then hold policy time
+        // constant regardless of how long actor scheduling takes.
+        clock.advance(by: 0.1)
 
         let second = await manager.forceRefresh()
         #expect(second[VendorIdentifier.claude.rawValue]?.status == .measured(.warning)) // stale reading preserved
         #expect(fetchCounter.value == 2)
 
-        // Immediately re-refresh, well within a fresh floor window measured
-        // from the failed attempt above. Without re-arming fetchedAt on
-        // failure, this would incorrectly re-hit the vendor a third time.
+        #expect(second[VendorIdentifier.claude.rawValue]?.metric == first[VendorIdentifier.claude.rawValue]?.metric)
+        #expect(second[VendorIdentifier.claude.rawValue]?.lastUpdated == first[VendorIdentifier.claude.rawValue]?.lastUpdated)
+        #expect(second[VendorIdentifier.claude.rawValue]?.staleReading == StaleReading(reason: .badResponse, at: clock.now()))
+
+        // A failed user attempt must re-arm the user clock. Removing only
+        // that write must cause a third request here.
         let third = await manager.forceRefresh()
         #expect(third[VendorIdentifier.claude.rawValue]?.status == .measured(.warning))
-        #expect(fetchCounter.value == 2) // still 2 — the floor re-armed on the failed attempt above
+        #expect(fetchCounter.value == 2)
+
+        // Independently check the automatic clock: the user floor cannot
+        // mask a missing fetchedAt write on the failed attempt.
+        let fourth = await manager.refresh()
+        #expect(fourth[VendorIdentifier.claude.rawValue]?.metric == first[VendorIdentifier.claude.rawValue]?.metric)
+        #expect(fourth[VendorIdentifier.claude.rawValue]?.staleReading == second[VendorIdentifier.claude.rawValue]?.staleReading)
+        #expect(fetchCounter.value == 2)
+
+        // The re-armed floor must expire again, rather than holding the
+        // vendor indefinitely during an outage.
+        clock.advance(by: 0.1)
+        _ = await manager.refresh()
+        #expect(fetchCounter.value == 3)
+        _ = await manager.refresh()
+        #expect(fetchCounter.value == 3)
     }
 
     @Test("transient provider error preserves existing measured cache entry")
@@ -478,6 +667,191 @@ struct QuotaManagerTests {
         #expect(recovered.staleReading == nil)
         #expect(recovered.status == .measured(.none))
         #expect(SystemHealthSummary.compute(from: Array(third.values)).staleCount == 0)
+    }
+
+    @Test("quota retention replaces monthly credit with its independent read outcome")
+    func monthlyCreditFreshnessIsIndependentOfQuotaFailure() async throws {
+        struct SnapshotProvider: QuotaProvider {
+            let snapshot: QuotaSnapshot
+            var vendorId: VendorIdentifier { .claude }
+            var displayName: String { "Claude" }
+            var category: MetricCategory { .aiSubscriptions }
+            func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
+        let updated = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"50.00"}"#.utf8), now: now.addingTimeInterval(400)))
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                let pass = counter.increment()
+                var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+                    category: .aiSubscriptions, metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+                    status: pass == 1 ? .measured(.warning) : .unavailable(.offline),
+                    resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+                snapshot.monthlyAPICredit = pass == 1 ? grant : (pass == 2 ? updated : nil)
+                return [SnapshotProvider(snapshot: snapshot)]
+            })
+        let first = await manager.forceRefresh()
+        #expect(first["claude"]?.monthlyAPICredit == grant)
+        let second = await manager.forceRefresh()
+        #expect(second["claude"]?.staleReading?.reason == .offline)
+        #expect(second["claude"]?.consumptionFraction == 0.5)
+        #expect(second["claude"]?.monthlyAPICredit == updated)
+        #expect(second["claude"]?.monthlyAPICredit?.detail() == nil)
+        let third = await manager.forceRefresh()
+        #expect(third["claude"]?.staleReading?.reason == .offline)
+        #expect(third["claude"]?.monthlyAPICredit == nil)
+    }
+
+    @Test("cycle attachment and removal preserve monthly entitlements")
+    func monthlyCreditSurvivesCycleRebuilds() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        snapshot.monthlyAPICredit = grant
+        let attached = QuotaManager.attachingCycleRow(to: snapshot,
+            cycle: SubscriptionCycle(anchorDate: now), now: now)
+        #expect(attached.resetsAt != nil)
+        #expect(attached.monthlyAPICredit == grant)
+        let removed = QuotaManager.removingStaleCycleRow(from: attached)
+        #expect(removed.resetsAt == nil)
+        #expect(removed.monthlyAPICredit == grant)
+    }
+
+    @Test("disconnect clears a fresh cached monthly credit without polling quota")
+    func disconnectClearsCachedMonthlyCredit() async throws {
+        struct CreditProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let grant: ClaudeMonthlyCredit
+            let calls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                calls.increment()
+                var snapshot = try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.monthlyAPICredit = grant
+                return snapshot
+            }
+        }
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: Date(timeIntervalSince1970: 1_800_000_000)))
+        let calls = InvocationCounter()
+        let manager = QuotaManager(providerFactory: { [CreditProvider(grant: grant, calls: calls)] })
+        #expect(await manager.refresh()["claude"]?.monthlyAPICredit == grant)
+        await manager.clearMonthlyCredit()
+        #expect(await manager.cachedSnapshots()["claude"]?.monthlyAPICredit == nil)
+        #expect(await manager.refresh()["claude"]?.monthlyAPICredit == nil)
+        #expect(await manager.sortedSnapshots().first?.monthlyAPICredit == nil)
+        #expect(calls.value == 1)
+    }
+
+    @Test("disconnect rejects pending monthly results and deadline carry-forward")
+    func disconnectRejectsPendingMonthlyCredit() async throws {
+        actor Connection {
+            var generation: String? = "first"
+            func value() -> String? { generation }
+            func set(_ value: String?) { generation = value }
+        }
+        struct PendingProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let grant: ClaudeMonthlyCredit
+            let calls: InvocationCounter
+            let gate: AutomaticFetchGate
+            let timesOut: Bool
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                if calls.increment() > 1 {
+                    await gate.run()
+                    if timesOut { try await Task.sleep(for: .seconds(60)) }
+                }
+                var snapshot = try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.monthlyAPICredit = grant
+                return snapshot
+            }
+        }
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: Date(timeIntervalSince1970: 1_800_000_000)))
+        // Test both a completed provider and the engine's real deadline. Do
+        // not clear the cache here: independently test the source-lifetime guard.
+        for timesOut in [false, true] {
+            let connection = Connection()
+            let gate = AutomaticFetchGate()
+            let calls = InvocationCounter()
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                    perProviderTimeout: 2, minPollInterval: 0),
+                providerFactory: { [PendingProvider(grant: grant, calls: calls, gate: gate, timesOut: timesOut)] },
+                monthlyCreditConnection: { await connection.value() })
+            #expect(await manager.refresh()["claude"]?.monthlyAPICredit == grant)
+            let pending = Task { await manager.refresh() }
+            await gate.waitForEntry()
+            await connection.set(nil)
+            await gate.resume()
+            let result = await pending.value
+            #expect(result["claude"]?.monthlyAPICredit == nil)
+            #expect(await manager.cachedSnapshots()["claude"]?.monthlyAPICredit == nil)
+            if timesOut { #expect(result["claude"]?.staleReading?.reason == .timedOut) }
+        }
+        // Independently exercise a generation change and explicit local
+        // invalidation, so neither guard can mask the other's regression.
+        for reconnect in [false, true] {
+            let connection = Connection()
+            let gate = AutomaticFetchGate()
+            let calls = InvocationCounter()
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                    perProviderTimeout: 2, minPollInterval: 0),
+                providerFactory: { [PendingProvider(grant: grant, calls: calls, gate: gate, timesOut: false)] },
+                monthlyCreditConnection: { await connection.value() })
+            _ = await manager.refresh()
+            let pending = Task { await manager.refresh() }
+            await gate.waitForEntry()
+            if reconnect { await connection.set("second") }
+            else { await manager.clearMonthlyCredit() }
+            await gate.resume()
+            #expect(await pending.value["claude"]?.monthlyAPICredit == nil)
+        }
+    }
+
+    @Test("a whole-provider timeout retains the monthly entitlement as stale")
+    func monthlyCreditSurvivesProviderDeadline() async throws {
+        struct DeadlineProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .claude
+            let displayName = "Claude"
+            let category: MetricCategory = .aiSubscriptions
+            let grant: ClaudeMonthlyCredit
+            let calls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                if calls.increment() > 1 { try await Task.sleep(for: .seconds(60)) }
+                var snapshot = try await StubProvider(vendorId: .claude, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.monthlyAPICredit = grant
+                return snapshot
+            }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"25.00"}"#.utf8), now: now))
+        let calls = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [DeadlineProvider(grant: grant, calls: calls)] })
+        _ = await manager.refresh()
+        let failed = await manager.refresh()
+        #expect(calls.value == 2)
+        #expect(failed["claude"]?.monthlyAPICredit?.amountUSD == 25)
+        #expect(failed["claude"]?.monthlyAPICredit?.measuredAt == now)
+        #expect(failed["claude"]?.monthlyAPICredit?.refreshFailed == true)
+        #expect(failed["claude"]?.staleReading?.reason == .timedOut)
     }
 
     /// Two failures in a row report the newest reason. Retention exists to keep

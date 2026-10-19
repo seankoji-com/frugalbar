@@ -16,7 +16,8 @@ public actor QuotaManager {
             // is no UI left to clear it from.
             vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
         },
-        displayPreferences: { CredentialStore.providerDisplayPreferences })
+        displayPreferences: { CredentialStore.providerDisplayPreferences },
+        monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
 
     // --- State ---
     /// Keyed by each provider's stable `instanceID`, not by vendor: one vendor
@@ -28,10 +29,15 @@ public actor QuotaManager {
     private var instanceOrder: [String] = []
     private var lastCompleteFetch: Date?
     private let cachePolicy: CachePolicy
+    private let clock: @Sendable () -> Date
     private let providerFactory: @Sendable () -> [any QuotaProvider]
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
+    private let monthlyCreditConnection: @Sendable () async -> String?
+    private var monthlyCreditInvalidation = 0
+    private var activeTaskIsForced = false
+    private var forcedPassPending = false
 
     private struct CacheEntry: Sendable {
         let snapshot: QuotaSnapshot
@@ -77,12 +83,20 @@ public actor QuotaManager {
         // Same rule as `cycleLookup`: the default shows every provider in
         // canonical order and reads no preference store, so a test sees
         // exactly the providers its factory serves.
-        displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default }
+        displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default },
+        // Isolated managers use an injected connection lifetime, never the
+        // real web session or preference store. The app opts in above.
+        monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
+        // Cache policy time is injectable independently of vendor observations
+        // and real elapsed deadlines, so tests never race the scheduler.
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.cachePolicy = cachePolicy
+        self.clock = clock
         self.providerFactory = providerFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
+        self.monthlyCreditConnection = monthlyCreditConnection
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -120,6 +134,19 @@ public actor QuotaManager {
     }
 
     // MARK: Public accessors
+
+    /// Disconnect is a local state change, not a reason to poll quota. Also
+    /// invalidate results from a pass already awaiting a provider or deadline.
+    public func clearMonthlyCredit() {
+        monthlyCreditInvalidation += 1
+        for id in Array(cache.keys) {
+            guard let entry = cache[id] else { continue }
+            var snapshot = entry.snapshot
+            snapshot.monthlyAPICredit = nil
+            cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
+    }
 
     /// Returns cached snapshots immediately (fast path for UI), keyed by each
     /// provider instance's stable id.
@@ -258,7 +285,7 @@ public actor QuotaManager {
     /// Returns true if cache is still fresh.
     public func isCacheFresh() -> Bool {
         guard let last = lastCompleteFetch else { return false }
-        return Date().timeIntervalSince(last) < cachePolicy.cacheTTL
+        return clock().timeIntervalSince(last) < cachePolicy.cacheTTL
     }
 
     /// Worst quota pressure across providers we could actually read.
@@ -279,35 +306,71 @@ public actor QuotaManager {
         return await fetchDeduplicated()
     }
 
-    /// Bypasses the cache entirely. Used by the manual refresh button.
+    /// Requests a user pass. Concurrent manual callers share it; an automatic
+    /// pass already in flight is followed by one user pass.
     public func forceRefresh() async -> [String: QuotaSnapshot] {
         lastCompleteFetch = nil
         return await fetchDeduplicated(force: true)
     }
 
+    /// Lets a UI already awaiting this pass register a click without waiting
+    /// for the same task twice. Its original caller receives the final result.
+    public func queueUserRefreshIfActive() -> Bool {
+        guard activeTask != nil else { return false }
+        if !activeTaskIsForced { forcedPassPending = true }
+        return true
+    }
+
     // MARK: Private
 
     private func fetchDeduplicated(force: Bool = false) async -> [String: QuotaSnapshot] {
-        if force {
-            activeTask?.cancel()
-            activeTask = nil
-        }
-
-        // Join an in-flight fetch rather than starting a second one.
+        // A forced refresh must join too. Keep one owner of the in-flight
+        // pass, but queue a user-initiated pass if this one is automatic.
+        // Automatic selection may have skipped a vendor under Retry-After or
+        // the automatic floor, and cannot satisfy the person's click.
         if let existing = activeTask {
+            if force && !activeTaskIsForced { forcedPassPending = true }
             return await existing.value
         }
 
-        let task = Task { await self.parallelFetch(force: force) }
+        activeTaskIsForced = force
+        let task = Task {
+            var result = await self.parallelFetch(force: force)
+            if self.forcedPassPending {
+                self.forcedPassPending = false
+                self.activeTaskIsForced = true
+                // A successful in-flight read already satisfies the click.
+                // Retry only skipped providers and unavailable outcomes.
+                let satisfied = self.successfulPassIDs
+                result = await self.parallelFetch(force: true, excluding: satisfied)
+                // Arm the user floor only once the follow-up has settled.
+                // Bumping `lastUserFetchAt` before it made the floor, not the
+                // exclusion above, the thing that stopped a satisfied provider
+                // being asked twice - so a follow-up that re-asked every
+                // provider looked identical from the outside. Providers this
+                // click satisfied keep the reading they were served and are
+                // marked as user-fetched from this instant.
+                let satisfiedAt = self.clock()
+                for id in satisfied {
+                    if let entry = self.cache[id] {
+                        self.cache[id] = CacheEntry(snapshot: entry.snapshot, fetchedAt: entry.fetchedAt,
+                            lastUserFetchAt: satisfiedAt, vendorRetryAfter: entry.vendorRetryAfter)
+                    }
+                }
+            }
+            // Clear ownership before returning, while still on this actor.
+            // A caller arriving after completion must start a new pass rather
+            // than queue onto a task whose follow-up decision already ran.
+            self.activeTask = nil
+            return result
+        }
         activeTask = task
-        let result = await task.value
-        // Only clear if this task is still the current one — a forceRefresh
-        // may have installed a newer task while we were suspended.
-        if activeTask == task { activeTask = nil }
-        return result
+        return await task.value
     }
 
-    private func parallelFetch(force: Bool = false) async -> [String: QuotaSnapshot] {
+    private var successfulPassIDs: Set<String> = []
+
+    private func parallelFetch(force: Bool = false, excluding: Set<String> = []) async -> [String: QuotaSnapshot] {
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at
@@ -332,7 +395,7 @@ public actor QuotaManager {
         instanceOrder = providers.map(\.instanceID)
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
-        let startNow = Date()
+        let startNow = clock()
 
         // Per-vendor poll floor: a vendor fetched more recently than
         // minPollInterval is served its cached snapshot instead of being
@@ -351,6 +414,7 @@ public actor QuotaManager {
         var providersToFetch: [any QuotaProvider] = []
         var throttledOnForce: [String] = []
         for provider in providers {
+            if excluding.contains(provider.instanceID) { continue }
             let shouldThrottle: Bool
             if let entry = cache[provider.instanceID] {
                 let measuredFrom = force ? entry.lastUserFetchAt : entry.fetchedAt
@@ -407,14 +471,19 @@ public actor QuotaManager {
         var results: [String: QuotaSnapshot] = [:]
         let cycleLookup = self.cycleLookup
 
-        await withTaskGroup(of: (String, QuotaSnapshot).self) { group in
+        let creditInvalidation = monthlyCreditInvalidation
+        let creditConnection = await monthlyCreditConnection()
+        var deadlineFailures: Set<String> = []
+        await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
             for provider in providersToFetch {
                 group.addTask {
                     // A whole-provider deadline. URLSession's per-request timeout
                     // does not bound a provider that issues several requests.
                     let startedAt = DispatchTime.now().uptimeNanoseconds
                     let outcome = await withDeadline(seconds: budget) {
-                        try await provider.fetchSnapshot()
+                        try await QuotaFetchContext.$isUserInitiated.withValue(force) {
+                            try await provider.fetchSnapshot()
+                        }
                     }
                     let cycle = cycleLookup(provider.vendorId)
                     switch outcome {
@@ -424,22 +493,34 @@ public actor QuotaManager {
                         // that issue several requests per refresh.
                         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
                         snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle), false)
                     case .failure(let reason):
                         let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
-                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle))
+                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle), reason == .timedOut)
                     }
                 }
             }
-            for await (instanceID, snapshot) in group {
+            for await (instanceID, snapshot, deadlineFailed) in group {
                 results[instanceID] = snapshot
+                if deadlineFailed { deadlineFailures.insert(instanceID) }
             }
         }
 
-        let now = Date()
+        let currentCreditConnection = await monthlyCreditConnection()
+        let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
+            && creditInvalidation == monthlyCreditInvalidation
+        successfulPassIDs = Set(results.compactMap { id, snapshot in
+            snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
+        })
+        let now = clock()
         for provider in providersToFetch {
             let id = provider.instanceID
-            guard let snap = results[id] else { continue }
+            guard var snap = results[id] else { continue }
+            if deadlineFailures.contains(id) {
+                snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
+                snap.monthlyAPICredit?.refreshFailed = true
+            }
+            if !acceptsMonthlyCredit { snap.monthlyAPICredit = nil }
             // Keep the old cache entry's snapshot if a previously successful
             // provider now fails transiently, so we don't wipe out the
             // measured reading the UI is showing. But always bump fetchedAt
@@ -477,14 +558,15 @@ public actor QuotaManager {
                 // reading froze for the whole outage, and the history re-stamped
                 // them with a fresh timestamp.
                 retained.staleReading = StaleReading(reason: reason, at: now)
+                retained.monthlyAPICredit = snap.monthlyAPICredit
                 displaySnapshot = retained
             } else {
                 displaySnapshot = snap
             }
             // A provider we attempted re-arms the floors it is supposed to:
             // `fetchedAt` always (so the automatic floor measures from the
-            // attempt, not the outcome), and `lastUserFetchAt` when this pass
-            // was the user's, so a second ⟳ inside the floor is served from
+            // attempt, not the outcome), and `lastUserFetchAt` when a user
+            // requested this user-initiated pass, so another ⟳ is served from
             // cache rather than re-hitting the vendor. A provider never
             // fetched this round is not in this loop at all and keeps both
             // instants.
@@ -569,6 +651,7 @@ public actor QuotaManager {
             // entries ride this snapshot, and losing them here would make
             // them flicker out whenever a hand-entered cycle row is attached.
             rebuilt.apiCredits = updated.apiCredits
+            rebuilt.monthlyAPICredit = updated.monthlyAPICredit
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             // A fact about the poll, not a figure that was re-fetched: the
@@ -634,6 +717,7 @@ public actor QuotaManager {
             currencyBasis: updated.currencyBasis
         )
         rebuilt.apiCredits = updated.apiCredits
+        rebuilt.monthlyAPICredit = updated.monthlyAPICredit
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         // Same rule as the catalog failure above: this snapshot's figures are

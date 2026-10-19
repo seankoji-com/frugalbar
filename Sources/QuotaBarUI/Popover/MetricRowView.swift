@@ -89,6 +89,15 @@ struct MetricRowView: View {
             if let credits = p.resetCredits {
                 resetCreditRow(credits)
             }
+            if let monthly = p.monthlyCreditLine {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(monthly, systemImage: "calendar")
+                    if let detail = p.monthlyCreditDetail { Text(detail) }
+                }
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "plus.circle")
@@ -137,23 +146,8 @@ struct MetricRowView: View {
     private func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
-        // Every countdown in the label, including the headline's own, is
-        // measured from the grid's instant: the same one the cells draw.
-        let windows = grid.spokenSummary()
-        // With the grid speaking each window, the headline percentage would
-        // be the same figure twice.
-        var parts = [windows == nil ? presentation.accessibilityLabel : presentation.accessibilityLabelOmittingPercentage]
-        if let windows {
-            parts.append(windows)
-        }
-        if let forecastText = forecastText(now: grid.now) {
-            parts.append(forecastText)
-        }
-        if let credits = presentation.resetCredits {
-            parts.append(credits.spoken)
-        }
-        parts += presentation.subscriptionCredits.map { $0.spoken(stale: snapshot.staleReading != nil) }
-        return parts.joined(separator: ". ")
+        presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
+            forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
     }
 
     /// Only for a provider we are currently reading: a forecast under an

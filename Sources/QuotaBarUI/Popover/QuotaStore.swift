@@ -182,10 +182,18 @@ public final class QuotaStore {
         await run { await self.manager.refresh() }
     }
 
+    public func clearMonthlyCredit() async {
+        await manager.clearMonthlyCredit()
+        await reloadFromCache()
+    }
+
     /// Explicit user action — bypasses the cache.
     public func forceRefresh() async {
         if isRefreshing {
-            forcedRefreshPending = true
+            // Join the manager's pass while it can still select only skipped
+            // or failed providers. Queuing a separate forced pass here would
+            // re-fetch every provider the automatic pass just read successfully.
+            if !(await manager.queueUserRefreshIfActive()) { forcedRefreshPending = true }
             return
         }
         await run { await self.manager.forceRefresh() }

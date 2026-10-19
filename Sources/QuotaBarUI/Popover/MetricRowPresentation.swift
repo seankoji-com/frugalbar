@@ -78,6 +78,22 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// change. Always set and cleared together with `staleNote`.
     public let staleSpoken: String?
     public let subscriptionCredits: [APICreditEntryPresentation]
+    public let monthlyCreditLine: String?
+    public let monthlyCreditDetail: String?
+
+    /// The actual row is one accessibility element with children ignored.
+    public func combinedAccessibilityLabel(windows: String?, forecast: String?, creditsStale: Bool) -> String {
+        var parts = [windows == nil ? accessibilityLabel : accessibilityLabelOmittingPercentage]
+        if let windows { parts.append(windows) }
+        if let forecast { parts.append(forecast) }
+        if let resetCredits { parts.append(resetCredits.spoken) }
+        if let monthlyCreditLine {
+            parts.append(monthlyCreditLine)
+            if let monthlyCreditDetail { parts.append(monthlyCreditDetail) }
+        }
+        parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
+        return parts.joined(separator: ". ")
+    }
 
     /// A bar is only exhausted at the top of its range. `>= 1` would miss the
     /// floating-point residue of a percentage that arrived as 100.
@@ -86,6 +102,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
     static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
+        self.monthlyCreditLine = snapshot.monthlyAPICredit?.line
+        self.monthlyCreditDetail = snapshot.monthlyAPICredit?.detail()
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured

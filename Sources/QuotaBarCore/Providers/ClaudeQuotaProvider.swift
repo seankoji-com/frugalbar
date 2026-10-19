@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Claude subscription quota from Anthropic's OAuth usage endpoint, read via
 /// CLI Proxy or directly with the Claude Code OAuth token. Derived from
@@ -9,6 +10,8 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
     private let apiKey: String?
     private let cliProxyConfig: CLIProxyConfig?
+    private let proxyBackoff: ClaudeProxyBackoff
+    private let monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit?
     /// Resolves the *direct* Claude Code OAuth token — the one this Mac's own
     /// `claude` login holds, as opposed to whatever the proxy holds.
     private let directCredential: @Sendable () async -> String?
@@ -19,10 +22,17 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // Injectable so a test can drive the proxy-failure fall-through below
         // without reading the developer's own Claude login out of the Keychain.
         // Nil means the production path: this Mac's Claude Code credential.
-        directCredential: (@Sendable () async -> String?)? = nil
+        directCredential: (@Sendable () async -> String?)? = nil,
+        proxyBackoff: ClaudeProxyBackoff? = nil,
+        monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil
     ) {
+        self.monthlyCredit = monthlyCredit ?? { now in
+            guard !TestHost.isActive else { return nil }
+            return await ClaudeMonthlyCreditSession.shared.read(now: now)
+        }
         self.apiKey = apiKey
         self.cliProxyConfig = cliProxyConfig
+        self.proxyBackoff = proxyBackoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .claude) }
     }
@@ -32,6 +42,23 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     }
 
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
+        // Billing is independent of OAuth usage. Read it concurrently so a
+        // slow web process cannot add its entire wait to the quota request,
+        // and a quota transport failure does not erase a fresh entitlement.
+        async let credit = monthlyCredit(now)
+        var snapshot: QuotaSnapshot
+        do {
+            snapshot = try await fetchUsageSnapshot(now: now)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            snapshot = unavailable(unavailableReason(for: error))
+        }
+        snapshot.monthlyAPICredit = await credit
+        return snapshot
+    }
+
+    private func fetchUsageSnapshot(now: Date) async throws -> QuotaSnapshot {
         // If an explicit apiKey is injected, use direct token path.
         if let injectedKey = apiKey, !injectedKey.isEmpty {
             return try await fetchSnapshotDirect(token: injectedKey, now: now)
@@ -47,14 +74,23 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // about a different credential.
         var proxyFailure: UnavailableReason?
         if let proxyConfig {
-            do {
-                return try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
-            } catch let error as ProviderError {
-                proxyFailure = error.reason
-            } catch {
-                // Transport or connection failure: nothing about either
-                // credential has been established, so fall through to the
-                // direct token with nothing to report yet.
+            // A healthy direct token must not erase the proxy token's throttle.
+            // Providers are rebuilt each pass, so this state outlives this
+            // instance. Manual refresh deliberately probes the proxy again.
+            if !QuotaFetchContext.isUserInitiated,
+               let until = await proxyBackoff.retryAfter(config: proxyConfig, now: now) {
+                proxyFailure = .rateLimited(retryAfter: until)
+            } else {
+                do {
+                    let snapshot = try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
+                    await proxyBackoff.record(nil, config: proxyConfig)
+                    return snapshot
+                } catch let error as ProviderError {
+                    proxyFailure = error.reason
+                    await proxyBackoff.record(error.reason, config: proxyConfig)
+                } catch {
+                    // Transport failure establishes nothing about either token.
+                }
             }
         }
 
@@ -101,6 +137,10 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // The same usage endpoint the proxy path calls, read directly. It used
         // to send a one-token Haiku request and read the rate-limit headers,
         // which spent the quota being reported on every poll.
+        if !QuotaFetchContext.isUserInitiated,
+           let until = await proxyBackoff.directRetryAfter(token: token, now: now) {
+            return unavailable(.rateLimited(retryAfter: until))
+        }
         let (data, response) = try await QuotaHTTP.get(
             url: CLIProxyClient.claudeOAuthUsageWithGrantsURL,
             headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
@@ -113,6 +153,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         if let reason = CLIProxyClient.claudeUsageFailureReason(
             for: response.statusCode,
             retryAfter: response.value(forHTTPHeaderField: "Retry-After"), now: now) {
+            await proxyBackoff.recordDirect(reason, token: token)
             NSLog("frugalbar: Claude OAuth usage request returned %ld (%@)",
                   response.statusCode, String(describing: reason))
             return unavailable(reason)
@@ -121,6 +162,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             NSLog("frugalbar: Claude OAuth usage body failed to decode (%ld bytes)", data.count)
             return unavailable(.badResponse)
         }
+        await proxyBackoff.recordDirect(nil, token: token)
         // The plan is published in the credential blob, not in this payload.
         // Absent, the row shows no subtitle at all — "Claude" under "Claude"
         // was a placeholder that said nothing.
@@ -212,7 +254,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             entries.append(APICreditEntry(
                 id: "claude.extra-usage",
                 vendorId: .claude,
-                label: "API credits",
+                label: "Extra usage",
                 metric: .currency(balance: remaining, limit: limit, spent: nil,
                                   currencyCode: credit.currencyCode),
                 currencyBasis: .prepaidCredit,
@@ -311,5 +353,55 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                        usedText: "\(Int((reading.used * 100).rounded()))% used",
                        resetText: resetText,
                        resetsAt: reading.reset, windowLength: window)
+    }
+}
+
+/// A relayed throttle belongs to the proxy credential even when the direct
+/// credential succeeds. In-memory only, with one configured proxy retained;
+/// neither configuration nor credentials are written to logs or preferences.
+public actor ClaudeProxyBackoff {
+    static let shared = ClaudeProxyBackoff()
+    private var configuration: CLIProxyConfig?
+    private var until: Date?
+    private var directTokenDigest: SHA256.Digest?
+    private var directUntil: Date?
+
+    public init() {}
+
+    func retryAfter(config: CLIProxyConfig, now: Date) -> Date? {
+        guard configuration?.url == config.url,
+              configuration?.managementKey == config.managementKey,
+              let until, now < until else { return nil }
+        return until
+    }
+
+    func directRetryAfter(token: String, now: Date) -> Date? {
+        guard directTokenDigest == SHA256.hash(data: Data(token.utf8)), let directUntil, now < directUntil else { return nil }
+        return directUntil
+    }
+
+    func recordDirect(_ reason: UnavailableReason?, token: String) {
+        let digest = SHA256.hash(data: Data(token.utf8))
+        if directTokenDigest != digest { directUntil = nil }
+        directTokenDigest = digest
+        if case .rateLimited(let retryAfter)? = reason {
+            if let retryAfter { directUntil = max(directUntil ?? retryAfter, retryAfter) }
+        } else if reason == nil {
+            directUntil = nil
+        }
+    }
+
+    func record(_ reason: UnavailableReason?, config: CLIProxyConfig) {
+        let sameCredential = configuration?.url == config.url
+            && configuration?.managementKey == config.managementKey
+        if !sameCredential { until = nil }
+        configuration = config
+        if case .rateLimited(let retryAfter)? = reason {
+            if let retryAfter { until = max(until ?? retryAfter, retryAfter) }
+        } else if reason == nil {
+            // Only a success retracts a throttle. A failed manual probe does
+            // not give the automatic poll permission to ignore Retry-After.
+            until = nil
+        }
     }
 }

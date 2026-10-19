@@ -1,5 +1,11 @@
 import Foundation
 
+/// Request intent travels with the fetch, including through the deadline task.
+/// Direct provider callers retain manual-refresh semantics.
+enum QuotaFetchContext {
+    @TaskLocal static var isUserInitiated = true
+}
+
 // MARK: - Provider adapter protocol
 
 public protocol QuotaProvider: Sendable {
