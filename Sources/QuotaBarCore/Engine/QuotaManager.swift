@@ -317,13 +317,21 @@ public actor QuotaManager {
                 // A successful in-flight read already satisfies the click.
                 // Retry only skipped providers and unavailable outcomes.
                 let satisfied = self.successfulPassIDs
+                result = await self.parallelFetch(force: true, excluding: satisfied)
+                // Arm the user floor only once the follow-up has settled.
+                // Bumping `lastUserFetchAt` before it made the floor, not the
+                // exclusion above, the thing that stopped a satisfied provider
+                // being asked twice - so a follow-up that re-asked every
+                // provider looked identical from the outside. Providers this
+                // click satisfied keep the reading they were served and are
+                // marked as user-fetched from this instant.
+                let satisfiedAt = Date()
                 for id in satisfied {
                     if let entry = self.cache[id] {
                         self.cache[id] = CacheEntry(snapshot: entry.snapshot, fetchedAt: entry.fetchedAt,
-                            lastUserFetchAt: Date(), vendorRetryAfter: entry.vendorRetryAfter)
+                            lastUserFetchAt: satisfiedAt, vendorRetryAfter: entry.vendorRetryAfter)
                     }
                 }
-                result = await self.parallelFetch(force: true, excluding: satisfied)
             }
             // Clear ownership before returning, while still on this actor.
             // A caller arriving after completion must start a new pass rather
