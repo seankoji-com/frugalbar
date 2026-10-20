@@ -96,12 +96,14 @@ decoding and scheduling. Credential resolution still shares the engine's overall
 deadline; this budget does not promise a reading when credential refresh itself
 consumes that time. The shared provider timeout and deadline suite are unchanged.
 
-The bound cancels the losing URLSession task. Cancellation checks before requests,
-after bounded work and on the host-loop catch prevent a cancelled fetch from
+The bound cancels the losing URLSession task. Two cancellation checks, before
+each bounded request and after bounded work, prevent a cancelled fetch from
 starting another host request or accepting a late response. The existing deadline
 helper uses unstructured work, so parent cancellation is observed by the provider
 at the next request boundary, at most one request budget later. Original transport
 errors remain intact through the bound; local deadline expiry throws a timeout.
+The loop-top and catch checks were redundant and masked one another in the
+original cancellation test; they have been removed.
 
 Two hermetic tests suspend a stubbed daily-host request indefinitely, once in
 project lookup and once in scoped quota, and require the plain host to supply its
@@ -109,9 +111,22 @@ scoped weekly reading. Task-local test budgets shorten waits to 0.2 seconds; a
 separate five-second outer deadline turns removal of the bound into a normal
 assertion failure. Neither test asserts an elapsed duration derived from `Date()`.
 The proof adds `unbounded-project` and `unbounded-quota` cases that remove the
-bound and require assertion failures. A cancellation test requires one request
-only, and a budget test pins production headroom. Hosted execution is required
-before treating these new Swift tests or mutations as passing.
+bound and require assertion failures. The stalled-request cancellation test still
+requires one request only, and a budget test pins production headroom.
+
+Three controlled cancellation tests exercise the injected HTTP session. The first
+cancels before entering the provider and requires `CancellationError` with zero
+requests. The other two hold a successful project response or a valid scoped
+weekly quota response in the URLProtocol stub, cancel the caller, then release
+the response. They require `CancellationError`, exactly one or two daily-host
+requests respectively, and no later requests or accepted reading. Gates determine
+the ordering; these tests do not sleep to arrange a race. Their 30-second request
+budget separates cancellation behavior from the timeout tests' 0.2-second budget.
+The `cancelled-request-starts` mutation removes only the pre-request check and
+must fail the zero-request assertion. The `cancelled-quota-accepted` mutation
+removes only the post-response check and must fail by accepting the late scoped
+quota. Each retained check therefore has its own independent mutation proof.
+Hosted execution is required before treating Swift tests or mutations as passing.
 
 If no host supplies a reading, a saved transport error takes precedence over a
 content-less answer. A credential rejection overrides that error and ends the
@@ -120,7 +135,7 @@ timeout error and the three requests to the expected hosts.
 
 ## Proof completion and retention
 
-Proof manifests start `incomplete` before setup and identify all ten expected
+Proof manifests start `incomplete` before setup and identify all twelve expected
 cases. They checkpoint each phase, record an error on abort, verify source
 restoration independently and become `succeeded` only after the full roster and
 final Git diff check. Consumers must require `is_complete(manifest)`, including

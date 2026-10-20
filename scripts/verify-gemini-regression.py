@@ -31,6 +31,7 @@ EXPECTED_CASES = [
     "scoped-transport", "original-provider-lower-usage",
     "scoped-rejection-continues", "scoped-rejection-keeps-timeout",
     "unbounded-project", "unbounded-quota",
+    "cancelled-request-starts", "cancelled-quota-accepted",
 ]
 
 
@@ -74,6 +75,16 @@ def mutations(text, original):
         ("unbounded-quota", unbounded_request(text),
          "ProviderHTTPTests/geminiBoundsScopedQuota",
          "Gemini bounds scoped quota so the alternate host can answer"),
+        ("cancelled-request-starts", replace_once(text,
+            "        try Task.checkCancellation()\n        // Preserve the original transport error",
+            "        // Preserve the original transport error"),
+         "ProviderHTTPTests/geminiCancellationBeforeRequest",
+         "Gemini cancellation before fetching starts no HTTP request"),
+        ("cancelled-quota-accepted", replace_once(text,
+            "        try Task.checkCancellation()\n        switch outcome {",
+            "        switch outcome {"),
+         "ProviderHTTPTests/geminiCancellationRejectsLateQuota",
+         "Gemini cancellation rejects a late scoped quota reading"),
     ]
 
 

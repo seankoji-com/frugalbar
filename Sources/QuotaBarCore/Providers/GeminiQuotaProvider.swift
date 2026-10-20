@@ -144,7 +144,6 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // a reading; only a credential rejection may overrule it.
         var transportFailure: Error?
         for base in bases {
-            try Task.checkCancellation()
             do {
                 // Scope before reading quota. A populated project-less summary
                 // can describe a different pool; its numbers cannot establish
@@ -208,7 +207,6 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 readings = read
                 break
             } catch {
-                try Task.checkCancellation()
                 NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
                 transportFailure = error
             }

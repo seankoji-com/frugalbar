@@ -20,6 +20,7 @@ final class URLProtocolStub: URLProtocol {
         let headers: [String: String]
         let body: Data
         var suspend: Bool = false
+        var responseGate: HTTPResponseGate?
     }
 
     private static let lock = NSLock()
@@ -103,12 +104,48 @@ final class URLProtocolStub: URLProtocol {
             httpVersion: "HTTP/1.1",
             headerFields: stub.headers
         )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: stub.body)
-        client?.urlProtocolDidFinishLoading(self)
+        let deliver = {
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: stub.body)
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+        if let gate = stub.responseGate {
+            gate.hold(deliver)
+        } else {
+            deliver()
+        }
     }
 
     override func stopLoading() {}
+}
+
+/// Holds a real stubbed URLSession response until the test releases it. The
+/// signal fires only after delivery is installed, so cancellation always
+/// precedes the response, without sleeping or racing a short request budget.
+final class HTTPResponseGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delivery: (() -> Void)?
+    private let held = AsyncStream<Void>.makeStream()
+
+    func hold(_ delivery: @escaping () -> Void) {
+        lock.lock()
+        self.delivery = delivery
+        lock.unlock()
+        held.continuation.yield(())
+        held.continuation.finish()
+    }
+
+    func waitUntilHeld() async {
+        for await _ in held.stream { break }
+    }
+
+    func release() {
+        lock.lock()
+        let deliver = delivery
+        delivery = nil
+        lock.unlock()
+        deliver?()
+    }
 }
 
 /// Builds a canned HTTP response body/status pair.
@@ -231,6 +268,77 @@ struct ProviderHTTPTests {
         case .success: Issue.record("A cancelled fetch must not return a reading")
         }
         #expect(URLProtocolStub.requestCount == 1)
+    }
+
+    @Test("Gemini cancellation before fetching starts no HTTP request")
+    func geminiCancellationBeforeRequest() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let start = AsyncStream<Void>.makeStream()
+        let result = try await withStubbedHTTP({ _ in
+            canned(body: #"{"cloudaicompanionProject":"selected-project"}"#)
+        }) {
+            let task = Task {
+                // Cancellation ends this nonthrowing wait too. Either way the
+                // provider cannot start until the task is already cancelled.
+                for await _ in start.stream { break }
+                return try await provider.fetchSnapshot()
+            }
+            task.cancel()
+            start.continuation.finish()
+            return await task.result
+        }
+        switch result {
+        case .failure(let error): #expect(error is CancellationError)
+        case .success: Issue.record("A fetch cancelled before HTTP must throw CancellationError")
+        }
+        #expect(URLProtocolStub.requestCount == 0)
+        #expect(URLProtocolStub.capturedRequests.isEmpty)
+    }
+
+    private func geminiRejectsCancelledResponse(path: String) async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let gate = HTTPResponseGate()
+        let result = try await withStubbedHTTP({ request in
+            let isProject = request.url?.path == "/v1internal:loadCodeAssist"
+            if !isProject {
+                #expect(extractBody(from: request) == Data(#"{"project":"selected-project"}"#.utf8))
+            }
+            var response = canned(body: isProject
+                ? #"{"cloudaicompanionProject":"selected-project"}"#
+                : #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0}]}]}"#)
+            if request.url?.path == path { response.responseGate = gate }
+            return response
+        }) {
+            let task = Task {
+                // The gate determines ordering. A generous bound keeps the
+                // production timeout from being the mechanism under test.
+                try await GeminiRequestBudget.$seconds.withValue(30) { try await provider.fetchSnapshot() }
+            }
+            await gate.waitUntilHeld()
+            task.cancel()
+            gate.release()
+            return await task.result
+        }
+        switch result {
+        case .failure(let error): #expect(error is CancellationError)
+        case .success: Issue.record("A response delivered after cancellation must not become a reading")
+        }
+        let expectedPaths = path == "/v1internal:loadCodeAssist"
+            ? ["/v1internal:loadCodeAssist"]
+            : ["/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"]
+        #expect(URLProtocolStub.requestCount == expectedPaths.count)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.path } == expectedPaths)
+        #expect(URLProtocolStub.capturedRequests.allSatisfy { $0.url?.host == "daily-cloudcode-pa.googleapis.com" })
+    }
+
+    @Test("Gemini cancellation rejects a late project response without requesting quota")
+    func geminiCancellationRejectsLateProject() async throws {
+        try await geminiRejectsCancelledResponse(path: "/v1internal:loadCodeAssist")
+    }
+
+    @Test("Gemini cancellation rejects a late scoped quota reading")
+    func geminiCancellationRejectsLateQuota() async throws {
+        try await geminiRejectsCancelledResponse(path: "/v1internal:retrieveUserQuotaSummary")
     }
 
     @Test("a quota transport failure preserves an independently read monthly entitlement")
