@@ -86,7 +86,7 @@ struct RegressionTests {
     /// Gemini looked like the healthiest provider on the list.
     @Test("both metered windows are rendered, and the fuller one drives urgency")
     func geminiRendersBothWindows() async throws {
-        let snap = try await GeminiHarness.snapshot(summary: Self.quotaSummary, assist: "{}")
+        let snap = try await GeminiHarness.snapshot(summary: Self.quotaSummary, assist: #"{"cloudaicompanionProject":"account-project"}"#)
         #expect(snap.bars.count == 2)
         #expect(snap.row1?.label == "5H")
         #expect(snap.row2?.label == "WK")
@@ -100,22 +100,31 @@ struct RegressionTests {
     @Test("the paid subscription is shown, not the Code Assist licence tier")
     func geminiShowsPaidSubscription() async throws {
         let assist = #"""
-        {"currentTier":{"id":"free-tier","name":"Antigravity"},
+        {"cloudaicompanionProject":"account-project","currentTier":{"id":"free-tier","name":"Antigravity"},
          "paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}
         """#
         let snap = try await GeminiHarness.snapshot(summary: Self.quotaSummary, assist: assist)
         #expect(snap.planName == "Google AI Pro")
     }
 
-    /// The plan is decoration. Losing it must not cost a reading we already
-    /// hold — an earlier revision made the whole provider fail when the
-    /// second call did not return what it expected.
-    @Test("a failed plan lookup still yields the quota")
+    /// The plan is decoration, but the project is required to attribute the
+    /// quota. A response with a project and no tier still supplies the reading.
+    @Test("a missing plan still yields the scoped quota")
     func geminiPlanIsBestEffort() async throws {
         let snap = try await GeminiHarness.snapshot(
-            summary: Self.quotaSummary, assist: "{}", assistStatus: 500)
+            summary: Self.quotaSummary, assist: #"{"cloudaicompanionProject":"account-project"}"#)
         #expect(snap.status.confidence == .measured)
         #expect(snap.bars.count == 2)
+        #expect(snap.planName == nil)
+        #expect(snap.metric == .subscription(tierName: nil, renewalDate: nil))
+    }
+
+    @Test("failed project discovery cannot vouch for an unscoped quota")
+    func geminiFailedProjectIsUnavailable() async throws {
+        let snap = try await GeminiHarness.snapshot(
+            summary: Self.quotaSummary, assist: "{}", assistStatus: 500)
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(snap.bars.isEmpty)
         #expect(snap.planName == nil)
     }
 
