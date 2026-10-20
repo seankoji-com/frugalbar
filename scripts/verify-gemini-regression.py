@@ -17,6 +17,11 @@ ORIGINAL_REVISION = "3cdfedfcb3bd6b9fe00f2d02c9291dc01a33ba2b"
 LOGS = ROOT / "coverage" / "gemini-mutations"
 SELECTOR = "ProviderHTTPTests/geminiScopesPopulatedSummary"
 DISPLAY = "Gemini scopes a populated summary before reporting the screenshot's exhausted weekly quota"
+# Include context unique to the quota-response branch, leaving project-lookup
+# rejection intact so it cannot mask either scoped-response regression.
+SCOPED_REJECTION = """                        // — so a re-sign-in would not even take effect at once.
+                        transportFailure = nil
+                        break"""
 
 
 def main():
@@ -43,6 +48,14 @@ def main():
         ("original-provider-lower-usage", original,
          "ProviderHTTPTests/geminiScopedQuotaIsNotMaximumAcrossPools",
          "Gemini uses the scoped quota even when an unscoped or other-host pool is more consumed"),
+        ("scoped-rejection-continues", replace_once(text, SCOPED_REJECTION,
+                                                   SCOPED_REJECTION.replace("break", "continue")),
+         "ProviderHTTPTests/geminiScopedRejectionEndsHostWalk",
+         "Gemini scoped quota credential rejection ends the default host walk"),
+        ("scoped-rejection-keeps-timeout", replace_once(text, SCOPED_REJECTION,
+                                                       SCOPED_REJECTION.replace("                        transportFailure = nil\n", "")),
+         "ProviderHTTPTests/geminiScopedRejectionOutranksStaleTransportFailure",
+         "Gemini scoped quota credential rejection clears an earlier host timeout"),
     ]
     manifest = {
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),

@@ -995,6 +995,50 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
+    @Test("Gemini scoped quota credential rejection ends the default host walk")
+    func geminiScopedRejectionEndsHostWalk() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return canned(status: 401, body: "{}")
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .unavailable(.credentialRejected))
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com",
+        ])
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.path } == [
+            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
+        ])
+    }
+
+    @Test("Gemini scoped quota credential rejection clears an earlier host timeout")
+    func geminiScopedRejectionOutranksStaleTransportFailure() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return canned(status: 401, body: "{}")
+        }) {
+            URLProtocolStub.nextFailureCode = .timedOut
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot()
+        }
+
+        #expect(snap.status == .unavailable(.credentialRejected))
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com",
+        ])
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.path } == [
+            "/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
+        ])
+    }
+
     /// The other half of that asymmetry: a 200 without a Gemini group does *not*
     /// overrule a host that never answered, because which host publishes the
     /// windows is exactly what differs between accounts — so it cannot stand in

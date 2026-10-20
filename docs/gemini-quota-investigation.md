@@ -57,6 +57,9 @@ five-hour bar. Dates and project IDs are test fixtures. A second test reverses
 the pressure relationship, proving the scoped pool wins even when it has less
 usage. Other cases cover missing projects, scoped HTTP/decode/transport failures,
 per-host project selection, separate model groups and disabled buckets.
+Two default-host tests reach credential rejection from the scoped summary,
+after a successful project lookup. One requires the walk to stop on the first
+host; the other requires a later rejection to override an earlier timeout.
 
 Run on a clean disposable macOS checkout:
 
@@ -72,6 +75,8 @@ The proof script restores the **entire original provider** from the pinned
 revision and requires the named test to fail by assertion, after a green control
 and before another green control. It also independently removes the project
 body and disabled-bucket filter and reverses fraction inversion. Only the
+scoped quota branch is mutated to continue after rejection or retain an earlier
+timeout, with a separate behavioural test for each defect. Only the
 intended Gemini cases run during mutation proof. It records revision, hashes,
 command arguments, working directory, exit status and test logs in
 `coverage/gemini-mutations/`. Compiler errors and empty selections do not count.
