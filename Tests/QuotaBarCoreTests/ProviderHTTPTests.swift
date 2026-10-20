@@ -19,6 +19,7 @@ final class URLProtocolStub: URLProtocol {
         let status: Int
         let headers: [String: String]
         let body: Data
+        var suspend: Bool = false
     }
 
     private static let lock = NSLock()
@@ -93,6 +94,9 @@ final class URLProtocolStub: URLProtocol {
             return
         }
         let stub = handler(request)
+        // Deliberately never answers. The provider must cancel the request at
+        // its own deadline; URLSession's real network timeout is not the test.
+        if stub.suspend { return }
         let response = HTTPURLResponse(
             url: url,
             statusCode: stub.status,
@@ -156,6 +160,78 @@ private let githubPayload = #"""
 
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
+
+    private func geminiBoundedFallback(stalledPath: String) async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let outcome = try await withStubbedHTTP({ request in
+            if request.url?.host == "daily-cloudcode-pa.googleapis.com",
+               request.url?.path == stalledPath {
+                var response = canned(body: "{}")
+                response.suspend = true
+                return response
+            }
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"alternate-project"}"#)
+            }
+            #expect(extractBody(from: request) == Data(#"{"project":"alternate-project"}"#.utf8))
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0}]}]}"#)
+        }) {
+            // A missing request bound returns a normal assertion failure below,
+            // rather than hanging the suite or accepting a process timeout.
+            await GeminiRequestBudget.$seconds.withValue(0.2) {
+                await withDeadline(seconds: 5) { try await provider.fetchSnapshot() }
+            }
+        }
+        switch outcome {
+        case .success(let snapshot):
+            #expect(snapshot.status == .measured(.critical))
+            #expect(snapshot.row1?.primaryFraction == 1)
+            #expect(snapshot.row1?.label == "WK")
+        case .failure(let reason):
+            Issue.record("The alternate host must supply a reading before the outer deadline: \(reason)")
+        }
+        let paths = URLProtocolStub.capturedRequests.map { $0.url?.path }
+        #expect(paths == (stalledPath == "/v1internal:loadCodeAssist"
+            ? ["/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"]
+            : ["/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"]))
+        #expect(URLProtocolStub.capturedRequests.suffix(2).allSatisfy {
+            $0.url?.host == "cloudcode-pa.googleapis.com"
+        })
+    }
+
+    @Test("Gemini bounds project lookup so the alternate host can answer")
+    func geminiBoundsProjectLookup() async throws {
+        try await geminiBoundedFallback(stalledPath: "/v1internal:loadCodeAssist")
+    }
+
+    @Test("Gemini bounds scoped quota so the alternate host can answer")
+    func geminiBoundsScopedQuota() async throws {
+        try await geminiBoundedFallback(stalledPath: "/v1internal:retrieveUserQuotaSummary")
+    }
+
+    @Test("Gemini cancellation prevents further host requests")
+    func geminiCancellationStopsHostWalk() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let started = AsyncStream<Void>.makeStream()
+        let result = try await withStubbedHTTP({ _ in
+            started.continuation.yield(())
+            var response = canned(body: "{}")
+            response.suspend = true
+            return response
+        }) {
+            let task = Task {
+                try await GeminiRequestBudget.$seconds.withValue(0.2) { try await provider.fetchSnapshot() }
+            }
+            for await _ in started.stream { break }
+            task.cancel()
+            return await task.result
+        }
+        switch result {
+        case .failure(let error): #expect(error is CancellationError)
+        case .success: Issue.record("A cancelled fetch must not return a reading")
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+    }
 
     @Test("a quota transport failure preserves an independently read monthly entitlement")
     func claudeMonthlyCreditSurvivesQuotaTransportFailure() async throws {
@@ -1048,8 +1124,8 @@ struct ProviderHTTPTests {
     @Test("a content-less answer does not overrule a host that never answered")
     func geminiContentLessAnswerDoesNotMaskTransportFailure() async throws {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
-        await #expect(throws: URLError.self) {
-            try await withStubbedHTTP({ request in
+        do {
+            _ = try await withStubbedHTTP({ request in
                 if request.url?.path == "/v1internal:loadCodeAssist" {
                     return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
                 }
@@ -1059,7 +1135,14 @@ struct ProviderHTTPTests {
                 URLProtocolStub.failNextRequest = true
                 return try await provider.fetchSnapshot()
             }
+            Issue.record("A content-less host answer must not hide the earlier timeout")
+        } catch {
+            #expect((error as? URLError)?.code == .timedOut)
         }
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com",
+        ])
     }
 
     /// The response also carries a "Claude and GPT models" group — a separate

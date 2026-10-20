@@ -140,11 +140,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var lastFailure: UnavailableReason?
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
-        // than turned into a reason here. It stands only while no host has
-        // spoken, and a credential rejection below is the one verdict allowed
-        // to overrule it.
+        // than turned into a reason here. It stands while no host has supplied
+        // a reading; only a credential rejection may overrule it.
         var transportFailure: Error?
         for base in bases {
+            try Task.checkCancellation()
             do {
                 // Scope before reading quota. A populated project-less summary
                 // can describe a different pool; its numbers cannot establish
@@ -208,6 +208,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 readings = read
                 break
             } catch {
+                try Task.checkCancellation()
                 NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
                 transportFailure = error
             }
@@ -267,7 +268,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         token: String, base: String, project: String
     ) async throws -> (Data, HTTPURLResponse) {
         let body = try JSONEncoder().encode(["project": project])
-        return try await QuotaHTTP.post(
+        return try await boundedPost(
             url: base + "retrieveUserQuotaSummary", body: body,
             headers: ["User-Agent": "antigravity"], auth: .bearer(token))
     }
@@ -324,9 +325,33 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     private static func loadCodeAssist(token: String, base: String) async throws -> (Data, HTTPURLResponse) {
         let body = try JSONEncoder().encode(
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
-        return try await QuotaHTTP.post(
+        return try await boundedPost(
             url: base + "loadCodeAssist", body: body,
             headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+    }
+
+    private static func boundedPost(
+        url: String, body: Data, headers: [String: String], auth: QuotaHTTP.Auth
+    ) async throws -> (Data, HTTPURLResponse) {
+        try Task.checkCancellation()
+        // Preserve the original transport error for the engine. withDeadline's
+        // own error mapping must not replace an offline URLError with timeout.
+        let outcome = await withDeadline(seconds: GeminiRequestBudget.seconds) {
+            do {
+                return Result<(Data, HTTPURLResponse), any Error>.success(
+                    try await QuotaHTTP.post(url: url, body: body, headers: headers, auth: auth))
+            } catch {
+                return .failure(error)
+            }
+        }
+        // withDeadline cancels its request task on expiry. Its unstructured
+        // work does not inherit later parent cancellation, so check again before
+        // accepting a response or allowing the host walk to continue.
+        try Task.checkCancellation()
+        switch outcome {
+        case .success(let result): return try result.get()
+        case .failure: throw URLError(.timedOut)
+        }
     }
 
     private static func parseDate(_ text: String) -> Date? {

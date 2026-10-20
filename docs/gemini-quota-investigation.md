@@ -85,6 +85,68 @@ and publishes `gemini-regression-proof`, including a production SwiftUI render
 of the representative weekly-only output. That render is a visual fixture,
 not a live or provider-parsing claim.
 
+## Post-publication review
+
+The project-first repair added two requests per host, so relying on the shared
+four-second URLSession request timeout could spend sixteen seconds within the
+engine's ten-second provider deadline. Each Gemini project lookup and scoped
+quota request now has its own two-second `withDeadline` bound. Four sequential
+requests have an eight-second request budget, leaving two seconds for setup,
+decoding and scheduling. Credential resolution still shares the engine's overall
+deadline; this budget does not promise a reading when credential refresh itself
+consumes that time. The shared provider timeout and deadline suite are unchanged.
+
+The bound cancels the losing URLSession task. Cancellation checks before requests,
+after bounded work and on the host-loop catch prevent a cancelled fetch from
+starting another host request or accepting a late response. The existing deadline
+helper uses unstructured work, so parent cancellation is observed by the provider
+at the next request boundary, at most one request budget later. Original transport
+errors remain intact through the bound; local deadline expiry throws a timeout.
+
+Two hermetic tests suspend a stubbed daily-host request indefinitely, once in
+project lookup and once in scoped quota, and require the plain host to supply its
+scoped weekly reading. Task-local test budgets shorten waits to 0.2 seconds; a
+separate five-second outer deadline turns removal of the bound into a normal
+assertion failure. Neither test asserts an elapsed duration derived from `Date()`.
+The proof adds `unbounded-project` and `unbounded-quota` cases that remove the
+bound and require assertion failures. A cancellation test requires one request
+only, and a budget test pins production headroom. Hosted execution is required
+before treating these new Swift tests or mutations as passing.
+
+Proof manifests now start `incomplete` before setup and identify all ten expected
+cases. They checkpoint each phase, record an error on abort, verify source
+restoration independently and become `succeeded` only after the full roster and
+final Git diff check. Consumers must require `is_complete(manifest)`, including
+the case/phase roster, exit codes and restored source hash. A new invocation
+invalidates an old successful manifest and clears prior logs before setup checks.
+An uncatchable process termination can leave an `incomplete` manifest and pending
+restoration, never a completed proof. Directory/storage failures can prevent an
+artifact from being written and remain process failures.
+
+`python3 scripts/test_verify_gemini_regression.py` exercises this bookkeeping
+offline without running or pretending to prove Swift behavior. It covers aborted
+baseline/mutant/restored phases, missing original revision, invalid mutation
+target, dirty checkout with stale logs, final-diff failure, interruption,
+in-progress status and restoration failure. Against the previous harness from
+`b9d3d8c982798464f05f24fc7ff59c047401b4fe`, the phase-abort and stale-success
+tests fail four assertions about missing failure status. The fixed harness passes
+before and after that substitution in disposable copies.
+
+Two review claims require no behavior change:
+
+- Transport preservation was already present in the post-loop guard:
+  `if let transportFailure { throw transportFailure }`.
+  `geminiContentLessAnswerDoesNotMaskTransportFailure` already covered a first-host
+  timeout followed by a content-less second-host answer. It now requires the
+  exact timeout error and three requests to the expected hosts. The guard and
+  credential-rejection precedence are preserved.
+- The Gemini proof step precedes rendering, and artifact upload has `if: always()`.
+  A failed render therefore cannot erase existing proof logs. Rendering remains
+  blocking; no `continue-on-error` or missing-file tolerance was added. The new
+  failed setup manifest also preserves evidence when the proof aborts before its
+  first case. A failure before the proof script starts can still leave no proof
+  output, which the upload correctly reports rather than presenting a proof.
+
 The prior tests that expected no project lookup for populated buckets, or
 preservation of an unscoped response after a failed project retry, described the
 unsafe fallback. They are replaced with project-required and scoped-failure

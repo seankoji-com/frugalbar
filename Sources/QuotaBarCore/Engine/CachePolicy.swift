@@ -28,9 +28,8 @@ public struct CachePolicy: Sendable {
     public static let `default` = CachePolicy(
         cacheTTL: 30,                    // popover opens are instant within 30s
         backgroundRefreshInterval: 120,  // 2 minute background poll
-        // Gemini and OpenRouter each issue two sequential requests, so the
-        // ceiling has to clear 2 x URLSession's 4s per-request budget or a slow
-        // network cancels them mid-second-call and they report nothing.
+        // OpenRouter needs 2 x URLSession's 4s request budget. Gemini bounds
+        // its four sequential project/quota requests to 2s each, also 8s.
         perProviderTimeout: 10,
         // Guards paid provider APIs from repeated "force refresh"
         // clicks; a vendor the user already refreshed within the last 30s is

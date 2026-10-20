@@ -12,12 +12,18 @@ struct CachePolicyTests {
         #expect(policy.minPollInterval == 30)
     }
 
-    /// Gemini and OpenRouter each issue two sequential requests under one
+    /// OpenRouter issues two sequential requests under one
     /// provider deadline. If the ceiling ever drops below twice URLSession's
     /// 4s per-request budget they get cancelled mid-second-call on a slow
     /// network and silently report nothing.
     @Test func defaultPolicy_clearsTwoSequentialRequests() {
         #expect(CachePolicy.default.perProviderTimeout >= 8)
+    }
+
+    @Test func geminiFourRequestBudgetLeavesEngineHeadroom() {
+        #expect(GeminiRequestBudget.seconds == 2)
+        #expect(Double(GeminiQuotaProvider.productionAPIHosts.count * 2)
+            * GeminiRequestBudget.seconds < CachePolicy.default.perProviderTimeout)
     }
 
     @Test func customPolicy_usesSuppliedValues() {

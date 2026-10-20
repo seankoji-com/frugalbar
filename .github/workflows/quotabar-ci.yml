@@ -52,6 +52,9 @@ jobs:
       - name: Verify monthly credit WebKit scripts offline
         run: node scripts/test-claude-monthly-credit-scripts.mjs
 
+      - name: Verify Gemini proof failure bookkeeping offline
+        run: python3 scripts/test_verify_gemini_regression.py
+
       # Warnings are how this project's defects announced themselves; treat
       # them as failures so the zero-warning state cannot silently rot.
       - name: Build (warnings are errors)
@@ -194,6 +197,8 @@ jobs:
           fetch-depth: 0
       - name: Select Xcode 16
         run: scripts/select-xcode.sh 16
+      - name: Verify Gemini proof failure bookkeeping offline
+        run: python3 scripts/test_verify_gemini_regression.py
       - name: Build mutation test baseline
         run: swift build -c debug --build-tests
       - name: Prove Gemini regression
@@ -201,6 +206,9 @@ jobs:
       - name: Render representative exhausted Gemini row
         run: FRUGALBAR_RENDER_DIR="$RUNNER_TEMP/gemini-renders" swift test -c debug --filter UXRenderTests/renderGemini
       - name: Preserve Gemini proof and render
+        # Proof is written before rendering; a failed render stays blocking and
+        # cannot erase the proof directory. Early proof failures write a failed
+        # manifest too, including setup failures before the first mutation.
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
