@@ -692,6 +692,28 @@ struct ProviderHTTPTests {
         }
     }
 
+    @Test("disabled and invalid scoped Gemini buckets remain unavailable")
+    func geminiScopedBucketsNeedReading() async throws {
+        for bucket in [
+            #"{"window":"5h","remainingFraction":0.5,"disabled":true}"#,
+            #"{"window":"weekly","remainingFraction":1.5}"#,
+            #"{"window":"weekly","remainingFraction":-0.5}"#,
+            #"{"window":"weekly"}"#
+        ] {
+            let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+            let snap = try await withStubbedHTTP({ request in
+                if request.url?.path == "/v1internal:loadCodeAssist" {
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }
+                return canned(body: "{\"groups\":[{\"displayName\":\"Gemini Models\",\"buckets\":[\(bucket)]}]}")
+            }) { try await provider.fetchSnapshot() }
+            #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
+            #expect(snap.bars.isEmpty)
+            #expect(snap.consumptionFraction == nil)
+            #expect(URLProtocolStub.requestCount == 2)
+        }
+    }
+
     @Test("Gemini with no key short-circuits without issuing a request")
     func geminiNoKeyNoRequest() async throws {
         let provider = GeminiQuotaProvider(accessToken: "")
