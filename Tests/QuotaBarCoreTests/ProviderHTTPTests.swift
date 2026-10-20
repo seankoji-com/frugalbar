@@ -19,6 +19,7 @@ final class URLProtocolStub: URLProtocol {
         let status: Int
         let headers: [String: String]
         let body: Data
+        var suspend: Bool = false
     }
 
     private static let lock = NSLock()
@@ -93,6 +94,9 @@ final class URLProtocolStub: URLProtocol {
             return
         }
         let stub = handler(request)
+        // Deliberately never answers. The provider must cancel the request at
+        // its own deadline; URLSession's real network timeout is not the test.
+        if stub.suspend { return }
         let response = HTTPURLResponse(
             url: url,
             statusCode: stub.status,
@@ -156,6 +160,78 @@ private let githubPayload = #"""
 
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
+
+    private func geminiBoundedFallback(stalledPath: String) async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let outcome = try await withStubbedHTTP({ request in
+            if request.url?.host == "daily-cloudcode-pa.googleapis.com",
+               request.url?.path == stalledPath {
+                var response = canned(body: "{}")
+                response.suspend = true
+                return response
+            }
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"alternate-project"}"#)
+            }
+            #expect(extractBody(from: request) == Data(#"{"project":"alternate-project"}"#.utf8))
+            return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0}]}]}"#)
+        }) {
+            // A missing request bound returns a normal assertion failure below,
+            // rather than hanging the suite or accepting a process timeout.
+            await GeminiRequestBudget.$seconds.withValue(0.2) {
+                await withDeadline(seconds: 5) { try await provider.fetchSnapshot() }
+            }
+        }
+        switch outcome {
+        case .success(let snapshot):
+            #expect(snapshot.status == .measured(.critical))
+            #expect(snapshot.row1?.primaryFraction == 1)
+            #expect(snapshot.row1?.label == "WK")
+        case .failure(let reason):
+            Issue.record("The alternate host must supply a reading before the outer deadline: \(reason)")
+        }
+        let paths = URLProtocolStub.capturedRequests.map { $0.url?.path }
+        #expect(paths == (stalledPath == "/v1internal:loadCodeAssist"
+            ? ["/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"]
+            : ["/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"]))
+        #expect(URLProtocolStub.capturedRequests.suffix(2).allSatisfy {
+            $0.url?.host == "cloudcode-pa.googleapis.com"
+        })
+    }
+
+    @Test("Gemini bounds project lookup so the alternate host can answer")
+    func geminiBoundsProjectLookup() async throws {
+        try await geminiBoundedFallback(stalledPath: "/v1internal:loadCodeAssist")
+    }
+
+    @Test("Gemini bounds scoped quota so the alternate host can answer")
+    func geminiBoundsScopedQuota() async throws {
+        try await geminiBoundedFallback(stalledPath: "/v1internal:retrieveUserQuotaSummary")
+    }
+
+    @Test("Gemini cancellation prevents further host requests")
+    func geminiCancellationStopsHostWalk() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let started = AsyncStream<Void>.makeStream()
+        let result = try await withStubbedHTTP({ _ in
+            started.continuation.yield(())
+            var response = canned(body: "{}")
+            response.suspend = true
+            return response
+        }) {
+            let task = Task {
+                try await GeminiRequestBudget.$seconds.withValue(0.2) { try await provider.fetchSnapshot() }
+            }
+            for await _ in started.stream { break }
+            task.cancel()
+            return await task.result
+        }
+        switch result {
+        case .failure(let error): #expect(error is CancellationError)
+        case .success: Issue.record("A cancelled fetch must not return a reading")
+        }
+        #expect(URLProtocolStub.requestCount == 1)
+    }
 
     @Test("a quota transport failure preserves an independently read monthly entitlement")
     func claudeMonthlyCreditSurvivesQuotaTransportFailure() async throws {
@@ -585,56 +661,132 @@ struct ProviderHTTPTests {
         #expect(snap.consumptionFraction == nil)
     }
 
-    @Test("Gemini retries an empty summary with Google's selected project")
-    func geminiRetriesWithSelectedProject() async throws {
-        let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+    /// Representative reconstruction of the screenshot, not a live capture.
+    /// A populated unscoped response must never suppress project selection.
+    @Test("Gemini scopes a populated summary before reporting the screenshot's exhausted weekly quota")
+    func geminiScopesPopulatedSummary() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/v1internal:loadCodeAssist" {
                 return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"name":"Google AI Pro"}}"#)
             }
             let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))) as? [String: String]
-            if body?["project"] == "account-project" {
-                return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.25}]}]}"#)
+            if body?["project"] != "account-project" {
+                // FrugalBar's old request path accepted these plausible values.
+                return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.77},{"bucketId":"gemini-5h","window":"5h","remainingFraction":1}]}]}"#)
             }
-            return canned(body: #"{"groups":[]}"#)
+            return canned(body: #"""
+            {"groups":[
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.552},
+                {"bucketId":"3p-5h","window":"5h","remainingFraction":1}]},
+              {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0,"resetTime":"2099-01-04T13:12:00Z"},
+                {"bucketId":"gemini-5h","window":"5h","remainingFraction":1,"disabled":true}]}]}
+            """#)
         }) { try await provider.fetchSnapshot() }
-        #expect(snap.status.confidence == .measured)
-        #expect(snap.row1?.primaryFraction == 0.75)
-        #expect(URLProtocolStub.requestCount == 4)
-        #expect(URLProtocolStub.capturedRequests.allSatisfy { $0.url?.host == "cloudcode-pa.googleapis.com" })
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "0% left")
+        #expect(snap.planName == "Google AI Pro")
+        #expect(snap.bars.count == 1)
+        #expect(snap.row1?.label == "WK")
+        #expect(snap.row1?.primaryFraction == 1)
+        #expect(snap.row1?.usedText == "100% used")
+        #expect(snap.row1?.resetsAt == ISO8601DateFormatter().date(from: "2099-01-04T13:12:00Z"))
+        #expect(snap.row2 == nil)
+        #expect(snap.row3 == nil)
+        #expect(snap.displayBars.allSatisfy { $0.label != "5H" })
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(URLProtocolStub.capturedRequests.map(\.url?.path) == [
+            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"
+        ])
     }
 
-    @Test("a throwing Gemini project retry preserves the initial summary")
-    func geminiRetryFailurePreservesInitialSummary() async throws {
-        for code in [URLError.Code.timedOut, .cannotConnectToHost] {
+    @Test("Gemini uses the scoped quota even when an unscoped or other-host pool is more consumed")
+    func geminiScopedQuotaIsNotMaximumAcrossPools() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"selected-project"}"#)
+            }
+            let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))) as? [String: String]
+            let selected = body?["project"] == "selected-project" && request.url?.host == "daily-cloudcode-pa.googleapis.com"
+            return canned(body: selected
+                ? #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.9}]}]}"#
+                : #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0}]}]}"#)
+        }) { try await provider.fetchSnapshot() }
+        #expect(snap.status == .measured(.none))
+        let fraction = try #require(snap.row1?.primaryFraction)
+        #expect(abs(fraction - 0.1) < 0.000_001)
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(URLProtocolStub.capturedRequests.allSatisfy { $0.url?.host == "daily-cloudcode-pa.googleapis.com" })
+    }
+
+    @Test("Gemini never reads an unscoped quota when project discovery is absent or malformed")
+    func geminiRequiresSelectedProject() async throws {
+        for body in ["{}", #"{"cloudaicompanionProject":"  "}"#, "not json"] {
             let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
-            let snap = try await withStubbedHTTP({ request in
-                if request.url?.path == "/v1internal:loadCodeAssist" {
-                    URLProtocolStub.nextFailureCode = code
-                    URLProtocolStub.failNextRequest = true
-                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
-                }
-                return canned(body: #"{"groups":[]}"#)
-            }) { try await provider.fetchSnapshot() }
-            #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
+            let snap = try await withStubbedHTTP({ _ in canned(body: body) }) { try await provider.fetchSnapshot() }
+            #expect(snap.status.confidence == .unavailable)
+            #expect(snap.bars.isEmpty)
             #expect(snap.consumptionFraction == nil)
-            #expect(URLProtocolStub.requestCount == 3)
+            #expect(URLProtocolStub.requestCount == 1)
+            #expect(URLProtocolStub.capturedRequests.first?.url?.path == "/v1internal:loadCodeAssist")
         }
     }
 
-    @Test("disabled or invalid Gemini buckets do not trigger project discovery")
-    func geminiPopulatedBucketsSkipProjectRetry() async throws {
-        for body in [
-            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5,"disabled":true}]}]}"#,
-            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":1.5}]}]}"#
+    @Test("a failed Gemini scoped quota is never replaced by a populated unscoped response")
+    func geminiScopedFailureDoesNotReadUnscopedQuota() async throws {
+        for status in [401, 404, 429, 503, 200] {
+            let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+            let snap = try await withStubbedHTTP({ request in
+                if request.url?.path == "/v1internal:loadCodeAssist" {
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }
+                let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))) as? [String: String]
+                if body?["project"] != nil { return canned(status: status, body: "not json") }
+                return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":1}]}]}"#)
+            }) { try await provider.fetchSnapshot() }
+            #expect(snap.status == .unavailable(QuotaHTTP.failureReason(for: status) ?? .badResponse))
+            #expect(snap.bars.isEmpty)
+            #expect(URLProtocolStub.requestCount == 2)
+        }
+    }
+
+    @Test("Gemini preserves scoped quota transport failures for the engine")
+    func geminiScopedTransportFailureIsRethrown() async throws {
+        for code in [URLError.Code.timedOut, .cannotConnectToHost] {
+            let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
+            await #expect(throws: URLError.self) {
+                try await withStubbedHTTP({ _ in
+                    URLProtocolStub.nextFailureCode = code
+                    URLProtocolStub.failNextRequest = true
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }) { try await provider.fetchSnapshot() }
+            }
+            #expect(URLProtocolStub.requestCount == 2)
+        }
+    }
+
+    @Test("disabled and invalid scoped Gemini buckets remain unavailable")
+    func geminiScopedBucketsNeedReading() async throws {
+        for bucket in [
+            #"{"window":"5h","remainingFraction":0.5,"disabled":true}"#,
+            #"{"window":"weekly","remainingFraction":1.5}"#,
+            #"{"window":"weekly","remainingFraction":-0.5}"#,
+            #"{"window":"weekly"}"#
         ] {
             let provider = GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:")
-            let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
-                try await provider.fetchSnapshot()
-            }
+            let snap = try await withStubbedHTTP({ request in
+                if request.url?.path == "/v1internal:loadCodeAssist" {
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }
+                return canned(body: "{\"groups\":[{\"displayName\":\"Gemini Models\",\"buckets\":[\(bucket)]}]}")
+            }) { try await provider.fetchSnapshot() }
             #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
-            #expect(URLProtocolStub.requestCount == 1)
-            #expect(URLProtocolStub.capturedRequests.first?.url?.path == "/v1internal:retrieveUserQuotaSummary")
+            #expect(snap.bars.isEmpty)
+            #expect(snap.consumptionFraction == nil)
+            #expect(URLProtocolStub.requestCount == 2)
         }
     }
 
@@ -653,7 +805,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.path == "/v1internal:loadCodeAssist" {
-                return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+                return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"name":"Google AI Pro"}}"#)
             }
             // The daily backend is the measured agy pool for this account.
             return canned(body: #"""
@@ -681,12 +833,12 @@ struct ProviderHTTPTests {
     func geminiUsesProductionEndpointByDefault() async throws {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         _ = try await withStubbedHTTP({ request in
-            if request.url?.absoluteString.contains("loadCodeAssist") == true { return canned(body: "{}") }
+            if request.url?.absoluteString.contains("loadCodeAssist") == true { return canned(body: #"{"cloudaicompanionProject":"account-project"}"#) }
             return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.5}]}]}"#)
         }) { try await provider.fetchSnapshot() }
         #expect(URLProtocolStub.capturedRequests.map(\.url?.absoluteString) == [
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
         ])
     }
 
@@ -696,7 +848,7 @@ struct ProviderHTTPTests {
         let snap = try await withStubbedHTTP({ _ in
             if URLProtocolStub.requestCount == 1 { return canned(status: 404, body: "") }
             if URLProtocolStub.requestCount == 2 { return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.5}]}]}"#) }
-            return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+            return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"name":"Google AI Pro"}}"#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(snap.status == .unavailable(.badResponse))
@@ -710,7 +862,7 @@ struct ProviderHTTPTests {
         let snap = try await withStubbedHTTP({ _ in
             if URLProtocolStub.requestCount == 1 { return canned(status: 503, body: "") }
             if URLProtocolStub.requestCount == 2 { return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.5}]}]}"#) }
-            return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+            return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"name":"Google AI Pro"}}"#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(snap.status == .unavailable(.badResponse))
@@ -742,7 +894,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#)
+                return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#)
             }
             return canned(body: #"""
             {"groups":[
@@ -779,8 +931,12 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: #"{"paidTier":{"name":"Google AI Pro"}}"#)
+                let project = request.url?.host == "daily-cloudcode-pa.googleapis.com" ? "daily-project" : "plain-project"
+                return canned(body: "{\"cloudaicompanionProject\":\"\(project)\",\"paidTier\":{\"name\":\"Google AI Pro\"}}")
             }
+            let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))) as? [String: String]
+            let expected = request.url?.host == "daily-cloudcode-pa.googleapis.com" ? "daily-project" : "plain-project"
+            guard body?["project"] == expected else { return canned(status: 401, body: "{}") }
             if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
                 // Exactly what the daily host returned for the reporting account.
                 return canned(body: #"""
@@ -823,7 +979,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
                 return canned(status: 503, body: "")
@@ -833,7 +989,7 @@ struct ProviderHTTPTests {
 
         #expect(snap.status == .measured(.none))
         #expect(abs((snap.row1?.primaryFraction ?? 0) - 0.10) < 0.000_01)
-        #expect(URLProtocolStub.capturedRequests.count == 3)
+        #expect(URLProtocolStub.capturedRequests.count == 4)
     }
 
     /// Neither host publishing a Gemini window is the one case that still reads
@@ -843,14 +999,13 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             return canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
         }) { try await provider.fetchSnapshot() }
 
         #expect(snap.status == .unavailable(.unsupported("Antigravity reported no Gemini quota")))
-        // Each host gets one summary and one project lookup. No project was
-        // published, so neither host gets a quota retry with an invented id.
+        // Each host gets its own project lookup and one scoped summary.
         #expect(URLProtocolStub.requestCount == 4)
     }
 
@@ -861,7 +1016,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             return canned(body: #"""
             {"groups":[{"displayName":"Gemini Models","buckets":[
@@ -882,7 +1037,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             if request.url?.host == "daily-cloudcode-pa.googleapis.com" {
                 return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5,"disabled":true}]}]}"#)
@@ -916,6 +1071,52 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
+    @Test("Gemini scoped quota credential rejection ends the default host walk")
+    func geminiScopedRejectionEndsHostWalk() async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return canned(status: 401, body: "{}")
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .unavailable(.credentialRejected))
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com",
+        ])
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.path } == [
+            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
+        ])
+    }
+
+    @Test("Gemini scoped quota credential rejection clears an earlier host timeout")
+    func geminiScopedRejectionOutranksStaleTransportFailure() async {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
+        // A thrown timeout must fail the status assertion too, rather than
+        // ending the test before it checks the credential verdict.
+        let snap = try? await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return canned(status: 401, body: "{}")
+        }) {
+            URLProtocolStub.nextFailureCode = .timedOut
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot()
+        }
+
+        #expect(snap?.status == .unavailable(.credentialRejected))
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com",
+        ])
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.path } == [
+            "/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
+        ])
+    }
+
     /// The other half of that asymmetry: a 200 without a Gemini group does *not*
     /// overrule a host that never answered, because which host publishes the
     /// windows is exactly what differs between accounts — so it cannot stand in
@@ -923,15 +1124,25 @@ struct ProviderHTTPTests {
     @Test("a content-less answer does not overrule a host that never answered")
     func geminiContentLessAnswerDoesNotMaskTransportFailure() async throws {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
-        await #expect(throws: URLError.self) {
-            try await withStubbedHTTP({ _ in
-                canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
+        do {
+            _ = try await withStubbedHTTP({ request in
+                if request.url?.path == "/v1internal:loadCodeAssist" {
+                    return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
+                }
+                return canned(body: #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.31}]}]}"#)
             }) {
                 URLProtocolStub.nextFailureCode = .timedOut
                 URLProtocolStub.failNextRequest = true
                 return try await provider.fetchSnapshot()
             }
+            Issue.record("A content-less host answer must not hide the earlier timeout")
+        } catch {
+            #expect((error as? URLError)?.code == .timedOut)
         }
+        #expect(URLProtocolStub.requestCount == 3)
+        #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
+            "daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com",
+        ])
     }
 
     /// The response also carries a "Claude and GPT models" group — a separate
@@ -942,7 +1153,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             return canned(body: #"""
             {"groups":[
@@ -1007,14 +1218,14 @@ struct ProviderHTTPTests {
         #expect(GeminiQuotaProvider.apiBase(from: "").invalid == false)
     }
 
-    /// Every quota and best-effort plan request must keep the token out of its
+    /// Every project and quota request must keep the token out of its
     /// URL.
     @Test("Gemini keeps the token out of every request URL, not just the first")
     func geminiTokenNeverInAnyURL() async throws {
         let provider = GeminiQuotaProvider(accessToken: "super-secret-key")
         _ = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             return canned(body: #"""
             {"groups":[{"displayName":"Gemini Models","buckets":[
@@ -1036,7 +1247,7 @@ struct ProviderHTTPTests {
         let provider = GeminiQuotaProvider(accessToken: "token")
         let snap = try await withStubbedHTTP({ request in
             if request.url?.absoluteString.contains("loadCodeAssist") == true {
-                return canned(body: "{}")
+                return canned(body: #"{"cloudaicompanionProject":"account-project"}"#)
             }
             return canned(body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h"}]}]}"#)
         }) { try await provider.fetchSnapshot() }

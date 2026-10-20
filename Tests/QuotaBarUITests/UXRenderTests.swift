@@ -17,6 +17,26 @@ struct UXRenderTests {
         func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
     }
 
+    /// Visual fixture only. ProviderHTTPTests exercises project selection and
+    /// parsing; this checks how its weekly-only output fits the production row.
+    @Test func renderGemini() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let reset = now.addingTimeInterval(85 * 3600 + 12 * 60)
+        let snapshot = QuotaSnapshot(id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+            status: .measured(.critical), resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 1, label: "WK", usedText: "100% used",
+                resetText: "Resets in 85h 12m", resetsAt: reset, windowLength: QuotaWindow.week),
+            badgeText: "0% left", planName: "Google AI Pro")
+        try await save(VStack(spacing: 12) {
+            Text("Representative fixture · weekly exhausted, 5H disabled").font(.caption)
+            MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
+        }.padding(12).frame(width: 384).background(Theme.surface),
+            name: "gemini-weekly-exhausted", directory: directory)
+    }
+
     @Test func render() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

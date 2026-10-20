@@ -131,6 +131,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         let now = Date()
         var resolvedBase: String?
+        var resolvedPlan: String?
         var resolvedGroup: QuotaSummary.Group?
         var readings: [Reading] = []
         // What the last host to answer said, when none of them published a
@@ -139,13 +140,33 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var lastFailure: UnavailableReason?
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
-        // than turned into a reason here. It stands only while no host has
-        // spoken, and a credential rejection below is the one verdict allowed
-        // to overrule it.
+        // than turned into a reason here. It stands while no host has supplied
+        // a reading; only a credential rejection may overrule it.
         var transportFailure: Error?
         for base in bases {
+            try Task.checkCancellation()
             do {
-                let (data, http) = try await Self.quotaSummary(token: token, base: base)
+                // Scope before reading quota. A populated project-less summary
+                // can describe a different pool; its numbers cannot establish
+                // that this account has allowance left.
+                let (assistData, assistHTTP) = try await Self.loadCodeAssist(token: token, base: base)
+                if let reason = QuotaHTTP.failureReason(for: assistHTTP.statusCode) {
+                    lastFailure = reason
+                    if reason == .credentialRejected {
+                        transportFailure = nil
+                        break
+                    }
+                    continue
+                }
+                guard let assist = try? JSONDecoder().decode(CodeAssist.self, from: assistData) else {
+                    lastFailure = .badResponse
+                    continue
+                }
+                guard let project = assist.cloudaicompanionProject?.trimmed, !project.isEmpty else {
+                    lastFailure = .unsupported("Antigravity did not identify a quota project")
+                    continue
+                }
+                let (data, http) = try await Self.quotaSummary(token: token, base: base, project: project)
                 if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
                     lastFailure = reason
                     // A rejected credential is a verdict on the token, not on
@@ -181,11 +202,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = .unsupported("Antigravity reported no Gemini quota")
                     continue
                 }
+                resolvedPlan = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name
                 resolvedBase = base
                 resolvedGroup = group
                 readings = read
                 break
             } catch {
+                try Task.checkCancellation()
                 NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
                 transportFailure = error
             }
@@ -209,15 +232,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let worst = ordered.map(\.used).max() ?? 0
         let urgency: Urgency = worst > 0.90 ? .critical : worst > 0.70 ? .warning : .none
 
-        // The plan is decoration, so it is fetched best-effort: losing it must
-        // not cost us a reading we already hold.
-        let plan = await Self.plan(token: token, bases: [base])
+        // The tier comes from the same host and account scope as the reading.
+        // Its absence never costs us a measured quota.
+        let plan = resolvedPlan
         let sourceHost = URL(string: base)?.host ?? base
         let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
         return QuotaSnapshot(
             id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
-            category: category, metric: .subscription(tierName: plan ?? displayName, renewalDate: nil),
+            category: category, metric: .subscription(tierName: plan, renewalDate: nil),
             status: .measured(urgency), resetsAt: ordered.first?.reset, lastUpdated: now,
             auxiliaryInfo: (group.description ?? "Live Antigravity subscription quota") + sourceSuffix,
             row1: ordered[safe: 0].map { $0.bar }, row2: ordered[safe: 1].map { $0.bar },
@@ -239,32 +262,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
-    /// Some accounts need the project selected by loadCodeAssist. An empty
-    /// project-less summary is not evidence that the account has no Gemini
-    /// allowance. Retry once with Google's project, never a guessed id.
+    /// Only Google's selected project scopes this account's quota. Never fall
+    /// back to a project-less response after a scoped request fails.
     private static func quotaSummary(
-        token: String, base: String
+        token: String, base: String, project: String
     ) async throws -> (Data, HTTPURLResponse) {
-        let initial = try await QuotaHTTP.post(
-            url: base + "retrieveUserQuotaSummary", body: Data("{}".utf8),
+        let body = try JSONEncoder().encode(["project": project])
+        return try await boundedPost(
+            url: base + "retrieveUserQuotaSummary", body: body,
             headers: ["User-Agent": "antigravity"], auth: .bearer(token))
-        guard (200...299).contains(initial.1.statusCode),
-              let summary = try? JSONDecoder().decode(QuotaSummary.self, from: initial.0),
-              (geminiGroup(in: summary)?.buckets?.isEmpty ?? true)
-        else { return initial }
-        guard let assist = await codeAssist(token: token, base: base),
-              let project = assist.cloudaicompanionProject?.trimmed, !project.isEmpty,
-              let body = try? JSONEncoder().encode(["project": project])
-        else { return initial }
-        do {
-            return try await QuotaHTTP.post(
-                url: base + "retrieveUserQuotaSummary", body: body,
-                headers: ["User-Agent": "antigravity"], auth: .bearer(token))
-        } catch {
-            // Project discovery is an optional second chance, not a reason
-            // to discard a response the vendor already sent.
-            return initial
-        }
     }
 
     private struct Reading {
@@ -316,37 +322,36 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
-    private static func plan(token: String, bases: [String]) async -> String? {
-        for base in bases {
-            guard let assist = await codeAssist(token: token, base: base) else { continue }
-            if let name = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name {
-                return name
+    private static func loadCodeAssist(token: String, base: String) async throws -> (Data, HTTPURLResponse) {
+        let body = try JSONEncoder().encode(
+            ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
+        return try await boundedPost(
+            url: base + "loadCodeAssist", body: body,
+            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+    }
+
+    private static func boundedPost(
+        url: String, body: Data, headers: [String: String], auth: QuotaHTTP.Auth
+    ) async throws -> (Data, HTTPURLResponse) {
+        try Task.checkCancellation()
+        // Preserve the original transport error for the engine. withDeadline's
+        // own error mapping must not replace an offline URLError with timeout.
+        let outcome = await withDeadline(seconds: GeminiRequestBudget.seconds) {
+            do {
+                return Result<(Data, HTTPURLResponse), any Error>.success(
+                    try await QuotaHTTP.post(url: url, body: body, headers: headers, auth: auth))
+            } catch {
+                return .failure(error)
             }
         }
-        return nil
-    }
-
-    private static func codeAssist(token: String, base: String) async -> CodeAssist? {
-        // Both plan decoration and project discovery use the same endpoint
-        // and budget. Neither may consume the whole provider deadline.
-        let result = await withDeadline(seconds: 2) {
-            await loadCodeAssist(token: token, base: base)
+        // withDeadline cancels its request task on expiry. Its unstructured
+        // work does not inherit later parent cancellation, so check again before
+        // accepting a response or allowing the host walk to continue.
+        try Task.checkCancellation()
+        switch outcome {
+        case .success(let result): return try result.get()
+        case .failure: throw URLError(.timedOut)
         }
-        if case .success(let assist) = result { return assist }
-        return nil
-    }
-
-    private static func loadCodeAssist(token: String, base: String) async -> CodeAssist? {
-        let body = try? JSONEncoder().encode(
-            ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
-        guard let body else { return nil }
-        guard let (data, http) = try? await QuotaHTTP.post(
-                url: base + "loadCodeAssist", body: body,
-                headers: ["User-Agent": "antigravity"], auth: .bearer(token)),
-                (200...299).contains(http.statusCode),
-                let assist = try? JSONDecoder().decode(CodeAssist.self, from: data)
-        else { return nil }
-        return assist
     }
 
     private static func parseDate(_ text: String) -> Date? {

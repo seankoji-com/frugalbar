@@ -61,13 +61,14 @@ CASES = [
     ("retry-after-cap", QUOTA_HTTP, "seconds > maximumRetryAfter ? maximumRetryAfter : ",
      "ProviderStatusTests/retryAfterDateClampsToADay",
      "a Retry-After longer than a day holds the automatic poll for a day, not forever"),
-    ("gemini-retry-failure", GEMINI, "            return initial\n",
-     "ProviderHTTPTests/geminiRetryFailurePreservesInitialSummary",
-     "a throwing Gemini project retry preserves the initial summary",
-     "            throw error\n"),
-    ("gemini-populated-buckets", GEMINI, "(geminiGroup(in: summary)?.buckets?.isEmpty ?? true)",
-     "ProviderHTTPTests/geminiPopulatedBucketsSkipProjectRetry",
-     "disabled or invalid Gemini buckets do not trigger project discovery", "true"),
+    ("gemini-scoped-transport", GEMINI, "                transportFailure = error\n",
+     "ProviderHTTPTests/geminiScopedTransportFailureIsRethrown",
+     "Gemini preserves scoped quota transport failures for the engine",
+     "                transportFailure = nil\n"),
+    ("gemini-project-body", GEMINI, 'let body = try JSONEncoder().encode(["project": project])',
+     "ProviderHTTPTests/geminiScopesPopulatedSummary",
+     "Gemini scopes a populated summary before reporting the screenshot's exhausted weekly quota",
+     'let body = Data("{}".utf8)'),
     ("tray-elapsed-window", MENU_BAR, "snapshot.quotaBars.compactMap",
      "MenuBarLimitingTests/ignoresUnreadableAndElapsed",
      "stale, unavailable and elapsed windows cannot supply the next limit", "snapshot.bars.compactMap"),
@@ -241,6 +242,7 @@ def run_test(name, phase, selector, display):
         raise RuntimeError(f"{name}/{phase}: unexpected test exit status {proc.returncode}")
     if phase == "mutant" and "recorded an issue" not in proc.stdout:
         raise RuntimeError(f"{name}: process failure is not an assertion failure")
+    return {"argv": proc.args, "cwd": str(ROOT), "exit_code": proc.returncode}
 
 
 def partition_cases(cases, shard_index=0, shard_count=1):

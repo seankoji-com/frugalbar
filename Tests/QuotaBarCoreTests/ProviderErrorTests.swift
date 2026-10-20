@@ -298,7 +298,7 @@ struct GeminiPlanTests {
     @Test("the paid subscription is preferred over the Code Assist licence tier")
     func paidTierWins() async throws {
         let body = #"""
-        {"currentTier":{"id":"free-tier","name":"Antigravity"},
+        {"cloudaicompanionProject":"account-project","currentTier":{"id":"free-tier","name":"Antigravity"},
          "paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}
         """#
         #expect(try await plan(from: body) == "Google AI Pro")
@@ -306,13 +306,13 @@ struct GeminiPlanTests {
 
     @Test("without a paid tier the reported tier name is used")
     func fallsBackToCurrentTier() async throws {
-        let body = #"{"currentTier":{"id":"free-tier","name":"Antigravity"}}"#
+        let body = #"{"cloudaicompanionProject":"account-project","currentTier":{"id":"free-tier","name":"Antigravity"}}"#
         #expect(try await plan(from: body) == "Antigravity")
     }
 
     @Test("no published tier asserts no plan at all")
     func noTierAssertsNothing() async throws {
-        #expect(try await plan(from: "{}") == nil)
+        #expect(try await plan(from: #"{"cloudaicompanionProject":"account-project"}"#) == nil)
     }
 }
 
