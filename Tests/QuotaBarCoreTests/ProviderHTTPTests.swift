@@ -1016,9 +1016,11 @@ struct ProviderHTTPTests {
     }
 
     @Test("Gemini scoped quota credential rejection clears an earlier host timeout")
-    func geminiScopedRejectionOutranksStaleTransportFailure() async throws {
+    func geminiScopedRejectionOutranksStaleTransportFailure() async {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
-        let snap = try await withStubbedHTTP({ request in
+        // A thrown timeout must fail the status assertion too, rather than
+        // ending the test before it checks the credential verdict.
+        let snap = try? await withStubbedHTTP({ request in
             if request.url?.path == "/v1internal:loadCodeAssist" {
                 return canned(body: #"{"cloudaicompanionProject":"p"}"#)
             }
@@ -1029,7 +1031,7 @@ struct ProviderHTTPTests {
             return try await provider.fetchSnapshot()
         }
 
-        #expect(snap.status == .unavailable(.credentialRejected))
+        #expect(snap?.status == .unavailable(.credentialRejected))
         #expect(URLProtocolStub.requestCount == 3)
         #expect(URLProtocolStub.capturedRequests.map { $0.url?.host } == [
             "daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com",
