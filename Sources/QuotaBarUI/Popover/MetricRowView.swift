@@ -235,7 +235,9 @@ struct MetricRowView: View {
                 size: Theme.rowAvatarSize
             )
 
-            // Two lines: vendor, then the plan the provider actually reported.
+            // The name, then the row's second line: the vendor's reset text for
+            // an exhausted row, otherwise the plan unless a group header
+            // already carries it.
             VStack(alignment: .leading, spacing: 1) {
                 Text(snapshot.rowTitle)
                     .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)

@@ -43,9 +43,10 @@ struct MetricSectionView: View {
                             snapshot: snap,
                             onSelect: onSelect,
                             forecast: forecasts[snap.id],
-                            // Only the section’s final row draws its hover forecast
-                            // above itself: every other row has a neighbour below, and the
-                            // last row of a group still has the next group’s header under it.
+                            // Only this card's final row draws its hover forecast above
+                            // itself: every other row has a row or group header below it.
+                            // A card rendered below this one puts content there, so this
+                            // is a per-card rule, not a per-popover one.
                             forecastAbove: index == groups.count - 1
                                 && snap.id == group.snapshots.last?.id,
                             balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
