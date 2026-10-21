@@ -35,11 +35,10 @@ struct MetricRowView: View {
         }
     }
 
-    /// The second line of the name column. An exhausted provider spends it on
-    /// the vendor's own reset text — the plan name is the least useful thing to
-    /// print about a quota you cannot currently use — and falls back to its plan
-    /// when the vendor published no reset rather than inventing one. A row that
-    /// is not exhausted shows its plan unless a group header already carries it.
+    /// The second line of the name column. Published exhausted reset text wins.
+    /// Otherwise draw the plan unless `suppressPlan`, when the header already
+    /// states it. A suppressed, exhausted workspace without reset text leaves
+    /// this slot empty too; it must not repeat the plan.
     private func subtitle(_ p: MetricRowPresentation) -> String {
         PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
     }
