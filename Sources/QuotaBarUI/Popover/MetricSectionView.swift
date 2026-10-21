@@ -26,28 +26,41 @@ struct MetricSectionView: View {
             }
             let groups = PopoverRowGrouping.groups(for: snapshots)
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                if let header = group.header {
-                    Text(header)
-                        .font(Theme.Typography.title)
-                        .tracking(Theme.Tracking.title)
-                        .foregroundStyle(Theme.onSurface)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                        .padding(.top, 8)
-                        .padding(.bottom, 2)
-                        .accessibilityAddTraits(.isHeader)
+                VStack(spacing: 0) {
+                    if let header = group.header {
+                        Text(header)
+                            .font(Theme.Typography.title)
+                            .tracking(Theme.Tracking.title)
+                            .foregroundStyle(Theme.onSurface)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    ForEach(group.snapshots) { snap in
+                        MetricRowView(
+                            snapshot: snap,
+                            onSelect: onSelect,
+                            forecast: forecasts[snap.id],
+                            // Only the section’s final row draws its hover forecast
+                            // above itself: every other row has a neighbour below, and the
+                            // last row of a group still has the next group’s header under it.
+                            forecastAbove: index == groups.count - 1
+                                && snap.id == group.snapshots.last?.id,
+                            balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
+                            isGrouped: group.isGrouped,
+                            suppressPlan: group.suppressPlan
+                        )
+                    }
                 }
-                ForEach(group.snapshots) { snap in
-                    MetricRowView(
-                        snapshot: snap,
-                        onSelect: onSelect,
-                        forecast: forecasts[snap.id],
-                        forecastAbove: snap.id == snapshots.last?.id,
-                        balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
-                        isGrouped: group.isGrouped,
-                        suppressPlan: group.suppressPlan
-                    )
-                }
+                // Header and rows read as one element in VoiceOver; the
+                // header trait on its own left the text floating among
+                // unrelated rows. Ungrouped rows keep the structure they
+                // had, so a single-instance vendor is untouched.
+                .modifier(GroupAccessibilityContainer(isGrouped: group.isGrouped))
+                // The hairline sits between groups, outside the container, so
+                // it never becomes part of a group's spoken element.
                 if index < groups.count - 1 {
                     Rectangle()
                         .fill(Theme.outlineVariant.opacity(0.22))
@@ -111,5 +124,19 @@ struct MetricSectionView: View {
         }
         .padding(.top, 8)
         .accessibilityHidden(true)
+    }
+}
+
+/// Ties a grouped run's header to the rows beneath it for VoiceOver, and leaves
+/// an ungrouped row exactly as it was.
+private struct GroupAccessibilityContainer: ViewModifier {
+    let isGrouped: Bool
+
+    func body(content: Content) -> some View {
+        if isGrouped {
+            content.accessibilityElement(children: .contain)
+        } else {
+            content
+        }
     }
 }

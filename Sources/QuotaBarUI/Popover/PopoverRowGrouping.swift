@@ -37,12 +37,19 @@ struct PopoverRowGrouping {
         return groups
     }
 
-    /// The same reset-first rule applies to grouped and standalone rows.
+    /// The reset-first rule applies to grouped and standalone rows alike: an
+    /// exhausted row states the reset the vendor published, falling back to its
+    /// plan when it published none; otherwise a grouped row drops the plan its
+    /// header already carries.
     static func subtitle(
         for snapshot: QuotaSnapshot, suppressPlan: Bool, presentation: MetricRowPresentation
     ) -> String {
-        if presentation.isExhausted, let reset = presentation.exhaustedResetText, !reset.isEmpty {
-            return reset
+        if presentation.isExhausted {
+            if let reset = presentation.exhaustedResetText, !reset.isEmpty { return reset }
+            // An exhausted row that published no reset still spends this line on
+            // its plan: returning "" collapsed the row to a single line and left
+            // the state carried by colour and the struck glyph alone.
+            return snapshot.shortPlanName
         }
         return suppressPlan ? "" : snapshot.shortPlanName
     }
