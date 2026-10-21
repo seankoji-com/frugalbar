@@ -51,6 +51,8 @@ public enum Theme {
     /// Comfortable row height. Two lines of 17pt/12.5pt text plus padding, or
     /// up to three stacked window bars, both land near this.
     public static let rowMinHeight: CGFloat = 56
+    /// Compact workspace rows under a shared vendor header.
+    public static let groupedRowMinHeight: CGFloat = 40
 
     /// Width of the vendor name column. Narrowed from 132 when the bars moved
     /// into the three-column window grid: the card's 332pt of content is

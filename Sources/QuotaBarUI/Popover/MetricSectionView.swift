@@ -2,7 +2,7 @@ import SwiftUI
 import QuotaBarCore
 
 /// A categorized section: one card holding the vendor rows for that category,
-/// hairline-separated.
+/// with hairlines between vendor groups and standalone rows.
 struct MetricSectionView: View {
 
     let category: MetricCategory
@@ -24,16 +24,31 @@ struct MetricSectionView: View {
             if showsColumnHeader {
                 columnHeader
             }
-            ForEach(Array(snapshots.enumerated()), id: \.element.id) { index, snap in
-                MetricRowView(
-                    snapshot: snap,
-                    onSelect: onSelect,
-                    forecast: forecasts[snap.id],
-                    forecastAbove: index == snapshots.count - 1,
-                    balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? []
-                )
-
-                if index < snapshots.count - 1 {
+            let groups = PopoverRowGrouping.groups(for: snapshots)
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                if let header = group.header {
+                    Text(header)
+                        .font(Theme.Typography.title)
+                        .tracking(Theme.Tracking.title)
+                        .foregroundStyle(Theme.onSurface)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                        .padding(.top, 8)
+                        .padding(.bottom, 2)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                ForEach(group.snapshots) { snap in
+                    MetricRowView(
+                        snapshot: snap,
+                        onSelect: onSelect,
+                        forecast: forecasts[snap.id],
+                        forecastAbove: snap.id == snapshots.last?.id,
+                        balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
+                        isGrouped: group.isGrouped,
+                        suppressPlan: group.suppressPlan
+                    )
+                }
+                if index < groups.count - 1 {
                     Rectangle()
                         .fill(Theme.outlineVariant.opacity(0.22))
                         .frame(height: 0.5)
