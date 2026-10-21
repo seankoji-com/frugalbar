@@ -20,6 +20,9 @@ struct MetricRowView: View {
     /// history yet — in which case nothing is drawn rather than a flat line.
     var balancePoints: [BalancePoint] = []
 
+    var isGrouped: Bool = false
+    var suppressPlan: Bool = false
+
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var isHovered = false
@@ -32,15 +35,12 @@ struct MetricRowView: View {
         }
     }
 
-    /// The second line of the name column. An exhausted provider spends it on
-    /// the vendor's own reset text — the plan name is the least useful thing to
-    /// print about a quota you cannot currently use. Falls back to the plan
-    /// when the vendor published no reset rather than inventing one.
+    /// The second line of the name column. Published exhausted reset text wins.
+    /// Otherwise draw the plan unless `suppressPlan`, when the header already
+    /// states it. A suppressed, exhausted workspace without reset text leaves
+    /// this slot empty too; it must not repeat the plan.
     private func subtitle(_ p: MetricRowPresentation) -> String {
-        if p.isExhausted, let reset = p.exhaustedResetText, !reset.isEmpty {
-            return reset
-        }
-        return snapshot.shortPlanName
+        PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
     }
 
     private func subtitleColor(_ p: MetricRowPresentation) -> Color {
@@ -110,8 +110,8 @@ struct MetricRowView: View {
                 .padding(.leading, Theme.gridLeadingInset)
             }
         }
-        .padding(.vertical, 8)
-        .frame(minHeight: Theme.rowMinHeight)
+        .padding(.vertical, isGrouped ? 4 : 8)
+        .frame(minHeight: isGrouped ? Theme.groupedRowMinHeight : Theme.rowMinHeight)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
@@ -235,12 +235,14 @@ struct MetricRowView: View {
                 size: Theme.rowAvatarSize
             )
 
-            // Two lines: vendor, then the plan the provider actually reported.
+            // The name, then the row's second line: the vendor's reset text for
+            // an exhausted row, otherwise the plan unless a group header
+            // already carries it.
             VStack(alignment: .leading, spacing: 1) {
                 Text(snapshot.rowTitle)
-                    .font(Theme.Typography.title)
-                    .tracking(Theme.Tracking.title)
-                    .foregroundStyle(Theme.onSurface)
+                    .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
+                    .tracking(isGrouped ? 0 : Theme.Tracking.title)
+                    .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
                     .lineLimit(snapshot.instanceIdOrNil == nil ? 1 : 2)
                     .fixedSize(horizontal: false, vertical: true)
                     .minimumScaleFactor(0.85)

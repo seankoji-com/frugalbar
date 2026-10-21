@@ -27,8 +27,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// logo is reserved for nothing-left-at-all.
     public let isExhausted: Bool
     /// What the vendor published about when the exhausted window reopens, e.g.
-    /// "Resets on 1st of month". nil when it published nothing, in which case
-    /// the row keeps showing the plan name rather than inventing a date.
+    /// "Resets on 1st of month". nil means it published nothing; no date is
+    /// invented. The row uses the published reset text, otherwise the plan
+    /// unless the group header already states it, in which case a suppressed
+    /// row draws no second line.
     public let exhaustedResetText: String?
     /// Banked reset credits the vendor says the account holds (one ticket glyph
     /// each). nil when it published no such figure — which is *not* the same as

@@ -2,7 +2,7 @@ import SwiftUI
 import QuotaBarCore
 
 /// A categorized section: one card holding the vendor rows for that category,
-/// hairline-separated.
+/// with hairlines between vendor groups and standalone rows.
 struct MetricSectionView: View {
 
     let category: MetricCategory
@@ -24,16 +24,45 @@ struct MetricSectionView: View {
             if showsColumnHeader {
                 columnHeader
             }
-            ForEach(Array(snapshots.enumerated()), id: \.element.id) { index, snap in
-                MetricRowView(
-                    snapshot: snap,
-                    onSelect: onSelect,
-                    forecast: forecasts[snap.id],
-                    forecastAbove: index == snapshots.count - 1,
-                    balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? []
-                )
-
-                if index < snapshots.count - 1 {
+            let groups = PopoverRowGrouping.groups(for: snapshots)
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                VStack(spacing: 0) {
+                    if let header = group.header {
+                        Text(header)
+                            .font(Theme.Typography.title)
+                            .tracking(Theme.Tracking.title)
+                            .foregroundStyle(Theme.onSurface)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    ForEach(group.snapshots) { snap in
+                        MetricRowView(
+                            snapshot: snap,
+                            onSelect: onSelect,
+                            forecast: forecasts[snap.id],
+                            // Only this card's final row draws its hover forecast above
+                            // itself: every other row has a row or group header below it.
+                            // A card rendered below this one puts content there, so this
+                            // is a per-card rule, not a per-popover one.
+                            forecastAbove: index == groups.count - 1
+                                && snap.id == group.snapshots.last?.id,
+                            balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
+                            isGrouped: group.isGrouped,
+                            suppressPlan: group.suppressPlan
+                        )
+                    }
+                }
+                // Header and rows read as one element in VoiceOver; the
+                // header trait on its own left the text floating among
+                // unrelated rows. Ungrouped rows keep the structure they
+                // had, so a single-instance vendor is untouched.
+                .modifier(GroupAccessibilityContainer(isGrouped: group.isGrouped))
+                // The hairline sits between groups, outside the container, so
+                // it never becomes part of a group's spoken element.
+                if index < groups.count - 1 {
                     Rectangle()
                         .fill(Theme.outlineVariant.opacity(0.22))
                         .frame(height: 0.5)
@@ -96,5 +125,19 @@ struct MetricSectionView: View {
         }
         .padding(.top, 8)
         .accessibilityHidden(true)
+    }
+}
+
+/// Ties a grouped run's header to the rows beneath it for VoiceOver, and leaves
+/// an ungrouped row exactly as it was.
+private struct GroupAccessibilityContainer: ViewModifier {
+    let isGrouped: Bool
+
+    func body(content: Content) -> some View {
+        if isGrouped {
+            content.accessibilityElement(children: .contain)
+        } else {
+            content
+        }
     }
 }

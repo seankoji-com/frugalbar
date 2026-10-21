@@ -102,7 +102,10 @@ struct MetricRowExhaustionTests {
             now: now
         )
         #expect(p.isExhausted)
-        // The row falls back to the plan name rather than inventing a date.
+        // No published reset means no reset text; no date is invented.
+        // The row shows published reset text, otherwise the plan unless the
+        // group header already states it — in which case a suppressed row has no second line.
+        // This assertion checks only the absence of reset text.
         #expect(p.exhaustedResetText == nil)
     }
 
