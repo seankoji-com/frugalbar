@@ -1,5 +1,61 @@
 # Gemini quota scoping regression
 
+## Follow-up: CLI request identity
+
+On 22 October 2026 (Australia/Sydney), a live comparison reproduced a further
+source difference after the project-scoping repair. With the same access token,
+host, selected project and request body, `User-Agent: antigravity` returned only
+the Claude/GPT group. `antigravity/cli` without a version did the same.
+`antigravity/cli/1.4.3` returned both groups, with Gemini weekly remaining 0%
+and its five-hour bucket disabled, matching the new `agy` screenshot. The
+Claude/GPT weekly fraction was 0.5519576 in both responses. Both production
+hosts reproduced this difference. A separate comparison using the local CLI's
+renewed credential also reproduced it. Tokens were renewed in memory for these
+read-only requests; credential files were not changed.
+
+The provider now sends the verified versioned CLI identity on project lookup
+and quota requests. It still reads only Gemini's group and excludes disabled
+buckets. Changing client identity, rather than choosing a higher fraction from
+another pool, exposed the measured Gemini quota. The earlier project repair
+remains in place. The historical investigation below did not test this identity
+difference and did not establish the cause of this later report.
+
+`antigravity/cli/1.4.3` is a pinned compatibility header, not FrugalBar's version
+or a promise that Google will continue accepting it. Recheck the same-account
+response comparison if Google's client routing changes. These probes did not
+compare CLI version 1.4.2 with 1.4.3 and do not establish a minimum accepted
+version.
+
+The account model watcher intentionally retains `User-Agent: antigravity`. It reads
+`fetchAvailableModels`, not `retrieveUserQuotaSummary`; this investigation did
+not compare that endpoint's catalogs across headers. Changing that independent
+model-discovery path would need its own evidence and regression coverage.
+
+`ProviderHTTPTests/geminiCLIRequestIdentity` models the observed header-dependent
+response on each host. It requires a critical weekly bar at 100% used, the
+published reset, no five-hour bar, a project-scoped request and the CLI identity
+on both requests. Fixtures use an artificial project and future reset date.
+The mutation proof independently restores the old header at each call site.
+The project mutant must fail the project request's explicit header assertion;
+no header-dependent project response is claimed or invented. The quota mutant
+must fail the quota request's explicit header assertion and the snapshot
+assertions, because the fixture omits Gemini with the old quota header.
+Swift execution and assertion-red mutation proof require macOS; local Python
+checks validate only proof bookkeeping. The `verify-gemini-mutations` label opts
+a same-repository PR into proof on opening, reopening and every subsequent push
+(`synchronize`) while that label remains present. Do not remove/reapply it after
+each push. Adding a label alone does not start or cancel CI; to prove an existing
+head immediately, dispatch `quotabar-ci.yml` on its branch with
+`verify_gemini_mutations: true`. Removing the label opts subsequent PR runs out
+of this optional proof. Check the successful proof run's head before using it as
+evidence. The label remains available after this branch is gone.
+
+This proves the remote request difference, not which credential, API override
+or cached reading the installed Mac build used. The corrected Mac build still
+needs to be built, tested and refreshed before claiming live UI acceptance.
+
+## Original project-scoping investigation
+
 Investigation date: 20 October 2026 (Australia/Sydney).
 
 At the screenshot capture, Antigravity CLI 1.4.2 showed Gemini weekly remaining
@@ -135,7 +191,7 @@ timeout error and the three requests to the expected hosts.
 
 ## Proof completion and retention
 
-Proof manifests start `incomplete` before setup and identify all twelve expected
+Proof manifests start `incomplete` before setup and identify all fourteen expected
 cases. They checkpoint each phase, record an error on abort, verify source
 restoration independently and become `succeeded` only after the full roster and
 final Git diff check. Consumers must require `is_complete(manifest)`, including

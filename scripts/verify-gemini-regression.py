@@ -32,6 +32,7 @@ EXPECTED_CASES = [
     "scoped-rejection-continues", "scoped-rejection-keeps-timeout",
     "unbounded-project", "unbounded-quota",
     "cancelled-request-starts", "cancelled-quota-accepted",
+    "project-client-identity", "quota-client-identity",
 ]
 
 
@@ -85,6 +86,16 @@ def mutations(text, original):
             "        switch outcome {"),
          "ProviderHTTPTests/geminiCancellationRejectsLateQuota",
          "Gemini cancellation rejects a late scoped quota reading"),
+        ("project-client-identity", replace_once(text,
+            'url: base + "loadCodeAssist", body: body,\n            headers: ["User-Agent": quotaUserAgent]',
+            'url: base + "loadCodeAssist", body: body,\n            headers: ["User-Agent": "antigravity"]'),
+         "ProviderHTTPTests/geminiCLIRequestIdentity",
+         "Gemini requests the CLI quota pool on both project and summary requests"),
+        ("quota-client-identity", replace_once(text,
+            'url: base + "retrieveUserQuotaSummary", body: body,\n            headers: ["User-Agent": quotaUserAgent]',
+            'url: base + "retrieveUserQuotaSummary", body: body,\n            headers: ["User-Agent": "antigravity"]'),
+         "ProviderHTTPTests/geminiCLIRequestIdentity",
+         "Gemini requests the CLI quota pool on both project and summary requests"),
     ]
 
 

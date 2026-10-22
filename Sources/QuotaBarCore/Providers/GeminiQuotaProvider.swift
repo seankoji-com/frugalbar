@@ -20,6 +20,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
     static let productionAPIBase = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 
+    /// This API selects quota groups by client identity. The bare
+    /// "antigravity" agent (and even "antigravity/cli" without a version)
+    /// returned only Claude/GPT for an account whose Gemini week was spent.
+    /// Use the versioned CLI identity verified against that account on both
+    /// hosts. This is a protocol identity, not FrugalBar's app version.
+    static let quotaUserAgent = "antigravity/cli/1.4.3"
+
     /// The hosts to ask, in order, when no base was configured.
     ///
     /// Neither host is authoritative on its own. For some accounts the daily
@@ -268,7 +275,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let body = try JSONEncoder().encode(["project": project])
         return try await boundedPost(
             url: base + "retrieveUserQuotaSummary", body: body,
-            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+            headers: ["User-Agent": quotaUserAgent], auth: .bearer(token))
     }
 
     private struct Reading {
@@ -325,7 +332,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
         return try await boundedPost(
             url: base + "loadCodeAssist", body: body,
-            headers: ["User-Agent": "antigravity"], auth: .bearer(token))
+            headers: ["User-Agent": quotaUserAgent], auth: .bearer(token))
     }
 
     private static func boundedPost(
