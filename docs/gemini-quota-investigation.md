@@ -26,7 +26,7 @@ response comparison if Google's client routing changes. These probes did not
 compare CLI version 1.4.2 with 1.4.3 and do not establish a minimum accepted
 version.
 
-The account model watcher intentionally retains its existing identity. It reads
+The account model watcher intentionally retains `User-Agent: antigravity`. It reads
 `fetchAvailableModels`, not `retrieveUserQuotaSummary`; this investigation did
 not compare that endpoint's catalogs across headers. Changing that independent
 model-discovery path would need its own evidence and regression coverage.
@@ -41,10 +41,14 @@ no header-dependent project response is claimed or invented. The quota mutant
 must fail the quota request's explicit header assertion and the snapshot
 assertions, because the fixture omits Gemini with the old quota header.
 Swift execution and assertion-red mutation proof require macOS; local Python
-checks validate only proof bookkeeping. Add the `verify-gemini-mutations` label
-to a same-repository PR to run the proof automatically (including when the label
-is first added), or dispatch `quotabar-ci.yml` with `verify_gemini_mutations`.
-The label remains available for future Gemini changes after this branch is gone.
+checks validate only proof bookkeeping. The `verify-gemini-mutations` label opts
+a same-repository PR into proof on opening, reopening and every subsequent push
+(`synchronize`) while that label remains present. Do not remove/reapply it after
+each push. Adding a label alone does not start or cancel CI; to prove an existing
+head immediately, dispatch `quotabar-ci.yml` on its branch with
+`verify_gemini_mutations: true`. Removing the label opts subsequent PR runs out
+of this optional proof. Check the successful proof run's head before using it as
+evidence. The label remains available after this branch is gone.
 
 This proves the remote request difference, not which credential, API override
 or cached reading the installed Mac build used. The corrected Mac build still
