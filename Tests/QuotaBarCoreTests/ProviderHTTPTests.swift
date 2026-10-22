@@ -808,8 +808,10 @@ struct ProviderHTTPTests {
             "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"
         ])
         #expect(requests.allSatisfy { $0.url?.host == URL(string: base)?.host })
-        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3" })
+        let projectRequest = try #require(requests.first)
         let quotaRequest = try #require(requests.last)
+        #expect(projectRequest.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3")
+        #expect(quotaRequest.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3")
         let body = try JSONSerialization.jsonObject(with: extractBody(from: quotaRequest)) as? [String: String]
         #expect(body == ["project": "account-project"])
     }

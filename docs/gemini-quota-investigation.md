@@ -20,13 +20,31 @@ another pool, exposed the measured Gemini quota. The earlier project repair
 remains in place. The historical investigation below did not test this identity
 difference and did not establish the cause of this later report.
 
+`antigravity/cli/1.4.3` is a pinned compatibility header, not FrugalBar's version
+or a promise that Google will continue accepting it. Recheck the same-account
+response comparison if Google's client routing changes. These probes did not
+compare CLI version 1.4.2 with 1.4.3 and do not establish a minimum accepted
+version.
+
+The account model watcher intentionally retains its existing identity. It reads
+`fetchAvailableModels`, not `retrieveUserQuotaSummary`; this investigation did
+not compare that endpoint's catalogs across headers. Changing that independent
+model-discovery path would need its own evidence and regression coverage.
+
 `ProviderHTTPTests/geminiCLIRequestIdentity` models the observed header-dependent
 response on each host. It requires a critical weekly bar at 100% used, the
 published reset, no five-hour bar, a project-scoped request and the CLI identity
 on both requests. Fixtures use an artificial project and future reset date.
-The mutation proof independently restores the old header on project lookup and
-on quota lookup. Swift execution and assertion-red mutation proof still require
-macOS; local Python checks validate only proof bookkeeping.
+The mutation proof independently restores the old header at each call site.
+The project mutant must fail the project request's explicit header assertion;
+no header-dependent project response is claimed or invented. The quota mutant
+must fail the quota request's explicit header assertion and the snapshot
+assertions, because the fixture omits Gemini with the old quota header.
+Swift execution and assertion-red mutation proof require macOS; local Python
+checks validate only proof bookkeeping. Add the `verify-gemini-mutations` label
+to a same-repository PR to run the proof automatically (including when the label
+is first added), or dispatch `quotabar-ci.yml` with `verify_gemini_mutations`.
+The label remains available for future Gemini changes after this branch is gone.
 
 This proves the remote request difference, not which credential, API override
 or cached reading the installed Mac build used. The corrected Mac build still
