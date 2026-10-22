@@ -769,6 +769,51 @@ struct ProviderHTTPTests {
         #expect(snap.consumptionFraction == nil)
     }
 
+    @Test("Gemini requests the CLI quota pool on both project and summary requests", arguments: [
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:",
+        "https://cloudcode-pa.googleapis.com/v1internal:"
+    ])
+    func geminiCLIRequestIdentity(base: String) async throws {
+        let provider = GeminiQuotaProvider(accessToken: "token", environment: ["FRUGALBAR_GEMINI_API_BASE": base])
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v1internal:loadCodeAssist" {
+                return canned(body: #"{"cloudaicompanionProject":"account-project","paidTier":{"name":"Google AI Pro"}}"#)
+            }
+            // A representative of the live response difference on 22 October
+            // 2026. Changing only the User-Agent exposed Gemini's spent week;
+            // the bare agent returned just the independent Claude/GPT pool.
+            // Keep this literal independent of the production constant.
+            let gemini = request.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3"
+                ? #"{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0,"resetTime":"2099-01-04T13:12:00Z"},{"bucketId":"gemini-5h","window":"5h","remainingFraction":1,"disabled":true}]},"#
+                : ""
+            return canned(body: """
+            {"groups":[\(gemini){"displayName":"Claude and GPT models","buckets":[
+              {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.5519576},
+              {"bucketId":"3p-5h","window":"5h","remainingFraction":1}]}]}
+            """)
+        }) { try await provider.fetchSnapshot() }
+
+        #expect(snap.status == .measured(.critical))
+        #expect(snap.badgeText == "0% left")
+        #expect(snap.bars.count == 1)
+        #expect(snap.row1?.label == "WK")
+        #expect(snap.row1?.primaryFraction == 1)
+        #expect(snap.row1?.usedText == "100% used")
+        #expect(snap.row1?.resetsAt == ISO8601DateFormatter().date(from: "2099-01-04T13:12:00Z"))
+        #expect(snap.row2 == nil)
+        #expect(snap.row3 == nil)
+        #expect(URLProtocolStub.requestCount == 2)
+        let requests = URLProtocolStub.capturedRequests
+        #expect(requests.map(\.url?.path) == [
+            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary"
+        ])
+        #expect(requests.allSatisfy { $0.url?.host == URL(string: base)?.host })
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3" })
+        let quotaRequest = try #require(requests.last)
+        let body = try JSONSerialization.jsonObject(with: extractBody(from: quotaRequest)) as? [String: String]
+        #expect(body == ["project": "account-project"])
+    }
+
     /// Representative reconstruction of the screenshot, not a live capture.
     /// A populated unscoped response must never suppress project selection.
     @Test("Gemini scopes a populated summary before reporting the screenshot's exhausted weekly quota")

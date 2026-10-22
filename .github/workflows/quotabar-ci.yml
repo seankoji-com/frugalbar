@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       verify_gemini_mutations:
-        description: Prove Gemini project scoping against the original provider and focused defects
+        description: Prove Gemini project scoping and CLI request identity against focused defects
         type: boolean
         default: false
       verify_mutations:
@@ -187,7 +187,7 @@ jobs:
 
   gemini-regression:
     name: Gemini regression proof (macOS)
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_gemini_mutations
+    if: (github.event_name == 'workflow_dispatch' && inputs.verify_gemini_mutations) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 't3/fix-gemini-quota-group-read')
     runs-on: macos-15
     timeout-minutes: 15
     steps:
