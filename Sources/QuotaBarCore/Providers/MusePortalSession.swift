@@ -126,7 +126,12 @@ public final class MusePortalSession: ObservableObject {
         }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: payload.retryAfter, now: now)
         teams = payload.teams ?? []
-        message = payload.failure == "http"
+        message = payload.failure == "timedOut"
+            ? "The Muse portal request timed out. Refresh to try again."
+            : payload.failure == "http" && (payload.httpStatus == 401 || payload.httpStatus == 403)
+                && retryNotBefore == nil
+            ? "Sign in again to the Muse portal in Settings → API Keys → Muse portal quota."
+            : payload.failure == "http"
             ? "The Muse portal request failed. Retry after the portal's cooldown, if supplied."
             : payload.failure == nil
             ? "Select the team that holds your Muse subscription. The account and plan must match your CLI login."
@@ -179,7 +184,9 @@ public final class MusePortalSession: ObservableObject {
         window_resets_at:q.window_resets_at, window_duration_secs:q.window_duration_secs,
         weekly_weighted_used:q.weekly_weighted_used, weekly_weighted_limit:q.weekly_weighted_limit,
         weekly_resets_at:q.weekly_resets_at};
-    } catch (_) { result.failure = result.failure || 'read'; }
+    } catch (error) {
+      result.failure = result.failure || (error?.name === 'AbortError' ? 'timedOut' : 'read');
+    }
     finally { clearTimeout(timer); }
     return JSON.stringify(result);
     """#
@@ -201,8 +208,8 @@ protocol MusePortalWebsite: AnyObject {
 
 @MainActor
 final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate {
-    // Fixed across launches within this app's WebKit namespace. A wrapper must
-    // keep its bundle ID. Never clear the default/Claude website data store.
+    // The executable embeds com.quotabar.app so renaming it keeps this namespace.
+    // Wrappers must use that ID too. Never clear the default/Claude store.
     static let storeIdentifier = UUID(uuidString: "4AC3D48D-BC2D-419C-A916-2C94D3712B58")!
     private(set) var webView: WKWebView?
     private var hostWindow: NSWindow?
@@ -326,9 +333,13 @@ struct MusePortalPayload: Decodable, Sendable {
     }
 
     func read(email expectedEmail: String, plan: String, teamID: String, now: Date) -> MusePortalRead {
+        if failure == "timedOut" { return .failure(.timedOut) }
         if failure == "http" {
             let retry = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
             if retry != nil || httpStatus == 429 { return .failure(.rateLimited(retryAfter: retry)) }
+            if httpStatus == 401 || httpStatus == 403 {
+                return .unavailable("Sign in again to the Muse portal in Settings → API Keys → Muse portal quota.")
+            }
             return .failure(httpStatus.flatMap { QuotaHTTP.failureReason(for: $0, retryAfter: nil, now: now) } ?? .badResponse)
         }
         guard failure == nil, !expectedEmail.trimmed.isEmpty,

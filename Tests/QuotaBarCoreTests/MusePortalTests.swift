@@ -326,13 +326,54 @@ struct MusePortalTests {
     }
 
     @Test func httpStatusIsPreservedWithoutInventingAThrottle() throws {
-        for (status, reason) in [(401, UnavailableReason.credentialRejected), (503, .badResponse),
+        for (status, reason) in [(503, UnavailableReason.badResponse),
                                  (429, .rateLimited(retryAfter: nil))] {
             let text = "{\"failure\":\"http\",\"httpStatus\":\(status)}"
             guard case .failure(let actual) = try read(text) else {
                 Issue.record("HTTP failure was reported as an account mismatch"); continue
             }
             #expect(actual == reason)
+        }
+    }
+
+    @Test(arguments: [401, 403]) func rejectedPortalSessionRequestsPortalSignIn(status: Int) throws {
+        guard case .unavailable(let message) = try read("{\"failure\":\"http\",\"httpStatus\":\(status)}") else {
+            Issue.record("Rejected portal session was reported as a CLI credential failure"); return
+        }
+        #expect(message.contains("Sign in") && message.contains("Muse portal"))
+        #expect(!message.contains("key") && !message.contains("CLI"))
+        // A supplied retry instruction still wins over the sign-in remedy.
+        guard case .failure(.rateLimited(let retry)) = try read("{\"failure\":\"http\",\"httpStatus\":\(status),\"retryAfter\":\"30\"}") else {
+            Issue.record("Portal authentication response lost Retry-After"); return
+        }
+        #expect(retry == now.addingTimeInterval(30))
+    }
+
+    @Test @MainActor func abortedPortalRequestIsTimedOut() throws {
+        // Exercise the actual WebKit script, with each GET aborting in turn.
+        for endpoint in ["/api/auth/me", "/api/portal/teams", "/api/portal/teams/42/subscription-quota"] {
+            let context = try #require(JSContext())
+            context.evaluateScript(#"""
+            var output = null;
+            var location = {origin:'https://dev.meta.ai'};
+            var AbortController = class { constructor(){this.signal={aborted:false}} abort(){this.signal.aborted=true} };
+            var setTimeout = f => (f(), 1), clearTimeout = () => {};
+            var email = 'person@example.com', plan = 'Muse Code Power Usage', teamID = '42';
+            async function fetch(path, options) {
+              if (path === abortAt && options.signal.aborted) {
+                const error = new Error('aborted'); error.name = 'AbortError'; throw error;
+              }
+              return {ok:true,json:async()=>path === '/api/auth/me' ? {email} :
+                {teams:[{team_id:teamID,team_name:'My team'}]}};
+            }
+            """#)
+            context.setObject(endpoint, forKeyedSubscript: "abortAt" as NSString)
+            context.evaluateScript("async function run() {\n" + MusePortalSession.query + "\n}\nrun().then(p=>output=p);")
+            #expect(context.exception == nil)
+            let text = try #require(context.objectForKeyedSubscript("output")?.toString())
+            guard case .failure(.timedOut) = try read(text) else {
+                Issue.record("Aborted \(endpoint) was reported as an account/plan mismatch"); continue
+            }
         }
     }
 

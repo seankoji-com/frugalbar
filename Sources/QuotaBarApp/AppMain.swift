@@ -124,8 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notificationObserver = QuotaNotificationObserver()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Info.plist's LSUIElement only applies to a real .app bundle; `swift run`
-        // produces a bare executable, so set the accessory policy explicitly too.
+        // Keep the accessory policy explicit for bare and wrapped executables.
         NSApp.setActivationPolicy(.accessory)
 
         let activity = activityEngine
@@ -300,10 +299,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// what is, from the user's point of view, a single poll result, so
     /// callers consolidate multiple events into one notification.
     ///
-    /// `UNUserNotificationCenter` is not an option: this app ships as a bare
-    /// executable with no `.app` bundle, so `Bundle.main.bundleIdentifier` is
-    /// nil and `UNUserNotificationCenter.current()` crashes the process. This
-    /// mechanism needs no bundle identity and no authorization request.
+    /// Keep the existing bare-executable notification delivery. The embedded
+    /// WebKit identity does not register an installed notification application.
     private func deliverNotification(title: String, body: String) {
         let script = "display notification \"\(Self.escapeForAppleScript(body))\" with title \"\(Self.escapeForAppleScript(title))\""
 

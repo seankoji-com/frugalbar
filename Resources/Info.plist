@@ -8,10 +8,6 @@
     <string>FrugalBar</string>
     <key>CFBundleIdentifier</key>
     <string>com.quotabar.app</string>
-    <key>CFBundleVersion</key>
-    <string>1.0.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
