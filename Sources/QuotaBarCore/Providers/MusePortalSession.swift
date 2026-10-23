@@ -2,46 +2,69 @@ import Foundation
 import Combine
 import WebKit
 
-/// A separate, opt-in portal login. WebKit owns an ephemeral session; no
-/// browser cookies are imported, extracted, or persisted as credentials.
+/// A separate, opt-in portal login. WebKit retains only this app's session;
+/// browser cookies and credential strings never cross into Swift.
 @MainActor
 public final class MusePortalSession: ObservableObject {
-    public static let shared = MusePortalSession()
-    @Published public private(set) var isEnabled = false
+    public static let shared = MusePortalSession(preferences: CredentialStore.preferences,
+        website: TestHost.isActive ? nil : MusePortalWebKit())
+    static let enabledKey = "muse.portal.enabled"
+    static let teamKey = "muse.portal.teamID"
+    @Published public private(set) var isEnabled: Bool
+    @Published public private(set) var isDisconnecting = false
     @Published public private(set) var teams: [MusePortalTeam] = []
     @Published public private(set) var message = "Sign in, then refresh the team list."
-    @Published public var selectedTeamID = "" {
-        didSet { generation = UUID() }
+    @Published private var teamID = ""
+    public var selectedTeamID: String {
+        get { teamID }
+        set {
+            generation = UUID()
+            teamID = isEnabled && MusePortalTeam.validID(newValue) ? newValue : ""
+            if !teamID.isEmpty {
+                preferences.set(teamID, forKey: Self.teamKey)
+            } else {
+                preferences.removeObject(forKey: Self.teamKey)
+            }
+        }
     }
-    public private(set) var webView: WKWebView?
+    public var webView: WKWebView? { website?.webView }
+    private let preferences: UserDefaults
+    private let website: (any MusePortalWebsite)?
     private var generation = UUID()
     private var pending: ClaudeMonthlyCreditEvaluation?
     private var retryNotBefore: Date?
 
-    private init() {}
-
-    public func connect() {
-        guard !TestHost.isActive else { return }
-        isEnabled = true
-        guard webView == nil else { return }
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        webView = view
-        view.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
+    init(preferences: UserDefaults, website: (any MusePortalWebsite)?) {
+        self.preferences = preferences
+        self.website = website
+        isEnabled = website != nil && preferences.bool(forKey: Self.enabledKey)
+        let team = preferences.string(forKey: Self.teamKey) ?? ""
+        teamID = isEnabled && MusePortalTeam.validID(team) ? team : ""
     }
 
-    public func disconnect() {
+    public func connect() {
+        guard !isDisconnecting, let website else { return }
+        preferences.set(true, forKey: Self.enabledKey)
+        isEnabled = true
+        website.open()
+        objectWillChange.send()
+    }
+
+    public func disconnect() async {
+        guard !isDisconnecting else { return }
+        isDisconnecting = true
+        preferences.removeObject(forKey: Self.enabledKey)
         isEnabled = false
         generation = UUID()
         pending?.finish(nil)
         pending = nil
-        webView?.stopLoading()
-        webView = nil
+        website?.stop()
         teams = []
         selectedTeamID = ""
         retryNotBefore = nil
         message = "Sign in, then refresh the team list."
+        await website?.clear()
+        isDisconnecting = false
     }
 
     public func refreshTeams() async {
@@ -61,21 +84,18 @@ public final class MusePortalSession: ObservableObject {
     }
 
     private func evaluate(email: String, plan: String, teamID: String, now: Date) async -> MusePortalPayload? {
-        guard !TestHost.isActive, !Task.isCancelled, isEnabled, pending == nil,
-              retryNotBefore.map({ now >= $0 }) ?? true,
-              let webView, webView.url?.scheme == "https", webView.url?.host == "dev.meta.ai" else { return nil }
+        guard !Task.isCancelled, isEnabled, !isDisconnecting, pending == nil,
+              retryNotBefore.map({ now >= $0 }) ?? true, let website else { return nil }
+        // A restored opt-in resumes this app's own login, never another browser's.
+        website.open()
+        guard website.isAtPortal else { return nil }
         let current = generation
         // Reuse the bounded WebKit callback gate (timeout and cancellation).
         let evaluation = ClaudeMonthlyCreditEvaluation()
         pending = evaluation
         defer { if pending === evaluation { pending = nil } }
         let text = await evaluation.value { complete in
-            webView.callAsyncJavaScript(Self.query,
-                arguments: ["email": email, "plan": plan, "teamID": teamID], in: nil, in: .page) { result in
-                let text: String?
-                if case .success(let value) = result { text = value as? String } else { text = nil }
-                Task { @MainActor in complete(text) }
-            }
+            website.evaluate(email: email, plan: plan, teamID: teamID, complete: complete)
         }
         guard !Task.isCancelled, isEnabled, current == generation else { return nil }
         guard let text, let data = text.data(using: .utf8),
@@ -140,6 +160,61 @@ public final class MusePortalSession: ObservableObject {
     finally { clearTimeout(timer); }
     return JSON.stringify(result);
     """#
+}
+
+/// Keeps lifecycle tests away from real WebKit storage and network requests.
+@MainActor
+protocol MusePortalWebsite: AnyObject {
+    var webView: WKWebView? { get }
+    var isAtPortal: Bool { get }
+    func open()
+    func stop()
+    func clear() async
+    func evaluate(email: String, plan: String, teamID: String,
+                  complete: @escaping @MainActor @Sendable (String?) -> Void)
+}
+
+@MainActor
+final class MusePortalWebKit: MusePortalWebsite {
+    // Fixed across launches within this app's WebKit namespace. A wrapper must
+    // keep its bundle ID. Never clear the default/Claude website data store.
+    static let storeIdentifier = UUID(uuidString: "4AC3D48D-BC2D-419C-A916-2C94D3712B58")!
+    private(set) var webView: WKWebView?
+    var isAtPortal: Bool {
+        webView?.url?.scheme == "https" && webView?.url?.host == "dev.meta.ai"
+    }
+
+    func open() {
+        guard webView == nil else { return }
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        webView = view
+        view.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
+    }
+
+    func stop() {
+        webView?.stopLoading()
+        // Unload the signed-in page even if SwiftUI still holds the old view.
+        webView?.loadHTMLString("", baseURL: nil)
+        webView = nil
+    }
+
+    func clear() async {
+        let store = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
+        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+    }
+
+    func evaluate(email: String, plan: String, teamID: String,
+                  complete: @escaping @MainActor @Sendable (String?) -> Void) {
+        guard let webView, isAtPortal else { complete(nil); return }
+        webView.callAsyncJavaScript(MusePortalSession.query,
+            arguments: ["email": email, "plan": plan, "teamID": teamID], in: nil, in: .page) { result in
+            let text: String?
+            if case .success(let value) = result { text = value as? String } else { text = nil }
+            Task { @MainActor in complete(text) }
+        }
+    }
 }
 
 public struct MusePortalTeam: Decodable, Identifiable, Sendable {

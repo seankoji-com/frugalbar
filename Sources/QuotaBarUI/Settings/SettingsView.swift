@@ -304,17 +304,22 @@ public struct SettingsView: View {
         Form {
             credentialDiscoverySection
             Section("Muse portal quota") {
-                Text("If the CLI response omits usage, connect a temporary Meta portal session and select your subscription team. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
+                Text("If the CLI response omits usage, connect Meta and select your subscription team. This app retains its own sign-in and team across restarts until you disconnect. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
                     .font(.caption)
                 Button(musePortal.isEnabled ? "Open Muse portal connection" : "Connect Muse portal quota") {
                     musePortal.connect()
                     showMusePortal = true
-                }
+                }.disabled(musePortal.isDisconnecting)
                 if musePortal.isEnabled {
                     Button("Disconnect Muse portal") {
-                        musePortal.disconnect()
-                        Task { await store?.load() }
+                        Task {
+                            await musePortal.disconnect()
+                            await store?.load()
+                        }
                     }
+                }
+                if musePortal.isDisconnecting {
+                    Text("Clearing this app's Meta sign-in…").font(.caption)
                 }
             }
             Section("Claude monthly API credit") {

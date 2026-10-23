@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import JavaScriptCore
+import WebKit
 @testable import QuotaBarCore
 
 @Suite("Muse portal quota")
@@ -101,6 +102,158 @@ struct MusePortalTests {
         #expect(session.webView == nil)
     }
 
+    @Test @MainActor func explicitConnectionAndTeamSurviveRestart() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        let original = MusePortalSession(preferences: preferences, website: website)
+        #expect(!original.isEnabled)
+        _ = await original.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        #expect(website.opens == 0 && website.requests.isEmpty)
+        original.connect()
+        original.selectedTeamID = "42"
+
+        let resumedWebsite = PortalWebsiteStub(body: body)
+        let resumed = MusePortalSession(preferences: preferences, website: resumedWebsite)
+        #expect(resumed.isEnabled)
+        #expect(resumed.selectedTeamID == "42")
+        guard case .usage = await resumed.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+            Issue.record("Explicit connection did not resume after restart"); return
+        }
+        #expect(resumedWebsite.opens == 1)
+        #expect(resumedWebsite.requests == ["person@example.com|Muse Code Power Usage|42"])
+        // A saved team never substitutes for a fresh identity/membership/tier check.
+        for changed in [body.replacingOccurrences(of: "person@example.com", with: "other@example.com"),
+                        body.replacingOccurrences(of: "\"id\":\"42\"", with: "\"id\":\"43\""),
+                        body.replacingOccurrences(of: "Muse Code Power Usage", with: "Other plan")] {
+            resumedWebsite.body = changed
+            guard case .unavailable = await resumed.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+                Issue.record("Restored session accepted a changed account, membership or tier"); continue
+            }
+        }
+        #expect(resumedWebsite.requests.count == 4)
+    }
+
+    @Test @MainActor func disabledOrMalformedSavedScopeCannotSelectATeam() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set("42", forKey: MusePortalSession.teamKey)
+        let website = PortalWebsiteStub(body: body)
+        let disabled = MusePortalSession(preferences: preferences, website: website)
+        #expect(!disabled.isEnabled && disabled.selectedTeamID.isEmpty)
+        disabled.selectedTeamID = "42"
+        #expect(disabled.selectedTeamID.isEmpty)
+        preferences.set(true, forKey: MusePortalSession.enabledKey)
+        preferences.set("../42", forKey: MusePortalSession.teamKey)
+        let malformed = MusePortalSession(preferences: preferences, website: website)
+        #expect(malformed.isEnabled && malformed.selectedTeamID.isEmpty)
+        await malformed.refreshTeams()
+        #expect(malformed.teams.map(\.id) == ["42"])
+        #expect(malformed.selectedTeamID.isEmpty)
+        _ = await malformed.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        #expect(website.requests == ["||"])
+    }
+
+    @Test @MainActor func disconnectDisablesClearsAndRejectsLateResultsBeforeReconnect() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set("keep", forKey: "unrelated.preference")
+        let website = PortalWebsiteStub(body: body)
+        website.holdRead = true
+        website.holdClear = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        let read = Task { await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) }
+        await withCheckedContinuation { website.readStarted = $0 }
+        let disconnect = Task { await session.disconnect() }
+        await withCheckedContinuation { website.clearStarted = $0 }
+        #expect(!session.isEnabled && session.isDisconnecting && session.selectedTeamID.isEmpty)
+        #expect(session.teams.isEmpty)
+        #expect(website.stops == 1 && website.clears == 1)
+        #expect(preferences.object(forKey: MusePortalSession.enabledKey) == nil)
+        #expect(preferences.object(forKey: MusePortalSession.teamKey) == nil)
+        #expect(preferences.string(forKey: "unrelated.preference") == "keep")
+        let restarted = MusePortalSession(preferences: preferences, website: PortalWebsiteStub(body: body))
+        #expect(!restarted.isEnabled && restarted.selectedTeamID.isEmpty)
+        session.connect()
+        #expect(!session.isEnabled && website.opens == 2)
+        session.selectedTeamID = "42"
+        #expect(session.selectedTeamID.isEmpty)
+        _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        #expect(website.requests.count == 1)
+        website.complete?(body)
+        guard case .unavailable = await read.value else {
+            Issue.record("Disconnected portal read published a late quota"); return
+        }
+        #expect(session.teams.isEmpty)
+        website.finishClear?.resume()
+        await disconnect.value
+        #expect(!session.isDisconnecting)
+        session.connect()
+        #expect(session.isEnabled && session.selectedTeamID.isEmpty)
+        #expect(website.clears == 1)
+    }
+
+    @Test @MainActor func teamChangeInvalidatesAnInflightQuota() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.holdRead = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        let read = Task { await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) }
+        await withCheckedContinuation { website.readStarted = $0 }
+        session.selectedTeamID = "43"
+        website.complete?(body)
+        guard case .unavailable = await read.value else {
+            Issue.record("Previous team's in-flight quota was accepted"); return
+        }
+        #expect(session.teams.isEmpty)
+        #expect(MusePortalSession(preferences: preferences, website: website).selectedTeamID == "43")
+    }
+
+    @Test @MainActor func disconnectClearsWebsiteAndSavedSelection() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        await session.disconnect()
+        #expect(!session.isEnabled && !session.isDisconnecting)
+        #expect(session.selectedTeamID.isEmpty)
+        #expect(website.stops == 1 && website.clears == 1)
+        session.connect()
+        #expect(session.selectedTeamID.isEmpty)
+        let restarted = MusePortalSession(preferences: preferences, website: website)
+        #expect(restarted.selectedTeamID.isEmpty)
+    }
+
+    @Test @MainActor func restoredConnectionStillHonoursRetryAfter() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: MusePortalSession.enabledKey)
+        preferences.set("42", forKey: MusePortalSession.teamKey)
+        let website = PortalWebsiteStub(body: #"{"failure":"http","retryAfter":"30"}"#)
+        let session = MusePortalSession(preferences: preferences, website: website)
+        _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        website.body = body
+        _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now.addingTimeInterval(29))
+        #expect(website.requests.count == 1)
+        guard case .usage = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now.addingTimeInterval(30)) else {
+            Issue.record("Published Retry-After never expired"); return
+        }
+        #expect(website.requests.count == 2)
+    }
+
     @Test @MainActor func portalQueryUsesOnlyReadOnlyAllowlistedRequests() throws {
         for scenario in ["matching", "wrong-account", "no-selection", "failed"] {
             let context = try #require(JSContext())
@@ -148,5 +301,35 @@ struct MusePortalTests {
                 }
             }
         }
+    }
+}
+
+@MainActor
+private final class PortalWebsiteStub: MusePortalWebsite {
+    var webView: WKWebView? { nil }
+    var isAtPortal = true
+    var body: String
+    var opens = 0, stops = 0, clears = 0
+    var requests: [String] = []
+    var holdRead = false, holdClear = false
+    var complete: (@MainActor @Sendable (String?) -> Void)?
+    var readStarted: CheckedContinuation<Void, Never>?
+    var clearStarted: CheckedContinuation<Void, Never>?
+    var finishClear: CheckedContinuation<Void, Never>?
+
+    init(body: String) { self.body = body }
+    func open() { opens += 1 }
+    func stop() { stops += 1 }
+    func clear() async {
+        clears += 1
+        clearStarted?.resume()
+        if holdClear { await withCheckedContinuation { finishClear = $0 } }
+    }
+    func evaluate(email: String, plan: String, teamID: String,
+                  complete: @escaping @MainActor @Sendable (String?) -> Void) {
+        requests.append("\(email)|\(plan)|\(teamID)")
+        self.complete = complete
+        readStarted?.resume()
+        if !holdRead { complete(body) }
     }
 }

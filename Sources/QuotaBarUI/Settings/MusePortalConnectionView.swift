@@ -16,17 +16,20 @@ struct MusePortalConnectionView: View {
                 Picker("Subscription team", selection: $session.selectedTeamID) {
                     Text("Choose a team").tag("")
                     ForEach(session.teams) { team in Text(team.name).tag(team.id) }
-                }
+                }.disabled(!session.isEnabled || session.isDisconnecting)
                 Button("Refresh teams") {
                     isReading = true
                     Task { await session.refreshTeams(); isReading = false }
-                }.disabled(isReading)
+                }.disabled(isReading || !session.isEnabled || session.isDisconnecting)
             }
             Text(session.message).font(.caption)
             if let webView = session.webView { MusePortalWebView(webView: webView) }
             HStack {
-                Text("This sign-in lasts until disconnection or app exit.").font(.caption)
+                Text("This app keeps your Meta sign-in and team after restart. Disconnect clears only this app's Meta session.").font(.caption)
                 Spacer()
+                Button("Disconnect") {
+                    Task { await session.disconnect(); dismiss() }
+                }.disabled(session.isDisconnecting)
                 Button("Done") { dismiss() }
             }
         }
