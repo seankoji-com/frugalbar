@@ -2734,7 +2734,7 @@ struct ProviderHTTPTests {
     }
 
     @Test("invalid credit balances are absent, never zero or unlimited", arguments: [
-        "", "-1", "-0.1", "NaN", "inf", "Infinity", "1.2garbage", "1,234", "1e999",
+        "", ".5", "-1", "-0.1", "NaN", "inf", "Infinity", "1.2garbage", "1,234", "1e999",
         "123456789012345678901234567890123456789012345678901"
     ])
     func invalidCreditBalances(_ raw: String) {
@@ -2748,6 +2748,18 @@ struct ProviderHTTPTests {
         #expect(OpenAIQuotaProvider.creditCount(" 00060085.4229770000 ") == Decimal(string: "60085.422977"))
         #expect(OpenAIQuotaProvider.creditCount("0.000000000000000000000000000000001")
                 == Decimal(string: "0.000000000000000000000000000000001"))
+    }
+
+    @Test("Foundation emits exact plain decimal credit text", arguments: [
+        ("6.0085422977E4", "60085.422977"),
+        ("0.00000000000000000000000000000000000001", "0.00000000000000000000000000000000000001"),
+        ("10000000000000000000000000000000000000", "10000000000000000000000000000000000000")
+    ])
+    func canonicalCreditText(_ raw: String, _ expected: String) throws {
+        let value = try #require(Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")))
+        let canonical = NSDecimalNumber(decimal: value).stringValue
+        #expect(canonical == expected)
+        #expect(OpenAIQuotaProvider.creditCount(canonical) == value)
     }
 
     /// The credits block rides the same fetch as the quota, so it costs no

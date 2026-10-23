@@ -312,6 +312,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         guard text.range(of: #"^[0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil,
               let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")),
               !value.isNaN, value >= 0 else { return nil }
+        // The grammar requires a whole-number component, including for fractions.
         let parts = text.split(separator: ".")
         let whole = parts[0].drop(while: { $0 == "0" })
         let fraction = parts.count == 2 ? String(parts[1].reversed().drop(while: { $0 == "0" }).reversed()) : ""
