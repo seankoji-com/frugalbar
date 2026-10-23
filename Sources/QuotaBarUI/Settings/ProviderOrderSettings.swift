@@ -55,7 +55,7 @@ struct ProviderOrderSettings: View {
                        Service blocks are placed by the soonest longest-window \
                        reset among their usable members. The list below breaks \
                        ties and sets the order inside Antigravity and OpenCode Go \
-                       blocks. A block moves last only when every member is spent.
+                       blocks. A block moves last only when every member has a spent or blocked window.
                        """
                      : """
                        Antigravity pools and OpenCode Go workspaces each stay \
