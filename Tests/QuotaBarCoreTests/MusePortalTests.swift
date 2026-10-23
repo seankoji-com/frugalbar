@@ -87,7 +87,6 @@ struct MusePortalTests {
     @Test func malformedAndFailedReadingsCannotProduceHealth() throws {
         for changed in [body.replacingOccurrences(of: "\"200\"", with: "\"NaN\"")
                             .replacingOccurrences(of: "\"3500\"", with: "-1"),
-                        body.replacingOccurrences(of: "\"email\":", with: "\"failure\":\"read\",\"email\":"),
                         body.replacingOccurrences(of: "\"teams\":[{\"id\":\"42\",\"name\":\"My team\"}]", with: "\"teams\":[]")] {
             guard case .unavailable = try read(changed) else {
                 Issue.record("Failed portal reading rendered as health"); continue
@@ -374,6 +373,43 @@ struct MusePortalTests {
             guard case .failure(.timedOut) = try read(text) else {
                 Issue.record("Aborted \(endpoint) was reported as an account/plan mismatch"); continue
             }
+        }
+    }
+
+    @Test @MainActor func failedPortalFetchIsOffline() async throws {
+        for endpoint in ["/api/auth/me", "/api/portal/teams", "/api/portal/teams/42/subscription-quota"] {
+            let context = try #require(JSContext())
+            context.evaluateScript(#"""
+            var output = null;
+            var location = {origin:'https://dev.meta.ai'};
+            var AbortController = class { constructor(){this.signal={}} };
+            var setTimeout = () => 1, clearTimeout = () => {};
+            var email = 'person@example.com', plan = 'Muse Code Power Usage', teamID = '42';
+            async function fetch(path) {
+              if (path === failAt) throw new TypeError('fixture fetch failed');
+              return {ok:true,json:async()=>path === '/api/auth/me' ? {email} :
+                {teams:[{team_id:teamID,team_name:'My team'}]}};
+            }
+            """#)
+            context.setObject(endpoint, forKeyedSubscript: "failAt" as NSString)
+            context.evaluateScript("async function run() {\n" + MusePortalSession.query + "\n}\nrun().then(p=>output=p);")
+            #expect(context.exception == nil)
+            let text = try #require(context.objectForKeyedSubscript("output")?.toString())
+            // Include the session layer so Settings copy cannot blame the
+            // account while the quota row correctly reports a transport error.
+            let suite = "MusePortalTests.\(UUID().uuidString)"
+            let preferences = try #require(UserDefaults(suiteName: suite))
+            defer { preferences.removePersistentDomain(forName: suite) }
+            let session = MusePortalSession(preferences: preferences, website: PortalWebsiteStub(body: text))
+            session.connect()
+            session.selectedTeamID = "42"
+            guard case .failure(.offline) = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+                Issue.record("Failed \(endpoint) fetch was reported as an account/plan mismatch"); continue
+            }
+            #expect(session.message == "Could not reach the Muse portal. Check your connection and refresh.")
+        }
+        guard case .failure(.badResponse) = try read(#"{"failure":"read"}"#) else {
+            Issue.record("Malformed portal response was reported as an account mismatch"); return
         }
     }
 

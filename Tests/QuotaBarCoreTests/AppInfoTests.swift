@@ -21,7 +21,9 @@ struct AppInfoTests {
         task.waitUntilExit()
         #expect(task.terminationStatus == 0)
         let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        #expect(plist["CFBundleIdentifier"] as? String == "com.quotabar.app")
+        // Match the installed bare executable's legacy WebKit namespace. A new
+        // reverse-DNS ID would strand its existing Claude WebsiteData.
+        #expect(plist["CFBundleIdentifier"] as? String == "frugalbar")
         // An unstamped local build must not claim the old placeholder 1.0.0.
         #expect(plist["CFBundleShortVersionString"] == nil)
     }

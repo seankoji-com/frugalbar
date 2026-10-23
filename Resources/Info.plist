@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>FrugalBar</string>
     <key>CFBundleIdentifier</key>
-    <string>com.quotabar.app</string>
+    <string>frugalbar</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

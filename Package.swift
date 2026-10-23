@@ -27,8 +27,8 @@ let package = Package(
             name: "QuotaBarApp",
             dependencies: ["QuotaBarCore", "QuotaBarUI"],
             swiftSettings: [.swiftLanguageMode(.v6)],
-            // WebKit scopes persistent storage by bundle ID. Keep it stable
-            // when the release executable is renamed from QuotaBar to frugalbar.
+            // Preserve the installed bare frugalbar's WebKit namespace across
+            // executable renames, including its existing Claude website data.
             linkerSettings: [.unsafeFlags([
                 "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
                 "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist,
