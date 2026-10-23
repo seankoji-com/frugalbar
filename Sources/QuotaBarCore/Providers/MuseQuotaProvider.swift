@@ -94,6 +94,10 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
                 return snapshot
             case .unavailable(let message):
                 return missingUsage(response, message: message)
+            case .failure(let reason):
+                var snapshot = unavailable(reason)
+                snapshot.planName = plan
+                return snapshot
             }
         }
         return Self.snapshot(from: response, provider: self, now: now)

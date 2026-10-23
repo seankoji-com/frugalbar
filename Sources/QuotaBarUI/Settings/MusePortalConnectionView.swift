@@ -40,6 +40,16 @@ struct MusePortalConnectionView: View {
 
 private struct MusePortalWebView: NSViewRepresentable {
     let webView: WKWebView
-    func makeNSView(context: Context) -> WKWebView { webView }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        webView.removeFromSuperview()
+        container.addSubview(webView)
+        webView.frame = container.bounds
+        webView.autoresizingMask = [.width, .height]
+        return container
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+        MusePortalSession.shared.hostWebView()
+    }
 }

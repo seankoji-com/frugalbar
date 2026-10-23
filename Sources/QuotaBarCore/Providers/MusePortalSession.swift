@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import WebKit
+import AppKit
 
 /// A separate, opt-in portal login. WebKit retains only this app's session;
 /// browser cookies and credential strings never cross into Swift.
@@ -28,6 +29,7 @@ public final class MusePortalSession: ObservableObject {
         }
     }
     public var webView: WKWebView? { website?.webView }
+    public func hostWebView() { if isEnabled { website?.host() } }
     private let preferences: UserDefaults
     private let website: (any MusePortalWebsite)?
     private var generation = UUID()
@@ -77,19 +79,37 @@ public final class MusePortalSession: ObservableObject {
             return .unavailable("Muse omitted its usage window. Choose a team in Settings → API Keys → Muse portal quota.")
         }
         let teamID = selectedTeamID
-        guard let payload = await evaluate(email: email, plan: plan, teamID: teamID, now: now) else {
-            return .unavailable("Muse omitted its usage window. Sign in again or refresh the Muse portal connection.")
+        switch await evaluate(email: email, plan: plan, teamID: teamID, now: now) {
+        case .payload(let payload): return payload.read(email: email, plan: plan, teamID: teamID, now: now)
+        case .failure(let reason): return .failure(reason)
         }
-        return payload.read(email: email, plan: plan, teamID: teamID, now: now)
     }
 
-    private func evaluate(email: String, plan: String, teamID: String, now: Date) async -> MusePortalPayload? {
-        guard !Task.isCancelled, isEnabled, !isDisconnecting, pending == nil,
-              retryNotBefore.map({ now >= $0 }) ?? true, let website else { return nil }
-        // A restored opt-in resumes this app's own login, never another browser's.
-        website.open()
-        guard website.isAtPortal else { return nil }
+    private enum Evaluation {
+        case payload(MusePortalPayload)
+        case failure(UnavailableReason)
+    }
+
+    private func evaluate(email: String, plan: String, teamID: String, now: Date) async -> Evaluation {
+        guard !Task.isCancelled, isEnabled, !isDisconnecting, let website else { return .failure(.timedOut) }
+        if let retryNotBefore, now < retryNotBefore { return .failure(.rateLimited(retryAfter: retryNotBefore)) }
+        guard pending == nil else {
+            return .failure(.unsupported("A Muse portal read is already in progress. Refresh shortly."))
+        }
         let current = generation
+        // Navigation gets two seconds of the provider's budget. A restored
+        // login must commit before its same-origin GETs can run.
+        let navigation = ClaudeMonthlyCreditEvaluation()
+        pending = navigation
+        defer { if pending === navigation { pending = nil } }
+        website.open()
+        let ready = await navigation.value(waitForTimeout: { try await Task.sleep(for: .seconds(2)) }) { complete in
+            website.waitUntilPortal { complete($0 ? "ready" : nil) }
+        }
+        guard !Task.isCancelled, isEnabled, current == generation else { return .failure(.timedOut) }
+        guard ready != nil else {
+            return .failure(.timedOut)
+        }
         // Reuse the bounded WebKit callback gate (timeout and cancellation).
         let evaluation = ClaudeMonthlyCreditEvaluation()
         pending = evaluation
@@ -97,19 +117,21 @@ public final class MusePortalSession: ObservableObject {
         let text = await evaluation.value { complete in
             website.evaluate(email: email, plan: plan, teamID: teamID, complete: complete)
         }
-        guard !Task.isCancelled, isEnabled, current == generation else { return nil }
+        guard !Task.isCancelled, isEnabled, current == generation else { return .failure(.timedOut) }
         guard let text, let data = text.data(using: .utf8),
               let payload = try? JSONDecoder().decode(MusePortalPayload.self, from: data) else {
             teams = []
-            message = "Could not read the portal. Sign in and refresh teams."
-            return nil
+            message = "Could not read the portal. Refresh teams to try again."
+            return .failure(.badResponse)
         }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: payload.retryAfter, now: now)
         teams = payload.teams ?? []
-        message = payload.failure == nil
+        message = payload.failure == "http"
+            ? "The Muse portal request failed. Retry after the portal's cooldown, if supplied."
+            : payload.failure == nil
             ? "Select the team that holds your Muse subscription. The account and plan must match your CLI login."
             : "Could not read a matching portal quota. Check your sign-in, team and plan."
-        return payload
+        return .payload(payload)
     }
 
     // Only fixed, read-only same-origin queries. No credentials cross the
@@ -124,7 +146,8 @@ public final class MusePortalSession: ObservableObject {
       const r = await fetch(path, {method:'GET', credentials:'same-origin',
         redirect:'error', signal:controller.signal});
       if (!r.ok) {
-        result.failure = 'http'; result.retryAfter = r.headers.get('Retry-After');
+        result.failure = 'http'; result.httpStatus = r.status;
+        result.retryAfter = r.headers.get('Retry-After');
         throw new Error('http');
       }
       return await r.json();
@@ -168,6 +191,8 @@ protocol MusePortalWebsite: AnyObject {
     var webView: WKWebView? { get }
     var isAtPortal: Bool { get }
     func open()
+    func host()
+    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void)
     func stop()
     func clear() async
     func evaluate(email: String, plan: String, teamID: String,
@@ -175,29 +200,78 @@ protocol MusePortalWebsite: AnyObject {
 }
 
 @MainActor
-final class MusePortalWebKit: MusePortalWebsite {
+final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate {
     // Fixed across launches within this app's WebKit namespace. A wrapper must
     // keep its bundle ID. Never clear the default/Claude website data store.
     static let storeIdentifier = UUID(uuidString: "4AC3D48D-BC2D-419C-A916-2C94D3712B58")!
     private(set) var webView: WKWebView?
+    private var hostWindow: NSWindow?
+    private var committedURL: URL?
+    private var navigationComplete: (@MainActor @Sendable (Bool) -> Void)?
     var isAtPortal: Bool {
-        webView?.url?.scheme == "https" && webView?.url?.host == "dev.meta.ai"
+        committedURL?.scheme == "https" && committedURL?.host == "dev.meta.ai"
     }
 
     func open() {
-        guard webView == nil else { return }
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        webView = view
-        view.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
+        if webView == nil {
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
+            let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: configuration)
+            view.navigationDelegate = self
+            webView = view
+            host()
+        }
+        if !isAtPortal, webView?.isLoading == false {
+            webView?.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
+        }
+    }
+
+    // Keep the page attached to an app-owned window while the settings sheet
+    // is closed. This window is never ordered on screen or made key.
+    func host() {
+        guard let webView else { return }
+        if hostWindow == nil {
+            hostWindow = NSWindow(contentRect: webView.frame, styleMask: [], backing: .buffered, defer: false)
+            hostWindow?.isReleasedWhenClosed = false
+        }
+        webView.removeFromSuperview()
+        hostWindow?.contentView?.addSubview(webView)
+        webView.frame = hostWindow?.contentView?.bounds ?? webView.frame
+        webView.autoresizingMask = [.width, .height]
+    }
+
+    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void) {
+        if isAtPortal { complete(true) } else { navigationComplete = complete }
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        committedURL = nil
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        committedURL = webView.url
+        if isAtPortal { navigationComplete?(true); navigationComplete = nil }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView else { return }
+        navigationComplete?(false)
+        navigationComplete = nil
     }
 
     func stop() {
+        navigationComplete?(false)
+        navigationComplete = nil
+        committedURL = nil
+        webView?.navigationDelegate = nil
         webView?.stopLoading()
         // Unload the signed-in page even if SwiftUI still holds the old view.
         webView?.loadHTMLString("", baseURL: nil)
         webView = nil
+        hostWindow?.close()
+        hostWindow = nil
     }
 
     func clear() async {
@@ -228,6 +302,7 @@ public struct MusePortalTeam: Decodable, Identifiable, Sendable {
 enum MusePortalRead: Sendable {
     case usage(MuseQuotaProvider.SubscriptionUsage)
     case unavailable(String)
+    case failure(UnavailableReason)
 }
 
 /// Only the allowlisted projection of portal GETs, never a full page body.
@@ -236,6 +311,7 @@ struct MusePortalPayload: Decodable, Sendable {
     let teams: [MusePortalTeam]?
     let subscription_quota: Quota?
     let failure: String?
+    let httpStatus: Int?
     let retryAfter: String?
 
     struct Quota: Decodable, Sendable {
@@ -250,6 +326,11 @@ struct MusePortalPayload: Decodable, Sendable {
     }
 
     func read(email expectedEmail: String, plan: String, teamID: String, now: Date) -> MusePortalRead {
+        if failure == "http" {
+            let retry = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
+            if retry != nil || httpStatus == 429 { return .failure(.rateLimited(retryAfter: retry)) }
+            return .failure(httpStatus.flatMap { QuotaHTTP.failureReason(for: $0, retryAfter: nil, now: now) } ?? .badResponse)
+        }
         guard failure == nil, !expectedEmail.trimmed.isEmpty,
               email?.trimmed.lowercased() == expectedEmail.trimmed.lowercased(),
               MusePortalTeam.validID(teamID), teams?.contains(where: { $0.id == teamID }) == true,

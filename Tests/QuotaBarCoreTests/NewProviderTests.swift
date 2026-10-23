@@ -1524,6 +1524,23 @@ struct MuseQuotaProviderTests {
         }
     }
 
+    @Test("portal failures retain status, retry instant and published plan")
+    func portalFailureKeepsItsReason() async throws {
+        let missing = #"{"is_subs_active":true,"require_payment":false,"subs_tier_name":"Muse Code Power Usage","user_email":"person@example.com"}"#
+        let retry = Date(timeIntervalSince1970: 1_800_000_030)
+        for reason in [UnavailableReason.rateLimited(retryAfter: retry), .timedOut, .badResponse] {
+            let snap = try await withStubbedHTTP(host: StubHost.muse, body: missing) {
+                try await MuseQuotaProvider(apiKey: "test-oauth", portalRead: { _, _, _ in
+                    .failure(reason)
+                }).fetchSnapshot()
+            }
+            #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+            #expect(snap.status == .unavailable(reason))
+            #expect(snap.planName == "Muse Code Power Usage")
+            #expect(snap.row1 == nil && snap.row2 == nil && snap.consumptionFraction == nil)
+        }
+    }
+
     /// An inactive subscription must not render as a healthy 0%-used row: the
     /// vendor stated it cannot serve.
     @Test("an inactive subscription with a payment requirement is critical")

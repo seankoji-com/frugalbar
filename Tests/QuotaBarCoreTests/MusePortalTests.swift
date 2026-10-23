@@ -87,7 +87,7 @@ struct MusePortalTests {
     @Test func malformedAndFailedReadingsCannotProduceHealth() throws {
         for changed in [body.replacingOccurrences(of: "\"200\"", with: "\"NaN\"")
                             .replacingOccurrences(of: "\"3500\"", with: "-1"),
-                        body.replacingOccurrences(of: "\"email\":", with: "\"failure\":\"http\",\"email\":"),
+                        body.replacingOccurrences(of: "\"email\":", with: "\"failure\":\"read\",\"email\":"),
                         body.replacingOccurrences(of: "\"teams\":[{\"id\":\"42\",\"name\":\"My team\"}]", with: "\"teams\":[]")] {
             guard case .unavailable = try read(changed) else {
                 Issue.record("Failed portal reading rendered as health"); continue
@@ -156,6 +156,69 @@ struct MusePortalTests {
         #expect(website.requests == ["||"])
     }
 
+    @Test @MainActor func restartedReadWaitsForPortalCommit() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: MusePortalSession.enabledKey)
+        preferences.set("42", forKey: MusePortalSession.teamKey)
+        let website = PortalWebsiteStub(body: body)
+        website.isAtPortal = false
+        let session = MusePortalSession(preferences: preferences, website: website)
+        guard case .usage = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+            Issue.record("Restarted read failed before the simulated portal commit"); return
+        }
+        #expect(website.waits == 1 && website.isAtPortal)
+        #expect(website.requests.count == 1 && !website.requestBeforeCommit)
+        // Closing the connection sheet returns the same view to its lifetime host.
+        session.hostWebView()
+        #expect(website.hosts == 1)
+        await session.disconnect()
+        session.hostWebView()
+        #expect(website.hosts == 1)
+    }
+
+    @Test @MainActor func failedNavigationIsTransientAndCanRetry() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.isAtPortal = false
+        website.navigationSucceeds = false
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        guard case .failure(.timedOut) = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+            Issue.record("Uncommitted navigation was reported as a lost login"); return
+        }
+        #expect(website.requests.isEmpty)
+        website.navigationSucceeds = true
+        guard case .usage = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+            Issue.record("Failed navigation prevented the next read"); return
+        }
+        #expect(website.waits == 2 && website.requests.count == 1)
+    }
+
+    @Test @MainActor func overlappingReadDoesNotClaimSignInWasLost() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.holdRead = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        let first = Task { await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) }
+        await withCheckedContinuation { website.readStarted = $0 }
+        guard case .failure(.unsupported(let message)) = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
+            Issue.record("Overlapping read lost its transient outcome"); website.complete?(body); _ = await first.value; return
+        }
+        #expect(message.contains("in progress") && !message.contains("Sign in"))
+        website.complete?(body)
+        guard case .usage = await first.value else { Issue.record("Overlap invalidated the first read"); return }
+        #expect(website.requests.count == 1)
+    }
+
     @Test @MainActor func disconnectDisablesClearsAndRejectsLateResultsBeforeReconnect() async throws {
         let suite = "MusePortalTests.\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
@@ -186,7 +249,7 @@ struct MusePortalTests {
         _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
         #expect(website.requests.count == 1)
         website.complete?(body)
-        guard case .unavailable = await read.value else {
+        guard case .failure = await read.value else {
             Issue.record("Disconnected portal read published a late quota"); return
         }
         #expect(session.teams.isEmpty)
@@ -211,7 +274,7 @@ struct MusePortalTests {
         await withCheckedContinuation { website.readStarted = $0 }
         session.selectedTeamID = "43"
         website.complete?(body)
-        guard case .unavailable = await read.value else {
+        guard case .failure = await read.value else {
             Issue.record("Previous team's in-flight quota was accepted"); return
         }
         #expect(session.teams.isEmpty)
@@ -244,14 +307,33 @@ struct MusePortalTests {
         preferences.set("42", forKey: MusePortalSession.teamKey)
         let website = PortalWebsiteStub(body: #"{"failure":"http","retryAfter":"30"}"#)
         let session = MusePortalSession(preferences: preferences, website: website)
-        _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        if case .failure(.rateLimited(let retry)) = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) {
+            #expect(retry == now.addingTimeInterval(30))
+        } else {
+            Issue.record("Portal HTTP failure was reported as a login failure")
+        }
         website.body = body
-        _ = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now.addingTimeInterval(29))
+        if case .failure(.rateLimited(let heldRetry)) = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now.addingTimeInterval(29)) {
+            #expect(heldRetry == now.addingTimeInterval(30))
+        } else {
+            Issue.record("Retry hold was reported as a login failure")
+        }
         #expect(website.requests.count == 1)
         guard case .usage = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now.addingTimeInterval(30)) else {
             Issue.record("Published Retry-After never expired"); return
         }
         #expect(website.requests.count == 2)
+    }
+
+    @Test func httpStatusIsPreservedWithoutInventingAThrottle() throws {
+        for (status, reason) in [(401, UnavailableReason.credentialRejected), (503, .badResponse),
+                                 (429, .rateLimited(retryAfter: nil))] {
+            let text = "{\"failure\":\"http\",\"httpStatus\":\(status)}"
+            guard case .failure(let actual) = try read(text) else {
+                Issue.record("HTTP failure was reported as an account mismatch"); continue
+            }
+            #expect(actual == reason)
+        }
     }
 
     @Test @MainActor func portalQueryUsesOnlyReadOnlyAllowlistedRequests() throws {
@@ -279,7 +361,7 @@ struct MusePortalTests {
             } else if scenario == "no-selection" {
                 context.evaluateScript("teamID = '';")
             } else if scenario == "failed" {
-                context.evaluateScript("fetch = async (p,o) => (paths.push(p), {ok:false,headers:{get:()=> '30'}});")
+                context.evaluateScript("fetch = async (p,o) => (paths.push(p), {ok:false,status:429,headers:{get:()=> '30'}});")
             }
             context.evaluateScript("async function run() {\n" + MusePortalSession.query + "\n}\nrun().then(p=>output=p).catch(e=>error=String(e));")
             #expect(context.exception == nil)
@@ -296,7 +378,16 @@ struct MusePortalTests {
                 #expect(usage.weekly?.used_percent?.value == 35)
             } else {
                 #expect(paths?.contains(where: { $0.contains("subscription-quota") }) == false)
-                guard case .unavailable = payload.read(email: "person@example.com", plan: "Muse Code Power Usage", teamID: "42", now: now) else {
+                let outcome = payload.read(email: "person@example.com", plan: "Muse Code Power Usage", teamID: "42", now: now)
+                if scenario == "failed" {
+                    #expect(payload.httpStatus == 429)
+                    guard case .failure(.rateLimited(let retry)) = outcome else {
+                        Issue.record("HTTP failure lost Retry-After"); continue
+                    }
+                    #expect(retry == now.addingTimeInterval(30))
+                    continue
+                }
+                guard case .unavailable = outcome else {
                     Issue.record("Portal query admitted a failed or unselected scope"); continue
                 }
             }
@@ -308,6 +399,9 @@ struct MusePortalTests {
 private final class PortalWebsiteStub: MusePortalWebsite {
     var webView: WKWebView? { nil }
     var isAtPortal = true
+    var navigationSucceeds = true
+    var waits = 0, hosts = 0
+    var requestBeforeCommit = false
     var body: String
     var opens = 0, stops = 0, clears = 0
     var requests: [String] = []
@@ -319,6 +413,17 @@ private final class PortalWebsiteStub: MusePortalWebsite {
 
     init(body: String) { self.body = body }
     func open() { opens += 1 }
+    func host() { hosts += 1 }
+    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void) {
+        waits += 1
+        if isAtPortal { complete(true); return }
+        // open() deliberately leaves the URL unset, as on a fresh WKWebView.
+        Task { @MainActor in
+            await Task.yield()
+            isAtPortal = navigationSucceeds
+            complete(isAtPortal)
+        }
+    }
     func stop() { stops += 1 }
     func clear() async {
         clears += 1
@@ -328,6 +433,7 @@ private final class PortalWebsiteStub: MusePortalWebsite {
     func evaluate(email: String, plan: String, teamID: String,
                   complete: @escaping @MainActor @Sendable (String?) -> Void) {
         requests.append("\(email)|\(plan)|\(teamID)")
+        requestBeforeCommit = requestBeforeCommit || !isAtPortal
         self.complete = complete
         readStarted?.resume()
         if !holdRead { complete(body) }
