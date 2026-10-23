@@ -111,7 +111,7 @@ public enum MetricType: Sendable, Equatable {
     /// `remaining` is nil only for a pool the vendor declares unlimited, which
     /// is a statement in its own right — the same reason `consumptionFraction`
     /// is optional. It is never a 0 standing in for "not reported".
-    case credits(remaining: Int?, unitName: String)
+    case credits(remaining: Decimal?, unitName: String)
     case subscription(tierName: String?, renewalDate: Date?)
 }
 

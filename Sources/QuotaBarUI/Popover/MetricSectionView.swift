@@ -29,10 +29,18 @@ struct MetricSectionView: View {
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                 VStack(spacing: 0) {
                     if let header = group.header {
-                        Text(header)
-                            .font(Theme.Typography.title)
-                            .tracking(Theme.Tracking.title)
-                            .foregroundStyle(Theme.onSurface)
+                        HStack(spacing: 8) {
+                            Text(header)
+                                .font(Theme.Typography.title)
+                                .tracking(Theme.Tracking.title)
+                                .foregroundStyle(Theme.onSurface)
+                            if let plan = group.headerPlan {
+                                Text(plan)
+                                    .font(Theme.Typography.title.weight(.regular))
+                                    .foregroundStyle(Theme.onSurfaceVariant)
+                                    .lineLimit(1)
+                            }
+                        }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
                             .padding(.top, 8)

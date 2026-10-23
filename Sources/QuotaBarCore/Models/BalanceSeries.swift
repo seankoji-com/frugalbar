@@ -49,7 +49,7 @@ public enum BalanceSeries {
         public func format(_ value: Decimal) -> String {
             switch self {
             case .currency(let code): MoneyText.format(value, code: code)
-            case .credits(let name):  "\(NSDecimalNumber(decimal: value).intValue.formatted()) \(name)"
+            case .credits(let name):  "\(CreditText.format(value)) \(name)"
             }
         }
     }
@@ -170,7 +170,7 @@ public enum BalanceSeries {
     public static func value(of metric: MetricType) -> Decimal? {
         switch metric {
         case .currency(let balance, _, _, _): balance
-        case .credits(let remaining, _): remaining.map { Decimal($0) }
+        case .credits(let remaining, _): remaining
         default: nil
         }
     }

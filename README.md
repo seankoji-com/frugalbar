@@ -113,7 +113,9 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
-The popover groups Gemini, Argon and the shared Claude/GPT pool under one **Antigravity** heading, with separate **Claude** (Claude Code) and **ChatGPT** (Codex) headings. Each pool keeps its own bars, resets, plan and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
+The popover groups Gemini, Argon and the shared Claude/GPT pool (shown as **Claude**, with a split Claude/Gemini icon) under one **Antigravity** heading. A matching published plan appears beside that heading; mixed or missing plans stay on their individual rows. Direct **Claude** (Claude Code) and **ChatGPT** (Codex) have separate headings. Each pool keeps its own bars, resets and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
+
+ChatGPT usage credits appear below Codex in credits, including published fractions, and retain their exact decimal value in history. The sync-v1 companion format accepts only integer credits; a fractional balance exports as an unavailable `outOfRange` metric rather than a rounded figure.
 
 ---
 

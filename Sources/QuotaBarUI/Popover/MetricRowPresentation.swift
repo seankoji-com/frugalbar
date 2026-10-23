@@ -237,7 +237,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
             // A count with no cap behind it is stated on its own; only a pool
             // the vendor declares unlimited says so, because that is the
             // vendor's own word rather than a missing number.
-            remaining.map { "\($0.formatted()) \(unitName)" } ?? "Unlimited"
+            remaining.map { "\(CreditText.format($0)) \(unitName)" } ?? "Unlimited"
         case .currency(let balance, let limit, let spent, let code):
             // An uncapped key has no "left of" to show. Falling back to
             // `spent ?? balance` printed the *balance* under a spend label —

@@ -193,7 +193,25 @@ public struct VendorAvatarView: View {
 
     @ViewBuilder
     private var mark: some View {
-        if let nsImg = VendorSVGLogo.nsImage(for: vendorId) {
+        if vendorId == .antigravityClaude {
+            ZStack {
+                logo(for: .claude).clipShape(DiagonalLogoHalf(upper: true))
+                logo(for: .gemini).clipShape(DiagonalLogoHalf(upper: false))
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: size))
+                    path.addLine(to: CGPoint(x: size, y: 0))
+                }
+                .stroke(Theme.onSurface, lineWidth: 1)
+            }
+            .frame(width: size, height: size)
+        } else {
+            logo(for: vendorId)
+        }
+    }
+
+    @ViewBuilder
+    private func logo(for vendor: VendorIdentifier) -> some View {
+        if let nsImg = VendorSVGLogo.nsImage(for: vendor) {
             Image(nsImage: nsImg)
                 .resizable()
                 .interpolation(.high)
@@ -202,7 +220,7 @@ public struct VendorAvatarView: View {
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.23))
         } else {
             RoundedRectangle(cornerRadius: size * 0.23)
-                .fill(Color(hexString: vendorId.accentColorHex) ?? Theme.primary)
+                .fill(Color(hexString: vendor.accentColorHex) ?? Theme.primary)
                 .frame(width: size, height: size)
         }
     }
@@ -255,6 +273,19 @@ public struct VendorAvatarView: View {
             }
         }
         .frame(width: size, height: size)
+    }
+}
+
+private struct DiagonalLogoHalf: Shape {
+    let upper: Bool
+
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: upper ? CGPoint(x: rect.minX, y: rect.minY) : CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.closeSubpath()
+        }
     }
 }
 

@@ -55,7 +55,7 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
     static func figure(for metric: MetricType) -> String {
         switch metric {
         case .credits(let remaining, let unitName):
-            remaining.map { "\($0.formatted()) \(unitName)" } ?? "Unlimited"
+            remaining.map { "\(CreditText.format($0)) \(unitName)" } ?? "Unlimited"
         case .currency(let balance, _, _, let code):
             // The same rule the money rows print with, so the card's figure and
             // its own detail note ("$200.00 monthly limit") cannot disagree.

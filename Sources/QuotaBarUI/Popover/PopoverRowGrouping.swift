@@ -8,6 +8,7 @@ struct PopoverRowGrouping {
         let header: String?
         let suppressPlan: Bool
         let snapshots: [QuotaSnapshot]
+        var headerPlan: String? = nil
 
         var isGrouped: Bool { header != nil }
     }
@@ -25,7 +26,7 @@ struct PopoverRowGrouping {
         return switch snapshot.vendorId {
         case .gemini: "Gemini"
         case .antigravityArgon: "Argon"
-        case .antigravityClaude: "Claude/GPT (shared)"
+        case .antigravityClaude: "Claude"
         case .claude: "Claude Code"
         case .openai: "Codex"
         default: snapshot.rowTitle
@@ -76,7 +77,9 @@ struct PopoverRowGrouping {
             let sharedPlan = plan.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 == true && run.allSatisfy { $0.planName == plan }
             if let service {
-                groups.append(Group(id: run[0].id, header: service, suppressPlan: false, snapshots: run))
+                let headerPlan = service == "Antigravity" && sharedPlan ? plan : nil
+                groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
+                                    snapshots: run, headerPlan: headerPlan))
             } else if grouped {
                 groups.append(Group(
                     id: run[0].id,

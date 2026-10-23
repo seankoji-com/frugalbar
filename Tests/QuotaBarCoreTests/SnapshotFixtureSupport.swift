@@ -197,7 +197,7 @@ enum SnapshotFixtures {
                              spent: try optionalDecimal(raw["spent"]),
                              currencyCode: try string(raw, "currencyCode"))
         case "credits":
-            return .credits(remaining: raw["remaining"] as? Int, unitName: try string(raw, "unit"))
+            return .credits(remaining: (raw["remaining"] as? Int).map { Decimal($0) }, unitName: try string(raw, "unit"))
         case "subscription":
             return .subscription(tierName: raw["tierName"] as? String,
                                  renewalDate: try optionalDate(raw["renewalAt"]))
