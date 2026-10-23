@@ -22,11 +22,10 @@ struct PopoverRowGrouping {
     }
 
     static func rowTitle(for snapshot: QuotaSnapshot) -> String {
-        let claudeTitle = snapshot.displayName.contains("GPT") ? "Claude/GPT" : "Claude"
         return switch snapshot.vendorId {
         case .gemini: "Gemini"
         case .antigravityArgon: "Argon"
-        case .antigravityClaude: hasSharedClaudeReading(snapshot) ? "Claude/GPT (shared)" : claudeTitle
+        case .antigravityClaude: "Claude/GPT (shared)"
         case .claude: "Claude Code"
         case .openai: "Codex"
         default: snapshot.rowTitle
@@ -34,15 +33,10 @@ struct PopoverRowGrouping {
     }
 
     static func accessibilityPrefix(for snapshot: QuotaSnapshot) -> String? {
-        if hasSharedClaudeReading(snapshot) {
+        if snapshot.vendorId == .antigravityClaude {
             return "Antigravity shared Claude/GPT pool"
         }
         return service(for: snapshot.vendorId)
-    }
-
-    private static func hasSharedClaudeReading(_ snapshot: QuotaSnapshot) -> Bool {
-        snapshot.vendorId == .antigravityClaude && snapshot.status.confidence == .measured
-            && snapshot.displayName.contains("GPT")
     }
 
     static func groups(
@@ -50,22 +44,13 @@ struct PopoverRowGrouping {
     ) -> [Group] {
         let counts = Dictionary(grouping: snapshots, by: \.vendorId).mapValues { $0.count }
         var groups: [Group] = []
-        var remaining = snapshots
-        // Automatic priority can scatter the independent Antigravity pools.
-        // Anchor each usable/exhausted block at its first row, retaining
-        // priority within it. Never lift a spent pool above a usable provider.
-        // A custom arrangement is exact, so only adjacent service rows join.
-        if ordering == .automatic {
-            var seen = Set<String>()
-            remaining = snapshots.flatMap { snapshot -> [QuotaSnapshot] in
-                guard let service = service(for: snapshot.vendorId) else { return [snapshot] }
-                let key = "\(service)|\(snapshot.isQuotaExhausted)"
-                guard seen.insert(key).inserted else { return [] }
-                return snapshots.filter {
-                    self.service(for: $0.vendorId) == service
-                        && $0.isQuotaExhausted == snapshot.isQuotaExhausted
-                }
-            }
+        // QuotaManager places service blocks from preferences. Also collect
+        // scattered inputs here so a caller cannot emit duplicate headings.
+        var seen = Set<String>()
+        let remaining = snapshots.flatMap { snapshot -> [QuotaSnapshot] in
+            guard let service = service(for: snapshot.vendorId) else { return [snapshot] }
+            guard seen.insert(service).inserted else { return [] }
+            return snapshots.filter { self.service(for: $0.vendorId) == service }
         }
         var start = 0
         while start < remaining.count {

@@ -102,7 +102,7 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 | Section | What it does |
 |---|---|
-| **Providers** | Each provider's connection state from the last poll (a symbol, the reason, and what to do about it), whether it is shown, and its order. *Soonest deadline first* (default) puts the provider whose longest window turns over soonest at the top and a spent one last; *Custom order* keeps the list you arrange with the up and down buttons, except that a provider with a spent or blocked window drops to the bottom. OpenCode Go workspaces are listed under OpenCode with their own arrows and always stay together in the order you give them. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
+| **Providers** | Each provider's connection state from the last poll (a symbol, the reason, and what to do about it), whether it is shown, and its order. Antigravity's independent pools form one service block, anchored at its first visible pool in the saved order, with stable pool order inside it. *Soonest deadline first* (default) places blocks by the soonest longest-window reset among their usable members; *Custom order* keeps the saved block order. A block moves to the bottom only when every member is exhausted. OpenCode Go workspaces likewise stay together in their saved order. A hidden provider is **not polled** and is absent from the popover, menu bar, advice, desktop widget and notifications. Its key stays put, so showing it again is instant |
 | **API Keys** | Credentials per provider, where each one is coming from, and CLI discovery |
 | **OpenCode Go** | One row per subscription workspace: name, key, monitoring, and order (drag a row or use its arrows) |
 | **Display** | Desktop widget position, and a key to the popover's symbols |
@@ -113,7 +113,7 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
-The popover groups Gemini, Argon and the shared Claude/GPT pool under **Antigravity**, with separate **Claude** (Claude Code) and **ChatGPT** (Codex) headings. Each pool keeps its own bars, resets and inspector. Automatic ordering gathers usable Antigravity pools at the first one's position; exhausted pools stay at the bottom. Custom ordering keeps every provider's position. These ordering rules can split a service across multiple headings.
+The popover groups Gemini, Argon and the shared Claude/GPT pool under one **Antigravity** heading, with separate **Claude** (Claude Code) and **ChatGPT** (Codex) headings. Each pool keeps its own bars, resets, plan and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
 
 ---
 
@@ -137,7 +137,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
 | **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan. A plan id FrugalBar does not recognise gets no credit gauge rather than a guessed denominator |
 | **ClinePass** | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` with the Cline API key or account token | Live gauges: the 5-hour, weekly and monthly ClinePass windows as percentages with reset times. The account's credit balance is deliberately not shown: the API's unit for it is undocumented. HTTP 404 means the account has no ClinePass subscription, and is reported as such |
-| **Muse** | `POST https://api.meta.ai/muse-code/key` with the Muse Code CLI's OAuth session token | Five-hour and weekly percentages with resets when the CLI's key-mint response includes `subs_usage`. An active subscription can omit it, yielding "No quota reading" without guessed bars. An inactive subscription requiring payment reports "Payment required". FrugalBar never makes a model call to obtain usage |
+| **Muse** | `POST https://api.meta.ai/muse-code/key` with the Muse Code CLI's OAuth session token; optional read-only `dev.meta.ai` portal session | The mint's `subs_usage` stays primary. When an active subscription omits it, **Settings → API Keys → Muse portal quota** offers an in-app sign-in and explicit team picker. Account email, team membership and published plan must match before the team's published used/limit pairs are drawn. Idle, expired or unknown windows stay absent. Sign-in and team selection last until disconnection or app exit; no browser cookies are imported and no additional credential is persisted. Missing usage retains the published plan and explains the absent window. Payment requirements remain visible. FrugalBar never makes a model call to obtain usage |
 
 ### Caveats worth knowing
 

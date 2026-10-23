@@ -63,6 +63,32 @@ struct SnapshotOrderingTests {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test("Antigravity is one block in saved order and moves only when all visible pools are exhausted")
+    func antigravityServiceBlock() {
+        let order = ProviderDisplayPreferences.resolveOrder(stored: ["claude", "openai", "gemini", "opencode", "muse"])
+        let rows = [snapshot(.gemini, now: now, rows: [bar("WK", used: 1, window: QuotaWindow.week, resetsIn: 1, now: now)]),
+                    snapshot(.claude, now: now), snapshot(.openai, now: now), snapshot(.muse, now: now),
+                    snapshot(.antigravityClaude, now: now, rows: [bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 48, now: now)]),
+                    snapshot(.antigravityArgon, now: now, rows: [bar("WK", used: 1, window: QuotaWindow.week, resetsIn: 12, now: now)])]
+        let prefs = ProviderDisplayPreferences(ordering: .custom, order: order)
+        #expect(QuotaManager.arrange(rows, preferences: prefs, instanceOrder: []).map(\.vendorId)
+            == [.claude, .openai, .gemini, .antigravityClaude, .antigravityArgon, .muse])
+        // Hiding the only usable pool makes the remaining service exhausted.
+        var hidden = prefs
+        hidden.hidden = [.antigravityClaude]
+        #expect(QuotaManager.arrange(rows, preferences: hidden, instanceOrder: []).map(\.vendorId)
+            == [.claude, .openai, .muse, .gemini, .antigravityArgon])
+        #expect(prefs.order == order)
+        var automatic = prefs
+        automatic.ordering = .automatic
+        #expect(QuotaManager.arrange(rows, preferences: automatic, instanceOrder: []).map(\.vendorId)
+            == [.gemini, .antigravityClaude, .antigravityArgon, .claude, .openai, .muse])
+        // A different saved within-service order survives automatic sorting.
+        automatic.order = [.antigravityArgon, .muse, .antigravityClaude, .gemini, .claude, .openai]
+        #expect(QuotaManager.arrange(rows, preferences: automatic, instanceOrder: []).prefix(3).map(\.vendorId)
+            == [.antigravityArgon, .antigravityClaude, .gemini])
+    }
+
     @Test("the longest window decides a vendor's place, not its shortest")
     func longestWindowWins() async {
         // Claude's five-hour bucket resets in an hour, but its week has three

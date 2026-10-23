@@ -60,11 +60,11 @@ struct UXRenderTests {
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools", directory: directory)
         let exhaustedRows = Array(rows.dropLast()) + [snapshot(.gemini, name: "Gemini", weekly: 1)]
         try await save(VStack(spacing: 12) {
-            Text("Fixture · exhausted pools stay last").font(.caption)
+            Text("Fixture · mixed exhaustion stays in its service").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: exhaustedRows)
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-exhausted", directory: directory)
         try await save(VStack(spacing: 12) {
-            Text("Fixture · exact custom provider order").font(.caption)
+            Text("Fixture · custom service blocks").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: rows, ordering: .custom)
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-custom", directory: directory)
     }

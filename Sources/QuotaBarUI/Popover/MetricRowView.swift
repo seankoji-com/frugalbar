@@ -143,7 +143,7 @@ struct MetricRowView: View {
     /// announced. The credits' count is folded in here rather than left on the
     /// glyph strip, where a shape channel alone would silently be the only
     /// carrier (AGENTS.md, WCAG 1.4.1).
-    private func combinedAccessibilityLabel(
+    func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
         let label = presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
@@ -162,6 +162,17 @@ struct MetricRowView: View {
     /// How far the hover bubble sits past the row edge: it overlaps the row
     /// by a few points so it reads as belonging to it.
     private static let bubbleOffset: CGFloat = 16
+
+    /// Shared with the default-suite layout check at the actual name width.
+    var titleView: some View {
+        Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
+            .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
+            .tracking(isGrouped ? 0 : Theme.Tracking.title)
+            .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
+            .lineLimit(snapshot.instanceIdOrNil == nil && snapshot.vendorId != .antigravityClaude ? 1 : 2)
+            .fixedSize(horizontal: false, vertical: true)
+            .minimumScaleFactor(0.85)
+    }
 
     private func forecastBubble(_ text: String) -> some View {
         PaceForecastBubble(text: text, isUrgent: forecastIsUrgent)
@@ -240,13 +251,7 @@ struct MetricRowView: View {
             // an exhausted row, otherwise the plan unless a group header
             // already carries it.
             VStack(alignment: .leading, spacing: 1) {
-                Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
-                    .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
-                    .tracking(isGrouped ? 0 : Theme.Tracking.title)
-                    .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
-                    .lineLimit(snapshot.instanceIdOrNil == nil && snapshot.vendorId != .antigravityClaude ? 1 : 2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .minimumScaleFactor(0.85)
+                titleView
 
                 if !subtitle(p).isEmpty {
                     Text(subtitle(p))

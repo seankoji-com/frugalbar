@@ -148,24 +148,24 @@ struct PopoverRowGroupingTests {
         #expect(groups.allSatisfy { !$0.suppressPlan })
     }
 
-    @Test func customOrderingKeepsEveryProviderPositionIncludingSplitServices() {
+    @Test func customOrderingKeepsOneAntigravityBlockIncludingExhaustedMembers() {
         let rows = [snapshot("gemini", vendor: .gemini), snapshot("claude", vendor: .claude),
                     snapshot("shared", vendor: .antigravityClaude), snapshot("codex", vendor: .openai),
                     snapshot("argon", vendor: .antigravityArgon, exhausted: true)]
         let groups = PopoverRowGrouping.groups(for: rows, ordering: .custom)
-        #expect(groups.flatMap(\.snapshots).map(\.id) == rows.map(\.id))
-        #expect(groups.map(\.header) == ["Antigravity", "Claude", "Antigravity", "ChatGPT", "Antigravity"])
+        #expect(groups.flatMap(\.snapshots).map(\.id) == ["gemini", "shared", "argon", "claude", "codex"])
+        #expect(groups.map(\.header) == ["Antigravity", "Claude", "ChatGPT"])
     }
 
-    @Test func groupingNeverRaisesAnExhaustedPoolAboveAUsableProvider() {
+    @Test func mixedExhaustionDoesNotSplitTheService() {
         let rows = [snapshot("shared", vendor: .antigravityClaude),
                     snapshot("claude", vendor: .claude),
                     snapshot("gemini", vendor: .gemini, exhausted: true),
                     snapshot("codex", vendor: .openai, exhausted: true),
                     snapshot("argon", vendor: .antigravityArgon, exhausted: true)]
         let groups = PopoverRowGrouping.groups(for: rows)
-        #expect(groups.flatMap(\.snapshots).map(\.id) == ["shared", "claude", "gemini", "argon", "codex"])
-        #expect(groups.flatMap(\.snapshots).map(\.isQuotaExhausted) == [false, false, true, true, true])
+        #expect(groups.flatMap(\.snapshots).map(\.id) == ["shared", "gemini", "argon", "claude", "codex"])
+        #expect(groups.filter { $0.header == "Antigravity" }.count == 1)
     }
 
     @Test func aHiddenOrAbsentPoolIsNotRecreatedByGrouping() {
@@ -187,8 +187,8 @@ struct PopoverRowGroupingTests {
         let unknown = QuotaSnapshot(id: shared.id, vendorId: shared.vendorId,
             displayName: shared.displayName, category: shared.category, metric: shared.metric,
             status: .unavailable(.badResponse), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        #expect(PopoverRowGrouping.rowTitle(for: unknown) == "Claude/GPT")
-        #expect(PopoverRowGrouping.accessibilityPrefix(for: unknown) == "Antigravity")
+        #expect(PopoverRowGrouping.rowTitle(for: unknown) == "Claude/GPT (shared)")
+        #expect(PopoverRowGrouping.accessibilityPrefix(for: unknown) == "Antigravity shared Claude/GPT pool")
         #expect(PopoverRowGrouping.accessibilityPrefix(for: snapshot("gemini", vendor: .gemini)) == "Antigravity")
         #expect(PopoverRowGrouping.rowTitle(for: snapshot("claude", vendor: .claude)) == "Claude Code")
         #expect(PopoverRowGrouping.rowTitle(for: snapshot("codex", vendor: .openai)) == "Codex")

@@ -7,6 +7,49 @@ import Testing
 @Suite("Antigravity row layout")
 @MainActor
 struct AntigravityRowLayoutTests {
+    @Test("grouped titles fit the 112pt name column without truncation at 384pt")
+    func groupedTitlesFit() {
+        let titles: [(VendorIdentifier, String)] = [(.gemini, "Gemini"), (.antigravityArgon, "Argon"),
+            (.antigravityClaude, "Claude/GPT (shared)"), (.claude, "Claude Code"), (.openai, "Codex")]
+        for (vendor, title) in titles {
+            let snap = QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
+                category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+                status: .measured(.none), resetsAt: nil,
+                lastUpdated: Date(timeIntervalSince1970: 1_700_000_000), auxiliaryInfo: nil)
+            let row = MetricRowView(snapshot: snap, isGrouped: true)
+            #expect(PopoverRowGrouping.rowTitle(for: snap) == title)
+            let actual = NSHostingView(rootView: row.titleView.frame(width: Theme.nameColumnWidth))
+            let full = NSHostingView(rootView: Text(title).font(Theme.Typography.subtitle)
+                .fixedSize(horizontal: false, vertical: true).frame(width: Theme.nameColumnWidth))
+            actual.layoutSubtreeIfNeeded()
+            full.layoutSubtreeIfNeeded()
+            #expect(abs(actual.fittingSize.height - full.fittingSize.height) < 1)
+            #expect(actual.fittingSize.width == 112)
+            if vendor == .antigravityClaude { #expect(actual.fittingSize.height > 25) }
+        }
+        #expect(Theme.popoverWidth - 2 * Theme.edgeMargin - 2 * Theme.cardPadding == 332)
+        #expect(Theme.rowAvatarSize + 2 * Theme.rowSpacing + Theme.nameColumnWidth + 176 == 332)
+    }
+
+    @Test("the row's composed accessibility label retains service, pool, usage and failure")
+    func composedAccessibilityLabels() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for status: ProviderStatus in [.measured(.warning), .unavailable(.badResponse)] {
+            let snapshot = QuotaSnapshot(id: "antigravity_claude", vendorId: .antigravityClaude,
+                displayName: "AGY Claude/GPT", category: .aiSubscriptions,
+                metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+                status: status, resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                row1: status.confidence == .measured ? DualBarMetrics(primaryFraction: 0.8, label: "5H") : nil)
+            let row = MetricRowView(snapshot: snapshot, isGrouped: true)
+            let label = row.combinedAccessibilityLabel(grid: WindowGridPresentation(snapshot: snapshot, now: now),
+                presentation: MetricRowPresentation(snapshot: snapshot, now: now))
+            #expect(label.hasPrefix("Antigravity shared Claude/GPT pool. "))
+            #expect(label.contains("AGY Claude/GPT"))
+            if status.confidence == .measured { #expect(label.contains("80")) }
+            else { #expect(label.contains("Unexpected response")) }
+        }
+    }
+
     @Test("the shared Claude/GPT name gets room to wrap at the real row width")
     func sharedPoolTitleWraps() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
