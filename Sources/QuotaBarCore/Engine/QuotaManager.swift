@@ -244,7 +244,10 @@ public actor QuotaManager {
         let antigravity: Set<VendorIdentifier> = [.gemini, .antigravityClaude, .antigravityArgon]
         var addedAntigravity = false
         let groups = prefs.visibleOrder.compactMap { vendor -> [QuotaSnapshot]? in
-            guard byVendor[vendor] != nil else { return nil }
+            // A pool with no snapshots cannot anchor the block: the dictionary
+            // is only ever populated by appends, so an empty entry is not a
+            // reading and must not claim the anchor.
+            guard !(byVendor[vendor] ?? []).isEmpty else { return nil }
             guard antigravity.contains(vendor) else { return byVendor[vendor] }
             guard !addedAntigravity else { return nil }
             addedAntigravity = true

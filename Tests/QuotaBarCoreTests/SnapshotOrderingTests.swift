@@ -89,6 +89,16 @@ struct SnapshotOrderingTests {
             == [.antigravityArgon, .antigravityClaude, .gemini])
     }
 
+    @Test("an absent Gemini pool cannot anchor the other Antigravity pools ahead of a saved service")
+    func absentAntigravityPoolCannotAnchor() {
+        let prefs = ProviderDisplayPreferences(ordering: .custom,
+            order: [.gemini, .muse, .antigravityClaude, .claude, .antigravityArgon])
+        let rows = [snapshot(.antigravityArgon, now: now), snapshot(.claude, now: now),
+                    snapshot(.antigravityClaude, now: now), snapshot(.muse, now: now)]
+        #expect(QuotaManager.arrange(rows, preferences: prefs, instanceOrder: []).map(\.vendorId)
+            == [.muse, .antigravityClaude, .antigravityArgon, .claude])
+    }
+
     @Test("the longest window decides a vendor's place, not its shortest")
     func longestWindowWins() async {
         // Claude's five-hour bucket resets in an hour, but its week has three

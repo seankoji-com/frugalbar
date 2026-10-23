@@ -5,7 +5,6 @@ import QuotaBarCore
 struct MusePortalConnectionView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = MusePortalSession.shared
-    @State private var isReading = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,10 +16,11 @@ struct MusePortalConnectionView: View {
                     Text("Choose a team").tag("")
                     ForEach(session.teams) { team in Text(team.name).tag(team.id) }
                 }.disabled(!session.isEnabled || session.isDisconnecting)
+                // The read and its in-flight flag belong to the session, which
+                // outlives this sheet and clears the flag on every exit.
                 Button("Refresh teams") {
-                    isReading = true
-                    Task { await session.refreshTeams(); isReading = false }
-                }.disabled(isReading || !session.isEnabled || session.isDisconnecting)
+                    Task { await session.refreshTeams() }
+                }.disabled(session.isReadingTeams || !session.isEnabled || session.isDisconnecting)
             }
             Text(session.message).font(.caption)
             if let webView = session.webView { MusePortalWebView(webView: webView) }
@@ -35,6 +35,11 @@ struct MusePortalConnectionView: View {
         }
         .padding(16)
         .frame(width: 800, height: 660)
+        // Disconnecting in the parent Settings pane takes the session's web
+        // view away, so this sheet has nothing left to show.
+        .onChange(of: session.isEnabled) { _, enabled in
+            if !enabled { dismiss() }
+        }
     }
 }
 

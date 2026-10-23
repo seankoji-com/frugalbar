@@ -155,6 +155,113 @@ struct MusePortalTests {
         #expect(website.requests == ["||"])
     }
 
+    @Test(arguments: ["not JSON", #"{"failure":"http","httpStatus":503}"#,
+                     #"{"failure":"offline"}"#, #"{"failure":"timedOut"}"#,
+                     #"{"email":"person@example.com"}"#])
+    @MainActor func failedOrMissingTeamListKeepsPreviousMembership(failedBody: String) async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        await session.refreshTeams()
+        #expect(session.teams.map(\.id) == ["42"])
+
+        website.body = failedBody
+        let result = await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now)
+        if case .usage = result { Issue.record("Saved membership substituted for a failed fresh read") }
+        #expect(website.requests == ["||", "person@example.com|Muse Code Power Usage|42"])
+        #expect(session.teams.map(\.id) == ["42"])
+        #expect(session.selectedTeamID == "42")
+        #expect(preferences.string(forKey: MusePortalSession.teamKey) == "42")
+
+        // A list actually returned by the server replaces the old one, even
+        // on a failed quota read, and an explicit empty list really is empty.
+        website.body = #"{"failure":"tier","teams":[{"id":"43","name":"Other team"}]}"#
+        await session.refreshTeams()
+        #expect(session.teams.map(\.id) == ["43"])
+        website.body = #"{"teams":[]}"#
+        await session.refreshTeams()
+        #expect(session.teams.isEmpty && session.selectedTeamID == "42")
+        #expect(!session.isReadingTeams)
+    }
+
+    @Test(arguments: ["success", "malformed", "http", "cancelled"])
+    @MainActor func teamRefreshOwnsItsFlagThroughCompletion(outcome: String) async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.holdRead = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        // A disabled session never starts a refresh.
+        await session.refreshTeams()
+        #expect(!session.isReadingTeams && website.requests.isEmpty)
+        session.connect()
+        let refresh = Task { await session.refreshTeams() }
+        await withCheckedContinuation { website.readStarted = $0 }
+        #expect(session.isReadingTeams)
+        // A second sheet/click cannot start a duplicate or release this flag.
+        await session.refreshTeams()
+        #expect(session.isReadingTeams && website.requests == ["||"])
+        if outcome == "cancelled" {
+            refresh.cancel()
+        } else {
+            website.complete?(outcome == "success" ? body : outcome == "malformed"
+                ? "not JSON" : #"{"failure":"http","httpStatus":503}"#)
+        }
+        await refresh.value
+        #expect(!session.isReadingTeams)
+        #expect(session.teams.map(\.id) == (outcome == "success" ? ["42"] : []))
+        // Cleanup also permits a subsequent successful refresh.
+        website.holdRead = false
+        await session.refreshTeams()
+        #expect(!session.isReadingTeams && website.requests.count == 2)
+        #expect(session.teams.map(\.id) == ["42"])
+    }
+
+    @Test @MainActor func disconnectImmediatelyReleasesTeamRefreshAndRejectsItsLateResult() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.holdRead = true
+        website.holdClear = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        var readingAtStop: Bool?
+        website.onStop = { [weak session] in readingAtStop = session?.isReadingTeams }
+        let refresh = Task { await session.refreshTeams() }
+        await withCheckedContinuation { website.readStarted = $0 }
+        #expect(session.isReadingTeams)
+        let lateCompletion = website.complete
+        let disconnect = Task { await session.disconnect() }
+        await withCheckedContinuation { website.clearStarted = $0 }
+        #expect(readingAtStop == false)
+        #expect(!session.isReadingTeams && session.isDisconnecting && !session.isEnabled)
+        await session.refreshTeams()
+        #expect(!session.isReadingTeams && website.requests.count == 1)
+        lateCompletion?(body)
+        await refresh.value
+        #expect(session.teams.isEmpty && session.selectedTeamID.isEmpty)
+        website.finishClear?.resume()
+        await disconnect.value
+        session.connect()
+        guard !session.isReadingTeams else {
+            Issue.record("Disconnected refresh prevented a new session's read"); return
+        }
+        let next = Task { await session.refreshTeams() }
+        await withCheckedContinuation { website.readStarted = $0 }
+        lateCompletion?(body)
+        #expect(session.isReadingTeams && session.teams.isEmpty)
+        website.complete?(body)
+        await next.value
+        #expect(!session.isReadingTeams && session.teams.map(\.id) == ["42"])
+    }
+
     @Test @MainActor func restartedReadWaitsForPortalCommit() async throws {
         let suite = "MusePortalTests.\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
@@ -487,6 +594,7 @@ private final class PortalWebsiteStub: MusePortalWebsite {
     var readStarted: CheckedContinuation<Void, Never>?
     var clearStarted: CheckedContinuation<Void, Never>?
     var finishClear: CheckedContinuation<Void, Never>?
+    var onStop: (() -> Void)?
 
     init(body: String) { self.body = body }
     func open() { opens += 1 }
@@ -501,7 +609,7 @@ private final class PortalWebsiteStub: MusePortalWebsite {
             complete(isAtPortal)
         }
     }
-    func stop() { stops += 1 }
+    func stop() { stops += 1; onStop?() }
     func clear() async {
         clears += 1
         clearStarted?.resume()
@@ -513,6 +621,7 @@ private final class PortalWebsiteStub: MusePortalWebsite {
         requestBeforeCommit = requestBeforeCommit || !isAtPortal
         self.complete = complete
         readStarted?.resume()
+        readStarted = nil
         if !holdRead { complete(body) }
     }
 }

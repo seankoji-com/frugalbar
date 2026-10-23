@@ -1543,9 +1543,12 @@ struct MuseQuotaProviderTests {
 
     /// An inactive subscription must not render as a healthy 0%-used row: the
     /// vendor stated it cannot serve.
-    @Test("an inactive subscription with a payment requirement is critical")
-    func paymentRequired() throws {
-        let snap = try snapshot(#"{"is_subs_active":false,"require_payment":true}"#)
+    @Test("a published payment requirement wins over active, inactive or absent activity flags",
+          arguments: [#"{"is_subs_active":false,"require_payment":true}"#,
+                      #"{"is_subs_active":true,"require_payment":true}"#,
+                      #"{"require_payment":true}"#])
+    func paymentRequired(body: String) throws {
+        let snap = try snapshot(body)
         #expect(snap.status == .measured(.critical))
         #expect(snap.badgeText == "Payment required")
         #expect(snap.row1 == nil && snap.row2 == nil)

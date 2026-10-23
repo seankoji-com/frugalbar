@@ -15,6 +15,10 @@ public final class MusePortalSession: ObservableObject {
     @Published public private(set) var isDisconnecting = false
     @Published public private(set) var teams: [MusePortalTeam] = []
     @Published public private(set) var message = "Sign in, then refresh the team list."
+    // Session ownership lets a read finish after the sheet closes. The token
+    // prevents an old read's cleanup from clearing a reconnected session's flag.
+    @Published private var teamRefreshID: UUID?
+    public var isReadingTeams: Bool { teamRefreshID != nil }
     @Published private var teamID = ""
     public var selectedTeamID: String {
         get { teamID }
@@ -60,6 +64,7 @@ public final class MusePortalSession: ObservableObject {
         generation = UUID()
         pending?.finish(nil)
         pending = nil
+        teamRefreshID = nil
         website?.stop()
         teams = []
         selectedTeamID = ""
@@ -70,6 +75,10 @@ public final class MusePortalSession: ObservableObject {
     }
 
     public func refreshTeams() async {
+        guard isEnabled, !isDisconnecting, !isReadingTeams else { return }
+        let refreshID = UUID()
+        teamRefreshID = refreshID
+        defer { if teamRefreshID == refreshID { teamRefreshID = nil } }
         _ = await evaluate(email: "", plan: "", teamID: "", now: Date())
     }
 
@@ -120,12 +129,12 @@ public final class MusePortalSession: ObservableObject {
         guard !Task.isCancelled, isEnabled, current == generation else { return .failure(.timedOut) }
         guard let text, let data = text.data(using: .utf8),
               let payload = try? JSONDecoder().decode(MusePortalPayload.self, from: data) else {
-            teams = []
             message = "Could not read the portal. Refresh teams to try again."
             return .failure(.badResponse)
         }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: payload.retryAfter, now: now)
-        teams = payload.teams ?? []
+        // Only a published membership list can replace the previous list.
+        if let listed = payload.teams { teams = listed }
         message = payload.failure == "timedOut"
             ? "The Muse portal request timed out. Refresh to try again."
             : payload.failure == "offline"
