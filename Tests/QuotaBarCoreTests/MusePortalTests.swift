@@ -305,6 +305,70 @@ struct MusePortalTests {
         #expect(website.waits == 2 && website.requests.count == 1)
     }
 
+    @Test(arguments: ["timeout", "cancelled", "success"])
+    @MainActor func navigationWaiterIsReleasedWhenReadFinishes(outcome: String) async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let website = PortalWebsiteStub(body: body)
+        website.isAtPortal = false
+        website.holdNavigation = true
+        let session = MusePortalSession(preferences: preferences, website: website)
+        session.connect()
+        session.selectedTeamID = "42"
+        let first = Task { await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) }
+        await withCheckedContinuation { website.navigationStarted = $0 }
+        let lateCompletion = try #require(website.navigationComplete)
+        if outcome == "cancelled" { first.cancel() }
+        if outcome == "success" { website.finishNavigation() }
+        let result = await first.value
+        if outcome == "success" {
+            guard case .usage = result else { Issue.record("Committed navigation lost its quota"); return }
+        } else {
+            guard case .failure(.timedOut) = result else { Issue.record("Navigation did not end as a timeout/cancellation"); return }
+        }
+        #expect(website.navigationComplete == nil)
+        #expect(website.stops == 0 && website.clears == 0 && session.isEnabled)
+
+        // A callback retained by a navigation already in flight cannot finish
+        // a later read or remove the later read's registered waiter.
+        website.isAtPortal = false
+        let next = Task { await session.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) }
+        await withCheckedContinuation { website.navigationStarted = $0 }
+        let requestsBeforeCommit = website.requests.count
+        lateCompletion(true)
+        #expect(website.navigationComplete != nil)
+        #expect(website.requests.count == requestsBeforeCommit)
+        website.finishNavigation()
+        guard case .usage = await next.value else { Issue.record("Stale callback interfered with the next read"); return }
+        #expect(website.navigationComplete == nil && website.requests.count == requestsBeforeCommit + 1)
+        #expect(!website.requestBeforeCommit && website.stops == 0 && website.clears == 0)
+    }
+
+    @Test @MainActor func webKitWaiterCleanupReleasesOnlyMatchingCallback() {
+        // No open(): exercise the real callback storage without creating a
+        // web view, touching website data or sending a network request.
+        let website = MusePortalWebKit()
+        let oldID = UUID(), newID = UUID()
+        weak var retainedEvaluation: ClaudeMonthlyCreditEvaluation?
+        do {
+            let evaluation = ClaudeMonthlyCreditEvaluation()
+            retainedEvaluation = evaluation
+            website.waitUntilPortal(id: oldID) { _ in evaluation.finish(nil) }
+        }
+        #expect(retainedEvaluation != nil)
+        website.cancelPortalWait(id: oldID)
+        #expect(retainedEvaluation == nil)
+
+        var completed: [UUID] = []
+        website.waitUntilPortal(id: oldID) { _ in completed.append(oldID) }
+        website.waitUntilPortal(id: newID) { _ in completed.append(newID) }
+        website.cancelPortalWait(id: oldID)
+        website.stop()
+        #expect(completed == [newID])
+        #expect(website.webView == nil)
+    }
+
     @Test @MainActor func overlappingReadDoesNotClaimSignInWasLost() async throws {
         let suite = "MusePortalTests.\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
@@ -584,6 +648,10 @@ private final class PortalWebsiteStub: MusePortalWebsite {
     var webView: WKWebView? { nil }
     var isAtPortal = true
     var navigationSucceeds = true
+    var holdNavigation = false
+    var navigationID: UUID?
+    var navigationComplete: (@MainActor @Sendable (Bool) -> Void)?
+    var navigationStarted: CheckedContinuation<Void, Never>?
     var waits = 0, hosts = 0
     var requestBeforeCommit = false
     var body: String
@@ -599,15 +667,35 @@ private final class PortalWebsiteStub: MusePortalWebsite {
     init(body: String) { self.body = body }
     func open() { opens += 1 }
     func host() { hosts += 1 }
-    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void) {
+    func waitUntilPortal(id: UUID, complete: @escaping @MainActor @Sendable (Bool) -> Void) {
         waits += 1
         if isAtPortal { complete(true); return }
+        if holdNavigation {
+            navigationID = id
+            navigationComplete = complete
+            navigationStarted?.resume()
+            navigationStarted = nil
+            return
+        }
         // open() deliberately leaves the URL unset, as on a fresh WKWebView.
         Task { @MainActor in
             await Task.yield()
             isAtPortal = navigationSucceeds
             complete(isAtPortal)
         }
+    }
+    func cancelPortalWait(id: UUID) {
+        if navigationID == id {
+            navigationID = nil
+            navigationComplete = nil
+        }
+    }
+    func finishNavigation() {
+        isAtPortal = navigationSucceeds
+        let complete = navigationComplete
+        navigationID = nil
+        navigationComplete = nil
+        complete?(isAtPortal)
     }
     func stop() { stops += 1; onStop?() }
     func clear() async {

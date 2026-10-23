@@ -112,9 +112,11 @@ public final class MusePortalSession: ObservableObject {
         pending = navigation
         defer { if pending === navigation { pending = nil } }
         website.open()
+        let navigationID = UUID()
         let ready = await navigation.value(waitForTimeout: { try await Task.sleep(for: .seconds(2)) }) { complete in
-            website.waitUntilPortal { complete($0 ? "ready" : nil) }
+            website.waitUntilPortal(id: navigationID) { complete($0 ? "ready" : nil) }
         }
+        website.cancelPortalWait(id: navigationID)
         guard !Task.isCancelled, isEnabled, current == generation else { return .failure(.timedOut) }
         guard ready != nil else {
             return .failure(.timedOut)
@@ -218,7 +220,8 @@ protocol MusePortalWebsite: AnyObject {
     var isAtPortal: Bool { get }
     func open()
     func host()
-    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void)
+    func waitUntilPortal(id: UUID, complete: @escaping @MainActor @Sendable (Bool) -> Void)
+    func cancelPortalWait(id: UUID)
     func stop()
     func clear() async
     func evaluate(email: String, plan: String, teamID: String,
@@ -233,7 +236,7 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
     private(set) var webView: WKWebView?
     private var hostWindow: NSWindow?
     private var committedURL: URL?
-    private var navigationComplete: (@MainActor @Sendable (Bool) -> Void)?
+    private var navigationComplete: (id: UUID, complete: @MainActor @Sendable (Bool) -> Void)?
     var isAtPortal: Bool {
         committedURL?.scheme == "https" && committedURL?.host == "dev.meta.ai"
     }
@@ -266,8 +269,14 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
         webView.autoresizingMask = [.width, .height]
     }
 
-    func waitUntilPortal(complete: @escaping @MainActor @Sendable (Bool) -> Void) {
-        if isAtPortal { complete(true) } else { navigationComplete = complete }
+    func waitUntilPortal(id: UUID, complete: @escaping @MainActor @Sendable (Bool) -> Void) {
+        if isAtPortal { complete(true) } else { navigationComplete = (id, complete) }
+    }
+
+    func cancelPortalWait(id: UUID) {
+        // A disconnected read can finish after a new session starts waiting.
+        // Remove only its callback, leaving the user's navigation running.
+        if navigationComplete?.id == id { navigationComplete = nil }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -278,17 +287,17 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard webView === self.webView else { return }
         committedURL = webView.url
-        if isAtPortal { navigationComplete?(true); navigationComplete = nil }
+        if isAtPortal { navigationComplete?.complete(true); navigationComplete = nil }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard webView === self.webView else { return }
-        navigationComplete?(false)
+        navigationComplete?.complete(false)
         navigationComplete = nil
     }
 
     func stop() {
-        navigationComplete?(false)
+        navigationComplete?.complete(false)
         navigationComplete = nil
         committedURL = nil
         webView?.navigationDelegate = nil
