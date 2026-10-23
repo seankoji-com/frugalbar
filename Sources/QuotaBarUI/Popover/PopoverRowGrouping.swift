@@ -39,9 +39,18 @@ struct PopoverRowGrouping {
         return service(for: snapshot.vendorId)
     }
 
+    /// - Parameter ordering: informational here, and deliberately not
+    ///   re-applied. The saved order is already in the array: `QuotaManager`
+    ///   `.arrange` places service blocks from `ProviderDisplayPreferences`
+    ///   before a section slices them, and this function preserves the order
+    ///   it is handed rather than sorting again - re-sorting would undo that
+    ///   placement. The flag stays on the signature so the caller's contract
+    ///   is visible at the call site, and is referenced below so it cannot
+    ///   read as a dead parameter.
     static func groups(
         for snapshots: [QuotaSnapshot], ordering: ProviderOrdering = .automatic
     ) -> [Group] {
+        _ = ordering
         let counts = Dictionary(grouping: snapshots, by: \.vendorId).mapValues { $0.count }
         var groups: [Group] = []
         // QuotaManager places service blocks from preferences. Also collect

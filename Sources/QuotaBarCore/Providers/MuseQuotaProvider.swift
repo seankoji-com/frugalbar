@@ -206,6 +206,13 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
         // reading, so it never renders as a healthy, fully-available row. An
         // *absent* flag is unknown, not "active", so it falls through to the
         // usage check rather than assuming health.
+        // Checked before the activity flag, deliberately. A body that flags
+        // payment *and* an inactive subscription is a state the user must act
+        // on, where the payment is the remedy and the vendor sends no usage to
+        // draw: "Payment required" is the honest row, not "no active
+        // subscription". A body that omits the activity flag but flags payment
+        // stops here too, for the same reason - a payment-required response
+        // carries no usage by definition.
         if response.require_payment == true {
             return paymentRequiredSnapshot(provider: provider, now: now)
         }

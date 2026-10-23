@@ -10,6 +10,10 @@ public final class MusePortalSession: ObservableObject {
     @Published public private(set) var isEnabled = false
     @Published public private(set) var teams: [MusePortalTeam] = []
     @Published public private(set) var message = "Sign in, then refresh the team list."
+    /// The team read is owned by the session, not by the sheet that starts it:
+    /// the sheet can be dismissed mid-read, and a view-held flag would then be
+    /// left set, or cleared on a view that no longer exists.
+    @Published public private(set) var isReadingTeams = false
     @Published public var selectedTeamID = "" {
         didSet { generation = UUID() }
     }
@@ -45,6 +49,11 @@ public final class MusePortalSession: ObservableObject {
     }
 
     public func refreshTeams() async {
+        // Released on every exit path, cancellation included, because it is
+        // the session's flag rather than a view's.
+        guard !isReadingTeams else { return }
+        isReadingTeams = true
+        defer { isReadingTeams = false }
         _ = await evaluate(email: "", plan: "", teamID: "", now: Date())
     }
 
@@ -80,12 +89,15 @@ public final class MusePortalSession: ObservableObject {
         guard !Task.isCancelled, isEnabled, current == generation else { return nil }
         guard let text, let data = text.data(using: .utf8),
               let payload = try? JSONDecoder().decode(MusePortalPayload.self, from: data) else {
-            teams = []
             message = "Could not read the portal. Sign in and refresh teams."
             return nil
         }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: payload.retryAfter, now: now)
-        teams = payload.teams ?? []
+        // A failed or partial read is not evidence that the membership
+        // changed. Only the `GET /api/portal/teams` step produces this list,
+        // so an absent one leaves the previous selection intact instead of
+        // emptying the picker and stranding `selectedTeamID` outside it.
+        if let listed = payload.teams { teams = listed }
         message = payload.failure == nil
             ? "Select the team that holds your Muse subscription. The account and plan must match your CLI login."
             : "Could not read a matching portal quota. Check your sign-in, team and plan."

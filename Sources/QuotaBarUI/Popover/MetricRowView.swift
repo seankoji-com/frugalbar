@@ -143,6 +143,10 @@ struct MetricRowView: View {
     /// announced. The credits' count is folded in here rather than left on the
     /// glyph strip, where a shape channel alone would silently be the only
     /// carrier (AGENTS.md, WCAG 1.4.1).
+    ///
+    /// Internal rather than `private` only so the layout check in the default
+    /// test suite can compose the same label from its own presentations; the
+    /// row's `body` is the sole production caller.
     func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
