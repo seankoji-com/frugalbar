@@ -198,6 +198,108 @@ private let githubPayload = #"""
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
 
+    private let agyBothPools = #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0}]},{"displayName":"Claude and GPT models","description":"Shared allowance","buckets":[{"bucketId":"claude-weekly","window":"weekly","remainingFraction":0.4,"resetTime":"2099-01-08T00:00:00Z"},{"bucketId":"claude-5h","window":"5h","remainingFraction":0.8,"resetTime":"2099-01-01T05:00:00Z"}]}]}"#
+
+    @Test("AGY exposes Claude's shared pool independently and reuses Gemini's scoped response")
+    func agyClaudeSeparateSharedPool() async throws {
+        #expect(QuotaManager.defaultProviders().filter { $0.vendorId == .antigravityClaude }.count == 1)
+        let payload = agyBothPools
+        let snapshots = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"selected-project","paidTier":{"name":"Published plan"}}"#)
+            }
+            let body = try! JSONSerialization.jsonObject(with: extractBody(from: request)) as! [String: String]
+            #expect(body == ["project": "selected-project"])
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == "antigravity/cli/1.4.3")
+            return canned(body: payload)
+        }) {
+            let manager = QuotaManager(providerFactory: {
+                let batch = AntigravityRequestBatch()
+                return [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                        GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch)]
+            })
+            return await manager.forceRefresh()
+        }
+        #expect(URLProtocolStub.requestCount == 2)
+        let claude = try #require(snapshots["antigravity_claude"])
+        #expect(claude.vendorId == .antigravityClaude)
+        #expect(claude.displayName == "AGY Claude/GPT")
+        #expect(claude.shortVendorName == "AGY Claude/GPT")
+        #expect(claude.status.confidence == .measured)
+        #expect(abs(try #require(claude.row1?.primaryFraction) - 0.2) < 0.00001)
+        #expect(abs(try #require(claude.row2?.primaryFraction) - 0.6) < 0.00001)
+        #expect(claude.row1?.label == "5H" && claude.row2?.label == "WK")
+        #expect(claude.row1?.windowLength == QuotaWindow.fiveHours)
+        #expect(claude.row2?.resetsAt == ISO8601DateFormatter().date(from: "2099-01-08T00:00:00Z"))
+        #expect(claude.planName == "Published plan")
+        #expect(claude.auxiliaryInfo?.contains("Claude and GPT models · Shared allowance · Project: selected-project") == true)
+        #expect(snapshots["gemini"]?.row1?.primaryFraction == 1)
+        #expect(snapshots["claude"] == nil)
+    }
+
+    @Test("AGY Claude never borrows missing, disabled, ambiguous or malformed quota", arguments: [
+        #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":1}]}]}"#,
+        #"{"groups":[{"displayName":"GPT models","buckets":[{"window":"weekly","remainingFraction":1}]}]}"#,
+        #"{"groups":[{"displayName":"Claude and GPT models","buckets":[{"remainingFraction":1,"disabled":true}]}]}"#,
+        #"{"groups":[{"displayName":"Claude models","buckets":[{"remainingFraction":1.1}]}]}"#,
+        #"{"groups":[{"displayName":"Claude models","buckets":[{"window":"5h"}]}]}"#,
+        #"{"groups":[{"displayName":"Claude models","buckets":[{"remainingFraction":"oops"}]}]}"#,
+        #"{"groups":[{"displayName":"Claude A","buckets":[{"remainingFraction":1}]},{"displayName":"Claude B","buckets":[{"remainingFraction":0}]}]}"#
+    ])
+    func agyClaudeUnavailable(payload: String) async throws {
+        let snapshot = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:", allowance: .claude).fetchSnapshot()
+        }
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snapshot.status.confidence != .measured)
+        #expect(snapshot.displayBars.isEmpty)
+        #expect(snapshot.consumptionFraction == nil)
+    }
+
+    @Test("AGY Claude falls through absent pools and host failures, but stops on rejected credentials", arguments: [200, 404, 429, 500, 401])
+    func agyClaudeHostFallback(status: Int) async throws {
+        let payload = agyBothPools
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.url!.host!.hasPrefix("daily-")
+                ? canned(status: status, body: #"{"groups":[{"displayName":"Gemini Models"}]}"#)
+                : canned(body: payload)
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude).fetchSnapshot()
+        }
+        #expect(URLProtocolStub.requestCount == (status == 401 ? 2 : 4))
+        if status == 401 { #expect(snapshot.status == .unavailable(.credentialRejected)) }
+        else { #expect(snapshot.status.confidence == .measured) }
+    }
+
+    @Test("AGY Claude hiding is independent and each pass obtains a fresh shared response")
+    func agyClaudeVisibilityAndFreshPass() async throws {
+        let payload = agyBothPools
+        for hidden: Set<VendorIdentifier> in [[.gemini], [.antigravityClaude], [.gemini, .antigravityClaude]] {
+            let result = try await withStubbedHTTP({ request in
+                request.url!.path.hasSuffix("loadCodeAssist")
+                    ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+            }) {
+                let manager = QuotaManager(cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, minPollInterval: 0),
+                    providerFactory: {
+                        let batch = AntigravityRequestBatch()
+                        return [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                                GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch)]
+                    }, displayPreferences: { ProviderDisplayPreferences(hidden: hidden) })
+                _ = await manager.forceRefresh()
+                return await manager.forceRefresh()
+            }
+            #expect(URLProtocolStub.requestCount == (hidden.count == 2 ? 0 : 4))
+            #expect((result["gemini"] != nil) == !hidden.contains(.gemini))
+            #expect((result["antigravity_claude"] != nil) == !hidden.contains(.antigravityClaude))
+        }
+    }
+
     private func geminiBoundedFallback(stalledPath: String) async throws {
         let provider = GeminiQuotaProvider(accessToken: "token", environment: [:])
         let outcome = try await withStubbedHTTP({ request in

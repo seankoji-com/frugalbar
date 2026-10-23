@@ -103,6 +103,7 @@ public enum AttributionEngine {
         .grok,
         .kiro,
         .gemini,
+        .antigravityClaude,
         .clinepass,
         .muse
     ]

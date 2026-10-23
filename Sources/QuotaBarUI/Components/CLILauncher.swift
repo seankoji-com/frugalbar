@@ -21,7 +21,7 @@ public enum CLILauncher {
     public static func command(for vendor: VendorIdentifier) -> String? {
         switch vendor {
         case .claude:                       "claude"
-        case .gemini:                       "agy"
+        case .gemini, .antigravityClaude:   "agy"
         case .openai:                       "codex"
         case .opencode:                     "opencode"
         case .copilot:                      "opencode"

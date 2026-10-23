@@ -41,7 +41,7 @@ public struct ProviderDisplayPreferences: Sendable, Equatable {
     /// The order a fresh install shows, and the tie-break the automatic sort
     /// falls back to: subscriptions first, then spend, then developer limits.
     public static let defaultOrder: [VendorIdentifier] = [
-        .claude, .openai, .gemini, .copilot, .opencode,
+        .claude, .openai, .gemini, .antigravityClaude, .copilot, .opencode,
         .openrouter, .deepseek, .grok, .kiro, .devpass,
         .commandcode, .clinepass, .muse,
         .githubRest, .githubGraphql,

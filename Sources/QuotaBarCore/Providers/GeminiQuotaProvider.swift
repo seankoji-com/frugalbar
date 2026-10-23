@@ -1,16 +1,19 @@
 import Foundation
 
-/// Antigravity subscription quota from the Google Cloud Code API.
+/// One independent Antigravity model pool from the Google Cloud Code API.
 ///
 /// Reads `v1internal:retrieveUserQuotaSummary`, the same source the `agy` CLI
-/// uses, from whichever of the two Cloud Code hosts publishes Gemini's windows
+/// uses, from whichever of the two Cloud Code hosts publishes this pool's windows
 /// (`productionAPIHosts`). It returns the real windows the vendor meters — a
 /// five-hour and a weekly bucket per model group — where `fetchAvailableModels`
 /// exposes only a single `remainingFraction` per model. Using the latter showed
 /// one bar and silently omitted the weekly limit, which was the binding
 /// constraint.
 public final class GeminiQuotaProvider: QuotaProvider, Sendable {
-    public let vendorId: VendorIdentifier = .gemini
+    public enum Allowance: Sendable { case gemini, claude }
+    private let allowance: Allowance
+    public var vendorId: VendorIdentifier { allowance == .gemini ? .gemini : .antigravityClaude }
+    private let requests: AntigravityRequestBatch?
     public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
 
@@ -63,16 +66,29 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         return (normalized.url.map { $0.absoluteString + ":" }, false)
     }
 
-    public init(accessToken: String? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
+    public convenience init(accessToken: String? = nil,
+                            environment: [String: String] = ProcessInfo.processInfo.environment,
+                            allowance: Allowance = .gemini) {
+        self.init(accessToken: accessToken, environment: environment, allowance: allowance,
+                  requests: nil)
+    }
+
+    init(accessToken: String? = nil,
+         environment: [String: String] = ProcessInfo.processInfo.environment,
+         allowance: Allowance, requests: AntigravityRequestBatch?) {
         self.accessToken = accessToken
         self.apiBaseOverride = nil
         self.configuredAPIBase = Self.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
+        self.allowance = allowance
+        self.requests = requests
     }
 
-    init(accessToken: String?, apiBaseOverride: String?) {
+    init(accessToken: String?, apiBaseOverride: String?, allowance: Allowance = .gemini) {
         self.accessToken = accessToken
         self.apiBaseOverride = apiBaseOverride
         self.configuredAPIBase = (nil, false)
+        self.allowance = allowance
+        self.requests = nil
     }
 
     private struct CodeAssist: Decodable, Sendable {
@@ -112,20 +128,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             return unavailable(.unsupported("FRUGALBAR_GEMINI_API_BASE is not a valid https://*.googleapis.com URL"))
         }
 
-        var resolvedToken = accessToken
-        // Ambient credential lookup is skipped under a test host. Otherwise
-        // whether "no key short-circuits" passes depends on whether the
-        // developer running the suite happens to be signed in to Google.
-        if !TestHost.isActive {
-            if resolvedToken == nil || resolvedToken?.isEmpty == true {
-                // Our own session first — it is the only one we can renew.
-                resolvedToken = await GeminiOAuthSession.loadRefreshed()?.accessToken
-            }
-            if resolvedToken == nil || resolvedToken?.isEmpty == true {
-                resolvedToken = await CredentialStore.antigravityAccessTokenAsync()
-            }
-        }
-        guard let token = resolvedToken, !token.isEmpty else {
+        let requests = requests ?? AntigravityRequestBatch()
+        guard let token = await requests.token(injected: accessToken), !token.isEmpty else {
             return unavailable(.notConfigured)
         }
 
@@ -139,6 +143,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let now = Date()
         var resolvedBase: String?
         var resolvedPlan: String?
+        var resolvedProject: String?
         var resolvedGroup: QuotaSummary.Group?
         var readings: [Reading] = []
         // What the last host to answer said, when none of them published a
@@ -155,7 +160,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 // Scope before reading quota. A populated project-less summary
                 // can describe a different pool; its numbers cannot establish
                 // that this account has allowance left.
-                let (assistData, assistHTTP) = try await Self.loadCodeAssist(token: token, base: base)
+                let (assistData, assistHTTP) = try await requests.response(key: base + "assist") {
+                    try await Self.loadCodeAssist(token: token, base: base)
+                }
                 if let reason = QuotaHTTP.failureReason(for: assistHTTP.statusCode) {
                     lastFailure = reason
                     if reason == .credentialRejected {
@@ -172,7 +179,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = .unsupported("Antigravity did not identify a quota project")
                     continue
                 }
-                let (data, http) = try await Self.quotaSummary(token: token, base: base, project: project)
+                let (data, http) = try await requests.response(key: base + "quota:" + project) {
+                    try await Self.quotaSummary(token: token, base: base, project: project)
+                }
                 if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
                     lastFailure = reason
                     // A rejected credential is a verdict on the token, not on
@@ -196,8 +205,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = .badResponse
                     continue
                 }
-                guard let group = Self.geminiGroup(in: summary) else {
-                    lastFailure = .unsupported("Antigravity reported no Gemini quota")
+                guard let group = quotaGroup(in: summary) else {
+                    lastFailure = noQuotaReason
                     continue
                 }
                 // Counted after the disabled filter: a group whose every bucket
@@ -205,16 +214,17 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 // still worth asking.
                 let read = (group.buckets ?? []).compactMap { Self.reading($0, now: now) }
                 guard !read.isEmpty else {
-                    lastFailure = .unsupported("Antigravity reported no Gemini quota")
+                    lastFailure = noQuotaReason
                     continue
                 }
                 resolvedPlan = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name
                 resolvedBase = base
+                resolvedProject = project
                 resolvedGroup = group
                 readings = read
                 break
             } catch {
-                NSLog("frugalbar: Gemini backend %@ failed: %@", base, String(describing: error))
+                try Task.checkCancellation()
                 transportFailure = error
             }
         }
@@ -244,15 +254,37 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
         return QuotaSnapshot(
-            id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+            id: vendorId.rawValue, vendorId: vendorId,
+            displayName: allowance == .claude ? Self.claudeDisplayName(group) : displayName,
             category: category, metric: .subscription(tierName: plan, renewalDate: nil),
             status: .measured(urgency), resetsAt: ordered.first?.reset, lastUpdated: now,
-            auxiliaryInfo: (group.description ?? "Live Antigravity subscription quota") + sourceSuffix,
+            auxiliaryInfo: allowance == .claude
+                ? [group.displayName, group.description, resolvedProject.map { "Project: \($0)" }]
+                    .compactMap { $0 }.joined(separator: " · ") + sourceSuffix
+                : (group.description ?? "Live Antigravity subscription quota") + sourceSuffix,
             row1: ordered[safe: 0].map { $0.bar }, row2: ordered[safe: 1].map { $0.bar },
             row3: ordered[safe: 2].map { $0.bar },
             badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
             planName: plan, cliSource: "Google OAuth\(sourceSuffix)"
         )
+    }
+
+    private var noQuotaReason: UnavailableReason {
+        .unsupported("Antigravity reported no \(allowance == .gemini ? "Gemini" : "Claude") quota")
+    }
+
+    private func quotaGroup(in summary: QuotaSummary) -> QuotaSummary.Group? {
+        if allowance == .gemini { return Self.geminiGroup(in: summary) }
+        // Never combine independently metered groups or borrow a GPT-only pool.
+        let candidates = (summary.groups ?? []).filter { group in
+            group.displayName?.lowercased().contains("claude") == true
+                || group.buckets?.contains { $0.bucketId?.lowercased().hasPrefix("claude") == true } == true
+        }
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    private static func claudeDisplayName(_ group: QuotaSummary.Group) -> String {
+        group.displayName?.lowercased().contains("gpt") == true ? "AGY Claude/GPT" : "AGY Claude"
     }
 
     /// The group metering Gemini itself. The response also carries a "Claude

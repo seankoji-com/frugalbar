@@ -23,7 +23,7 @@ public enum VendorSVGLogo {
 
     public static func svgString(for vendor: VendorIdentifier) -> String {
         switch vendor {
-        case .claude:
+        case .claude, .antigravityClaude:
             return """
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 3.5 24 17" width="24" height="24">
               <path clip-rule="evenodd"
