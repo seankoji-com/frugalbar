@@ -243,7 +243,7 @@ struct MetricRowView: View {
                     .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
                     .tracking(isGrouped ? 0 : Theme.Tracking.title)
                     .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
-                    .lineLimit(snapshot.instanceIdOrNil == nil ? 1 : 2)
+                    .lineLimit(snapshot.instanceIdOrNil == nil && snapshot.vendorId != .antigravityClaude ? 1 : 2)
                     .fixedSize(horizontal: false, vertical: true)
                     .minimumScaleFactor(0.85)
 

@@ -106,6 +106,7 @@ public actor QuotaManager {
             OpenAIQuotaProvider(),
             GeminiQuotaProvider(allowance: .gemini, requests: agyRequests),
             GeminiQuotaProvider(allowance: .claude, requests: agyRequests),
+            GeminiQuotaProvider(allowance: .argon, requests: agyRequests),
             GitHubCopilotProvider(),
         ]
         // One provider per OpenCode Go workspace, so each subscription is
@@ -167,7 +168,7 @@ public actor QuotaManager {
     /// Fallback ordering, used only to break ties and to place vendors that
     /// published no window at all. Not the primary sort — see below.
     static let canonicalOrder: [VendorIdentifier] = [
-        .claude, .openai, .gemini, .antigravityClaude, .copilot, .opencode,
+        .claude, .openai, .gemini, .antigravityClaude, .antigravityArgon, .copilot, .opencode,
         .openrouter, .deepseek, .grok, .kiro, .devpass,
         .commandcode, .clinepass, .muse,
         .githubRest, .githubGraphql,

@@ -37,6 +37,26 @@ struct UXRenderTests {
             name: "gemini-weekly-exhausted", directory: directory)
     }
 
+    @Test func renderAntigravityPools() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        func snapshot(_ vendor: VendorIdentifier, name: String, weekly: Double) -> QuotaSnapshot {
+            QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name,
+                category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+                status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                row1: DualBarMetrics(primaryFraction: weekly, label: "WK"), planName: "Google AI Pro")
+        }
+        var claude = snapshot(.antigravityClaude, name: "AGY Claude/GPT", weekly: 0.47)
+        claude.row2 = DualBarMetrics(primaryFraction: 0.05, label: "5H")
+        let rows = [claude, snapshot(.antigravityArgon, name: "AGY Argon", weekly: 0),
+                    snapshot(.gemini, name: "Gemini", weekly: 1)]
+        try await save(VStack(spacing: 12) {
+            Text("Fixture · separate published pools").font(.caption)
+            MetricSectionView(category: .aiSubscriptions, snapshots: rows)
+        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools", directory: directory)
+    }
+
     @Test func render() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

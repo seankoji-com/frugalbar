@@ -24,7 +24,7 @@ public enum SnapshotExportTable {
         switch vendor {
         case .claude:        [.row1: "5h", .row2: "weekly"]
         case .openai:        [.row1: "w1", .row2: "w2", .row3: "w3"]
-        case .gemini, .antigravityClaude: [.row1: "w1", .row2: "w2", .row3: "w3"]
+        case .gemini, .antigravityClaude, .antigravityArgon: [.row1: "w1", .row2: "w2", .row3: "w3"]
         case .opencode:      [.row1: "5h", .row2: "weekly", .row3: "monthly"]
         case .copilot:       [.row1: "premium", .row2: "chat"]
         case .openrouter, .deepseek: [:]

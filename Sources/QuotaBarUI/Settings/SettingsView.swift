@@ -344,7 +344,7 @@ public struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Google (Gemini and AGY Claude)") {
+            Section("Google (Gemini, AGY Claude/GPT and Argon)") {
                 HStack {
                     Button("Connect Google account") { Task { await connectGemini() } }
                         .disabled(isSigningInToGemini)
@@ -1357,6 +1357,7 @@ public struct SettingsView: View {
         // above — but the switch must stay exhaustive.
         case .gemini:      provider = GeminiQuotaProvider(accessToken: key)
         case .antigravityClaude: provider = GeminiQuotaProvider(accessToken: key, allowance: .claude)
+        case .antigravityArgon: provider = GeminiQuotaProvider(accessToken: key, allowance: .argon)
         case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
         case .copilot:     provider = GitHubCopilotProvider(token: key)
         case .grok:        provider = GrokQuotaProvider(accessToken: key)

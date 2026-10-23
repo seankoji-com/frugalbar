@@ -104,6 +104,7 @@ public enum AttributionEngine {
         .kiro,
         .gemini,
         .antigravityClaude,
+        .antigravityArgon,
         .clinepass,
         .muse
     ]

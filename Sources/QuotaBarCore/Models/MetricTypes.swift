@@ -7,6 +7,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case openai
     case gemini
     case antigravityClaude = "antigravity_claude"
+    case antigravityArgon = "antigravity_argon"
     case opencode
     case copilot
     case openrouter
@@ -25,7 +26,8 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .claude:        "Claude"
         case .openai:        "OpenAI"
         case .gemini:        "Gemini"
-        case .antigravityClaude: "AGY Claude"
+        case .antigravityClaude: "AGY Claude/GPT"
+        case .antigravityArgon: "AGY Argon"
         case .opencode:      "OpenCode"
         case .copilot:       "GitHub Copilot"
         case .openrouter:    "OpenRouter"
@@ -47,6 +49,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .openai:        "#10a37f"
         case .gemini:        "#3b82f6"
         case .antigravityClaude: "#d97757"
+        case .antigravityArgon: "#3b82f6"
         case .opencode:      "#d47b00"
         case .copilot:       "#6e7681"
         case .openrouter:    "#d47b00"
@@ -75,6 +78,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .openai:        "circle.hexagongrid.fill"
         case .gemini:        "sparkle"
         case .antigravityClaude: "sparkles"
+        case .antigravityArgon: "sparkle"
         case .opencode:      "chevron.left.forwardslash.chevron.right"
         case .copilot:       "curlybraces"
         case .openrouter:    "arrow.triangle.branch"
@@ -764,7 +768,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .claude:        return "Claude"
         case .openai:        return "OpenAI"
         case .gemini:        return "Gemini"
-        case .antigravityClaude: return displayName
+        case .antigravityClaude, .antigravityArgon: return displayName
         case .opencode:      return "OpenCode"
         case .copilot:       return "GitHub Copilot"
         case .openrouter:    return "OpenRouter"
