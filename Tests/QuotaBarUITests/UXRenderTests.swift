@@ -50,9 +50,12 @@ struct UXRenderTests {
         }
         var claude = snapshot(.antigravityClaude, name: "AGY Claude/GPT", weekly: 0.47)
         claude.row2 = DualBarMetrics(primaryFraction: 0.05, label: "5H")
+        var codex = snapshot(.openai, name: "OpenAI", weekly: 0.8)
+        codex.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
+            label: "Usage credits", metric: .credits(remaining: Decimal(string: "60085.422977"), unitName: "credits"))]
         let rows = [claude, snapshot(.claude, name: "Claude", weekly: 0.38),
                     snapshot(.antigravityArgon, name: "AGY Argon", weekly: 0.51),
-                    snapshot(.openai, name: "OpenAI", weekly: 0.8),
+                    codex,
                     snapshot(.gemini, name: "Gemini", weekly: 0.6)]
         try await save(VStack(spacing: 12) {
             Text("Fixture · service groups, separate pools").font(.caption)
@@ -67,6 +70,12 @@ struct UXRenderTests {
             Text("Fixture · custom service blocks").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: rows, ordering: .custom)
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-custom", directory: directory)
+        try await save(HStack(spacing: 16) {
+            VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, size: 28)
+            VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, isExhausted: true, size: 28)
+            VendorAvatarView(vendorId: .antigravityClaude, status: .unavailable(.badResponse), size: 28)
+            VendorAvatarView(vendorId: .claude, status: .healthy, size: 28)
+        }.padding(12).background(Theme.surface), name: "agy-claude-icons", directory: directory)
     }
 
     @Test func render() async throws {

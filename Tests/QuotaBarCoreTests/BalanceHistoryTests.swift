@@ -207,6 +207,22 @@ struct BalanceHistoryTests {
         #expect(all[BalanceSeries.id(source: "openai.api-credits", unit: .credits(name: "credits"))]?.first?.value == 62_500)
     }
 
+    @Test("fractional credits round-trip exactly through recorded history")
+    func fractionalCreditHistory() async throws {
+        let store = makeStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let amount = try #require(Decimal(string: "60085.4229770000"))
+        var snap = money("openai", balance: "0")
+        let entry = APICreditEntry(id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
+                                  metric: .credits(remaining: amount, unitName: "credits"))
+        snap.apiCredits = [entry]
+        try await store.record([snap], now: now)
+        let series = try #require(BalanceSeries.of(entry))
+        let points = try await recorded(store, series.id, until: now)
+        #expect(points.map(\.value) == [amount])
+        #expect(series.unit.format(amount) == "60,085.422977 credits")
+    }
+
     @Test("several readings in one bucket keep the latest, and nothing is interpolated")
     func thinningKeepsTheLatest() async throws {
         let store = makeStore()

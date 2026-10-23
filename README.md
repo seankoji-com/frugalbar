@@ -81,7 +81,7 @@ swift run
    - **GitHub**: One PAT covers REST, GraphQL rate limits, and Copilot subscription status.
    - **OpenRouter**: Use an API key. With a provisioning key, FrugalBar shows the live account credit balance. Otherwise it reports that key's own spend: against its spend cap when the key has one, and as lifetime spend when it has none — the case for a key created without a cap. The per-window spend columns are gone — the balance or the key's spend is the one figure the row reports.
    - **DeepSeek**: Paste a `sk-…` API key, or set `DEEPSEEK_API_KEY` / enable CLI discovery to read the OpenCode auth.json entry, to show the prepaid credit balance.
-   - **Antigravity**: Connect Google OAuth once for Gemini, Argon and "Claude/GPT (shared)". These independent allowances share one service heading, each with its own row and visibility control. Argon uses only its published quota group, never Gemini's windows; the shared Claude/GPT pool is independent of direct Claude Code. All three rows reuse each host's project-scoped response within a refresh, and each falls through to the alternate host when its own pool is absent or disabled. A missing or malformed pool stays unavailable.
+   - **Antigravity**: Connect Google OAuth once for Gemini, Argon and "Claude". These independent allowances share one service heading, each with its own row and visibility control. Argon uses only its published quota group, never Gemini's windows; the shared Claude/GPT pool is independent of direct Claude Code. All three rows reuse each host's project-scoped response within a refresh, and each falls through to the alternate host when its own pool is absent or disabled. A missing or malformed pool stays unavailable.
    - **Anthropic Claude**: Sign in with the Claude Code CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that active OAuth session.
    - **OpenAI / ChatGPT**: Sign in with the Codex CLI or connect a CLI Proxy hub; enable CLI discovery and FrugalBar reads that session.
    - **OpenCode Go**: Configure a token under Preferences → OpenCode Go. Add a row per subscription workspace and arrange them in the order you want them listed; each named workspace is fetched with its own key and shown as its own rolling / weekly / monthly reading. The original workspace keeps your existing key and the CLI `auth.json` fallback, wherever you move it in the list.
@@ -113,7 +113,9 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
-The popover groups Gemini, Argon and the shared Claude/GPT pool under one **Antigravity** heading, with separate **Claude** (Claude Code) and **ChatGPT** (Codex) headings. Each pool keeps its own bars, resets, plan and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
+The popover groups Gemini, Argon and the shared Claude/GPT pool (shown as **Claude**, with a split Claude/Gemini icon) under one **Antigravity** heading. A matching published plan appears beside that heading; mixed or missing plans stay on their individual rows. Direct **Claude** (Claude Code) and **ChatGPT** (Codex) have separate headings. Each pool keeps its own bars, resets and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
+
+ChatGPT usage credits appear below Codex in credits, including published fractions, and retain their exact decimal value in history. The sync-v1 companion format accepts only integer credits; a fractional balance exports as an unavailable `outOfRange` metric rather than a rounded figure.
 
 ---
 

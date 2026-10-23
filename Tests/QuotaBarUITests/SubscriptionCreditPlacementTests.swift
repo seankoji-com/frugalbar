@@ -7,6 +7,33 @@ import QuotaBarCore
 struct SubscriptionCreditPlacementTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test("fractional credits display under Codex without rounding or changing quota")
+    func fractionalSubscriptionCredits() throws {
+        let amount = try #require(Decimal(string: "60085.4229770000"))
+        let metric = MetricType.credits(remaining: amount, unitName: "credits")
+        var snap = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.5, label: "5H"))
+        snap.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
+                                        label: "Usage credits", metric: metric)]
+        let p = MetricRowPresentation(snapshot: snap, now: now)
+        #expect(p.subscriptionCredits.first?.figure == "60,085.422977 credits")
+        #expect(p.subscriptionCredits.first?.spoken.contains("60085.422977 credits remaining") == true)
+        #expect(MetricRowPresentation.value(for: metric) == "60,085.422977 credits")
+        #expect(BalanceSeries.Unit.credits(name: "credits").format(-amount) == "-60,085.422977 credits")
+        #expect(CreditText.format(0) == "0")
+        #expect(CreditText.format(Decimal(string: "0.00000001")!) == "0.00000001")
+        #expect(snap.consumptionFraction == 0.5)
+        #expect(snap.displayBars.count == 1)
+        #expect(snap.status == .measured(.warning))
+        let balance = QuotaSnapshot(id: "credits", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: metric, status: .measured(.none), resetsAt: nil,
+            lastUpdated: now, auxiliaryInfo: nil)
+        #expect(MetricDetailPresentation.rawFigure(balance) == "60,085.422977 credits remaining")
+        #expect(balance.consumptionFraction == nil)
+    }
+
     @Test("Codex usage credits stay with the plan and leave its quota figures unchanged")
     func creditsBelongToSubscription() {
         let credit = APICreditEntry(id: "openai.api-credits", vendorId: .openai,

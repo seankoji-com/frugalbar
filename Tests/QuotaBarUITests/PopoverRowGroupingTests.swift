@@ -42,6 +42,39 @@ struct PopoverRowGroupingTests {
             presentation: MetricRowPresentation(snapshot: rows[1], now: now)) == "")
     }
 
+    @Test func antigravitySharedPlanLeavesTheRows() {
+        let rows = [snapshot("gemini", vendor: .gemini, plan: "Google AI Pro"),
+                    snapshot("claude", vendor: .antigravityClaude, plan: "Google AI Pro"),
+                    snapshot("argon", vendor: .antigravityArgon, plan: "Google AI Pro")]
+        let group = PopoverRowGrouping.groups(for: rows)[0]
+        #expect(group.header == "Antigravity")
+        #expect(group.headerPlan == "Google AI Pro")
+        #expect(group.suppressPlan)
+        for row in rows {
+            #expect(PopoverRowGrouping.subtitle(for: row, suppressPlan: group.suppressPlan,
+                presentation: MetricRowPresentation(snapshot: row, now: now)).isEmpty)
+        }
+    }
+
+    @Test func antigravityMissingAndMixedPlansStayTruthful() {
+        for plan: String? in [nil, "", "   ", "Google AI Ultra"] {
+            let rows = [snapshot("gemini", vendor: .gemini, plan: "Google AI Pro"),
+                        snapshot("claude", vendor: .antigravityClaude, plan: plan)]
+            let group = PopoverRowGrouping.groups(for: rows)[0]
+            #expect(group.headerPlan == nil)
+            #expect(!group.suppressPlan)
+            #expect(PopoverRowGrouping.subtitle(for: rows[0], suppressPlan: group.suppressPlan,
+                presentation: MetricRowPresentation(snapshot: rows[0], now: now)) == "Google AI Pro")
+        }
+        let exhausted = snapshot("gemini", vendor: .gemini, plan: "Google AI Pro", exhausted: true)
+        let group = PopoverRowGrouping.groups(for: [exhausted])[0]
+        #expect(group.headerPlan == "Google AI Pro")
+        #expect(PopoverRowGrouping.subtitle(for: exhausted, suppressPlan: group.suppressPlan,
+            presentation: MetricRowPresentation(snapshot: exhausted, now: now)) == "Resets in 2 weeks")
+        let absent = snapshot("gemini", vendor: .gemini, plan: nil)
+        #expect(PopoverRowGrouping.groups(for: [absent])[0].headerPlan == nil)
+    }
+
     @Test func singleInstanceCardIsUnchanged() {
         let row = snapshot("Alpha")
         let group = PopoverRowGrouping.groups(for: [row])[0]
@@ -145,7 +178,9 @@ struct PopoverRowGroupingTests {
             #expect(pool.row2 == original.row2)
             #expect(pool.planName == original.planName)
         }
-        #expect(groups.allSatisfy { !$0.suppressPlan })
+        #expect(groups[0].suppressPlan)
+        #expect(groups[0].headerPlan == "Google AI Pro")
+        #expect(groups.dropFirst().allSatisfy { !$0.suppressPlan })
     }
 
     @Test func customOrderingKeepsOneAntigravityBlockIncludingExhaustedMembers() {
@@ -155,6 +190,30 @@ struct PopoverRowGroupingTests {
         let groups = PopoverRowGrouping.groups(for: rows, ordering: .custom)
         #expect(groups.flatMap(\.snapshots).map(\.id) == ["gemini", "shared", "argon", "claude", "codex"])
         #expect(groups.map(\.header) == ["Antigravity", "Claude", "ChatGPT"])
+    }
+
+    @Test(arguments: [ProviderOrdering.automatic, .custom])
+    func scatteredMixedAntigravityPlansStayOnTheirRows(_ ordering: ProviderOrdering) throws {
+        for argonPlan: String? in ["Google AI Pro", nil] {
+            let pools = [snapshot("gemini", vendor: .gemini, plan: "Google AI Pro"),
+                         snapshot("shared", vendor: .antigravityClaude, plan: "Google AI Ultra"),
+                         snapshot("argon", vendor: .antigravityArgon, plan: argonPlan, exhausted: true)]
+            let rows = [pools[0], snapshot("direct", vendor: .claude, plan: "Max"),
+                        pools[1], snapshot("codex", vendor: .openai, plan: "Pro"), pools[2]]
+            let groups = PopoverRowGrouping.groups(for: rows, ordering: ordering)
+            #expect(groups.map(\.header) == ["Antigravity", "Claude", "ChatGPT"])
+            let group = try #require(groups.first)
+            #expect(group.snapshots == pools)
+            #expect(group.headerPlan == nil)
+            #expect(!group.suppressPlan)
+            for pool in pools.prefix(2) {
+                #expect(PopoverRowGrouping.subtitle(for: pool, suppressPlan: group.suppressPlan,
+                    presentation: MetricRowPresentation(snapshot: pool, now: now)) == pool.shortPlanName)
+            }
+            #expect(PopoverRowGrouping.subtitle(for: pools[2], suppressPlan: group.suppressPlan,
+                presentation: MetricRowPresentation(snapshot: pools[2], now: now)) == "Resets in 2 weeks")
+            #expect(groups.dropFirst().flatMap(\.snapshots) == [rows[1], rows[3]])
+        }
     }
 
     @Test func mixedExhaustionDoesNotSplitTheService() {
@@ -182,12 +241,12 @@ struct PopoverRowGroupingTests {
             displayName: "AGY Claude/GPT", category: .aiSubscriptions,
             metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.none),
             resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        #expect(PopoverRowGrouping.rowTitle(for: shared) == "Claude/GPT (shared)")
+        #expect(PopoverRowGrouping.rowTitle(for: shared) == "Claude")
         #expect(PopoverRowGrouping.accessibilityPrefix(for: shared) == "Antigravity shared Claude/GPT pool")
         let unknown = QuotaSnapshot(id: shared.id, vendorId: shared.vendorId,
             displayName: shared.displayName, category: shared.category, metric: shared.metric,
             status: .unavailable(.badResponse), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        #expect(PopoverRowGrouping.rowTitle(for: unknown) == "Claude/GPT (shared)")
+        #expect(PopoverRowGrouping.rowTitle(for: unknown) == "Claude")
         #expect(PopoverRowGrouping.accessibilityPrefix(for: unknown) == "Antigravity shared Claude/GPT pool")
         #expect(PopoverRowGrouping.accessibilityPrefix(for: snapshot("gemini", vendor: .gemini)) == "Antigravity")
         #expect(PopoverRowGrouping.rowTitle(for: snapshot("claude", vendor: .claude)) == "Claude Code")

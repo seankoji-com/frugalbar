@@ -426,7 +426,13 @@ public enum SnapshotExporter {
         case .credits(let remaining, let unit):
             let value: ExportJSON
             if let remaining {
-                guard let count = ExportText.integer(remaining) else { return outOfRange }
+                // maxInteger bounds exact JSON integer export in sync-v1 only.
+                // Local credits remain Decimal; fractions and larger balances
+                // stay local rather than being rounded or changing the schema.
+                guard !remaining.isNaN, remaining >= 0,
+                      remaining <= Decimal(ExportText.maxInteger) else { return outOfRange }
+                let count = NSDecimalNumber(decimal: remaining).int64Value
+                guard Decimal(count) == remaining else { return outOfRange }
                 value = .int(count)
             } else {
                 value = .null

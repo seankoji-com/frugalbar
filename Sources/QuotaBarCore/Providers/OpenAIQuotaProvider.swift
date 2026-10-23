@@ -303,19 +303,21 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         )]
     }
 
-    /// A credit count off the wire, or nil. The payload sends it as a string;
-    /// a bare number is accepted too, and a value with a fractional part that
-    /// is not integral is not a count of anything, so it is nil rather than
-    /// rounded into one.
-    static func creditCount(_ raw: String?) -> Int? {
+    /// A nonnegative published decimal, never rounded to a whole credit.
+    /// Compare the canonical text too: Decimal's parser can accept a prefix
+    /// or round an amount beyond its precision, neither of which is a reading.
+    static func creditCount(_ raw: String?) -> Decimal? {
         guard let raw else { return nil }
         let text = raw.trimmed
-        if let count = Int(text) { return count >= 0 ? count : nil }
-        if let value = Double(text), value.isFinite, value.rounded() == value,
-           value >= 0, value < Double(Int32.max) {
-            return Int(value)
-        }
-        return nil
+        guard text.range(of: #"^[0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil,
+              let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")),
+              !value.isNaN, value >= 0 else { return nil }
+        // The grammar requires a whole-number component, including for fractions.
+        let parts = text.split(separator: ".")
+        let whole = parts[0].drop(while: { $0 == "0" })
+        let fraction = parts.count == 2 ? String(parts[1].reversed().drop(while: { $0 == "0" }).reversed()) : ""
+        let canonical = (whole.isEmpty ? "0" : String(whole)) + (fraction.isEmpty ? "" : "." + fraction)
+        return NSDecimalNumber(decimal: value).stringValue == canonical ? value : nil
     }
 
     /// The row's note. Mentions banked reset credits only when OpenAI

@@ -585,7 +585,7 @@ struct SnapshotExporterTests {
         var credit = snapshot(.openai, metric: .percentage(usedFraction: 1.5, displayDetails: nil),
                               rows: [bar(1.2), tooBig, bar(0.3, label: "PLAN")])
         credit.apiCredits = [
-            APICreditEntry(id: "big", vendorId: .openai, label: "Big", metric: .credits(remaining: Int.max, unitName: "credits")),
+            APICreditEntry(id: "big", vendorId: .openai, label: "Big", metric: .credits(remaining: Decimal(Int.max), unitName: "credits")),
             APICreditEntry(id: "ok", vendorId: .openai, label: "OK", metric: .credits(remaining: 5, unitName: "credits")),
         ]
         let provider = try providers(try exported([credit]))[0]
@@ -612,10 +612,33 @@ struct SnapshotExporterTests {
         var many = snapshot(.openai, rows: [bar(0.1)])
         many.apiCredits = (0..<12).map {
             APICreditEntry(id: "c\(String($0))", vendorId: .openai, label: "C\(String($0))",
-                           metric: .credits(remaining: $0, unitName: "credits"))
+                           metric: .credits(remaining: Decimal($0), unitName: "credits"))
         }
         let credits = try #require(try providers(try exported([many]))[0]["apiCredits"] as? [[String: Any]])
         #expect(credits.map { $0["id"] as? String } == (0..<8).map { SnapshotExportIdentity.digest("c\($0)") })
+    }
+
+    @Test("sync-v1 preserves integer credits and truthfully rejects fractional balances")
+    func fractionalCreditExport() throws {
+        var host = snapshot(.openai, rows: [bar(0.1)])
+        let amounts: [Decimal?] = [62_500, Decimal(string: "60085.422977"), nil, -1, .nan,
+                                  Decimal(ExportText.maxInteger), Decimal(ExportText.maxInteger) + 1]
+        host.apiCredits = amounts.enumerated().map { index, amount in
+            APICreditEntry(id: "c\(index)", vendorId: .openai, label: "Credits",
+                           metric: .credits(remaining: amount, unitName: "credits"))
+        }
+        let provider = try providers(try exported([host]))[0]
+        let entries = try #require(provider["apiCredits"] as? [[String: Any]])
+        let metrics = try entries.map { try #require($0["metric"] as? [String: Any]) }
+        #expect(metrics[0]["remaining"] as? Int == 62_500)
+        #expect(metrics[2]["remaining"] is NSNull)
+        #expect(metrics[5]["remaining"] as? Int64 == ExportText.maxInteger)
+        for index in [1, 3, 4, 6] {
+            #expect(metrics[index]["type"] as? String == "unavailable")
+            #expect(metrics[index]["reason"] as? String == "outOfRange")
+            #expect(metrics[index]["remaining"] == nil)
+        }
+        #expect(try windows(provider).first?["usedFraction"] as? Double == 0.1)
     }
 
     @Test("Settings shows the too-many-providers notice when providers are omitted")
