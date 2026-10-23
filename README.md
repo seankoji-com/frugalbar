@@ -113,6 +113,8 @@ Gear menu → **Settings…** (⌘,) has a sidebar of sections:
 
 The running version is shown in the popover footer ("v1.4.2", or "dev" for a local build) and in **About**.
 
+The popover groups Gemini, Argon and the shared Claude/GPT pool under **Antigravity**, with separate **Claude** (Claude Code) and **ChatGPT** (Codex) headings. Each pool keeps its own bars, resets and inspector. Automatic ordering gathers usable Antigravity pools at the first one's position; exhausted pools stay at the bottom. Custom ordering keeps every provider's position. These ordering rules can split a service across multiple headings.
+
 ---
 
 ## What It Can Actually Measure
@@ -135,7 +137,7 @@ Not every vendor publishes usage telemetry. Where a vendor doesn't provide real 
 | **DevPass** | `GET https://api.llmgateway.io/v1/key` with the LLM Gateway API key | Live gauge: plan credits used against the fixed monthly allowance — DevPass is a monthly product and that is all FrugalBar tracks for it |
 | **Command Code** | `GET https://api.commandcode.ai/alpha/billing/credits` with the `cmd` CLI's API key | Live gauges: the 5-hour and weekly windows with their caps, usage and reset times, plus the plan's monthly credits measured against the allowance Command Code publishes for the plan. A plan id FrugalBar does not recognise gets no credit gauge rather than a guessed denominator |
 | **ClinePass** | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` with the Cline API key or account token | Live gauges: the 5-hour, weekly and monthly ClinePass windows as percentages with reset times. The account's credit balance is deliberately not shown: the API's unit for it is undocumented. HTTP 404 means the account has no ClinePass subscription, and is reported as such |
-| **Muse** | `POST https://api.meta.ai/muse-code/key` with the Muse Code CLI's OAuth session token | Live gauges: the 5-hour and weekly windows as percentages with reset times, plus the subscription tier's published name. Meta offers no read-only usage endpoint — this is the CLI's own key-mint call, and FrugalBar verified it is idempotent (it returns the key the account already holds and creates nothing), never a model call that would spend the quota it reports. An inactive subscription reports "Payment required" rather than a 0%-used row |
+| **Muse** | `POST https://api.meta.ai/muse-code/key` with the Muse Code CLI's OAuth session token | Five-hour and weekly percentages with resets when the CLI's key-mint response includes `subs_usage`. An active subscription can omit it, yielding "No quota reading" without guessed bars. An inactive subscription requiring payment reports "Payment required". FrugalBar never makes a model call to obtain usage |
 
 ### Caveats worth knowing
 

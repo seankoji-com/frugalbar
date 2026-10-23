@@ -146,8 +146,9 @@ struct MetricRowView: View {
     private func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
-        presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
+        let label = presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
             forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
+        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(label)" } ?? label
     }
 
     /// Only for a provider we are currently reading: a forecast under an
@@ -239,7 +240,7 @@ struct MetricRowView: View {
             // an exhausted row, otherwise the plan unless a group header
             // already carries it.
             VStack(alignment: .leading, spacing: 1) {
-                Text(snapshot.rowTitle)
+                Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
                     .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
                     .tracking(isGrouped ? 0 : Theme.Tracking.title)
                     .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)

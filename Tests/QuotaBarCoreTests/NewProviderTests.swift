@@ -1474,6 +1474,20 @@ struct MuseQuotaProviderTests {
             .status == .unavailable(.unsupported("Muse reported no subscription usage")))
     }
 
+    @Test("an active live-schema mint without subs_usage publishes no quota")
+    func activeMintWithoutUsage() async throws {
+        // Allowlisted fields from the live response on 23 October 2026.
+        // A plan and a minted key do not establish a quota percentage.
+        let body = #"{"is_subs_active":true,"require_payment":false,"subs_tier_name":"Muse Code Power Usage"}"#
+        let snap = try await withStubbedHTTP(host: StubHost.muse, body: body) {
+            try await MuseQuotaProvider(apiKey: "test-oauth").fetchSnapshot()
+        }
+        #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+        #expect(snap.status == .unavailable(.unsupported("Muse reported no subscription usage")))
+        #expect(snap.row1 == nil && snap.row2 == nil)
+        #expect(snap.consumptionFraction == nil)
+    }
+
     /// An inactive subscription must not render as a healthy 0%-used row: the
     /// vendor stated it cannot serve.
     @Test("an inactive subscription with a payment requirement is critical")
