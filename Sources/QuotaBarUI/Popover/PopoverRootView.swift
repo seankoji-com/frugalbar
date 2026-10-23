@@ -178,6 +178,7 @@ public struct PopoverRootView: View {
                     MetricSectionView(
                         category: category,
                         snapshots: items,
+                        ordering: CredentialStore.providerOrdering,
                         forecasts: store.forecasts,
                         balanceSeries: store.balanceSeries,
                         onSelect: { snap in

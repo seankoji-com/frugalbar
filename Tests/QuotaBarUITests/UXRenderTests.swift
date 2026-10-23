@@ -42,19 +42,31 @@ struct UXRenderTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         func snapshot(_ vendor: VendorIdentifier, name: String, weekly: Double) -> QuotaSnapshot {
-            QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name,
-                category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+            let plan = vendor == .claude ? "Max" : vendor == .openai ? "Pro" : "Google AI Pro"
+            return QuotaSnapshot(id: vendor.rawValue, vendorId: vendor, displayName: name,
+                category: .aiSubscriptions, metric: .subscription(tierName: plan, renewalDate: nil),
                 status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
-                row1: DualBarMetrics(primaryFraction: weekly, label: "WK"), planName: "Google AI Pro")
+                row1: DualBarMetrics(primaryFraction: weekly, label: "WK"), planName: plan)
         }
         var claude = snapshot(.antigravityClaude, name: "AGY Claude/GPT", weekly: 0.47)
         claude.row2 = DualBarMetrics(primaryFraction: 0.05, label: "5H")
-        let rows = [claude, snapshot(.antigravityArgon, name: "AGY Argon", weekly: 0),
-                    snapshot(.gemini, name: "Gemini", weekly: 1)]
+        let rows = [claude, snapshot(.claude, name: "Claude", weekly: 0.38),
+                    snapshot(.antigravityArgon, name: "AGY Argon", weekly: 0.51),
+                    snapshot(.openai, name: "OpenAI", weekly: 0.8),
+                    snapshot(.gemini, name: "Gemini", weekly: 0.6)]
         try await save(VStack(spacing: 12) {
-            Text("Fixture · separate published pools").font(.caption)
+            Text("Fixture · service groups, separate pools").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: rows)
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools", directory: directory)
+        let exhaustedRows = Array(rows.dropLast()) + [snapshot(.gemini, name: "Gemini", weekly: 1)]
+        try await save(VStack(spacing: 12) {
+            Text("Fixture · mixed exhaustion stays in its service").font(.caption)
+            MetricSectionView(category: .aiSubscriptions, snapshots: exhaustedRows)
+        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-exhausted", directory: directory)
+        try await save(VStack(spacing: 12) {
+            Text("Fixture · custom service blocks").font(.caption)
+            MetricSectionView(category: .aiSubscriptions, snapshots: rows, ordering: .custom)
+        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-custom", directory: directory)
     }
 
     @Test func render() async throws {

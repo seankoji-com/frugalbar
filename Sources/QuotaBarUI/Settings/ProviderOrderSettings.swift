@@ -52,21 +52,16 @@ struct ProviderOrderSettings: View {
                 .onChange(of: ordering) { CredentialStore.providerOrdering = ordering }
                 Text(ordering == .automatic
                      ? """
-                       The provider whose longest window turns over soonest comes \
-                       first and a spent one goes last. The list below only breaks \
-                       ties. OpenCode Go workspaces always stay together, in the \
-                       order you give them, placed by whichever of them is most \
-                       usable, so a spent workspace stays with the others until \
-                       every one of them is spent.
+                       Service blocks are placed by the soonest longest-window \
+                       reset among their usable members. The list below breaks \
+                       ties and sets the order inside Antigravity and OpenCode Go \
+                       blocks. A block moves last only when every member has a spent or blocked window.
                        """
                      : """
-                       Providers and workspaces appear in the order below, \
-                       except that a provider with a spent or blocked window \
-                       drops to the bottom — it is not somewhere to send work \
-                       right now. OpenCode Go workspaces always stay together, \
-                       placed by whichever of them is most usable, so a spent \
-                       workspace stays with the others until every one of them \
-                       is spent.
+                       Antigravity pools and OpenCode Go workspaces each stay \
+                       together in their saved order. The first visible member \
+                       places its block in the list below. A block moves last \
+                       only when every member has a spent or blocked window.
                        """)
                     .font(.caption)
                     .foregroundStyle(.secondary)

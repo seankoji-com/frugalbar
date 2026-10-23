@@ -2,10 +2,9 @@ import Foundation
 
 /// Identity the app can state about itself.
 ///
-/// A release ships a bare executable renamed to `frugalbar`, not a `.app`, so
-/// `Bundle.main` carries no name, version or icon — which is why the standard
-/// About panel came up blank. Everything an About window needs lives here
-/// instead of being read out of a bundle that does not exist.
+/// Releases ship a bare executable with an embedded bundle ID for WebKit.
+/// Version still comes from the release stamp; the embedded plist has no
+/// version, and the About window's content lives here.
 public enum AppInfo {
 
     public static let name = "FrugalBar"

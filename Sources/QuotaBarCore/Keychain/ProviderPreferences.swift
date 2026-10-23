@@ -6,7 +6,8 @@ public enum ProviderOrdering: String, Sendable, CaseIterable, Codable {
     /// published no window keeps its list position; a spent vendor goes
     /// last. See `QuotaManager.sortedSnapshots()`.
     case automatic
-    /// Exactly the order arranged in Preferences → Providers, nothing more.
+    /// Saved service-block order; exhausted blocks move last. Members keep
+    /// their saved relative order without rewriting the preference list.
     case custom
 
     /// Missing or unrecognised stored values fall back to `.automatic`.

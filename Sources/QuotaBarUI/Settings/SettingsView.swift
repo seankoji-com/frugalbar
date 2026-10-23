@@ -135,6 +135,8 @@ public struct SettingsView: View {
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
     @State private var claudeMonthlyEnabled = false
+    @State private var showMusePortal = false
+    @ObservedObject private var musePortal = MusePortalSession.shared
     @State private var showGeminiClient = false
     @State private var isSigningInToGemini = false
     @State private var geminiSignInStatus: String?
@@ -301,6 +303,25 @@ public struct SettingsView: View {
     private var keysForm: some View {
         Form {
             credentialDiscoverySection
+            Section("Muse portal quota") {
+                Text("If the CLI response omits usage, connect Meta and select your subscription team. This app retains its own sign-in and team across restarts until you disconnect. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
+                    .font(.caption)
+                Button(musePortal.isEnabled ? "Open Muse portal connection" : "Connect Muse portal quota") {
+                    musePortal.connect()
+                    showMusePortal = true
+                }.disabled(musePortal.isDisconnecting)
+                if musePortal.isEnabled {
+                    Button("Disconnect Muse portal") {
+                        Task {
+                            await musePortal.disconnect()
+                            await store?.load()
+                        }
+                    }
+                }
+                if musePortal.isDisconnecting {
+                    Text("Clearing this app's Meta sign-in…").font(.caption)
+                }
+            }
             Section("Claude monthly API credit") {
                 Text("Connect Claude's billing page to read the linked Console monthly allowance and next credit date. This is separate from extra usage and is never shown as a remaining balance.")
                     .font(.caption)
@@ -399,6 +420,9 @@ public struct SettingsView: View {
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
             Task { await store?.load() }
         }) { ClaudeMonthlyCreditConnectionView() }
+        .sheet(isPresented: $showMusePortal, onDismiss: {
+            Task { await store?.forceRefresh() }
+        }) { MusePortalConnectionView() }
     }
 
     /// Pinned below the form rather than appended to it. As the last row of a

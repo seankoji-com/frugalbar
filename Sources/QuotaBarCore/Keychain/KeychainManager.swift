@@ -198,14 +198,10 @@ public enum CredentialStore {
 
     /// Where FrugalBar's preferences live.
     ///
-    /// `UserDefaults.standard` in an *unbundled* executable keys off the
-    /// process name, not `CFBundleIdentifier` — `Info.plist` applies only
-    /// inside a real `.app`. The released binary installs as `frugalbar` while
-    /// the SwiftPM product builds as `QuotaBar`, so the two kept separate
-    /// preference files: opting into credential discovery under one name left
-    /// the other reporting every provider as "Not configured", with no visible
-    /// cause. Pinning the suite makes both names — and a bundled `.app`, whose
-    /// standard domain already *is* this string — share one store.
+    /// Before the executable embedded a bundle ID, `.standard` keyed off the
+    /// process name: release `frugalbar` and SwiftPM `QuotaBar` kept separate
+    /// files. Pinning the suite preserves those migrated preferences and keeps
+    /// storage explicit in bare executables, wrappers and test hosts.
     /// `nonisolated(unsafe)` because `UserDefaults` is not `Sendable` while
     /// being documented as thread-safe: it is a shared store by design, and
     /// this reference is assigned once and never reassigned.

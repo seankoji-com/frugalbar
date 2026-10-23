@@ -1471,14 +1471,84 @@ struct MuseQuotaProviderTests {
     @Test("a body with no usage payload is unsupported, not measured")
     func noUsage() throws {
         #expect(try snapshot(#"{"is_subs_active":true}"#)
-            .status == .unavailable(.unsupported("Muse reported no subscription usage")))
+            .status == .unavailable(.unsupported(MuseQuotaProvider.missingUsageMessage)))
+    }
+
+    @Test("an active live-schema mint without subs_usage publishes no quota")
+    func activeMintWithoutUsage() async throws {
+        // Allowlisted fields from the live response on 23 October 2026.
+        // A plan and a minted key do not establish a quota percentage.
+        let body = #"{"is_subs_active":true,"require_payment":false,"subs_tier_name":"Muse Code Power Usage"}"#
+        let snap = try await withStubbedHTTP(host: StubHost.muse, body: body) {
+            try await MuseQuotaProvider(apiKey: "test-oauth").fetchSnapshot()
+        }
+        #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+        #expect(snap.status == .unavailable(.unsupported(MuseQuotaProvider.missingUsageMessage)))
+        #expect(snap.planName == "Muse Code Power Usage")
+        #expect(snap.row1 == nil && snap.row2 == nil)
+        #expect(snap.consumptionFraction == nil)
+    }
+
+    @Test("the missing live mint uses matching portal windows; a present mint stays primary")
+    func missingMintUsesPortal() async throws {
+        let missing = #"{"is_subs_active":true,"require_payment":false,"subs_tier_name":"Muse Code Power Usage","user_email":"person@example.com"}"#
+        let portal = #"""
+        {"email":"person@example.com","teams":[{"id":"42","name":"Chosen team"}],
+        "subscription_quota":{"tier":"Muse Code Power Usage",
+        "weekly_weighted_used":"35","weekly_weighted_limit":"100","weekly_resets_at":64000000000}}
+        """#
+        let snap = try await withStubbedHTTP(host: StubHost.muse, body: missing) {
+            try await MuseQuotaProvider(apiKey: "test-oauth", portalRead: { email, plan, now in
+                #expect(email == "person@example.com")
+                #expect(plan == "Muse Code Power Usage")
+                return try! JSONDecoder().decode(MusePortalPayload.self, from: Data(portal.utf8))
+                    .read(email: email, plan: plan, teamID: "42", now: now)
+            }).fetchSnapshot()
+        }
+        #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+        #expect(snap.status == .measured(.none))
+        #expect(snap.row1 == nil)
+        #expect(snap.row2?.primaryFraction == 0.35)
+        #expect(snap.planName == "Muse Code Power Usage")
+        #expect(snap.cliSource == "Muse CLI + selected portal team")
+
+        for body in [museBody(), missing.replacingOccurrences(of: "true", with: "false"),
+                     missing.replacingOccurrences(of: "\"require_payment\":false", with: "\"require_payment\":true")] {
+            _ = try await withStubbedHTTP(host: StubHost.muse, body: body) {
+                try await MuseQuotaProvider(apiKey: "test-oauth", portalRead: { _, _, _ in
+                    Issue.record("Portal must not override a present mint or a disabled subscription")
+                    return .unavailable("test")
+                }).fetchSnapshot()
+            }
+            #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+        }
+    }
+
+    @Test("portal failures retain status, retry instant and published plan")
+    func portalFailureKeepsItsReason() async throws {
+        let missing = #"{"is_subs_active":true,"require_payment":false,"subs_tier_name":"Muse Code Power Usage","user_email":"person@example.com"}"#
+        let retry = Date(timeIntervalSince1970: 1_800_000_030)
+        for reason in [UnavailableReason.rateLimited(retryAfter: retry), .timedOut, .badResponse] {
+            let snap = try await withStubbedHTTP(host: StubHost.muse, body: missing) {
+                try await MuseQuotaProvider(apiKey: "test-oauth", portalRead: { _, _, _ in
+                    .failure(reason)
+                }).fetchSnapshot()
+            }
+            #expect(NewProviderStub.lastRequest(host: StubHost.muse) != nil)
+            #expect(snap.status == .unavailable(reason))
+            #expect(snap.planName == "Muse Code Power Usage")
+            #expect(snap.row1 == nil && snap.row2 == nil && snap.consumptionFraction == nil)
+        }
     }
 
     /// An inactive subscription must not render as a healthy 0%-used row: the
     /// vendor stated it cannot serve.
-    @Test("an inactive subscription with a payment requirement is critical")
-    func paymentRequired() throws {
-        let snap = try snapshot(#"{"is_subs_active":false,"require_payment":true}"#)
+    @Test("a published payment requirement wins over active, inactive or absent activity flags",
+          arguments: [#"{"is_subs_active":false,"require_payment":true}"#,
+                      #"{"is_subs_active":true,"require_payment":true}"#,
+                      #"{"require_payment":true}"#])
+    func paymentRequired(body: String) throws {
+        let snap = try snapshot(body)
         #expect(snap.status == .measured(.critical))
         #expect(snap.badgeText == "Payment required")
         #expect(snap.row1 == nil && snap.row2 == nil)

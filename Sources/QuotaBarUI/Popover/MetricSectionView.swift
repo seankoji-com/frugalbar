@@ -7,6 +7,7 @@ struct MetricSectionView: View {
 
     let category: MetricCategory
     let snapshots: [QuotaSnapshot]
+    var ordering: ProviderOrdering = .automatic
     var forecasts: [String: BurnRateForecast] = [:]
     /// Recorded balance-over-time points per `BalanceSeries.id`, for the rows
     /// that carry a money figure. Empty when the history loader was not
@@ -24,7 +25,7 @@ struct MetricSectionView: View {
             if showsColumnHeader {
                 columnHeader
             }
-            let groups = PopoverRowGrouping.groups(for: snapshots)
+            let groups = PopoverRowGrouping.groups(for: snapshots, ordering: ordering)
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                 VStack(spacing: 0) {
                     if let header = group.header {

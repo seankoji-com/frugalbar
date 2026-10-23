@@ -238,7 +238,21 @@ public actor QuotaManager {
                 return a != b ? a < b : $0.id < $1.id
             }
         }
-        let groups = prefs.visibleOrder.compactMap { byVendor[$0] }
+        // Antigravity meters independent pools, but presents one service.
+        // Anchor it at the first visible pool in the saved order. Its members
+        // keep that order even when their deadlines or exhaustion differ.
+        let antigravity: Set<VendorIdentifier> = [.gemini, .antigravityClaude, .antigravityArgon]
+        var addedAntigravity = false
+        let groups = prefs.visibleOrder.compactMap { vendor -> [QuotaSnapshot]? in
+            // A pool with no snapshots cannot anchor the block: the dictionary
+            // is only ever populated by appends, so an empty entry is not a
+            // reading and must not claim the anchor.
+            guard !(byVendor[vendor] ?? []).isEmpty else { return nil }
+            guard antigravity.contains(vendor) else { return byVendor[vendor] }
+            guard !addedAntigravity else { return nil }
+            addedAntigravity = true
+            return prefs.visibleOrder.filter { antigravity.contains($0) }.flatMap { byVendor[$0] ?? [] }
+        }
 
         // A custom order is the user's, verbatim — with one exception. A
         // provider whose best instance has nothing left is not somewhere to

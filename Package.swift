@@ -1,5 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+let appInfoPlist = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .appendingPathComponent("Resources/Info.plist").path
 
 let package = Package(
     name: "QuotaBar",
@@ -22,7 +26,13 @@ let package = Package(
         .executableTarget(
             name: "QuotaBarApp",
             dependencies: ["QuotaBarCore", "QuotaBarUI"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: [.swiftLanguageMode(.v6)],
+            // Preserve the installed bare frugalbar's WebKit namespace across
+            // executable renames, including its existing Claude website data.
+            linkerSettings: [.unsafeFlags([
+                "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+                "-Xlinker", "__info_plist", "-Xlinker", appInfoPlist,
+            ])]
         ),
         .testTarget(
             name: "QuotaBarCoreTests",

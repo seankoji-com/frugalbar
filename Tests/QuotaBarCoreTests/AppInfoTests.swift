@@ -2,10 +2,31 @@ import Testing
 import Foundation
 @testable import QuotaBarCore
 
-/// The About window states the app's identity, and a release ships a bare
-/// executable — so none of this can be read back out of `Bundle.main`.
+/// The bare executable embeds its WebKit identity; release versions are stamped.
 @Suite("AppInfo")
 struct AppInfoTests {
+
+    @Test("the executable embeds the stable WebKit namespace")
+    func executableEmbedsBundleIdentity() throws {
+        let directory = Bundle(for: AppInfoTestBundleToken.self).bundleURL
+        try #require(directory.pathExtension == "xctest")
+        let executable = directory.deletingLastPathComponent().appendingPathComponent("QuotaBar")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/otool")
+        task.arguments = ["-X", "-P", executable.path]
+        let output = Pipe()
+        task.standardOutput = output
+        try task.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        #expect(task.terminationStatus == 0)
+        let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        // Match the installed bare executable's legacy WebKit namespace. A new
+        // reverse-DNS ID would strand its existing Claude WebsiteData.
+        #expect(plist["CFBundleIdentifier"] as? String == "frugalbar")
+        // An unstamped local build must not claim the old placeholder 1.0.0.
+        #expect(plist["CFBundleShortVersionString"] == nil)
+    }
 
     @Test("a stamped build reports the tag the workflow cut")
     func stampedWins() {
@@ -82,3 +103,5 @@ struct AppInfoTests {
         #expect(!live.contains("__"))
     }
 }
+
+private final class AppInfoTestBundleToken: NSObject {}

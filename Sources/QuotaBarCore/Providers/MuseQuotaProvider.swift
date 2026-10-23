@@ -6,9 +6,9 @@ import Foundation
 /// session token the Muse Code CLI stores in the macOS login Keychain (service
 /// `ai.meta.dev.credentials`, account `meta`).
 ///
-/// Muse publishes **no read-only usage endpoint**. The subscription snapshot
-/// rides the CLI's own key-mint response — the same call the CLI makes on
-/// launch — and this provider polls exactly that. The call is idempotent: it
+/// The primary subscription snapshot rides the CLI's key-mint response.
+/// If it omits usage, an opt-in in-app portal session can read the explicitly
+/// selected team's quota after checking the CLI account and plan. The mint is idempotent: it
 /// returns the key the account already holds and creates nothing (verified
 /// against a live account: repeated calls return a byte-identical `api_key`).
 /// The alternative the CLI also uses, a usage frame carried in-band on a model
@@ -32,16 +32,26 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
 
     /// The OAuth access token, when one is injected (Settings' verify, tests).
     private let apiKey: String?
+    private let portalRead: @Sendable (String, String, Date) async -> MusePortalRead
 
     /// Named `apiKey` to match every other provider's call site, though the
     /// value is the Muse OAuth session token, not the minted api key.
     public init(apiKey: String? = nil) {
         self.apiKey = apiKey
+        self.portalRead = { email, plan, now in
+            await MusePortalSession.shared.read(email: email, plan: plan, now: now)
+        }
+    }
+
+    init(apiKey: String, portalRead: @escaping @Sendable (String, String, Date) async -> MusePortalRead) {
+        self.apiKey = apiKey
+        self.portalRead = portalRead
     }
 
     // MARK: - Endpoint
 
     static let usageURL = "https://api.meta.ai/muse-code/key"
+    static let missingUsageMessage = "Muse omitted its usage window. Connect Muse portal quota in Settings → API Keys and select your subscription team."
 
     // MARK: - Fetch
 
@@ -71,7 +81,26 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
         guard let response = Self.parse(data) else {
             return unavailable(.badResponse)
         }
-        return Self.snapshot(from: response, provider: self, now: Date())
+        let now = Date()
+        if response.subs_usage == nil, response.is_subs_active == true, response.require_payment != true,
+           let email = response.user_email, !email.trimmed.isEmpty,
+           let plan = response.subs_tier_name, !plan.trimmed.isEmpty {
+            switch await portalRead(email, plan, now) {
+            case .usage(let usage):
+                var snapshot = Self.snapshot(from: KeyResponse(is_subs_active: response.is_subs_active,
+                    require_payment: response.require_payment, subs_tier_name: plan,
+                    subs_usage: usage, user_email: nil), provider: self, now: now)
+                snapshot.cliSource = "Muse CLI + selected portal team"
+                return snapshot
+            case .unavailable(let message):
+                return missingUsage(response, message: message)
+            case .failure(let reason):
+                var snapshot = unavailable(reason)
+                snapshot.planName = plan
+                return snapshot
+            }
+        }
+        return Self.snapshot(from: response, provider: self, now: now)
     }
 
     // MARK: - Response shape
@@ -86,6 +115,7 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
         /// "Muse Code Power Usage" — the subscription tier's published name.
         let subs_tier_name: String?
         let subs_usage: SubscriptionUsage?
+        let user_email: String?
     }
 
     /// The one usage payload. `window` is the five-hour-class block; `weekly`
@@ -115,6 +145,8 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
     struct MuseNumber: Decodable, Sendable {
         let value: Double?
 
+        init(value: Double) { self.value = value.isFinite ? value : nil }
+
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
             if container.decodeNil() {
@@ -141,7 +173,11 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
             if let number = try? container.decode(Double.self), number.isFinite, number > 0 {
                 date = Date(timeIntervalSince1970: number > 1e12 ? number / 1000 : number)
             } else if let text = try? container.decode(String.self) {
-                date = Self.parseISO8601(text)
+                if let number = Double(text), number.isFinite, number > 0 {
+                    date = Date(timeIntervalSince1970: number > 1e12 ? number / 1000 : number)
+                } else {
+                    date = Self.parseISO8601(text)
+                }
             } else {
                 date = nil
             }
@@ -174,14 +210,22 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
         // reading, so it never renders as a healthy, fully-available row. An
         // *absent* flag is unknown, not "active", so it falls through to the
         // usage check rather than assuming health.
+        // Checked before the activity flag, deliberately. A body that flags
+        // payment *and* an inactive subscription is a state the user must act
+        // on, where the payment is the remedy and the vendor sends no usage to
+        // draw: "Payment required" is the honest row, not "no active
+        // subscription". A body that omits the activity flag but flags payment
+        // stops here too, for the same reason - a payment-required response
+        // carries no usage by definition.
+        if response.require_payment == true {
+            return paymentRequiredSnapshot(provider: provider, now: now)
+        }
         if response.is_subs_active == false {
-            return response.require_payment == true
-                ? paymentRequiredSnapshot(provider: provider, now: now)
-                : provider.unavailable(.unsupported("Muse reported no active subscription"))
+            return provider.missingUsage(response, message: "Muse reported no active subscription")
         }
 
         guard let usage = response.subs_usage else {
-            return provider.unavailable(.unsupported("Muse reported no subscription usage"))
+            return provider.missingUsage(response, message: Self.missingUsageMessage)
         }
 
         let fiveHour = row(usage.window, label: "5H", now: now)
@@ -191,7 +235,7 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
         // not a healthy provider: there is no figure to draw, so this must not
         // reach `measured`.
         guard fiveHour != nil || weekly != nil else {
-            return provider.unavailable(.unsupported("Muse reported no usage window"))
+            return provider.missingUsage(response, message: "Muse reported no usage window")
         }
 
         let measured = [fiveHour, weekly].compactMap { $0?.primaryFraction }
@@ -227,6 +271,12 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
             planName: planName,
             cliSource: "macOS Keychain / Muse CLI"
         )
+    }
+
+    private func missingUsage(_ response: KeyResponse, message: String) -> QuotaSnapshot {
+        var snapshot = unavailable(.unsupported(message))
+        snapshot.planName = response.subs_tier_name?.trimmed
+        return snapshot
     }
 
     /// The subscription exists but cannot serve a request until a payment

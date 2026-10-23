@@ -1,8 +1,7 @@
 import Foundation
 import QuotaBarCore
 
-/// Ordered contiguous vendor runs. A vendor earns a header only when all of
-/// its snapshots form one run with at least two members. Never reorders rows.
+/// Service headings describe where an allowance is metered, not its model family.
 struct PopoverRowGrouping {
     struct Group: Identifiable {
         let id: String
@@ -13,21 +12,72 @@ struct PopoverRowGrouping {
         var isGrouped: Bool { header != nil }
     }
 
-    static func groups(for snapshots: [QuotaSnapshot]) -> [Group] {
+    private static func service(for vendor: VendorIdentifier) -> String? {
+        switch vendor {
+        case .gemini, .antigravityClaude, .antigravityArgon: "Antigravity"
+        case .claude: "Claude"
+        case .openai: "ChatGPT"
+        default: nil
+        }
+    }
+
+    static func rowTitle(for snapshot: QuotaSnapshot) -> String {
+        return switch snapshot.vendorId {
+        case .gemini: "Gemini"
+        case .antigravityArgon: "Argon"
+        case .antigravityClaude: "Claude/GPT (shared)"
+        case .claude: "Claude Code"
+        case .openai: "Codex"
+        default: snapshot.rowTitle
+        }
+    }
+
+    static func accessibilityPrefix(for snapshot: QuotaSnapshot) -> String? {
+        if snapshot.vendorId == .antigravityClaude {
+            return "Antigravity shared Claude/GPT pool"
+        }
+        return service(for: snapshot.vendorId)
+    }
+
+    /// - Parameter ordering: informational here, and deliberately not
+    ///   re-applied. The saved order is already in the array: `QuotaManager`
+    ///   `.arrange` places service blocks from `ProviderDisplayPreferences`
+    ///   before a section slices them, and this function preserves the order
+    ///   it is handed rather than sorting again - re-sorting would undo that
+    ///   placement. The flag stays on the signature so the caller's contract
+    ///   is visible at the call site, and is referenced below so it cannot
+    ///   read as a dead parameter.
+    static func groups(
+        for snapshots: [QuotaSnapshot], ordering: ProviderOrdering = .automatic
+    ) -> [Group] {
+        _ = ordering
         let counts = Dictionary(grouping: snapshots, by: \.vendorId).mapValues { $0.count }
         var groups: [Group] = []
+        // QuotaManager places service blocks from preferences. Also collect
+        // scattered inputs here so a caller cannot emit duplicate headings.
+        var seen = Set<String>()
+        let remaining = snapshots.flatMap { snapshot -> [QuotaSnapshot] in
+            guard let service = service(for: snapshot.vendorId) else { return [snapshot] }
+            guard seen.insert(service).inserted else { return [] }
+            return snapshots.filter { self.service(for: $0.vendorId) == service }
+        }
         var start = 0
-        while start < snapshots.count {
-            let vendor = snapshots[start].vendorId
+        while start < remaining.count {
+            let vendor = remaining[start].vendorId
+            let service = service(for: vendor)
             var end = start + 1
-            while end < snapshots.count, snapshots[end].vendorId == vendor { end += 1 }
-            let run = Array(snapshots[start..<end])
+            while end < remaining.count,
+                  service.map({ self.service(for: remaining[end].vendorId) == $0 })
+                    ?? (remaining[end].vendorId == vendor) { end += 1 }
+            let run = Array(remaining[start..<end])
             // Split vendors stay ungrouped so a card never repeats their header.
             let grouped = run.count > 1 && run.count == counts[vendor]
             let plan = run[0].planName
             let sharedPlan = plan.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 == true && run.allSatisfy { $0.planName == plan }
-            if grouped {
+            if let service {
+                groups.append(Group(id: run[0].id, header: service, suppressPlan: false, snapshots: run))
+            } else if grouped {
                 groups.append(Group(
                     id: run[0].id,
                     header: sharedPlan ? plan : vendor.displayName,
