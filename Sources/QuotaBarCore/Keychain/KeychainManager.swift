@@ -732,7 +732,7 @@ public enum CredentialStore {
             else { return nil }
             return key
 
-        case .gemini:
+        case .gemini, .antigravityClaude, .antigravityArgon:
             // Deliberately nothing. The Gemini provider reads Antigravity
             // subscription quota from the Cloud Code API, which takes a Google
             // OAuth bearer token — see the Connect Google account button in
@@ -952,7 +952,7 @@ extension CredentialStore {
         switch vendor {
         case .claude:        "Claude Code login"
         case .openai:        "~/.codex/auth.json"
-        case .gemini:        "Google OAuth session"
+        case .gemini, .antigravityClaude, .antigravityArgon: "Google OAuth session"
         case .opencode:      "OpenCode auth.json"
         case .copilot:       "OpenCode auth.json"
         case .openrouter:    "OpenCode auth.json"
