@@ -24,7 +24,15 @@ enum NotificationDelivery {
         let center = UNUserNotificationCenter.current()
         center.delegate = NotificationPresenter.shared
         guard anyBannerEnabled else { return }
-        center.getNotificationSettings { settings in
+        requestAuthorizationIfNeeded()
+    }
+
+    /// Nonisolated on purpose: `getNotificationSettings` calls its completion
+    /// on its own queue, and a closure formed in this main-actor type inherited
+    /// the actor in the release build, trapping in `dispatch_assert_queue`
+    /// before the body ran.
+    nonisolated private static func requestAuthorizationIfNeeded() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
             // Already refused (or turned off in System Settings): macOS will
             // not prompt again, and asking would only log a misleading error.
             guard settings.authorizationStatus != .denied else {
@@ -46,7 +54,12 @@ enum NotificationDelivery {
             postViaAppleScript(banner)
             return
         }
+        postBundled(banner)
+    }
 
+    /// Also nonisolated: every completion below runs off the main queue, so
+    /// none of them may carry this type's actor isolation.
+    nonisolated private static func postBundled(_ banner: AIEventBanner) {
         // `requestAuthorization` is idempotent: once the user has answered,
         // the completion arrives at once with the stored answer. Building the
         // content inside the completion keeps the non-Sendable notification
