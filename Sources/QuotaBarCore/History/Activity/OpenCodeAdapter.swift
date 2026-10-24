@@ -152,10 +152,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             let model = json["modelID"] as? String
             // Tool identity is `opencode`; the message's published provider
             // is the only billing identity it records. No account or
-            // workspace is inferred when the message does not name one.
-            let billingProvider = json["providerID"] as? String
-            let accountId = json["accountID"] as? String
-            let workspaceId = json["workspaceID"] as? String
+            // workspace is inferred when the message does not name one. The
+            // provider label is public and kept verbatim; the account and
+            // workspace it may also publish are private and reach the ledger
+            // only as fingerprints.
+            let publishedProvider = json["providerID"] as? String
 
             var projectPath: String?
             if let pathObj = json["path"] as? [String: Any] {
@@ -192,9 +193,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                 totalKind: publishedTotal == nil ? nil : .published,
                 semantics: .additive,
                 granularity: .request,
-                billingProvider: billingProvider,
-                accountId: accountId,
-                workspaceId: workspaceId
+                publishedProvider: publishedProvider,
+                accountHash: IdentityFingerprint.published(
+                    json["accountID"] as? String, in: .account),
+                workspaceHash: IdentityFingerprint.published(
+                    json["workspaceID"] as? String, in: .workspace)
             )
             if record.totalKind == .partial || record.totalKind == .unknown {
                 incomplete += 1

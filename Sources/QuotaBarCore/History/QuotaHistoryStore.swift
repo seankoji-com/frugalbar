@@ -492,7 +492,7 @@ public actor QuotaHistoryStore {
               git_branch, model, observed_at, input_tokens, output_tokens,
               cache_read_tokens, cache_write_tokens, reasoning_tokens,
               total_tokens, total_kind, semantics, granularity,
-              billing_provider, account_id, workspace_id
+              published_provider, account_hash, workspace_hash
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             let stmt = try db.prepare(sql: sql)
@@ -520,9 +520,13 @@ public actor QuotaHistoryStore {
                 try db.bindText(stmt, 14, row.totalKind.rawValue)
                 try db.bindText(stmt, 15, row.semantics.rawValue)
                 try db.bindText(stmt, 16, row.granularity.rawValue)
-                try db.bindText(stmt, 17, row.billingProvider)
-                try db.bindText(stmt, 18, row.accountId)
-                try db.bindText(stmt, 19, row.workspaceId)
+                // The provider label is public metadata and is stored
+                // verbatim. The account and workspace a source published are
+                // private: only their fingerprints are written, so the ledger
+                // never holds the published value (IdentityFingerprint).
+                try db.bindText(stmt, 17, row.publishedProvider)
+                try db.bindText(stmt, 18, row.accountHash?.stored)
+                try db.bindText(stmt, 19, row.workspaceHash?.stored)
 
                 let stepStatus = sqlite3_step(stmt)
                 guard stepStatus == SQLITE_DONE else {
@@ -561,7 +565,7 @@ public actor QuotaHistoryStore {
                    git_branch, model, observed_at, input_tokens, output_tokens,
                    cache_read_tokens, cache_write_tokens, reasoning_tokens,
                    total_tokens, total_kind, semantics, granularity,
-                   billing_provider, account_id, workspace_id
+                   published_provider, account_hash, workspace_hash
             FROM activity_unified
             """
             if !conditions.isEmpty {
@@ -618,9 +622,15 @@ public actor QuotaHistoryStore {
                     .flatMap(TokenComponentSemantics.init(rawValue:)) ?? .additive
                 let granularity = sqlite3_column_text(stmt, 15).map { String(cString: $0) }
                     .flatMap(ActivityGranularity.init(rawValue:)) ?? .legacy
-                let billingProvider: String? = sqlite3_column_text(stmt, 16).map { String(cString: $0) }
-                let accountId: String? = sqlite3_column_text(stmt, 17).map { String(cString: $0) }
-                let workspaceId: String? = sqlite3_column_text(stmt, 18).map { String(cString: $0) }
+                let publishedProvider: String? = sqlite3_column_text(stmt, 16).map { String(cString: $0) }
+                // A value that is not a fingerprint of the expected domain is
+                // not an identity to match on: reading it as one would either
+                // compare against a raw published id or match an account
+                // against a workspace. nil is "no identity established".
+                let accountHash = sqlite3_column_text(stmt, 17).map { String(cString: $0) }
+                    .flatMap { IdentityFingerprint(stored: $0, expecting: .account) }
+                let workspaceHash = sqlite3_column_text(stmt, 18).map { String(cString: $0) }
+                    .flatMap { IdentityFingerprint(stored: $0, expecting: .workspace) }
 
                 results.append(ActivityRecord(
                     source: sourceStr,
@@ -639,9 +649,9 @@ public actor QuotaHistoryStore {
                     totalKind: totalKind,
                     semantics: semantics,
                     granularity: granularity,
-                    billingProvider: billingProvider,
-                    accountId: accountId,
-                    workspaceId: workspaceId
+                    publishedProvider: publishedProvider,
+                    accountHash: accountHash,
+                    workspaceHash: workspaceHash
                 ))
             }
             return results

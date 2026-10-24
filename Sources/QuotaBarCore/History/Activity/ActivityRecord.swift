@@ -74,17 +74,23 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
     public let totalKind: TokenTotalKind
     public let semantics: TokenComponentSemantics
     public let granularity: ActivityGranularity
-    /// The billing provider the source published for this record, when it
-    /// published one. This is not the CLI's identity: `source == "opencode"`
-    /// says which tool wrote the message, not which provider or account it
-    /// billed.
-    public let billingProvider: String?
-    /// A published account identity, when the source wrote one. `nil` means
-    /// unpublished, not "the default account".
-    public let accountId: String?
-    /// A published workspace identity, when the source wrote one. `nil` means
-    /// unpublished, not "the legacy workspace".
-    public let workspaceId: String?
+    /// The provider label the source published for this record, when it
+    /// published one. It is public metadata — the model provider that served
+    /// the request (`model_provider` in a Codex rollout, `providerID` in an
+    /// OpenCode message), for example `openai` or `litellm` — and it is kept
+    /// exactly as published. It is not the CLI's identity: `source ==
+    /// "opencode"` says which tool wrote the message, not which provider or
+    /// account it billed. This field never holds an account, workspace or
+    /// credential.
+    public let publishedProvider: String?
+    /// Fingerprint of the account identity the source published, when it wrote
+    /// one. `nil` means unpublished, not "the default account". The ledger
+    /// stores the fingerprint, never the published value: see
+    /// `IdentityFingerprint`.
+    public let accountHash: IdentityFingerprint?
+    /// Fingerprint of the workspace identity the source published, when it
+    /// wrote one. `nil` means unpublished, not "the legacy workspace".
+    public let workspaceHash: IdentityFingerprint?
 
     public init(
         source: String,
@@ -103,9 +109,9 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
         totalKind: TokenTotalKind? = nil,
         semantics: TokenComponentSemantics = .additive,
         granularity: ActivityGranularity = .request,
-        billingProvider: String? = nil,
-        accountId: String? = nil,
-        workspaceId: String? = nil
+        publishedProvider: String? = nil,
+        accountHash: IdentityFingerprint? = nil,
+        workspaceHash: IdentityFingerprint? = nil
     ) {
         self.source = source
         self.recordId = recordId
@@ -116,9 +122,9 @@ public struct ActivityRecord: Sendable, Equatable, Identifiable {
         self.observedAt = observedAt
         self.semantics = semantics
         self.granularity = granularity
-        self.billingProvider = billingProvider
-        self.accountId = accountId
-        self.workspaceId = workspaceId
+        self.publishedProvider = publishedProvider
+        self.accountHash = accountHash
+        self.workspaceHash = workspaceHash
 
         // A negative count is not an observation. It is omitted rather than
         // clamped to zero, and the total falls back to what remains known.

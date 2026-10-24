@@ -414,9 +414,9 @@ extension ActivitySourceRepairTests {
             inputTokens: 90,
             outputTokens: 10,
             totalTokens: 100,
-            billingProvider: provider,
-            accountId: account,
-            workspaceId: workspace)
+            publishedProvider: provider,
+            accountHash: IdentityFingerprint.published(account, in: .account),
+            workspaceHash: IdentityFingerprint.published(workspace, in: .workspace))
     }
 
     @Test("C5: a workspace target excludes another workspace's published usage")
@@ -506,7 +506,7 @@ extension ActivitySourceRepairTests {
         let fetched = try #require(try await store.fetchActivities(source: "opencode").first)
         #expect(fetched.projectPath == "/repo/beta")
         #expect(fetched.gitBranch == "main")
-        #expect(fetched.workspaceId == "workspace-b")
+        #expect(fetched.workspaceHash == IdentityFingerprint.published("workspace-b", in: .workspace))
 
         let summary = AttributionEngine.computeAttribution(
             windowStart: date("2026-10-01T00:00:00Z"),

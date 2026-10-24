@@ -399,9 +399,9 @@ extension ActivityAccountingRegressionTests {
         let record = try #require(try await OpenCodeAdapter(databaseURL: dbURL)
             .collectActivities(watermarks: [:]).records.first)
         #expect(record.source == "opencode")
-        #expect(record.billingProvider == "litellm")
-        #expect(record.accountId == nil)
-        #expect(record.workspaceId == nil)
+        #expect(record.publishedProvider == "litellm")
+        #expect(record.accountHash == nil)
+        #expect(record.workspaceHash == nil)
         #expect(record.totalTokens == 127)
         #expect(record.totalKind == .published)
 

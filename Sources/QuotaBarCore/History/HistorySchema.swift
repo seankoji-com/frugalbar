@@ -5,6 +5,14 @@ public enum HistorySchema {
     public static let activityTable = "activity"
     /// Per-request ledger rows written since the accounting change. Kept apart
     /// from `activity` so legacy rows can never be rewritten in place.
+    ///
+    /// The published account and workspace identities are stored only as
+    /// `account_hash`/`workspace_hash` fingerprints (`IdentityFingerprint`).
+    /// A database written before that change still has the retired raw
+    /// `account_id`/`workspace_id` columns; `HistoryIdentityMigration` adds the
+    /// fingerprint columns in place, moves the values across, and empties the
+    /// raw columns. It is additive and idempotent — no version bump, and no row
+    /// loses a token, time or model figure.
     public static let activityRequestTable = "activity_request"
     /// The read-only union the app queries: every ledger row, plus legacy
     /// `activity` rows that no ledger row has superseded.
@@ -89,9 +97,14 @@ public enum HistorySchema {
       total_kind    TEXT    NOT NULL,    -- published | derived | partial | unknown
       semantics     TEXT    NOT NULL,    -- additive | cacheIncludedInInput
       granularity   TEXT    NOT NULL,    -- request | session
-      billing_provider TEXT,             -- only when the source published one
-      account_id    TEXT,                -- only when the source published one
-      workspace_id  TEXT,                -- only when the source published one
+      -- The provider label the source published (public metadata, kept
+      -- verbatim). The account and workspace it published are private
+      -- identifiers nobody needs to read back, so only a domain-separated
+      -- SHA-256 of each is stored here (IdentityFingerprint). A raw published
+      -- account or workspace id must never be written to any column.
+      published_provider TEXT,
+      account_hash  TEXT,                -- fbfp1.account.<sha256> | NULL = unpublished
+      workspace_hash TEXT,               -- fbfp1.workspace.<sha256> | NULL = unpublished
       PRIMARY KEY (source, record_id)
     ) WITHOUT ROWID;
 
@@ -153,9 +166,9 @@ public enum HistorySchema {
            'legacy' AS total_kind,
            CASE WHEN source = 'codex' THEN 'cacheIncludedInInput' ELSE 'additive' END AS semantics,
            'session' AS granularity,
-           NULL AS billing_provider,
-           NULL AS account_id,
-           NULL AS workspace_id
+           NULL AS published_provider,
+           NULL AS account_hash,
+           NULL AS workspace_hash
     FROM activity
     WHERE source = 'codex'
       AND NOT EXISTS (
@@ -166,7 +179,7 @@ public enum HistorySchema {
     SELECT source, record_id, session_id, project_path, git_branch, model,
            observed_at, input_tokens, output_tokens, cache_read_tokens,
            cache_write_tokens, reasoning_tokens, total_tokens, total_kind,
-           semantics, granularity, billing_provider, account_id, workspace_id
+           semantics, granularity, published_provider, account_hash, workspace_hash
     FROM activity_request
     WHERE granularity = 'session';
 
@@ -192,7 +205,7 @@ public enum HistorySchema {
            observed_at, input_tokens, output_tokens, cache_read_tokens,
            cache_write_tokens, NULL AS reasoning_tokens, total_tokens,
            'legacy' AS total_kind, 'additive' AS semantics, 'legacy' AS granularity,
-           NULL AS billing_provider, NULL AS account_id, NULL AS workspace_id
+           NULL AS published_provider, NULL AS account_hash, NULL AS workspace_hash
     FROM activity
     WHERE source <> 'codex'
       AND NOT EXISTS (
@@ -204,7 +217,7 @@ public enum HistorySchema {
     SELECT a.source, a.record_id, a.session_id, a.project_path, a.git_branch, a.model,
            a.observed_at, a.input_tokens, a.output_tokens, a.cache_read_tokens,
            a.cache_write_tokens, a.reasoning_tokens, a.total_tokens, a.total_kind,
-           a.semantics, a.granularity, a.billing_provider, a.account_id, a.workspace_id
+           a.semantics, a.granularity, a.published_provider, a.account_hash, a.workspace_hash
     FROM activity_aggregate a
     WHERE NOT EXISTS (
       SELECT 1 FROM activity_reconciled_aggregate reconciled
@@ -215,7 +228,7 @@ public enum HistorySchema {
     SELECT r.source, r.record_id, r.session_id, r.project_path, r.git_branch, r.model,
            r.observed_at, r.input_tokens, r.output_tokens, r.cache_read_tokens,
            r.cache_write_tokens, r.reasoning_tokens, r.total_tokens, r.total_kind,
-           r.semantics, r.granularity, r.billing_provider, r.account_id, r.workspace_id
+           r.semantics, r.granularity, r.published_provider, r.account_hash, r.workspace_hash
     FROM activity_request r
     WHERE r.granularity = 'request'
       AND NOT EXISTS (

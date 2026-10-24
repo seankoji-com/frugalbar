@@ -74,10 +74,16 @@ public enum AttributionBillingScope: Sendable, Equatable {
 /// provider is not enough to identify a workspace: two workspaces can bill
 /// through the same provider, so `isCorrelated` requires an account or
 /// workspace.
+///
+/// The account and workspace are taken as the *published* values the caller
+/// holds and fingerprinted once here, because that is the form the ledger
+/// stores. The raw values are not retained by the target; comparing them
+/// directly against a record would compare a published id against a
+/// fingerprint, so this is the only place the conversion may happen.
 public struct AttributionBillingTarget: Sendable, Equatable {
     public let billingProvider: String?
-    public let accountId: String?
-    public let workspaceId: String?
+    public let accountHash: IdentityFingerprint?
+    public let workspaceHash: IdentityFingerprint?
 
     public init(
         billingProvider: String? = nil,
@@ -85,22 +91,22 @@ public struct AttributionBillingTarget: Sendable, Equatable {
         workspaceId: String? = nil
     ) {
         self.billingProvider = billingProvider
-        self.accountId = accountId
-        self.workspaceId = workspaceId
+        self.accountHash = IdentityFingerprint.published(accountId, in: .account)
+        self.workspaceHash = IdentityFingerprint.published(workspaceId, in: .workspace)
     }
 
     /// A target that names an account or workspace. Without one there is no
     /// correlation, and a record must not be assigned on provider identity
     /// alone.
-    public var isCorrelated: Bool { accountId != nil || workspaceId != nil }
+    public var isCorrelated: Bool { accountHash != nil || workspaceHash != nil }
 
     /// True when every identity the target publishes is also published by the
     /// record, and the target names an account or workspace.
     public func matches(_ record: ActivityRecord) -> Bool {
         guard isCorrelated else { return false }
-        if let billingProvider, record.billingProvider != billingProvider { return false }
-        if let accountId, record.accountId != accountId { return false }
-        if let workspaceId, record.workspaceId != workspaceId { return false }
+        if let billingProvider, record.publishedProvider != billingProvider { return false }
+        if let accountHash, record.accountHash != accountHash { return false }
+        if let workspaceHash, record.workspaceHash != workspaceHash { return false }
         return true
     }
 }
@@ -278,7 +284,7 @@ public enum AttributionEngine {
         for record in scoped {
             let path = record.projectPath ?? "Unspecified Directory"
             projectSessionsMap[path, default: []].insert(record.sessionId)
-            if let provider = record.billingProvider, !provider.isEmpty {
+            if let provider = record.publishedProvider, !provider.isEmpty {
                 billingProviders.insert(provider)
             }
             if let total = record.totalTokens {

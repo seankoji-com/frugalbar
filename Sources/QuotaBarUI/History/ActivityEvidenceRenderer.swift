@@ -187,7 +187,7 @@ public enum ActivityEvidenceRenderer {
                 projectPath: "/controlled/opencode", model: "gpt-5.6-luna",
                 observedAt: fixture.openCodeObservedAt,
                 inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 2,
-                totalTokens: 127, billingProvider: "litellm"),
+                totalTokens: 127, publishedProvider: "litellm"),
         ])
 
         let statuses = [

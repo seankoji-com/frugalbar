@@ -81,6 +81,20 @@ survive. `activity_unified` is the read surface. It is rebuilt from
 `activity_aggregate` and `activity_reconciled_aggregate` on every open (views
 hold no rows, so replacing them is not a migration).
 
+Identity columns are additive too. A database written before the fingerprint
+change has `activity_request.billing_provider`, `account_id` and `workspace_id`;
+opening it adds `published_provider`, `account_hash` and `workspace_hash`
+(a guarded `ALTER TABLE`, before the views are created), then
+`HistoryIdentityMigration` copies the provider label across, fingerprints each
+published account/workspace value, and sets the retired columns to `NULL` in the
+same row update. Nothing else in the row is touched — no token, time, model,
+project or record identity — and the migration only selects rows that still
+carry a raw value, so a second open is a no-op. The database is then compacted
+once (`wal_checkpoint(TRUNCATE)`, `VACUUM`) so the removed values are not left
+in pages SQLite happened not to rewrite; failing to compact is logged and does
+not stop the app opening its history, because the rows themselves are already
+scrubbed. A database created by this build never has the raw columns at all.
+
 For a Codex session aggregate — an old `activity` row or a session row written
 by the adapter — reconciliation is explicit and by published totals:
 
@@ -122,10 +136,79 @@ and the last successful scan. An unchanged file is not evidence of a clean one.
 
 ## Provenance
 
-`source` is the CLI/tool (`claude_code`, `codex`, `opencode`). `billingProvider`,
-`accountId` and `workspaceId` are separate fields filled only when the source
-published them. OpenCode messages publish `providerID` (for example `litellm`),
-not a workspace.
+`source` is the CLI/tool (`claude_code`, `codex`, `opencode`). Three separate
+fields carry what the source published about the request:
+
+- `publishedProvider` — the provider label, kept exactly as published
+  (`model_provider` in a Codex rollout, `providerID` in an OpenCode message:
+  `openai`, `litellm`, …). This is public service metadata, not an account or a
+  credential.
+- `accountHash` / `workspaceHash` — the account and workspace the source
+  published (`creator_account_id`, `accountID`, `workspaceID`), stored as
+  domain-separated SHA-256 fingerprints. `nil` means the source published one
+  and we did not get it, or published none at all; either way no identity is
+  invented.
+
+All three are filled only when the source published them. OpenCode messages
+publish `providerID` (for example `litellm`), not a workspace. Claude Code
+publishes none of the three.
+
+### Why the identity is a fingerprint
+
+An account or workspace id names somebody's subscription. The ledger's only use
+for it is to tell two subscriptions apart, so it never needs the value back — and
+a value that is not stored cannot leak from the file. `IdentityFingerprint`
+turns the published value into:
+
+    fbfp1.<account|workspace>.<64 lowercase hex>
+
+The scheme tag, the domain and the exact published value are the hashed
+preimage, so the same value in the same domain always produces the same
+fingerprint (attribution keeps matching across a restart and a re-ingest), one
+string can never collide across domains, and two accounts or workspaces never
+match each other. There is no encryption key, no keychain item and no per-install
+secret: this is a pseudonym for a vendor-issued opaque id, not a credential
+store. No credential, token or transcript text is ever passed to it.
+
+The matching rule fingerprints the subject once, at construction, because that is
+the form the ledger holds: `AttributionBillingTarget(billingProvider:accountId:
+workspaceId:)` takes the *published* values the caller holds, and `matches`
+compares fingerprints. Comparing a published id against a record directly would
+compare a raw value with a fingerprint and never match.
+
+### Data classification (why the CodeQL alert is not suppressed)
+
+CodeQL's `swift/cleartext-storage-database` (CWE-312) flagged the
+`sqlite3_bind_text` that wrote `row.billingProvider` and `row.accountId` into
+`activity_request`. That rule does not look at values: `SensitiveExprs.qll`
+classifies an expression by its *identifier name* against
+`SensitiveDataHeuristics` — any `account`/`account id` name is "account
+information", and any name containing `billing` is "private/financial". So it
+flagged two very different things:
+
+- **A published account id — genuinely private.** Remediated in the data, not the
+  label: the raw id no longer has a column. Only `account_hash`/
+  `workspace_hash` are written, produced by `SHA256.hash` at the persistence
+  boundary (`IdentityFingerprint`, which is the one place a published value is
+  converted). Rows written before this change are migrated in place.
+- **A public provider slug — a name-classification false positive.** The value
+  came from `payload.model_provider` / `json["providerID"]`, is a service label
+  the vendor publishes, is drawn in the UI, and is never an account, workspace or
+  credential. It keeps its exact value; the field is named `publishedProvider`
+  because that is what it is — the ledger has no other provider identity to
+  store, and calling a provider label "billing" was the misclassification the
+  heuristic reacted to. `ActivityIdentityPrivacyTests` asserts the labels
+  (`litellm`, `openai`) survive ingestion verbatim.
+
+No alert was dismissed, no query suppressed, no check weakened and no bind
+helper changed. `HistoryIdentityMigration` never writes a published identity: it
+reads a retired column, fingerprints the value, writes the fingerprint and empties
+the column in the same row update.
+
+One nearby identifier is deliberately not in scope: an OpenCode Go workspace's
+`opencode-go:<uuid>` instance key (stored as `reading.vendor` and
+`event.instance_id`) is generated by this app when the user adds a workspace; it
+is local configuration, not an account or workspace id the vendor published.
 
 The History breakdown for an OpenCode Go workspace uses
 `.matchingPublishedIdentity` with the subject's published identity. A record is

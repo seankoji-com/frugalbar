@@ -136,7 +136,7 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             var projectPath: String?
             var gitBranch: String?
             var model: String?
-            var billingProvider: String?
+            var publishedProvider: String?
             var accountId: String?
             var sessionStartedAt: Date?
 
@@ -192,7 +192,7 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                         model = m
                     }
                     if let provider = payload["model_provider"] as? String {
-                        billingProvider = provider
+                        publishedProvider = provider
                     }
                     if let account = payload["creator_account_id"] as? String {
                         accountId = account
@@ -243,9 +243,9 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                         totalKind: parsed.total == nil ? nil : .published,
                         semantics: .cacheIncludedInInput,
                         granularity: .request,
-                        billingProvider: billingProvider,
-                        accountId: accountId,
-                        workspaceId: nil
+                        publishedProvider: publishedProvider,
+                        accountHash: IdentityFingerprint.published(accountId, in: .account),
+                        workspaceHash: nil
                     )
 
                     // Reconcile the request's own published total against the
@@ -341,9 +341,9 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                                 totalKind: parsed.total == nil ? nil : .published,
                                 semantics: .cacheIncludedInInput,
                                 granularity: .request,
-                                billingProvider: billingProvider,
-                                accountId: accountId,
-                                workspaceId: nil
+                                publishedProvider: publishedProvider,
+                                accountHash: IdentityFingerprint.published(accountId, in: .account),
+                                workspaceHash: nil
                             )
 
                             // Defer the row until the file is fully read: a
@@ -458,9 +458,9 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                             totalKind: legacy.total == nil ? nil : .published,
                             semantics: .cacheIncludedInInput,
                             granularity: .session,
-                            billingProvider: billingProvider,
-                            accountId: accountId,
-                            workspaceId: nil
+                            publishedProvider: publishedProvider,
+                            accountHash: IdentityFingerprint.published(accountId, in: .account),
+                            workspaceHash: nil
                         )
                         if observedRequests[record.recordId] == nil {
                             // One session aggregate, at the latest cumulative
