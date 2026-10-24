@@ -1,5 +1,12 @@
 import Foundation
 
+/// The row shows at most this many reset-credit tickets before adding an
+/// overflow count. Providers use the same limit when expanding per-credit
+/// metadata so every drawn ticket can retain its own published expiry.
+public enum ResetCreditTicketLimit {
+    public static let maxCount = 5
+}
+
 // MARK: - Vendor identifiers
 
 public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {

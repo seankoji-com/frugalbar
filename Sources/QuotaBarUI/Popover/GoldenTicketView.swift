@@ -1,6 +1,15 @@
 import SwiftUI
 
 enum GoldenTicketGlintState {
+    struct TaskIdentity: Equatable {
+        let index: Int
+        let reduceMotion: Bool
+    }
+
+    static func taskIdentity(index: Int, reduceMotion: Bool) -> TaskIdentity {
+        TaskIdentity(index: index, reduceMotion: reduceMotion)
+    }
+
     static func motionAdjusted(isGlinting: Bool, reduceMotion: Bool) -> Bool {
         reduceMotion ? false : isGlinting
     }
@@ -22,6 +31,10 @@ struct GoldenTicketView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var glint = false
+
+    private var animationIdentity: GoldenTicketGlintState.TaskIdentity {
+        GoldenTicketGlintState.taskIdentity(index: index, reduceMotion: reduceMotion)
+    }
 
     private static let light = Color(red: 1.00, green: 0.93, blue: 0.68)
     private static let gold = Color(red: 0.94, green: 0.72, blue: 0.25)
@@ -46,24 +59,31 @@ struct GoldenTicketView: View {
             .scaleEffect(glint ? 1.05 : 1)
             .shadow(color: Self.gold.opacity(0.25), radius: 2, y: 0.5)
             .animation(.easeOut(duration: 0.22), value: glint)
-            .task(id: reduceMotion) {
+            .task(id: animationIdentity) {
                 guard !reduceMotion else { return }
                 // Stagger the first glint, then leave several seconds of calm
                 // between them. `.task` cancels when the row scrolls away.
                 try? await Task.sleep(for: .seconds(2.2 + Double(index) * 0.7))
+                guard GoldenTicketGlintState.shouldContinueAnimation(
+                    isCancelled: Task.isCancelled, reduceMotion: reduceMotion
+                ) else { return }
                 while GoldenTicketGlintState.shouldContinueAnimation(
                     isCancelled: Task.isCancelled, reduceMotion: reduceMotion
                 ) {
                     glint = true
                     try? await Task.sleep(for: .seconds(0.42))
+                    guard GoldenTicketGlintState.shouldContinueAnimation(
+                        isCancelled: Task.isCancelled, reduceMotion: reduceMotion
+                    ) else { return }
                     glint = false
                     try? await Task.sleep(for: .seconds(4.4 + Double(index) * 0.55))
+                    guard GoldenTicketGlintState.shouldContinueAnimation(
+                        isCancelled: Task.isCancelled, reduceMotion: reduceMotion
+                    ) else { return }
                 }
             }
-            .onChange(of: reduceMotion) { _, enabled in
-                glint = GoldenTicketGlintState.motionAdjusted(
-                    isGlinting: glint, reduceMotion: enabled
-                )
+            .onChange(of: animationIdentity) { _, _ in
+                glint = false
             }
     }
 }

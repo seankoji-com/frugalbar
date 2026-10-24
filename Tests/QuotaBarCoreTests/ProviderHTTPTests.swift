@@ -1809,8 +1809,19 @@ struct ProviderHTTPTests {
             try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
         }
         #expect(snap.resetCreditsAvailable == Int.max)
-        #expect(snap.resetCreditExpiries.count == 5)
+        #expect(snap.resetCreditExpiries.count == ResetCreditTicketLimit.maxCount)
         #expect(snap.resetCreditExpiries.allSatisfy { $0 != nil })
+    }
+
+    @Test("Claude grant expiry selection keeps the earliest dates before the cap")
+    func claudeGrantExpiriesAreOrderedBeforeCapping() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"resets_left":3,"ends_at":"2026-12-01T00:00:00Z"},{"resets_left":2,"ends_at":"2026-11-01T00:00:00Z"},{"resets_left":2,"ends_at":"2026-11-01T00:00:00Z"},{"resets_left":1}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        let firstExpiry = ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z")
+        let laterExpiry = ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z")
+        #expect(snap.resetCreditExpiries == [firstExpiry, firstExpiry, firstExpiry, firstExpiry, laterExpiry])
     }
 
     /// A grant without its count makes the total unknowable: nil, never a

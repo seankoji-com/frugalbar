@@ -228,16 +228,40 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // `cedar_ember` grants carry an end for each banked reset. Expand the
         // count so the ticket glyphs line up with their own expiries; a grant
         // that published no end contributes nil, not the reset window's date.
-        var expirySlots = 5
-        snapshot.resetCreditExpiries = usage.resetGrants?.grants.flatMap { grant -> [Date?] in
-            guard let left = grant.resetsLeft, left > 0, expirySlots > 0 else { return [] }
-            let expiry = CLIProxyClient.parseResetDate(grant.endsAt)
-            let count = min(left, expirySlots)
-            expirySlots -= count
-            return Array(repeating: expiry, count: count)
+        snapshot.resetCreditExpiries = usage.resetGrants.map { grants in
+            Self.resetCreditExpiries(from: grants.grants)
         } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
         return snapshot
+    }
+
+    /// Selects up to the display cap, with earliest expiry first and vendor
+    /// order preserved for grants with the same expiry. Missing dates sort last.
+    private static func resetCreditExpiries(from grants: [ClaudeOAuthUsageResponse.ResetGrant]) -> [Date?] {
+        let ordered = grants.enumerated().map {
+            (index: $0.offset, grant: $0.element, expiry: CLIProxyClient.parseResetDate($0.element.endsAt))
+        }.sorted { lhs, rhs in
+            switch (lhs.expiry, rhs.expiry) {
+            case let (left?, right?) where left != right:
+                left < right
+            case (_?, nil):
+                true
+            case (nil, _?):
+                false
+            default:
+                lhs.index < rhs.index
+            }
+        }
+
+        var expiries: [Date?] = []
+        for item in ordered {
+            guard let left = item.grant.resetsLeft, left > 0,
+                  expiries.count < ResetCreditTicketLimit.maxCount
+            else { continue }
+            let count = min(left, ResetCreditTicketLimit.maxCount - expiries.count)
+            expiries.append(contentsOf: Array(repeating: item.expiry, count: count))
+        }
+        return expiries
     }
 
     /// The prepaid API credits this endpoint published alongside the quota, as

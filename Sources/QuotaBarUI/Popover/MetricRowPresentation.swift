@@ -47,13 +47,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// Credits beyond the glyph cap, so a truncated run still states its
         /// own count: five glyphs and "+2" is seven, not "5 or more".
         public let overflow: Int
-        /// When each credit expires, aligned with the published count. A
-        /// missing entry is "the vendor published no expiry", never a guess.
+        /// A tickets-length array aligned with the rendered credits. Missing
+        /// entries are nil, meaning the provider published no expiry. Never
+        /// inferred from the reset window or another credit.
         public let expiries: [Date?]
-
-        /// The most glyphs any row draws. Past this the strip stops widening
-        /// and the overflow count carries the rest.
-        public static let maxTickets = 5
 
         /// nil when there is nothing to draw. A vendor that published no figure
         /// (`nil`), or published zero, draws nothing: "0 reset credits" is
@@ -61,8 +58,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
         public init?(total: Int?, expiries: [Date?] = []) {
             guard let total, total > 0 else { return nil }
             self.total = total
-            self.tickets = min(total, Self.maxTickets)
-            self.overflow = max(0, total - Self.maxTickets)
+            self.tickets = min(total, ResetCreditTicketLimit.maxCount)
+            self.overflow = max(0, total - ResetCreditTicketLimit.maxCount)
             self.expiries = (0..<tickets).map { index in
                 index < expiries.count ? expiries[index] : nil
             }

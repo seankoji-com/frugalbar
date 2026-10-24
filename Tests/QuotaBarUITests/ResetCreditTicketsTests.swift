@@ -33,7 +33,7 @@ struct ResetCreditTicketsTests {
     @Test("past the cap the overflow count carries the rest, never a vague +")
     func overflowIsExact() throws {
         let credits = try #require(Credits(total: 7))
-        #expect(credits.tickets == Credits.maxTickets)
+        #expect(credits.tickets == ResetCreditTicketLimit.maxCount)
         #expect(credits.overflow == 2)
         // The strip is truncated, the *count* is not: five glyphs and "+2" is
         // seven, and the spoken form says seven.
@@ -45,8 +45,8 @@ struct ResetCreditTicketsTests {
     func expiryStorageIsCapped() throws {
         let expiry = Date(timeIntervalSince1970: 1_800_000_000)
         let credits = try #require(Credits(total: Int.max, expiries: [expiry, nil]))
-        #expect(credits.tickets == Credits.maxTickets)
-        #expect(credits.overflow == Int.max - Credits.maxTickets)
+        #expect(credits.tickets == ResetCreditTicketLimit.maxCount)
+        #expect(credits.overflow == Int.max - ResetCreditTicketLimit.maxCount)
         #expect(credits.expiries == [expiry, nil, nil, nil, nil])
     }
 
@@ -67,6 +67,14 @@ struct ResetCreditTicketsTests {
         #expect(!GoldenTicketGlintState.motionAdjusted(
             isGlinting: afterCancellation, reduceMotion: false
         ))
+    }
+
+    @Test("animation identity changes with slot and Reduce Motion")
+    func animationIdentityTracksSlotAndMotionPreference() {
+        let first = GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: false)
+        #expect(first != GoldenTicketGlintState.taskIdentity(index: 1, reduceMotion: false))
+        #expect(first != GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: true))
+        #expect(first == GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: false))
     }
 
     @Test("a single credit is spoken in the singular")
