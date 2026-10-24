@@ -212,7 +212,9 @@ public actor AIEventEngine {
             vendorId: restore.vendorId,
             instanceId: restore.instanceId,
             title: "\(restore.displayName) \(restore.barLabel) usage restored",
-            detail: restore.windowRestarted
+            detail: restore.resetCreditLikelyConsumed
+                ? "Used fell from \(before)% to \(after)% and the window restarted early; one banked reset credit disappeared, so a reset token was likely used"
+                : restore.windowRestarted
                 ? "Used fell from \(before)% to \(after)% and the window restarted early; the new reset is \(remaining(until: restore.resetsAt, now: now)) away"
                 : "Used fell from \(before)% to \(after)% with \(remaining(until: restore.resetsAt, now: now)) left before the published reset",
             occurredAt: now,

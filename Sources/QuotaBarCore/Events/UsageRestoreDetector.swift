@@ -24,6 +24,9 @@ public struct UsageRestoredEvent: Sendable, Equatable {
     /// "we've reset everyone's limits" looks when it restarts the clock as
     /// well as the counter. False when only the counter fell.
     public let windowRestarted: Bool
+    /// A likely redeemed banked reset credit, inferred when exactly one
+    /// published credit disappeared as this window restarted.
+    public let resetCreditLikelyConsumed: Bool
 
     public init(
         vendorId: VendorIdentifier,
@@ -33,7 +36,8 @@ public struct UsageRestoredEvent: Sendable, Equatable {
         previousFraction: Double,
         currentFraction: Double,
         resetsAt: Date,
-        windowRestarted: Bool = false
+        windowRestarted: Bool = false,
+        resetCreditLikelyConsumed: Bool = false
     ) {
         self.vendorId = vendorId
         self.displayName = displayName
@@ -43,6 +47,7 @@ public struct UsageRestoredEvent: Sendable, Equatable {
         self.currentFraction = currentFraction
         self.resetsAt = resetsAt
         self.windowRestarted = windowRestarted
+        self.resetCreditLikelyConsumed = resetCreditLikelyConsumed
     }
 }
 
@@ -113,6 +118,14 @@ public enum UsageRestoreDetector {
                       let currentReset = bar.resetsAt
                 else { continue }
 
+                let windowRestarted = currentReset.timeIntervalSince(previousReset) > QuotaResetDetector.minimumAdvance
+                let resetCreditLikelyConsumed: Bool
+                if let previousCredits = previousSnapshot.resetCreditsAvailable,
+                   let currentCredits = currentSnapshot.resetCreditsAvailable {
+                    resetCreditLikelyConsumed = windowRestarted && previousCredits - currentCredits == 1
+                } else {
+                    resetCreditLikelyConsumed = false
+                }
                 events.append(UsageRestoredEvent(
                     vendorId: currentSnapshot.vendorId,
                     displayName: currentSnapshot.displayName,
@@ -121,7 +134,8 @@ public enum UsageRestoreDetector {
                     previousFraction: previousFraction,
                     currentFraction: currentFraction,
                     resetsAt: currentReset,
-                    windowRestarted: currentReset.timeIntervalSince(previousReset) > QuotaResetDetector.minimumAdvance
+                    windowRestarted: windowRestarted,
+                    resetCreditLikelyConsumed: resetCreditLikelyConsumed
                 ))
             }
         }
