@@ -60,19 +60,65 @@ public enum ActivityEvidenceRenderer {
         }
     }
 
+    /// The controlled ledger's clock. It is explicit and fixed for the
+    /// production evidence route, so the same binary renders the same figures
+    /// at any local hour, date or daylight-saving transition: both days are
+    /// already behind the reference before any view is built.
+    public struct Fixture: Sendable, Equatable {
+        public let referenceDate: Date
+        public let calendar: Calendar
+        public let dayOne: Date
+        public let dayTwo: Date
+        public let claudeObservedAt: Date
+        public let openCodeObservedAt: Date
+
+        /// Derives two local 10:00 days that are strictly before `reference`.
+        /// Calendar arithmetic (not fixed 24-hour steps) is what keeps this
+        /// true across a daylight-saving transition.
+        public static func around(reference: Date, calendar: Calendar) -> Fixture {
+            let todayTen = calendar.date(
+                bySettingHour: 10, minute: 0, second: 0, of: reference
+            ) ?? reference
+            let dayTwo = todayTen < reference
+                ? todayTen
+                : calendar.date(byAdding: .day, value: -1, to: todayTen) ?? todayTen
+            let dayOne = calendar.date(byAdding: .day, value: -1, to: dayTwo) ?? dayTwo
+            return Fixture(
+                referenceDate: reference,
+                calendar: calendar,
+                dayOne: dayOne,
+                dayTwo: dayTwo,
+                claudeObservedAt: reference.addingTimeInterval(-3600),
+                openCodeObservedAt: reference.addingTimeInterval(-1800))
+        }
+
+        /// 2026-10-20T12:00:00Z with both requests on 2026-10-19 and
+        /// 2026-10-20 at 10:00Z. A fixed instant, not `Date()`, so a morning
+        /// run cannot omit the second day's observation.
+        public static let standard: Fixture = {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+            return Fixture.around(
+                reference: Date(timeIntervalSince1970: 1_792_497_600), calendar: calendar)
+        }()
+    }
+
     /// Renders every controlled view to `directory` and returns what was drawn.
     @MainActor
-    public static func render(to directory: URL) async throws -> Report {
+    public static func render(
+        to directory: URL,
+        fixture: Fixture = .standard
+    ) async throws -> Report {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("frugalbar-activity-evidence-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixtureRoot) }
 
-        let now = Date()
-        let calendar = Calendar.current
-        let dayOne = calendar.startOfDay(for: now.addingTimeInterval(-26 * 3600)).addingTimeInterval(10 * 3600)
-        let dayTwo = dayOne.addingTimeInterval(26 * 3600)
+        let now = fixture.referenceDate
+        let calendar = fixture.calendar
+        let dayOne = fixture.dayOne
+        let dayTwo = fixture.dayTwo
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
@@ -100,12 +146,12 @@ public enum ActivityEvidenceRenderer {
             ActivityRecord(
                 source: "claude_code", recordId: "fixture-claude", sessionId: "fixture-claude-session",
                 projectPath: "/controlled/claude", gitBranch: "main", model: "claude-sonnet",
-                observedAt: now.addingTimeInterval(-3600),
+                observedAt: fixture.claudeObservedAt,
                 inputTokens: 10, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 15),
             ActivityRecord(
                 source: "opencode", recordId: "fixture-opencode", sessionId: "fixture-opencode-session",
                 projectPath: "/controlled/opencode", model: "gpt-5.6-luna",
-                observedAt: now.addingTimeInterval(-1800),
+                observedAt: fixture.openCodeObservedAt,
                 inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 2,
                 totalTokens: 127, billingProvider: "litellm"),
         ])
@@ -194,6 +240,9 @@ public enum ActivityEvidenceRenderer {
             exit(64)
         }
         let directory = URL(fileURLWithPath: raw)
+        // The hosted views are AppKit objects; create the application object
+        // but never run it, so no delegate, status item or poll starts.
+        _ = NSApplication.shared
         var finished = false
         var code: Int32 = 1
         Task { @MainActor in

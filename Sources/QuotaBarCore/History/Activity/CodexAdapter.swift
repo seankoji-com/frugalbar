@@ -19,9 +19,12 @@ import Foundation
 ///   per-turn `info.last_token_usage`. With no request rows to read, that
 ///   cumulative total is retained as one honestly session-level record.
 ///
-/// Request rows are keyed by `response_id`, at the timestamp the source
-/// recorded, so a resumed session or a fork that copies history cannot move
-/// yesterday's usage into today or count the same request twice.
+/// Request rows keep the timestamp the source recorded. A `response_id` is the
+/// identity when it is published; an `event_msg`-only request is identified by
+/// its session, exact instant, counter segment and cumulative counter. The two
+/// shapes are paired one-to-one on that identity, never on a shared second and
+/// total, so a resumed session or a fork cannot move yesterday's usage into
+/// today, collapse two requests into one, or count one twice.
 public struct CodexAdapter: ActivityAdapter, Sendable {
     public let sourceIdentifier: String = "codex"
     public let baseURL: URL?
@@ -79,10 +82,6 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         /// one request. The first occurrence wins; a conflicting repeat is a
         /// diagnostic, not a second row.
         var observedRequests: [String: ActivityRecord] = [:]
-        /// `(session, second, total)` of every request row already emitted by
-        /// a `token_usage_record`. An `event_msg` `last_token_usage` for the
-        /// same request is the same observation in the older shape.
-        var recordedRequestKeys = Set<String>()
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -145,16 +144,27 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             /// counter restart reset the baseline; no usage is fabricated from
             /// the difference between two counter readings.
             var cumulativeByThread: [String: Int] = [:]
+            /// Compaction starts a new counter segment for every thread. It is
+            /// part of a request's identity, so a value that repeats after a
+            /// compaction is a new observation, not the earlier one. Only the
+            /// explicit marker moves the epoch: an inferred decrease cannot be
+            /// applied without depending on which shape was read first.
+            var compactionEpoch = 0
             var lastLegacyUsage: Usage?
             var lastLegacyObservedAt: Date?
             var fileRequests: [ActivityRecord] = []
-            /// Every request figure stated in this file, keyed by the same
-            /// identity used across the two shapes. A fork's copy states the
-            /// same requests as its parent; it still accounts for its own
-            /// cumulative total.
+            /// Every request figure stated in this file, keyed by its stable
+            /// record id. A fork's copy states the same requests as its parent;
+            /// it still accounts for its own cumulative total.
             var fileRequestTotals: [String: Int] = [:]
-            /// Requests reconstructed from `event_msg` `last_token_usage`.
-            var lastUsageRequests: [ActivityRecord] = []
+            /// Join identities of the `token_usage_record` rows stated in this
+            /// file, in order. A same-request `event_msg` row consumes exactly
+            /// one of them, whichever shape came first.
+            var tokenJoinIds: [String: [String]] = [:]
+            var tokenIdsInFile = Set<String>()
+            /// Requests reconstructed from `event_msg` `last_token_usage`,
+            /// reconciled against the token rows once the whole file is read.
+            var eventObservations: [(record: ActivityRecord, joinKey: String?, cumulative: Int?, epoch: Int)] = []
 
             for (lineIndex, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -238,10 +248,19 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                         workspaceId: nil
                     )
 
-                    if let total = parsed.total {
-                        fileRequestTotals[requestKey(
-                            session: effectiveSession, observed: observed, total: total)] = total
-                    }
+                    // Reconcile the request's own published total against the
+                    // thread's cumulative counter. A counter below its last
+                    // value is a restart/compaction: reset the baseline and
+                    // record nothing from the gap. No `nil` is invented as 0.
+                    let threadId = (payload["thread_id"] as? String) ?? effectiveSession
+                    let cumulative = (payload["thread_token_usage"] as? [String: Any])
+                        .flatMap({ TokenCountParsing.nonNegative($0["total_tokens"]) })
+                    let joinKey = requestJoinKey(
+                        session: effectiveSession,
+                        observed: observed,
+                        cumulative: cumulative,
+                        epoch: compactionEpoch)
+
                     if let prior = observedRequests[recordId] {
                         if prior.inputTokens != record.inputTokens
                             || prior.outputTokens != record.outputTokens
@@ -253,27 +272,21 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                     } else {
                         observedRequests[recordId] = record
                         fileRequests.append(record)
-                        recordedRequestKeys.insert(requestKey(
-                            session: record.sessionId, observed: record.observedAt, total: record.totalTokens))
+                    }
+                    if let total = parsed.total, fileRequestTotals[recordId] == nil {
+                        fileRequestTotals[recordId] = total
+                    }
+                    if let joinKey, tokenIdsInFile.insert(recordId).inserted {
+                        tokenJoinIds[joinKey, default: []].append(recordId)
                     }
 
-                    // Reconcile the request's own published total against the
-                    // thread's cumulative counter. A counter below its last
-                    // value is a restart/compaction: reset the baseline and
-                    // record nothing from the gap. No `nil` is invented as 0.
-                    let threadId = (payload["thread_id"] as? String) ?? effectiveSession
-                    if let cumulative = (payload["thread_token_usage"] as? [String: Any])
-                        .flatMap({ TokenCountParsing.nonNegative($0["total_tokens"]) }) {
-                        if let previous = cumulativeByThread[threadId], cumulative < previous {
-                            cumulativeByThread[threadId] = cumulative
-                        } else {
-                            if let previous = cumulativeByThread[threadId],
-                               let total = parsed.total,
-                               cumulative - previous != total {
-                                inconsistent += 1
-                            }
-                            cumulativeByThread[threadId] = cumulative
+                    if let cumulative {
+                        if let previous = cumulativeByThread[threadId], cumulative >= previous,
+                           let total = parsed.total,
+                           cumulative - previous != total {
+                            inconsistent += 1
                         }
+                        cumulativeByThread[threadId] = cumulative
                     }
                 } else if lineType == "event_msg", let payload = json["payload"] as? [String: Any] {
                     guard let pType = payload["type"] as? String else { continue }
@@ -304,16 +317,13 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                                 malformed += 1
                                 continue
                             }
-                            let key = requestKey(
-                                session: effectiveSession, observed: observed, total: parsed.total)
-                            if let total = parsed.total { fileRequestTotals[key] = total }
-                            // The same request stated as a token_usage_record
-                            // is already in the ledger.
-                            if recordedRequestKeys.contains(key) { continue }
-
+                            let epoch = compactionEpoch
+                            let joinKey = requestJoinKey(
+                                session: effectiveSession, observed: observed,
+                                cumulative: cumulativeTotal, epoch: epoch)
                             let recordId = lastUsageRecordId(
                                 session: effectiveSession, observed: observed,
-                                cumulative: cumulativeTotal, last: parsed)
+                                cumulative: cumulativeTotal, epoch: epoch, last: parsed)
                             let record = ActivityRecord(
                                 source: sourceIdentifier,
                                 recordId: recordId,
@@ -336,46 +346,80 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                                 workspaceId: nil
                             )
 
-                            if let prior = observedRequests[recordId] {
-                                if prior.totalTokens != record.totalTokens
-                                    || prior.inputTokens != record.inputTokens
-                                    || prior.outputTokens != record.outputTokens {
-                                    inconsistent += 1
-                                }
-                            } else {
-                                observedRequests[recordId] = record
-                                lastUsageRequests.append(record)
-                                recordedRequestKeys.insert(key)
-                            }
-
-                            // A counter below its last value is a restart or
-                            // compaction. A counter that disagrees with the
-                            // per-request figure is a diagnostic, never a
-                            // fabricated difference.
-                            if let cumulative = cumulativeTotal {
-                                if let previous = cumulativeByThread[effectiveSession],
-                                   cumulative < previous {
-                                    cumulativeByThread[effectiveSession] = cumulative
-                                } else {
-                                    if let previous = cumulativeByThread[effectiveSession],
-                                       let total = parsed.total,
-                                       cumulative - previous != total {
-                                        inconsistent += 1
-                                    }
-                                    cumulativeByThread[effectiveSession] = cumulative
-                                }
-                            }
+                            // Defer the row until the file is fully read: a
+                            // `token_usage_record` for the same request may
+                            // come before or after this line, and the two must
+                            // pair one-to-one rather than by order. The
+                            // counter check is deferred too, so a duplicate
+                            // notification cannot report itself as an
+                            // inconsistency.
+                            eventObservations.append(
+                                (record: record, joinKey: joinKey,
+                                 cumulative: cumulativeTotal, epoch: epoch))
                         }
                     }
                 } else if lineType == "compacted" {
                     // Compaction starts a new counter segment. The records
                     // after it are observations, never differences from the
-                    // pre-compaction total.
+                    // pre-compaction total, and a counter value that repeats
+                    // is a new observation rather than the earlier request.
                     cumulativeByThread.removeAll()
+                    compactionEpoch += 1
                 }
             }
 
-            fileRequests += lastUsageRequests
+            // Pair `event_msg` requests with their `token_usage_record` twins.
+            // The identity is the request's provenance — session, exact
+            // recorded instant, counter segment and cumulative value — so
+            // equal time and total never make two different requests look like
+            // one. Each token row is consumed at most once.
+            var eventCounterBySession: [String: (epoch: Int, value: Int)] = [:]
+            var consumedTokenIds = Set<String>()
+            for observation in eventObservations {
+                let record = observation.record
+                if let joinKey = observation.joinKey,
+                   let candidates = tokenJoinIds[joinKey],
+                   let matched = candidates.first(where: { !consumedTokenIds.contains($0) }) {
+                    consumedTokenIds.insert(matched)
+                    if let tokenRecord = observedRequests[matched],
+                       let tokenTotal = tokenRecord.totalTokens,
+                       let eventTotal = record.totalTokens,
+                       tokenTotal != eventTotal {
+                        inconsistent += 1
+                    }
+                    continue
+                }
+                if let prior = observedRequests[record.recordId] {
+                    if prior.totalTokens != record.totalTokens
+                        || prior.inputTokens != record.inputTokens
+                        || prior.outputTokens != record.outputTokens {
+                        inconsistent += 1
+                    }
+                } else {
+                    observedRequests[record.recordId] = record
+                    fileRequests.append(record)
+                    // A counter below its last value is a restart or
+                    // compaction, which resets the baseline silently. A
+                    // counter that disagrees with the per-request figure is a
+                    // diagnostic, never a fabricated difference. Duplicates
+                    // and cross-shape twins never move this baseline.
+                    if let cumulative = observation.cumulative {
+                        if let previous = eventCounterBySession[record.sessionId],
+                           previous.epoch == observation.epoch,
+                           cumulative >= previous.value,
+                           let total = record.totalTokens,
+                           cumulative - previous.value != total {
+                            inconsistent += 1
+                        }
+                        eventCounterBySession[record.sessionId] =
+                            (observation.epoch, cumulative)
+                    }
+                }
+                if let total = record.totalTokens, fileRequestTotals[record.recordId] == nil {
+                    fileRequestTotals[record.recordId] = total
+                }
+            }
+
             if !fileRequests.isEmpty {
                 records += fileRequests
                 incomplete += fileRequests.filter { $0.totalKind == .partial || $0.totalKind == .unknown }.count
@@ -498,18 +542,29 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         session: String,
         observed: Date,
         cumulative: Int?,
+        epoch: Int,
         last: Usage
     ) -> String {
         let millis = Int64((observed.timeIntervalSince1970 * 1000).rounded())
         let counter = cumulative.map(String.init) ?? last.total.map(String.init) ?? "unknown"
-        return "event_\(session)_\(millis)_\(counter)"
+        return "event_\(session)_\(millis)_\(epoch)_\(counter)"
     }
 
     /// The same request can be printed as a `token_usage_record` and as an
-    /// `event_msg` `last_token_usage`. Its time and own total identify it.
-    private func requestKey(session: String, observed: Date, total: Int?) -> String {
-        let second = Int64(observed.timeIntervalSince1970.rounded(.down))
-        return "\(session)|\(second)|\(total.map(String.init) ?? "unknown")"
+    /// `event_msg` `last_token_usage`. Only the source's own provenance can
+    /// join the two shapes: the session, the instant it recorded to the
+    /// millisecond, the counter segment and the cumulative counter it
+    /// published. A request that published no cumulative counter is not
+    /// joined at all; equal time and total are not proof of one request.
+    private func requestJoinKey(
+        session: String,
+        observed: Date,
+        cumulative: Int?,
+        epoch: Int
+    ) -> String? {
+        guard let cumulative else { return nil }
+        let millis = Int64((observed.timeIntervalSince1970 * 1000).rounded())
+        return "\(session)|\(millis)|\(epoch)|\(cumulative)"
     }
 
     private func summed(_ values: [Int]) -> Int? {

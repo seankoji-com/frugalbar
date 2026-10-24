@@ -821,9 +821,9 @@ struct UXRenderTests {
 // MARK: - Issue #128 accounting evidence
 
 extension UXRenderTests {
-    /// The app-executable seam. It is activated by the app entry point, which
-    /// is outside this repair's source scope; this test keeps the seam itself
-    /// honest and renders its controlled views through the test host.
+    /// The app-executable seam. `Sources/QuotaBarApp/AppMain.swift` activates
+    /// it after the CLI early exits; this test keeps the seam itself honest and
+    /// renders its controlled views through the test host.
     @Test func renderActivityEvidenceSeam() async throws {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         let directory = root.appendingPathComponent("release-seam", isDirectory: true)
@@ -847,10 +847,13 @@ extension UXRenderTests {
         try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixtureRoot) }
 
-        let now = Date()
-        let calendar = Calendar.current
-        let dayOne = calendar.startOfDay(for: now.addingTimeInterval(-26 * 3600)).addingTimeInterval(10 * 3600)
-        let dayTwo = dayOne.addingTimeInterval(26 * 3600)
+        // The same fixed clock the production evidence route uses: both days
+        // are behind the reference, so a morning run cannot omit day two.
+        let evidence = ActivityEvidenceRenderer.Fixture.standard
+        let now = evidence.referenceDate
+        let calendar = evidence.calendar
+        let dayOne = evidence.dayOne
+        let dayTwo = evidence.dayTwo
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
@@ -876,12 +879,12 @@ extension UXRenderTests {
             ActivityRecord(
                 source: "claude_code", recordId: "fixture-claude", sessionId: "fixture-claude-session",
                 projectPath: "/controlled/claude", gitBranch: "main", model: "claude-sonnet",
-                observedAt: now.addingTimeInterval(-3600),
+                observedAt: evidence.claudeObservedAt,
                 inputTokens: 10, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 15),
             ActivityRecord(
                 source: "opencode", recordId: "fixture-opencode", sessionId: "fixture-opencode-session",
                 projectPath: "/controlled/opencode", model: "gpt-5.6-luna",
-                observedAt: now.addingTimeInterval(-1800),
+                observedAt: evidence.openCodeObservedAt,
                 inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 2,
                 totalTokens: 127, billingProvider: "litellm"),
         ])

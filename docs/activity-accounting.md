@@ -38,11 +38,20 @@ Two shapes state a request:
 - `token_usage_record` carries `usage` and a `response_id`; the row is keyed by
   that response.
 - `event_msg` `token_count` carries `info.last_token_usage` beside the
-  cumulative counter. That is a request too, keyed by session, millisecond and
-  cumulative value, so a fork's copy is the same row and a same-second repeat
-  is not collapsed. A `last_token_usage` for the same request a
-  `token_usage_record` already stated (same session, second and total) is not
-  stored twice.
+  cumulative counter. That is a request too, keyed by session, exact
+  millisecond, counter segment and cumulative value, so a fork's copy is the
+  same row and a same-second repeat is not collapsed. Equal time and equal total
+  are not identity: two requests that share them stay two rows.
+
+The same request stated in both shapes is stored once. The two rows are paired
+one-to-one — never many-to-one and never by whichever shape was read first — on
+the source's own provenance: same session, same recorded instant, same counter
+segment and same published cumulative counter. A request that published no
+cumulative counter is not cross-paired at all, because nothing then proves the
+two shapes are the same request; both observations are kept rather than one
+being guessed away. A `compacted` event starts a new counter segment, so a
+counter value repeated after it is a new observation. A duplicate notification
+of one request remains one row and is not reported as inconsistent.
 
 The thread's cumulative counter is used to reconcile, not to create usage. A
 per-request figure that disagrees with the difference between two cumulative
@@ -136,19 +145,11 @@ controlled data:
 - `Tests/QuotaBarUITests/UXRenderTests.swift` runs
   `renderActivityAccountingEvidence` and `renderActivityEvidenceSeam` under the
   test host;
-- `ActivityEvidenceRenderer` is built into `QuotaBarUI`. It renders the same
-  views from a throwaway store, then exits, without opening the live history
-  database, preferences or credentials and without injecting quota.
-
-The renderer needs one call from the app entry point, which is outside this
-repair's source scope. Once that call is present:
-
-```swift
-// Sources/QuotaBarApp/AppMain.swift, in QuotaBarApp.init(), after CLIArguments
-if ProcessInfo.processInfo.environment[ActivityEvidenceRenderer.environmentKey] != nil {
-    ActivityEvidenceRenderer.runFromEnvironmentAndExit()
-}
-```
+- `ActivityEvidenceRenderer` is built into `QuotaBarUI`, and
+  `Sources/QuotaBarApp/AppMain.swift` calls it from `QuotaBarApp.init()` after
+  the CLI early exits and before any delegate, poll, store, preference or
+  credential is touched. It renders the same views from a throwaway store, then
+  exits, without opening the live history database and without injecting quota.
 
 ```sh
 FRUGALBAR_ACTIVITY_EVIDENCE_DIR=/tmp/frugalbar-activity-evidence ./frugalbar
@@ -156,13 +157,21 @@ FRUGALBAR_ACTIVITY_EVIDENCE_DIR=/tmp/frugalbar-activity-evidence ./frugalbar
 
 The process prints the chart total, layers, OpenAI project paths, OpenCode
 project paths (empty) and the unattributed-workspace message, then exits 0. The
-directory contains the PNGs and accessibility dumps. Until that call is added,
-use the test-host invocation:
+directory contains the PNGs and accessibility dumps. The test-host invocation
+remains available:
 
 ```sh
 FRUGALBAR_RENDER_DIR=.build/issue128-evidence/render \
   swift test -c debug --filter "UXRenderTests/renderActivity"
 ```
+
+The controlled ledger's clock is fixed, not `Date()`: a standard reference of
+2026-10-20T12:00:00Z with both request days at 10:00Z on 2026-10-19 and
+2026-10-20. The second day is therefore always behind the reference and inside
+the seven-day window, at any local hour. `Fixture.around(reference:calendar:)`
+derives the same two past days for an injected reference and calendar;
+`ActivityEvidenceClockTests` covers morning, the 10:00 boundary, midday,
+evening and daylight-saving transitions in several time zones.
 
 Both seams host the views offscreen with `NSHostingView`; they do not prove a
 GUI session against a logged-in desktop, and the accessibility tree of
