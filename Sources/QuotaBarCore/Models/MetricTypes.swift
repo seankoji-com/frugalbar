@@ -401,7 +401,11 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// Length of the calendar month ending at `reset`. Months are 28–31 days,
     /// so a 30-day constant would drift the marker by up to a day.
     public static func monthWindowLength(endingAt reset: Date) -> TimeInterval? {
-        guard let start = Calendar.current.date(byAdding: .month, value: -1, to: reset) else { return nil }
+        monthWindowLength(endingAt: reset, calendar: .current)
+    }
+
+    public static func monthWindowLength(endingAt reset: Date, calendar: Calendar) -> TimeInterval? {
+        guard let start = calendar.date(byAdding: .month, value: -1, to: reset) else { return nil }
         let length = reset.timeIntervalSince(start)
         return length > 0 ? length : nil
     }

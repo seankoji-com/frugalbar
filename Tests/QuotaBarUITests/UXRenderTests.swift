@@ -17,6 +17,45 @@ struct UXRenderTests {
         func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
     }
 
+    @Test func renderSubscriptionCreditLayout() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let end = now.addingTimeInterval(12 * 86_400)
+        var codex = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.22, label: "WK", resetsAt: now.addingTimeInterval(7 * 86_400),
+                                 windowLength: QuotaWindow.week), planName: "Pro")
+        codex.resetCreditsAvailable = 2
+        codex.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
+            metric: .credits(remaining: Decimal(string: "60085.422977")!, unitName: "credits"))]
+        var claude = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.38, label: "WK"), planName: "Max")
+        func promo(balance: Decimal, limit: Decimal?, end: Date?) -> APICreditEntry {
+            APICreditEntry(id: "claude.promo-credit", vendorId: .claude, label: "Promo credit",
+                metric: .currency(balance: balance, limit: limit, spent: nil, currencyCode: "USD"),
+                currencyBasis: .prepaidCredit, monthlyPeriodEnd: end)
+        }
+        claude.apiCredits = [promo(balance: 0, limit: 100, end: end)]
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [codex, claude])
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "subscription-credit-layout", directory: directory)
+        codex.resetCreditsAvailable = 7
+        claude.apiCredits = [promo(balance: 35, limit: 100, end: end)]
+        claude.staleReading = StaleReading(reason: .offline, at: now)
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [codex, claude])
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "subscription-credit-stale-overflow", directory: directory)
+        claude.staleReading = nil
+        claude.apiCredits = [promo(balance: 15, limit: nil, end: nil)]
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [claude])
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "subscription-credit-no-limit-or-date", directory: directory)
+    }
+
     /// Visual fixture only. ProviderHTTPTests exercises project selection and
     /// parsing; this checks how its weekly-only output fits the production row.
     @Test func renderGemini() async throws {

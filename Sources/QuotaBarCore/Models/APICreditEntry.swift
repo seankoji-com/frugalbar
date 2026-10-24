@@ -9,8 +9,7 @@ import Foundation
 /// recorder and the widget's average — reads snapshots, so a balance carried in
 /// this type cannot reach any of them. That is the structural half of "balances
 /// stay out of quota maths": a balance has no window to draw and no fraction to
-/// rank, and the only thing it can honestly do is state one figure with a
-/// label.
+/// rank. A credit's own published limit can support a presentation-only bar.
 ///
 /// It rides the snapshot of the fetch that already read it
 /// (`QuotaSnapshot.apiCredits`), which is why there is exactly one network
@@ -23,11 +22,12 @@ import Foundation
 /// money with different expiry rules.
 public struct APICreditEntry: Sendable, Equatable, Identifiable {
 
-    /// Codex's credit pool extends the ChatGPT plan. Keep its stable history
-    /// identity while placing its figure beside that plan's windows.
+    /// Keep subscription credits with their account without making them quotas.
     public var extendsSubscription: Bool {
-        vendorId == .openai && id == "openai.api-credits"
+        (vendorId == .openai && id == "openai.api-credits") || isMonthlyPromo
     }
+
+    public var isMonthlyPromo: Bool { vendorId == .claude && id == "claude.promo-credit" }
 
     /// Stable id, built from the facts — the vendor and which of its pools —
     /// never a UUID or prose, so the same entry re-renders as the same row.
@@ -38,8 +38,7 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     /// The figure, in the vendor's own unit: `.credits` for a count the vendor
     /// publishes in credits, `.currency` for money. A `.currency` figure keeps
     /// the vendor's own published limit in `limit` — it is a real figure the
-    /// vendor sent — but nothing here derives a fraction from it, and the row
-    /// that draws this entry has no bar.
+    /// vendor sent. It remains outside all snapshot quota calculations.
     public let metric: MetricType
     /// What the money *is*, in the same vocabulary a provider snapshot uses, so
     /// the figure is never printed under a label that describes something else
@@ -52,6 +51,9 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     public let detail: String?
     /// Which response the figure came from, for provenance. Never a credential.
     public let source: String?
+    /// Published end of the recurring monthly promo period. Never taken from
+    /// the separate Console API-credit entitlement or its next grant date.
+    public let monthlyPeriodEnd: Date?
 
     public init(
         id: String,
@@ -60,7 +62,8 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         metric: MetricType,
         currencyBasis: CurrencyBasis? = nil,
         detail: String? = nil,
-        source: String? = nil
+        source: String? = nil,
+        monthlyPeriodEnd: Date? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -69,5 +72,6 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         self.currencyBasis = currencyBasis
         self.detail = detail
         self.source = source
+        self.monthlyPeriodEnd = monthlyPeriodEnd
     }
 }

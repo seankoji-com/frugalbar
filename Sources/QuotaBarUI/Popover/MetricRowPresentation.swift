@@ -80,6 +80,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// change. Always set and cleared together with `staleNote`.
     public let staleSpoken: String?
     public let subscriptionCredits: [APICreditEntryPresentation]
+    public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let monthlyCreditLine: String?
     public let monthlyCreditDetail: String?
 
@@ -94,6 +95,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
             if let monthlyCreditDetail { parts.append(monthlyCreditDetail) }
         }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
+        if let monthlyPromo { parts.append(monthlyPromo.spoken) }
         return parts.joined(separator: ". ")
     }
 
@@ -111,7 +113,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
         self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable)
-        self.subscriptionCredits = snapshot.apiCredits.filter(\.extendsSubscription)
+        self.monthlyPromo = snapshot.apiCredits.first(where: \.isMonthlyPromo)
+            .map { MonthlyPromoCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil) }
+        self.subscriptionCredits = snapshot.apiCredits.filter { $0.extendsSubscription && !$0.isMonthlyPromo }
             .map { APICreditEntryPresentation(entry: $0) }
 
         // An unreadable provider has no bars, so this reads false there — a

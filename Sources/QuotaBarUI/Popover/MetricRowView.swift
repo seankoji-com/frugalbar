@@ -1,6 +1,37 @@
 import SwiftUI
 import QuotaBarCore
 
+/// One line aligned with the provider title. The enclosing row speaks both
+/// the ticket count and credit figure, so these children stay decorative.
+struct SubscriptionCreditLineView: View {
+    let presentation: MetricRowPresentation
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let credits = presentation.resetCredits {
+                HStack(spacing: 3) {
+                    ForEach(0..<credits.tickets, id: \.self) { _ in
+                        Image(systemName: "ticket").font(.system(size: 11))
+                    }
+                    if credits.overflow > 0 { Text("+\(credits.overflow)") }
+                }
+                .fixedSize()
+            }
+            ForEach(Array(presentation.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
+                HStack(spacing: 4) {
+                    Image(systemName: "plus.circle")
+                    Text(credit.figure).lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(Theme.Typography.subtitle)
+        .foregroundStyle(Theme.onSurfaceVariant)
+        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        .accessibilityHidden(true)
+    }
+}
+
 /// A single provider row: vendor mark, name and plan, then one cell per
 /// window column (5H / WK / MO, see `WindowColumn`) so the same window lines
 /// up down the card. Pools that are not a window (bonus credits, overage,
@@ -86,8 +117,8 @@ struct MetricRowView: View {
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
-            if let credits = p.resetCredits {
-                resetCreditRow(credits)
+            if p.resetCredits != nil || !p.subscriptionCredits.isEmpty {
+                SubscriptionCreditLineView(presentation: p)
             }
             if let monthly = p.monthlyCreditLine {
                 VStack(alignment: .leading, spacing: 2) {
@@ -98,16 +129,9 @@ struct MetricRowView: View {
                 .foregroundStyle(Theme.onSurfaceVariant)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Image(systemName: "plus.circle")
-                    Text("Usage credits: \(credit.figure)")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                }
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .padding(.leading, Theme.gridLeadingInset)
+            if let promo = p.monthlyPromo {
+                MonthlyPromoCreditView(presentation: promo)
+                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
             }
         }
         .padding(.vertical, isGrouped ? 4 : 8)
@@ -186,33 +210,6 @@ struct MetricRowView: View {
     private var forecastIsUrgent: Bool {
         if case .limitAt = forecast?.outcome { return true }
         return false
-    }
-
-    /// Banked reset credits the vendor granted, one ticket glyph each, capped
-    /// at `ResetCredits.maxTickets` with a "+n" for the remainder — so a large
-    /// grant still states its exact count instead of running off the row.
-    ///
-    /// Its own line under the row, like the non-window pools above it: a reset
-    /// credit is not a window and has no bar, and the row's 332pt budget has no
-    /// column left to put it in. Carries no accessibility label of its own —
-    /// the parent row ignores child elements, so the count is spoken by
-    /// `combinedAccessibilityLabel`.
-    private func resetCreditRow(_ credits: MetricRowPresentation.ResetCredits) -> some View {
-        HStack(spacing: 3) {
-            Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
-            ForEach(0..<credits.tickets, id: \.self) { _ in
-                Image(systemName: "ticket")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.onSurface)
-            }
-            if credits.overflow > 0 {
-                Text("+\(credits.overflow)")
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-            }
-            Spacer(minLength: 0)
-        }
-        .accessibilityHidden(true)
     }
 
     /// Under the row when this poll could not read the provider and the figures

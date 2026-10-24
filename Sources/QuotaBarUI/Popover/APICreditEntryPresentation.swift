@@ -6,8 +6,8 @@ import QuotaBarCore
 /// Extracted so the entry's wording can be asserted for real rather than
 /// re-read off a `View` value, the same reason `MetricRowPresentation` exists.
 ///
-/// The entry carries no fraction and no bar: a credit balance has no window and
-/// no denominator the vendor published. Drawing one would invent a figure.
+/// The balance label used by both standalone credits and subscription credits.
+/// MonthlyPromoCreditPresentation adds a bar only with the promo's own limit.
 public struct APICreditEntryPresentation: Equatable, Sendable {
 
     /// The entry's own name, vendor first: "OpenAI API credits".

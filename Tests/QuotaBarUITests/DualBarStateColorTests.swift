@@ -39,6 +39,15 @@ struct DualBarStateColorTests {
         #expect(color(1.0) == Theme.errorBold)
     }
 
+    @Test("an explicit presented tick controls the colour instead of the quota tick policy")
+    func presentedMarkerControlsColor() {
+        let metrics = DualBarMetrics(primaryFraction: 0.8, expectedPaceFraction: 0.1, label: "MO",
+            resetsAt: Date(timeIntervalSince1970: 1_900_000_000), windowLength: 30 * 86_400)
+        #expect(DualBarProgressView.stateColor(for: metrics) == amber)
+        #expect(DualBarProgressView.stateColor(for: metrics, presentedPaceMarker: 0.9) == Theme.healthy)
+        #expect(DualBarProgressView.stateColor(for: metrics, presentedPaceMarker: nil) == Theme.healthy)
+    }
+
     @Test("no reading is neutral, and blocked with no reading is the error tone")
     func noReading() {
         #expect(color(nil) == Theme.outline)
