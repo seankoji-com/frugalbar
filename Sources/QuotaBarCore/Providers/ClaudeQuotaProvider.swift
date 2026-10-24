@@ -54,6 +54,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         } catch {
             snapshot = unavailable(unavailableReason(for: error))
         }
+        // A refused usage read does not erase the plan the credential states.
+        // Without this, a rate-limited Claude header said only "Claude" while
+        // the account's "Max (20x)" was sitting in the same Keychain blob.
+        if snapshot.planName == nil {
+            snapshot.planName = await CredentialStore.claudePlanNameAsync()
+        }
         snapshot.monthlyAPICredit = await credit
         return snapshot
     }
@@ -219,6 +225,14 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // shows no reset-credit row rather than "0 banked".
         snapshot.resetCreditsAvailable = usage.resetGrants?.resetsAvailable
         snapshot.resetCreditsApplicable = usage.resetGrants?.resetsUsableNow
+        // `cedar_ember` grants carry an end for each banked reset. Expand the
+        // count so the ticket glyphs line up with their own expiries; a grant
+        // that published no end contributes nil, not the reset window's date.
+        snapshot.resetCreditExpiries = usage.resetGrants?.grants.flatMap { grant -> [Date?] in
+            guard let left = grant.resetsLeft, left > 0 else { return [] }
+            let expiry = CLIProxyClient.parseResetDate(grant.endsAt)
+            return Array(repeating: expiry, count: left)
+        } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
         return snapshot
     }

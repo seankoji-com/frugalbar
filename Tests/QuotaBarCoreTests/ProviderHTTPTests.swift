@@ -584,11 +584,19 @@ struct ProviderHTTPTests {
         #expect(snap.badgeText == "8% left")
     }
 
-    @Test("OpenAI reads banked reset credits and names them in the row note")
+    @Test("OpenAI reads banked reset credits, their expiries and the row note")
     func openAIResetCredits() async throws {
         let provider = OpenAIQuotaProvider(accessToken: "session-token")
-        let snap = try await withStubbedHTTP({ _ in
-            canned(body: #"""
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path.hasSuffix("rate-limit-reset-credits") == true {
+                return canned(body: #"""
+                {"credits":[
+                  {"id":"a","status":"available","expires_at":"2026-07-17T12:00:00Z"},
+                  {"id":"b","status":"available","expires_at":null}],
+                 "available_count":2}
+                """#)
+            }
+            return canned(body: #"""
             {"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":30,"reset_at":1787891551}},
              "credits":{"has_credits":true,"unlimited":false,"balance":"12.50"},
              "rate_limit_reset_credits":{"available_count":"2"}}
@@ -596,8 +604,11 @@ struct ProviderHTTPTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(URLProtocolStub.requestCount == 1)
+        #expect(URLProtocolStub.requestCount == 2)
         #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.resetCreditExpiries.count == 2)
+        #expect(snap.resetCreditExpiries[0] != nil)
+        #expect(snap.resetCreditExpiries[1] == nil)
         #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
         #expect(snap.resetCreditsApplicable == nil)
         #expect(snap.row1?.primaryFraction == 0.30)
@@ -1784,6 +1795,10 @@ struct ProviderHTTPTests {
         }
         #expect(snap.resetCreditsAvailable == 2)
         #expect(snap.resetCreditsApplicable == 1)
+        #expect(snap.resetCreditExpiries.count == 2)
+        #expect(snap.resetCreditExpiries[0]
+            == ISO8601DateFormatter().date(from: "2026-10-22T16:00:00Z"))
+        #expect(snap.resetCreditExpiries[1] == nil)
         #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
     }
 

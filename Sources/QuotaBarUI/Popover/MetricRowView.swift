@@ -10,10 +10,14 @@ struct SubscriptionCreditLineView: View {
         HStack(spacing: 8) {
             if let credits = presentation.resetCredits {
                 HStack(spacing: 3) {
-                    ForEach(0..<credits.tickets, id: \.self) { _ in
-                        Image(systemName: "ticket").font(.system(size: 11))
+                    ForEach(0..<credits.tickets, id: \.self) { index in
+                        GoldenTicketView(index: index)
+                            .help(credits.expiryText(at: index))
                     }
-                    if credits.overflow > 0 { Text("+\(credits.overflow)") }
+                    if credits.overflow > 0 {
+                        Text("+\(credits.overflow)")
+                            .help("\(credits.overflow) more banked reset credit\(credits.overflow == 1 ? "" : "s")")
+                    }
                 }
                 .fixedSize()
             }

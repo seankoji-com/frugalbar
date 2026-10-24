@@ -1,18 +1,26 @@
 import SwiftUI
 import QuotaBarCore
 
-/// A credit's own usage and calendar month, never a quota snapshot or urgency.
+/// The monthly promo credit, drawn in the same anatomy as a quota window:
+/// a name and its reset on the left, a bar in the grid column, and the share
+/// consumed with the countdown beneath it.
+///
+/// It still has no place in quota maths: `fraction` is presentation-only and
+/// never reaches `consumptionFraction`, urgency, sorting or advice.
 public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
-    let figure: String
     let fraction: Double?
     let paceMarker: Double?
+    /// "12d" — the reset countdown under the bar.
     let dayCountdown: String?
+    /// "Resets in 12 days" — the second line beside the name.
+    let resetText: String?
+    /// "100%" — the share used, where the window cells put their figure.
+    let percentText: String?
     let spoken: String
     let barMetrics: DualBarMetrics
     var isExhausted: Bool { fraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } ?? false }
 
     init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
-        figure = APICreditEntryPresentation(entry: entry).figure + " left"
         if case .currency(let balance, let limit?, _, _) = entry.metric,
            limit > 0, balance >= 0 {
             let used = NSDecimalNumber(decimal: (limit - balance) / limit).doubleValue
@@ -20,6 +28,7 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
         } else {
             fraction = nil
         }
+        percentText = fraction.map { "\(Int(($0 * 100).rounded()))%" }
 
         let periodLength: TimeInterval?
         if let end = entry.monthlyPeriodEnd,
@@ -28,7 +37,14 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
             // The confirmed recurring period is a calendar month, not 30 days.
             // Never roll a passed end forward and pretend a refill was read.
             let days = max(0, end.timeIntervalSince(now) / 86_400).rounded(.up)
-            dayCountdown = days.isFinite && days < Double(Int.max) ? "\(Int(days))d" : nil
+            if days.isFinite && days < Double(Int.max) {
+                let count = Int(days)
+                dayCountdown = "\(count)d"
+                resetText = "Resets in \(count) day\(count == 1 ? "" : "s")"
+            } else {
+                dayCountdown = nil
+                resetText = nil
+            }
             let elapsed = 1 - end.timeIntervalSince(now) / length
             // This credit keeps its even-use marker when fully used, as requested.
             paceMarker = fraction != nil && elapsed > 0 && elapsed < 1 ? elapsed : nil
@@ -36,9 +52,10 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
             periodLength = nil
             paceMarker = nil
             dayCountdown = nil
+            resetText = nil
         }
-        var parts = ["Monthly promo credit", figure]
-        if let dayCountdown { parts.append("subscription month ends in \(dayCountdown.dropLast()) days") }
+        var parts = ["Usage credits", percentText.map { "\($0) used" } ?? "no reading"]
+        if let resetText { parts.append(resetText.lowercased()) }
         if let paceMarker { parts.append("even-use marker at \(Int((paceMarker * 100).rounded())) percent of the month") }
         if isStale { parts.append("stale, the last poll failed") }
         spoken = parts.joined(separator: ", ")
@@ -55,52 +72,52 @@ struct MonthlyPromoCreditView: View {
     }
 
     nonisolated static func figureColor(for presentation: MonthlyPromoCreditPresentation) -> Color {
-        presentation.isExhausted ? Theme.error : DualBarProgressView.stateColor(
+        DualBarProgressView.stateColor(
             for: presentation.barMetrics, presentedPaceMarker: presentation.paceMarker)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Promo credit").font(Theme.Typography.subtitle)
-                Spacer(minLength: 0)
-                Text("Monthly").font(Theme.Typography.token).foregroundStyle(Theme.outline)
+        HStack(alignment: .top, spacing: Theme.rowSpacing) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Usage credits")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                if let resetText = presentation.resetText {
+                    Text(resetText)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.tail)
+                }
             }
-            if let fraction = presentation.fraction {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        ZStack(alignment: .leading) {
-                            Rectangle().fill(Color.white.opacity(0.08))
-                            if fraction > 0 {
-                                Rectangle().fill(color)
-                                    .frame(width: max(3, fraction * geometry.size.width))
-                            }
-                        }
-                        .frame(height: DualBarProgressView.barHeight)
-                        .clipShape(Capsule())
-                        if let pace = presentation.paceMarker {
-                            Capsule().fill(Color.white.opacity(0.9))
-                                .frame(width: DualBarProgressView.tickWidth, height: DualBarProgressView.tickHeight)
-                                .shadow(color: .black.opacity(0.6), radius: 1.5)
-                                .position(x: min(max(pace * geometry.size.width, 1), geometry.size.width - 1),
-                                          y: geometry.size.height / 2)
-                        }
+            .frame(width: Theme.nameColumnWidth, alignment: .leading)
+
+            VStack(spacing: 4) {
+                if presentation.fraction != nil {
+                    DualBarProgressView(metrics: presentation.barMetrics, showsLabel: false)
+                }
+                HStack(spacing: 2) {
+                    if let percent = presentation.percentText {
+                        Text(percent)
+                            .font(Theme.Typography.gridPercent)
+                            .foregroundStyle(Self.figureColor(for: presentation))
                     }
-                    .frame(height: geometry.size.height)
+                    Spacer(minLength: 0)
+                    if let countdown = presentation.dayCountdown {
+                        Text(countdown)
+                            .font(Theme.Typography.gridReset)
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                    }
                 }
-                .frame(height: DualBarProgressView.tickHeight)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             }
-            HStack {
-                Text(presentation.figure).font(Theme.Typography.chip)
-                    .foregroundStyle(Self.figureColor(for: presentation))
-                Spacer(minLength: 0)
-                if let countdown = presentation.dayCountdown {
-                    Text(countdown).font(Theme.Typography.gridReset).foregroundStyle(Theme.outline)
-                }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(Theme.onSurfaceVariant)
         .padding(.top, 8)
+        .foregroundStyle(Theme.onSurfaceVariant)
         .help(presentation.spoken)
         // The enclosing provider row speaks this alongside its quota windows.
         .accessibilityHidden(true)

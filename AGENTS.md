@@ -375,13 +375,32 @@ Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
 
-A row's banked reset credits draw as one `ticket` glyph per credit
-(`MetricRowPresentation.ResetCredits`), capped at `maxTickets` with an exact
-`+n` for the remainder, on a line of their own under the row. The glyph strip
-carries no accessibility label — the row is one accessibility element
-(`children: .ignore`), so a label on a child is never announced; the count is
-spoken by `combinedAccessibilityLabel` instead. A vendor that published no
-figure and a vendor that published zero both draw nothing.
+A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
+(`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
+`maxTickets` with an exact `+n` for the remainder, on a line of their own under
+the row. The glyph strip carries no accessibility label — the row is one
+accessibility element (`children: .ignore`), so a label on a child is never
+announced; the count is spoken by `combinedAccessibilityLabel` instead. Each
+glyph carries a `.help` tooltip with that credit's own published expiry; an
+expiry the vendor did not publish says "Expiry not published" rather than
+borrowing the reset window's date. Glints are staggered and disabled under
+Reduce Motion. A vendor that published no figure and a vendor that published
+zero both draw nothing.
+
+**Credit counts are shown rounded to the nearest whole credit.** `CreditText.format`
+rounds for display; the exact `Decimal` stays on the metric, in the history
+table and in the sync export. A figure like "60,085.422977 credits" is noise at
+a glance and implies a precision the vendor's own console does not show. The
+rounding is display-only: no balance, series or quota figure is altered.
+
+**The Claude promo credit is drawn in the window anatomy, not as a second
+kind of row.** It has a published limit, so `MonthlyPromoCreditView` draws it
+with the same name/reset/bar/percentage/countdown alignment as a window cell:
+"Usage credits", its own published reset, the bar, the percentage and the day
+countdown. It is still not quota: no snapshot fraction, urgency, sorting or
+advice reads it. Its reset text and countdown both come from the promo's own
+published period end (`monthlyPeriodEnd`); never substitute the subscription
+renewal or a hardcoded day count.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure
