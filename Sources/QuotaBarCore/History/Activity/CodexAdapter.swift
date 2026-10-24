@@ -2,16 +2,29 @@ import Foundation
 
 /// Ingests CLI activity from OpenAI Codex (`$CODEX_HOME/sessions/`, default `~/.codex/sessions/`).
 ///
-/// CRITICAL INVARIANT:
-/// Codex reports cumulative session totals on every turn in `payload.info.total_token_usage`.
-/// We must take the LAST recorded token usage per session, NEVER sum them across turns.
+/// Shapes and what they mean (verified against local rollouts):
 ///
-/// This adapter deliberately re-reads a rollout file from the start whenever it
-/// changes, rather than resuming at a byte offset: the cumulative total and the
-/// session metadata (`cwd`, `git_branch`, model) are established by the first
-/// lines of the file, and only the total is superseded by later lines. A
-/// file is skipped entirely when `(size, mtime)` are unchanged, which is the
-/// common case for every rollout except the one currently being written.
+/// - `session_meta` carries `payload.session_id`, `payload.cwd`, and the
+///   published `payload.model_provider` / `payload.creator_account_id`.
+/// - A model change is a **top-level** `type: "turn_context"` event whose
+///   `payload.model` applies from that point in the file onward. It is not an
+///   `event_msg`, and `payload.type` is absent.
+/// - `token_usage_record` carries `payload.usage` for one request, at the
+///   top-level `timestamp`, plus `payload.thread_token_usage` cumulative for
+///   the thread. `usage.input_tokens` already includes
+///   `usage.cached_input_tokens`; `reasoning_output_tokens` is inside
+///   `output_tokens`, and `total_tokens` is `input + output`.
+/// - Older rollouts only have `event_msg` / `payload.type == "token_count"`
+///   with a cumulative `info.total_token_usage` and (in newer files) a
+///   per-turn `info.last_token_usage`. With no request rows to read, that
+///   cumulative total is retained as one honestly session-level record.
+///
+/// Request rows keep the timestamp the source recorded. A `response_id` is the
+/// identity when it is published; an `event_msg`-only request is identified by
+/// its session, exact instant, counter segment and cumulative counter. The two
+/// shapes are paired one-to-one on that identity, never on a shared second and
+/// total, so a resumed session or a fork cannot move yesterday's usage into
+/// today, collapse two requests into one, or count one twice.
 public struct CodexAdapter: ActivityAdapter, Sendable {
     public let sourceIdentifier: String = "codex"
     public let baseURL: URL?
@@ -42,6 +55,15 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         ).appendingPathComponent("sessions", isDirectory: true)
     }
 
+    private struct Usage {
+        var input: Int?
+        var output: Int?
+        var cacheRead: Int?
+        var cacheWrite: Int?
+        var reasoning: Int?
+        var total: Int?
+    }
+
     public func collectActivities(watermarks: [String: ActivityWatermark]) async throws -> ActivityIngestResult {
         guard let baseURL, FileManager.default.fileExists(atPath: baseURL.path) else {
             return .empty
@@ -50,6 +72,16 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
         var records: [ActivityRecord] = []
         var updates: [ActivityWatermark] = []
         var skipped = 0
+        var scanned = 0
+        var malformed = 0
+        var inconsistent = 0
+        var incomplete = 0
+        var inputDiagnostics: [ActivityInputDiagnostics] = []
+        var consideredInputs: [String] = []
+        /// One response observed in two files (a fork or a copied history) is
+        /// one request. The first occurrence wins; a conflicting repeat is a
+        /// diagnostic, not a second row.
+        var observedRequests: [String: ActivityRecord] = [:]
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -78,6 +110,7 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
             let size = Int64(resourceValues?.fileSize ?? 0)
             let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
             let path = fileURL.path
+            consideredInputs.append(path)
 
             if let prior = watermarks[path], prior.isUnchanged(fileSize: size, modifiedAt: mtime) {
                 continue
@@ -88,30 +121,57 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                 // Unreadable, or not text. No watermark is stored, so it is
                 // tried again; the pass is reported as incomplete meanwhile.
                 skipped += 1
+                inputDiagnostics.append(ActivityInputDiagnostics(
+                    filePath: path, recordsObserved: 0, readFailure: true))
                 continue
             }
+
+            scanned += 1
+            let malformedBefore = malformed
+            let inconsistentBefore = inconsistent
+            let incompleteBefore = incomplete
+            let recordsBefore = records.count
 
             var sessionId: String?
             var projectPath: String?
             var gitBranch: String?
             var model: String?
+            var publishedProvider: String?
+            var accountId: String?
             var sessionStartedAt: Date?
-            var lastEndedAt: Date?
 
-            struct TokenUsage {
-                var inputTokens: Int?
-                var outputTokens: Int?
-                var cacheReadTokens: Int?
-                var cacheWriteTokens: Int?
-                var totalTokens: Int?
-            }
-            var lastTokenUsage: TokenUsage?
+            /// The latest cumulative counter seen, per thread. Compaction and a
+            /// counter restart reset the baseline; no usage is fabricated from
+            /// the difference between two counter readings.
+            var cumulativeByThread: [String: Int] = [:]
+            /// Compaction starts a new counter segment for every thread. It is
+            /// part of a request's identity, so a value that repeats after a
+            /// compaction is a new observation, not the earlier one. Only the
+            /// explicit marker moves the epoch: an inferred decrease cannot be
+            /// applied without depending on which shape was read first.
+            var compactionEpoch = 0
+            var lastLegacyUsage: Usage?
+            var lastLegacyObservedAt: Date?
+            var fileRequests: [ActivityRecord] = []
+            /// Every request figure stated in this file, keyed by its stable
+            /// record id. A fork's copy states the same requests as its parent;
+            /// it still accounts for its own cumulative total.
+            var fileRequestTotals: [String: Int] = [:]
+            /// Join identities of the `token_usage_record` rows stated in this
+            /// file, in order. A same-request `event_msg` row consumes exactly
+            /// one of them, whichever shape came first.
+            var tokenJoinIds: [String: [String]] = [:]
+            var tokenIdsInFile = Set<String>()
+            /// Requests reconstructed from `event_msg` `last_token_usage`,
+            /// reconciled against the token rows once the whole file is read.
+            var eventObservations: [(record: ActivityRecord, joinKey: String?, cumulative: Int?, epoch: Int)] = []
 
-            for line in content.split(separator: "\n") {
+            for (lineIndex, line) in content.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty,
-                      let lineData = trimmed.data(using: .utf8),
+                guard !trimmed.isEmpty else { continue }
+                guard let lineData = trimmed.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                    malformed += 1
                     continue
                 }
 
@@ -128,65 +188,299 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                     if let branch = payload["git_branch"] as? String {
                         gitBranch = branch
                     }
-                    if let ts = (payload["timestamp"] as? String).flatMap(parseDate) {
-                        sessionStartedAt = ts
-                    }
-                } else if lineType == "event_msg", let payload = json["payload"] as? [String: Any] {
-                    if let pType = payload["type"] as? String, pType == "token_count",
-                       let info = payload["info"] as? [String: Any],
-                       let totalUsage = info["total_token_usage"] as? [String: Any] {
-                        // Absent is absent. Codex reports these together, so a
-                        // missing one means an unexpected shape rather than a
-                        // real zero, and the total is then unknown.
-                        let input = totalUsage["input_tokens"] as? Int
-                        let output = totalUsage["output_tokens"] as? Int
-                        let cacheRead = totalUsage["cached_input_tokens"] as? Int
-                        let cacheWrite = totalUsage["cache_write_input_tokens"] as? Int
-
-                        let total: Int?
-                        if let reported = totalUsage["total_tokens"] as? Int {
-                            total = reported
-                        } else if let input, let output, let cacheRead, let cacheWrite {
-                            total = input + output + cacheRead + cacheWrite
-                        } else {
-                            total = nil
-                        }
-
-                        lastTokenUsage = TokenUsage(
-                            inputTokens: input,
-                            outputTokens: output,
-                            cacheReadTokens: cacheRead,
-                            cacheWriteTokens: cacheWrite,
-                            totalTokens: total
-                        )
-                        if let ts = lineTimestamp {
-                            lastEndedAt = ts
-                        }
-                    } else if let pType = payload["type"] as? String, pType == "turn_context",
-                              let m = payload["model"] as? String {
+                    if let m = payload["model"] as? String {
                         model = m
                     }
+                    if let provider = payload["model_provider"] as? String {
+                        publishedProvider = provider
+                    }
+                    if let account = payload["creator_account_id"] as? String {
+                        accountId = account
+                    }
+                    if let ts = (payload["timestamp"] as? String).flatMap(parseDate) ?? lineTimestamp {
+                        sessionStartedAt = ts
+                    }
+                } else if lineType == "turn_context", let payload = json["payload"] as? [String: Any] {
+                    // The actual shape: a top-level turn_context, not an
+                    // event_msg. Its model applies from this record onward.
+                    if let m = payload["model"] as? String {
+                        model = m
+                    }
+                    if let cwd = payload["cwd"] as? String {
+                        projectPath = cwd
+                    }
+                } else if lineType == "token_usage_record", let payload = json["payload"] as? [String: Any] {
+                    guard let usageObject = payload["usage"] as? [String: Any] else {
+                        malformed += 1
+                        continue
+                    }
+                    let parsed = parseUsage(usageObject, malformed: &malformed)
+                    let observed = lineTimestamp ?? sessionStartedAt
+                    guard let observed else {
+                        // No recorded time means we cannot place this usage at
+                        // its source time; keeping it would move it to now.
+                        malformed += 1
+                        continue
+                    }
+                    let effectiveSession = (payload["session_id"] as? String) ?? sessionId
+                        ?? fileURL.deletingPathExtension().lastPathComponent
+                    let recordId = requestRecordId(
+                        payload: payload, lineIndex: lineIndex, observed: observed, usage: parsed)
+                    let record = ActivityRecord(
+                        source: sourceIdentifier,
+                        recordId: recordId,
+                        sessionId: effectiveSession,
+                        projectPath: projectPath,
+                        gitBranch: gitBranch,
+                        model: model,
+                        observedAt: observed,
+                        inputTokens: parsed.input,
+                        outputTokens: parsed.output,
+                        cacheReadTokens: parsed.cacheRead,
+                        cacheWriteTokens: parsed.cacheWrite,
+                        reasoningTokens: parsed.reasoning,
+                        totalTokens: parsed.total,
+                        totalKind: parsed.total == nil ? nil : .published,
+                        semantics: .cacheIncludedInInput,
+                        granularity: .request,
+                        publishedProvider: publishedProvider,
+                        accountHash: IdentityFingerprint.published(accountId, in: .account),
+                        workspaceHash: nil
+                    )
+
+                    // Reconcile the request's own published total against the
+                    // thread's cumulative counter. A counter below its last
+                    // value is a restart/compaction: reset the baseline and
+                    // record nothing from the gap. No `nil` is invented as 0.
+                    let threadId = (payload["thread_id"] as? String) ?? effectiveSession
+                    let cumulative = (payload["thread_token_usage"] as? [String: Any])
+                        .flatMap({ TokenCountParsing.nonNegative($0["total_tokens"]) })
+                    let joinKey = requestJoinKey(
+                        session: effectiveSession,
+                        observed: observed,
+                        cumulative: cumulative,
+                        epoch: compactionEpoch)
+
+                    if let prior = observedRequests[recordId] {
+                        if prior.inputTokens != record.inputTokens
+                            || prior.outputTokens != record.outputTokens
+                            || prior.cacheReadTokens != record.cacheReadTokens
+                            || prior.cacheWriteTokens != record.cacheWriteTokens
+                            || prior.totalTokens != record.totalTokens {
+                            inconsistent += 1
+                        }
+                    } else {
+                        observedRequests[recordId] = record
+                        fileRequests.append(record)
+                    }
+                    if let total = parsed.total, fileRequestTotals[recordId] == nil {
+                        fileRequestTotals[recordId] = total
+                    }
+                    if let joinKey, tokenIdsInFile.insert(recordId).inserted {
+                        tokenJoinIds[joinKey, default: []].append(recordId)
+                    }
+
+                    if let cumulative {
+                        if let previous = cumulativeByThread[threadId], cumulative >= previous,
+                           let total = parsed.total,
+                           cumulative - previous != total {
+                            inconsistent += 1
+                        }
+                        cumulativeByThread[threadId] = cumulative
+                    }
+                } else if lineType == "event_msg", let payload = json["payload"] as? [String: Any] {
+                    guard let pType = payload["type"] as? String else { continue }
+                    if pType == "token_count" {
+                        guard let info = payload["info"] as? [String: Any] else {
+                            malformed += 1
+                            continue
+                        }
+                        var cumulativeTotal: Int?
+                        if let totalUsage = info["total_token_usage"] as? [String: Any] {
+                            let parsed = parseUsage(totalUsage, malformed: &malformed)
+                            lastLegacyUsage = parsed
+                            lastLegacyObservedAt = lineTimestamp ?? lastLegacyObservedAt ?? sessionStartedAt
+                            cumulativeTotal = parsed.total
+                        }
+                        // Newer rollouts publish per-request usage beside the
+                        // cumulative counter. That is the same observation the
+                        // ledger records; without reading it, earlier days
+                        // were folded into one session total at the last turn.
+                        if let lastUsage = info["last_token_usage"] as? [String: Any] {
+                            let parsed = parseUsage(lastUsage, malformed: &malformed)
+                            let effectiveSession = sessionId
+                                ?? fileURL.deletingPathExtension().lastPathComponent
+                            let observed = lineTimestamp ?? sessionStartedAt
+                            guard let observed else {
+                                // No recorded time means its day is unknown;
+                                // placing it now would move yesterday's usage.
+                                malformed += 1
+                                continue
+                            }
+                            let epoch = compactionEpoch
+                            let joinKey = requestJoinKey(
+                                session: effectiveSession, observed: observed,
+                                cumulative: cumulativeTotal, epoch: epoch)
+                            let recordId = lastUsageRecordId(
+                                session: effectiveSession, observed: observed,
+                                cumulative: cumulativeTotal, epoch: epoch, last: parsed)
+                            let record = ActivityRecord(
+                                source: sourceIdentifier,
+                                recordId: recordId,
+                                sessionId: effectiveSession,
+                                projectPath: projectPath,
+                                gitBranch: gitBranch,
+                                model: model,
+                                observedAt: observed,
+                                inputTokens: parsed.input,
+                                outputTokens: parsed.output,
+                                cacheReadTokens: parsed.cacheRead,
+                                cacheWriteTokens: parsed.cacheWrite,
+                                reasoningTokens: parsed.reasoning,
+                                totalTokens: parsed.total,
+                                totalKind: parsed.total == nil ? nil : .published,
+                                semantics: .cacheIncludedInInput,
+                                granularity: .request,
+                                publishedProvider: publishedProvider,
+                                accountHash: IdentityFingerprint.published(accountId, in: .account),
+                                workspaceHash: nil
+                            )
+
+                            // Defer the row until the file is fully read: a
+                            // `token_usage_record` for the same request may
+                            // come before or after this line, and the two must
+                            // pair one-to-one rather than by order. The
+                            // counter check is deferred too, so a duplicate
+                            // notification cannot report itself as an
+                            // inconsistency.
+                            eventObservations.append(
+                                (record: record, joinKey: joinKey,
+                                 cumulative: cumulativeTotal, epoch: epoch))
+                        }
+                    }
+                } else if lineType == "compacted" {
+                    // Compaction starts a new counter segment. The records
+                    // after it are observations, never differences from the
+                    // pre-compaction total, and a counter value that repeats
+                    // is a new observation rather than the earlier request.
+                    cumulativeByThread.removeAll()
+                    compactionEpoch += 1
                 }
             }
 
-            if let lastUsage = lastTokenUsage {
-                let effectiveSessionId = sessionId ?? fileURL.deletingPathExtension().lastPathComponent
-                let observed = lastEndedAt ?? sessionStartedAt ?? Date()
+            // Pair `event_msg` requests with their `token_usage_record` twins.
+            // The identity is the request's provenance — session, exact
+            // recorded instant, counter segment and cumulative value — so
+            // equal time and total never make two different requests look like
+            // one. Each token row is consumed at most once.
+            var eventCounterBySession: [String: (epoch: Int, value: Int)] = [:]
+            var consumedTokenIds = Set<String>()
+            for observation in eventObservations {
+                let record = observation.record
+                if let joinKey = observation.joinKey,
+                   let candidates = tokenJoinIds[joinKey],
+                   let matched = candidates.first(where: { !consumedTokenIds.contains($0) }) {
+                    consumedTokenIds.insert(matched)
+                    if let tokenRecord = observedRequests[matched],
+                       let tokenTotal = tokenRecord.totalTokens,
+                       let eventTotal = record.totalTokens,
+                       tokenTotal != eventTotal {
+                        inconsistent += 1
+                    }
+                    continue
+                }
+                if let prior = observedRequests[record.recordId] {
+                    if prior.totalTokens != record.totalTokens
+                        || prior.inputTokens != record.inputTokens
+                        || prior.outputTokens != record.outputTokens {
+                        inconsistent += 1
+                    }
+                } else {
+                    observedRequests[record.recordId] = record
+                    fileRequests.append(record)
+                    // A counter below its last value is a restart or
+                    // compaction, which resets the baseline silently. A
+                    // counter that disagrees with the per-request figure is a
+                    // diagnostic, never a fabricated difference. Duplicates
+                    // and cross-shape twins never move this baseline.
+                    if let cumulative = observation.cumulative {
+                        if let previous = eventCounterBySession[record.sessionId],
+                           previous.epoch == observation.epoch,
+                           cumulative >= previous.value,
+                           let total = record.totalTokens,
+                           cumulative - previous.value != total {
+                            inconsistent += 1
+                        }
+                        eventCounterBySession[record.sessionId] =
+                            (observation.epoch, cumulative)
+                    }
+                }
+                if let total = record.totalTokens, fileRequestTotals[record.recordId] == nil {
+                    fileRequestTotals[record.recordId] = total
+                }
+            }
 
-                records.append(ActivityRecord(
-                    source: sourceIdentifier,
-                    recordId: "codex_\(effectiveSessionId)",
-                    sessionId: effectiveSessionId,
-                    projectPath: projectPath,
-                    gitBranch: gitBranch,
-                    model: model,
-                    observedAt: observed,
-                    inputTokens: lastUsage.inputTokens,
-                    outputTokens: lastUsage.outputTokens,
-                    cacheReadTokens: lastUsage.cacheReadTokens,
-                    cacheWriteTokens: lastUsage.cacheWriteTokens,
-                    totalTokens: lastUsage.totalTokens
-                ))
+            if !fileRequests.isEmpty {
+                records += fileRequests
+                incomplete += fileRequests.filter { $0.totalKind == .partial || $0.totalKind == .unknown }.count
+            }
+
+            // A cumulative-only region is retained as one honestly
+            // session-level record, but only when it states more than the
+            // request rows observed here. A fully reconstructed file adds no
+            // aggregate; a partial one keeps the published session total so
+            // the missing tokens are not silently dropped. The read surface
+            // (activity_unified) suppresses whichever side is covered, so the
+            // aggregate is never added to its own request rows.
+            if let legacy = lastLegacyUsage {
+                let observedRequestTotal = summed(Array(fileRequestTotals.values))
+                let residual = legacy.total.map { total in
+                    observedRequestTotal.map { total > $0 } ?? true
+                } ?? (fileRequests.isEmpty)
+                if residual {
+                    let effectiveSessionId = sessionId ?? fileURL.deletingPathExtension().lastPathComponent
+                    let observed = lastLegacyObservedAt ?? sessionStartedAt
+                    if let observed {
+                        let record = ActivityRecord(
+                            source: sourceIdentifier,
+                            recordId: "codex_\(effectiveSessionId)",
+                            sessionId: effectiveSessionId,
+                            projectPath: projectPath,
+                            gitBranch: gitBranch,
+                            model: model,
+                            observedAt: observed,
+                            inputTokens: legacy.input,
+                            outputTokens: legacy.output,
+                            cacheReadTokens: legacy.cacheRead,
+                            cacheWriteTokens: legacy.cacheWrite,
+                            reasoningTokens: legacy.reasoning,
+                            totalTokens: legacy.total,
+                            totalKind: legacy.total == nil ? nil : .published,
+                            semantics: .cacheIncludedInInput,
+                            granularity: .session,
+                            publishedProvider: publishedProvider,
+                            accountHash: IdentityFingerprint.published(accountId, in: .account),
+                            workspaceHash: nil
+                        )
+                        if observedRequests[record.recordId] == nil {
+                            // One session aggregate, at the latest cumulative
+                            // reading: a resumed or forked file states the
+                            // same session total, not a second one.
+                            if let index = records.firstIndex(where: {
+                                $0.recordId == record.recordId
+                            }) {
+                                if records[index].observedAt <= record.observedAt {
+                                    records[index] = record
+                                }
+                            } else {
+                                records.append(record)
+                            }
+                        }
+                        if record.totalKind == .partial || record.totalKind == .unknown {
+                            incomplete += 1
+                        }
+                    }
+                }
             }
 
             updates.append(ActivityWatermark(
@@ -195,8 +489,107 @@ public struct CodexAdapter: ActivityAdapter, Sendable {
                 modifiedAt: mtime,
                 cursor: size
             ))
+            inputDiagnostics.append(ActivityInputDiagnostics(
+                filePath: path,
+                malformedRecords: malformed - malformedBefore,
+                inconsistentRecords: inconsistent - inconsistentBefore,
+                incompleteRecords: incomplete - incompleteBefore,
+                recordsObserved: records.count - recordsBefore))
         }
 
-        return ActivityIngestResult(records: records, watermarks: updates, skipped: skipped)
+        return ActivityIngestResult(
+            records: records,
+            watermarks: updates,
+            diagnostics: ActivityPassDiagnostics(
+                scannedInputs: scanned,
+                skippedInputs: skipped,
+                malformedRecords: malformed,
+                inconsistentRecords: inconsistent,
+                incompleteRecords: incomplete,
+                recordsObserved: records.count
+            ),
+            inputDiagnostics: inputDiagnostics,
+            inputsConsidered: consideredInputs
+        )
+    }
+
+    // MARK: - Parsing helpers
+
+    /// Parse a Codex usage dictionary without inventing figures. A field that
+    /// is present but not a non-negative integer is malformed: it does not
+    /// become a measured zero.
+    private func parseUsage(_ object: [String: Any], malformed: inout Int) -> Usage {
+        func read(_ key: String) -> Int? {
+            guard let raw = object[key], !(raw is NSNull) else { return nil }
+            if let value = TokenCountParsing.nonNegative(raw) { return value }
+            malformed += 1
+            return nil
+        }
+        return Usage(
+            input: read("input_tokens"),
+            output: read("output_tokens"),
+            cacheRead: read("cached_input_tokens"),
+            cacheWrite: read("cache_write_input_tokens"),
+            reasoning: read("reasoning_output_tokens"),
+            total: read("total_tokens")
+        )
+    }
+
+    /// Stable identity for a request stated only as `event_msg` usage. The
+    /// cumulative counter disambiguates two requests in the same millisecond;
+    /// a fork's copy states the same figures under the same id.
+    private func lastUsageRecordId(
+        session: String,
+        observed: Date,
+        cumulative: Int?,
+        epoch: Int,
+        last: Usage
+    ) -> String {
+        let millis = Int64((observed.timeIntervalSince1970 * 1000).rounded())
+        let counter = cumulative.map(String.init) ?? last.total.map(String.init) ?? "unknown"
+        return "event_\(session)_\(millis)_\(epoch)_\(counter)"
+    }
+
+    /// The same request can be printed as a `token_usage_record` and as an
+    /// `event_msg` `last_token_usage`. Only the source's own provenance can
+    /// join the two shapes: the session, the instant it recorded to the
+    /// millisecond, the counter segment and the cumulative counter it
+    /// published. A request that published no cumulative counter is not
+    /// joined at all; equal time and total are not proof of one request.
+    private func requestJoinKey(
+        session: String,
+        observed: Date,
+        cumulative: Int?,
+        epoch: Int
+    ) -> String? {
+        guard let cumulative else { return nil }
+        let millis = Int64((observed.timeIntervalSince1970 * 1000).rounded())
+        return "\(session)|\(millis)|\(epoch)|\(cumulative)"
+    }
+
+    private func summed(_ values: [Int]) -> Int? {
+        var total = 0
+        for value in values {
+            let (sum, overflow) = total.addingReportingOverflow(value)
+            if overflow { return nil }
+            total = sum
+        }
+        return total
+    }
+
+    private func requestRecordId(
+        payload: [String: Any],
+        lineIndex: Int,
+        observed: Date,
+        usage: Usage
+    ) -> String {
+        if let response = payload["response_id"] as? String, !response.isEmpty {
+            return "response_\(response)"
+        }
+        if let turn = payload["turn_id"] as? String, !turn.isEmpty {
+            return "turn_\(turn)_\(Int(observed.timeIntervalSince1970))"
+        }
+        let total = usage.total.map(String.init) ?? "unknown"
+        return "line_\(lineIndex)_\(Int(observed.timeIntervalSince1970))_\(total)"
     }
 }

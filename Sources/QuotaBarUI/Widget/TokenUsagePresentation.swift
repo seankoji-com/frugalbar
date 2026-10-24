@@ -100,6 +100,8 @@ public enum TokenUsagePresentation {
         /// How far ingestion has got: a short or empty chart is only
         /// "no activity" when this is `.complete`.
         public let ingestion: IngestionProgress
+        /// Per-source scan and malformed/incomplete counts, already worded.
+        public let sourceNotes: [String]
 
         public var isEmpty: Bool { totalTokens == 0 }
 
@@ -113,10 +115,15 @@ public enum TokenUsagePresentation {
             }
         }
 
-        /// Codex records one cumulative total per session, placed at the
-        /// session's last turn, so its tokens land in lumps rather than
-        /// spread over the session. Said on screen when it applies.
-        public var hasSessionTotals: Bool { layers.contains { $0.vendorId == .openai } }
+        /// True only when a drawn source's records are whole-session totals.
+        /// Codex request rows place each request at its own time, so they do
+        /// not carry the session-lump caveat.
+        public let usesSessionTotals: Bool
+
+        /// Codex fell back to one cumulative total per session for a source
+        /// that exposed no request rows; its tokens land in lumps rather than
+        /// being spread over the session. Said on screen only then.
+        public var hasSessionTotals: Bool { usesSessionTotals }
     }
 
     // MARK: - Which providers have token data
@@ -181,6 +188,9 @@ public enum TokenUsagePresentation {
     ///   - ingestion: How far the local-activity ingestion has got. There is
     ///     no default: whoever draws a chart must say, since an empty table
     ///     before the first pass is not an empty week.
+    ///   - sources: Retained per-source scan diagnostics. Their counts are
+    ///     shown beside the chart, and an unchanged-file skip cannot erase
+    ///     them.
     public static func chart(
         usage: QuotaHistoryStore.TokenUsage,
         filters: WidgetFilters,
@@ -188,7 +198,8 @@ public enum TokenUsagePresentation {
         configured: [VendorIdentifier],
         ingestion: IngestionProgress,
         now: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        sources: [ActivitySourceStatus] = []
     ) -> Chart {
         let window = window(range: filters.range, now: now, calendar: calendar)
         let size = bucketSeconds(for: filters.range)
@@ -247,6 +258,14 @@ public enum TokenUsagePresentation {
             .filter { shownSources.contains($0.key) }
             .values.reduce(0, +)
 
+        let usesSessionTotals: Bool
+        if usage.granularityKnown {
+            usesSessionTotals = drawn.contains(.openai)
+                && (usage.sessionTotalRecords["codex"] ?? 0) > 0
+        } else {
+            usesSessionTotals = drawn.contains(.openai)
+        }
+
         // Providers the user has that have no token source here. A selection
         // narrows the note to what was asked about.
         var seen = Set<VendorIdentifier>()
@@ -268,8 +287,66 @@ public enum TokenUsagePresentation {
             peak: peak,
             uncountedRecords: uncounted,
             vendorsWithoutTokenData: without,
-            ingestion: ingestion
+            ingestion: ingestion,
+            sourceNotes: sourceNotes(sources: sources, shownSources: shownSources),
+            usesSessionTotals: usesSessionTotals
         )
+    }
+
+    // MARK: - Source diagnostics
+
+    /// Word each retained diagnostic once. Counts arrive from the ingest
+    /// engine, never from the chart's own arithmetic.
+    public static func sourceNotes(
+        sources: [ActivitySourceStatus],
+        shownSources: Set<String>
+    ) -> [String] {
+        let visible = sources
+            .filter { shownSources.contains($0.source) }
+            .sorted { $0.source < $1.source }
+        guard !visible.isEmpty else { return [] }
+
+        var notes: [String] = []
+        for status in visible {
+            let name = sourceDisplayName(status.source)
+            if status.readFailures > 0 {
+                notes.append("\(name): \(status.readFailures) input\(status.readFailures == 1 ? "" : "s") could not be read on the last scan.")
+            }
+            if status.malformedRecords > 0 {
+                notes.append("\(name): \(status.malformedRecords) malformed record\(status.malformedRecords == 1 ? "" : "s") \(status.malformedRecords == 1 ? "was" : "were") not counted.")
+            }
+            if status.inconsistentRecords > 0 {
+                notes.append("\(name): \(status.inconsistentRecords) record\(status.inconsistentRecords == 1 ? "" : "s") disagreed with the source's cumulative counter and \(status.inconsistentRecords == 1 ? "was" : "were") not reconciled.")
+            }
+            if status.incompleteRecords > 0 {
+                notes.append("\(name): \(status.incompleteRecords) record\(status.incompleteRecords == 1 ? "" : "s") had an incomplete token breakdown.")
+            }
+        }
+
+        let scanned = visible.compactMap { status -> String? in
+            guard let at = status.lastSuccessfulScanAt else { return nil }
+            return "\(sourceDisplayName(status.source)) \(scanTimestamp(at))"
+        }
+        if !scanned.isEmpty {
+            notes.append("Last successful scan: \(scanned.joined(separator: ", ")).")
+        }
+        return notes
+    }
+
+    static func sourceDisplayName(_ source: String) -> String {
+        switch source {
+        case "claude_code": "Claude Code"
+        case "codex": "Codex"
+        case "opencode": "OpenCode"
+        default: source
+        }
+    }
+
+    static func scanTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "d MMM HH:mm"
+        return formatter.string(from: date)
     }
 
     // MARK: - Text
@@ -354,6 +431,9 @@ public enum TokenUsagePresentation {
         if chart.hasSessionTotals {
             notes.append("Codex counts tokens per session, at its last turn.")
         }
+        if chart.layers.contains(where: { $0.vendorId == .opencode }) {
+            notes.append("OpenCode sessions are local tool activity; they do not record which account or workspace billed them.")
+        }
         if chart.uncountedRecords == 1 {
             notes.append("1 record had no token count and is not included.")
         } else if chart.uncountedRecords > 1 {
@@ -362,6 +442,7 @@ public enum TokenUsagePresentation {
         if !chart.vendorsWithoutTokenData.isEmpty {
             notes.append("No token counts for \(chart.vendorsWithoutTokenData.map(\.displayName).joined(separator: ", ")).")
         }
+        notes += chart.sourceNotes
         return notes
     }
 

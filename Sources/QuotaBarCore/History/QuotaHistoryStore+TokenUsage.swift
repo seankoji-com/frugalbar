@@ -38,10 +38,25 @@ extension QuotaHistoryStore {
         /// Records in the range that reported no total, per source. They are
         /// in no bucket and no sum.
         public let uncountedRecords: [String: Int]
+        /// Records in the range that are whole-session aggregates rather than
+        /// request observations, per source. A Codex session total says its
+        /// tokens landed at the session's last turn; request rows do not.
+        public let sessionTotalRecords: [String: Int]
+        /// Whether `sessionTotalRecords` was read from a real query. Rows built
+        /// directly in tests carry no ledger provenance, and the presentation
+        /// keeps its historical per-layer note for them.
+        public let granularityKnown: Bool
 
-        public init(buckets: [TokenBucket], uncountedRecords: [String: Int]) {
+        public init(
+            buckets: [TokenBucket],
+            uncountedRecords: [String: Int],
+            sessionTotalRecords: [String: Int] = [:],
+            granularityKnown: Bool = false
+        ) {
             self.buckets = buckets
             self.uncountedRecords = uncountedRecords
+            self.sessionTotalRecords = sessionTotalRecords
+            self.granularityKnown = granularityKnown
         }
 
         public static let empty = TokenUsage(buckets: [], uncountedRecords: [:])
@@ -75,8 +90,9 @@ extension QuotaHistoryStore {
                    (observed_at - ?) / ? AS bucket,
                    COALESCE(SUM(total_tokens), 0),
                    COUNT(total_tokens),
-                   COUNT(*)
-            FROM activity
+                   COUNT(*),
+                   SUM(CASE WHEN granularity = 'session' THEN 1 ELSE 0 END)
+            FROM activity_unified
             WHERE observed_at >= ? AND observed_at <= ?
             GROUP BY source, bucket
             ORDER BY source ASC, bucket ASC;
@@ -90,6 +106,7 @@ extension QuotaHistoryStore {
 
             var buckets: [TokenBucket] = []
             var uncounted: [String: Int] = [:]
+            var sessionTotals: [String: Int] = [:]
             while true {
                 let status = sqlite3_step(stmt)
                 if status == SQLITE_DONE { break }
@@ -107,8 +124,10 @@ extension QuotaHistoryStore {
                 let tokens = sqlite3_column_int64(stmt, 2)
                 let counted = sqlite3_column_int64(stmt, 3)
                 let all = sqlite3_column_int64(stmt, 4)
+                let sessionRecords = sqlite3_column_int64(stmt, 5)
 
                 if all > counted { uncounted[source, default: 0] += Int(all - counted) }
+                if sessionRecords > 0 { sessionTotals[source, default: 0] += Int(sessionRecords) }
                 // A bucket in which nothing reported a total is not a bucket
                 // of zero tokens; it simply has no figure.
                 guard counted > 0 else { continue }
@@ -119,7 +138,14 @@ extension QuotaHistoryStore {
                     records: Int(counted)
                 ))
             }
-            return TokenUsage(buckets: buckets, uncountedRecords: uncounted)
+            if buckets.isEmpty && uncounted.isEmpty && sessionTotals.isEmpty {
+                return .empty
+            }
+            return TokenUsage(
+                buckets: buckets,
+                uncountedRecords: uncounted,
+                sessionTotalRecords: sessionTotals,
+                granularityKnown: true)
             #else
             return .empty
             #endif

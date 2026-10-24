@@ -487,11 +487,13 @@ public actor QuotaHistoryStore {
             }
 
             let sql = """
-            INSERT OR REPLACE INTO activity (
+            INSERT OR REPLACE INTO activity_request (
               source, record_id, session_id, project_path,
               git_branch, model, observed_at, input_tokens, output_tokens,
-              cache_read_tokens, cache_write_tokens, total_tokens
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+              cache_read_tokens, cache_write_tokens, reasoning_tokens,
+              total_tokens, total_kind, semantics, granularity,
+              published_provider, account_hash, workspace_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
             let stmt = try db.prepare(sql: sql)
             defer { db.finalize(stmt) }
@@ -511,9 +513,20 @@ public actor QuotaHistoryStore {
                 try db.bindInt64(stmt, 9, row.outputTokens.map(Int64.init))
                 try db.bindInt64(stmt, 10, row.cacheReadTokens.map(Int64.init))
                 try db.bindInt64(stmt, 11, row.cacheWriteTokens.map(Int64.init))
+                try db.bindInt64(stmt, 12, row.reasoningTokens.map(Int64.init))
                 // NULL when the source reported no total. Not 0 — an unknown
                 // total must not be counted as a measured one.
-                try db.bindInt64(stmt, 12, row.totalTokens.map(Int64.init))
+                try db.bindInt64(stmt, 13, row.totalTokens.map(Int64.init))
+                try db.bindText(stmt, 14, row.totalKind.rawValue)
+                try db.bindText(stmt, 15, row.semantics.rawValue)
+                try db.bindText(stmt, 16, row.granularity.rawValue)
+                // The provider label is public metadata and is stored
+                // verbatim. The account and workspace a source published are
+                // private: only their fingerprints are written, so the ledger
+                // never holds the published value (IdentityFingerprint).
+                try db.bindText(stmt, 17, row.publishedProvider)
+                try db.bindText(stmt, 18, row.accountHash?.stored)
+                try db.bindText(stmt, 19, row.workspaceHash?.stored)
 
                 let stepStatus = sqlite3_step(stmt)
                 guard stepStatus == SQLITE_DONE else {
@@ -550,8 +563,10 @@ public actor QuotaHistoryStore {
             var sql = """
             SELECT source, record_id, session_id, project_path,
                    git_branch, model, observed_at, input_tokens, output_tokens,
-                   cache_read_tokens, cache_write_tokens, total_tokens
-            FROM activity
+                   cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                   total_tokens, total_kind, semantics, granularity,
+                   published_provider, account_hash, workspace_hash
+            FROM activity_unified
             """
             if !conditions.isEmpty {
                 sql += " WHERE " + conditions.joined(separator: " AND ")
@@ -599,7 +614,23 @@ public actor QuotaHistoryStore {
                 let outputTokens: Int? = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 8))
                 let cacheReadTokens: Int? = sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 9))
                 let cacheWriteTokens: Int? = sqlite3_column_type(stmt, 10) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 10))
-                let totalTokens: Int? = sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 11))
+                let reasoningTokens: Int? = sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 11))
+                let totalTokens: Int? = sqlite3_column_type(stmt, 12) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 12))
+                let totalKind = sqlite3_column_text(stmt, 13).map { String(cString: $0) }
+                    .flatMap(TokenTotalKind.init(rawValue:)) ?? .legacy
+                let semantics = sqlite3_column_text(stmt, 14).map { String(cString: $0) }
+                    .flatMap(TokenComponentSemantics.init(rawValue:)) ?? .additive
+                let granularity = sqlite3_column_text(stmt, 15).map { String(cString: $0) }
+                    .flatMap(ActivityGranularity.init(rawValue:)) ?? .legacy
+                let publishedProvider: String? = sqlite3_column_text(stmt, 16).map { String(cString: $0) }
+                // A value that is not a fingerprint of the expected domain is
+                // not an identity to match on: reading it as one would either
+                // compare against a raw published id or match an account
+                // against a workspace. nil is "no identity established".
+                let accountHash = sqlite3_column_text(stmt, 17).map { String(cString: $0) }
+                    .flatMap { IdentityFingerprint(stored: $0, expecting: .account) }
+                let workspaceHash = sqlite3_column_text(stmt, 18).map { String(cString: $0) }
+                    .flatMap { IdentityFingerprint(stored: $0, expecting: .workspace) }
 
                 results.append(ActivityRecord(
                     source: sourceStr,
@@ -613,7 +644,14 @@ public actor QuotaHistoryStore {
                     outputTokens: outputTokens,
                     cacheReadTokens: cacheReadTokens,
                     cacheWriteTokens: cacheWriteTokens,
-                    totalTokens: totalTokens
+                    reasoningTokens: reasoningTokens,
+                    totalTokens: totalTokens,
+                    totalKind: totalKind,
+                    semantics: semantics,
+                    granularity: granularity,
+                    publishedProvider: publishedProvider,
+                    accountHash: accountHash,
+                    workspaceHash: workspaceHash
                 ))
             }
             return results
@@ -692,6 +730,211 @@ public actor QuotaHistoryStore {
         }
     }
 
+    // MARK: - Source status
+
+    /// Whether this source has any row in the request ledger. Codex uses this
+    /// once after upgrade: an install whose only Codex rows predate the ledger
+    /// must re-read its still-present rollouts, because their old watermarks
+    /// would otherwise skip every unchanged file forever and leave only the
+    /// session aggregate.
+    public func hasActivityRequests(source: String) async throws -> Bool {
+        try await ensureOpen()
+        return try await database.perform { db -> Bool in
+            #if canImport(SQLite3)
+            let stmt = try db.prepare(sql: "SELECT 1 FROM activity_request WHERE source = ? LIMIT 1;")
+            defer { db.finalize(stmt) }
+            try db.bindText(stmt, 1, source)
+            let status = sqlite3_step(stmt)
+            if status == SQLITE_ROW { return true }
+            guard status == SQLITE_DONE else {
+                throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
+            }
+            return false
+            #else
+            return false
+            #endif
+        }
+    }
+
+    // MARK: - Input status
+
+    /// Diagnostics retained for each input of one source.
+    public func activityInputStatuses(source: String) async throws -> [ActivityInputStatus] {
+        try await ensureOpen()
+        return try await database.perform { db -> [ActivityInputStatus] in
+            #if canImport(SQLite3)
+            let sql = """
+            SELECT source, file_path, malformed_records, inconsistent_records,
+                   incomplete_records, records_observed, read_failure, last_scanned_at
+            FROM activity_input_status
+            WHERE source = ?
+            ORDER BY file_path ASC;
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+            try db.bindText(stmt, 1, source)
+
+            var results: [ActivityInputStatus] = []
+            while true {
+                let status = sqlite3_step(stmt)
+                if status == SQLITE_DONE { break }
+                guard status == SQLITE_ROW else {
+                    throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
+                }
+                guard let sourceText = sqlite3_column_text(stmt, 0),
+                      let pathText = sqlite3_column_text(stmt, 1) else { continue }
+                results.append(ActivityInputStatus(
+                    source: String(cString: sourceText),
+                    filePath: String(cString: pathText),
+                    malformedRecords: Int(sqlite3_column_int64(stmt, 2)),
+                    inconsistentRecords: Int(sqlite3_column_int64(stmt, 3)),
+                    incompleteRecords: Int(sqlite3_column_int64(stmt, 4)),
+                    recordsObserved: Int(sqlite3_column_int64(stmt, 5)),
+                    readFailure: sqlite3_column_int64(stmt, 6) != 0,
+                    lastScannedAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
+                ))
+            }
+            return results
+            #else
+            return []
+            #endif
+        }
+    }
+
+    /// Replaces one source's retained input rows transactionally.
+    ///
+    /// The caller has already merged any appended-region counts and kept the
+    /// previous rows of unchanged inputs, so the set it passes is the whole
+    /// account of that source's existing inputs.
+    public func replaceActivityInputStatuses(
+        source: String,
+        inputs: [ActivityInputStatus]
+    ) async throws {
+        try await ensureOpen()
+        try await database.perform { db in
+            #if canImport(SQLite3)
+            try db.beginTransaction()
+            var didCommit = false
+            defer {
+                if !didCommit { try? db.rollbackTransaction() }
+            }
+
+            let delete = try db.prepare(sql: "DELETE FROM activity_input_status WHERE source = ?;")
+            defer { db.finalize(delete) }
+            try db.bindText(delete, 1, source)
+            let deleted = sqlite3_step(delete)
+            guard deleted == SQLITE_DONE else {
+                throw HistoryDatabaseError.stepFailed(code: deleted, message: db.lastErrorMessage)
+            }
+
+            let sql = """
+            INSERT OR REPLACE INTO activity_input_status (
+              source, file_path, malformed_records, inconsistent_records,
+              incomplete_records, records_observed, read_failure, last_scanned_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+            for input in inputs {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                try db.bindText(stmt, 1, input.source)
+                try db.bindText(stmt, 2, input.filePath)
+                try db.bindInt64(stmt, 3, Int64(input.malformedRecords))
+                try db.bindInt64(stmt, 4, Int64(input.inconsistentRecords))
+                try db.bindInt64(stmt, 5, Int64(input.incompleteRecords))
+                try db.bindInt64(stmt, 6, Int64(input.recordsObserved))
+                try db.bindInt64(stmt, 7, input.readFailure ? 1 : 0)
+                try db.bindInt64(stmt, 8, Int64(input.lastScannedAt.timeIntervalSince1970))
+                let step = sqlite3_step(stmt)
+                guard step == SQLITE_DONE else {
+                    throw HistoryDatabaseError.stepFailed(code: step, message: db.lastErrorMessage)
+                }
+            }
+
+            try db.commitTransaction()
+            didCommit = true
+            #endif
+        }
+    }
+
+    /// The retained per-source account of what the last scan could represent.
+    public func activitySourceStatuses() async throws -> [ActivitySourceStatus] {        try await ensureOpen()
+        return try await database.perform { db -> [ActivitySourceStatus] in
+            #if canImport(SQLite3)
+            let sql = """
+            SELECT source, last_scan_at, last_successful_scan_at, read_failures,
+                   malformed_records, inconsistent_records, incomplete_records,
+                   records_observed, last_pass_complete
+            FROM activity_source_status
+            ORDER BY source ASC;
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+
+            var results: [ActivitySourceStatus] = []
+            while true {
+                let status = sqlite3_step(stmt)
+                if status == SQLITE_DONE { break }
+                guard status == SQLITE_ROW else {
+                    throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
+                }
+                guard let sourceText = sqlite3_column_text(stmt, 0) else { continue }
+                let lastScan: Date? = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                    ? nil : Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 1)))
+                let lastSuccess: Date? = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                    ? nil : Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 2)))
+                results.append(ActivitySourceStatus(
+                    source: String(cString: sourceText),
+                    lastScanAt: lastScan,
+                    lastSuccessfulScanAt: lastSuccess,
+                    readFailures: Int(sqlite3_column_int64(stmt, 3)),
+                    malformedRecords: Int(sqlite3_column_int64(stmt, 4)),
+                    inconsistentRecords: Int(sqlite3_column_int64(stmt, 5)),
+                    incompleteRecords: Int(sqlite3_column_int64(stmt, 6)),
+                    recordsObserved: Int(sqlite3_column_int64(stmt, 7)),
+                    lastPassComplete: sqlite3_column_int64(stmt, 8) != 0
+                ))
+            }
+            return results
+            #else
+            return []
+            #endif
+        }
+    }
+
+    public func recordActivitySourceStatus(_ status: ActivitySourceStatus) async throws {
+        try await ensureOpen()
+        try await database.perform { db in
+            #if canImport(SQLite3)
+            let sql = """
+            INSERT OR REPLACE INTO activity_source_status (
+              source, last_scan_at, last_successful_scan_at, read_failures,
+              malformed_records, inconsistent_records, incomplete_records,
+              records_observed, last_pass_complete
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+
+            try db.bindText(stmt, 1, status.source)
+            try db.bindInt64(stmt, 2, status.lastScanAt.map { Int64($0.timeIntervalSince1970) })
+            try db.bindInt64(stmt, 3, status.lastSuccessfulScanAt.map { Int64($0.timeIntervalSince1970) })
+            try db.bindInt64(stmt, 4, Int64(status.readFailures))
+            try db.bindInt64(stmt, 5, Int64(status.malformedRecords))
+            try db.bindInt64(stmt, 6, Int64(status.inconsistentRecords))
+            try db.bindInt64(stmt, 7, Int64(status.incompleteRecords))
+            try db.bindInt64(stmt, 8, Int64(status.recordsObserved))
+            try db.bindInt64(stmt, 9, status.lastPassComplete ? 1 : 0)
+
+            let step = sqlite3_step(stmt)
+            guard step == SQLITE_DONE else {
+                throw HistoryDatabaseError.stepFailed(code: step, message: db.lastErrorMessage)
+            }
+            #endif
+        }
+    }
+
     /// Removes every row, including watermarks.
     ///
     /// Exists for the sample-data store only, so regenerating the fixture cannot
@@ -701,7 +944,10 @@ public actor QuotaHistoryStore {
         try await database.perform { db in
             #if canImport(SQLite3)
             for table in [
-                HistorySchema.readingTable, HistorySchema.activityTable, HistorySchema.ingestWatermarkTable,
+                HistorySchema.readingTable, HistorySchema.activityTable,
+                HistorySchema.activityRequestTable, HistorySchema.activitySourceStatusTable,
+                "activity_input_status",
+                HistorySchema.ingestWatermarkTable,
                 // Not the retired catalog/feed tables: a new database no
                 // longer has them, and DELETE on a missing table throws.
                 HistorySchema.eventTable, HistorySchema.accountModelTable,

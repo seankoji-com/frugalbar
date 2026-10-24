@@ -438,6 +438,16 @@ struct QuotaBarApp: App {
         if let exitCode = CLIArguments.handleIfPresent() {
             exit(exitCode)
         }
+        // Controlled activity evidence: render the production views from a
+        // throwaway store and exit before any delegate, poll, preference or
+        // credential is touched. This is the route a downloaded release is
+        // verified through; it must stay after the CLI early exits so --help
+        // and --version never depend on it.
+        let evidenceDirectory =
+            ProcessInfo.processInfo.environment[ActivityEvidenceRenderer.environmentKey]
+        if let evidenceDirectory, !evidenceDirectory.isEmpty {
+            ActivityEvidenceRenderer.runFromEnvironmentAndExit()
+        }
     }
 
     var body: some Scene {

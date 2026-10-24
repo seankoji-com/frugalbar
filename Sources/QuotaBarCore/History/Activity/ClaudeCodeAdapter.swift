@@ -42,6 +42,11 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         var records: [ActivityRecord] = []
         var updates: [ActivityWatermark] = []
         var skipped = 0
+        var scanned = 0
+        var malformed = 0
+        var incomplete = 0
+        var inputDiagnostics: [ActivityInputDiagnostics] = []
+        var consideredInputs: [String] = []
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -70,6 +75,7 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
             let size = Int64(resourceValues?.fileSize ?? 0)
             let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
             let path = fileURL.path
+            consideredInputs.append(path)
 
             // Where to resume. Appends resume at the last recorded line boundary;
             // anything else (truncation, in-place rewrite, a shrink) restarts at
@@ -94,8 +100,14 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 chunk = try AppendOnlyLog.readIncrementally(at: fileURL, from: readFrom)
             } catch {
                 skipped += 1
+                inputDiagnostics.append(ActivityInputDiagnostics(
+                    filePath: path, recordsObserved: 0, readFailure: true))
                 continue
             }
+            scanned += 1
+            let malformedBefore = malformed
+            let incompleteBefore = incomplete
+            let recordsBefore = records.count
 
             // An unterminated final line is either a half-written record or a
             // complete one the writer never newline-terminated. Parse it if it
@@ -118,6 +130,7 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
             for line in lines {
                 guard let lineData = line.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                    malformed += 1
                     continue
                 }
 
@@ -128,6 +141,7 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
 
                 guard let recordId = (message["id"] as? String) ?? (json["requestId"] as? String) ?? (json["uuid"] as? String),
                       !recordId.isEmpty else {
+                    malformed += 1
                     continue
                 }
 
@@ -148,9 +162,14 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 }
 
                 // Absent means absent: a missing field stays `nil` so it is never
-                // counted as a measured zero. `ActivityRecord` derives the total
+                // counted as a measured zero. Claude's cache reads and writes
+                // are additive to input; `ActivityRecord` derives the total
                 // from whatever was actually reported.
-                records.append(ActivityRecord(
+                let input = nonNegative(usage["input_tokens"], malformed: &malformed)
+                let output = nonNegative(usage["output_tokens"], malformed: &malformed)
+                let cacheRead = nonNegative(usage["cache_read_input_tokens"], malformed: &malformed)
+                let cacheWrite = nonNegative(usage["cache_creation_input_tokens"], malformed: &malformed)
+                let record = ActivityRecord(
                     source: sourceIdentifier,
                     recordId: recordId,
                     sessionId: sessionId,
@@ -158,11 +177,16 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                     gitBranch: gitBranch,
                     model: model,
                     observedAt: recordDate,
-                    inputTokens: usage["input_tokens"] as? Int,
-                    outputTokens: usage["output_tokens"] as? Int,
-                    cacheReadTokens: usage["cache_read_input_tokens"] as? Int,
-                    cacheWriteTokens: usage["cache_creation_input_tokens"] as? Int
-                ))
+                    inputTokens: input,
+                    outputTokens: output,
+                    cacheReadTokens: cacheRead,
+                    cacheWriteTokens: cacheWrite,
+                    semantics: .additive
+                )
+                if record.totalKind == .partial || record.totalKind == .unknown {
+                    incomplete += 1
+                }
+                records.append(record)
             }
 
             updates.append(ActivityWatermark(
@@ -171,8 +195,35 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 modifiedAt: mtime,
                 cursor: cursor
             ))
+            inputDiagnostics.append(ActivityInputDiagnostics(
+                filePath: path,
+                malformedRecords: malformed - malformedBefore,
+                incompleteRecords: incomplete - incompleteBefore,
+                recordsObserved: records.count - recordsBefore,
+                coverage: readFrom > 0 ? .appendedRegion : .wholeInput))
         }
 
-        return ActivityIngestResult(records: records, watermarks: updates, skipped: skipped)
+        return ActivityIngestResult(
+            records: records,
+            watermarks: updates,
+            diagnostics: ActivityPassDiagnostics(
+                scannedInputs: scanned,
+                skippedInputs: skipped,
+                malformedRecords: malformed,
+                incompleteRecords: incomplete,
+                recordsObserved: records.count
+            ),
+            inputDiagnostics: inputDiagnostics,
+            inputsConsidered: consideredInputs
+        )
+    }
+
+    private func nonNegative(_ value: Any?, malformed: inout Int) -> Int? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let exact = TokenCountParsing.nonNegative(value) else {
+            malformed += 1
+            return nil
+        }
+        return exact
     }
 }

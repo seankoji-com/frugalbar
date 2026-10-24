@@ -168,7 +168,8 @@ struct DesktopWidgetView: View {
         let progress = TokenUsagePresentation.IngestionProgress(status)
         tokenChart = TokenUsagePresentation.chart(
             usage: usage, filters: filters, hidden: CredentialStore.hiddenProviders,
-            configured: configured, ingestion: progress, now: now)
+            configured: configured, ingestion: progress, now: now,
+            sources: status?.sources ?? [])
         tokenLoadFailed = false
         return progress == .indexing && status != nil
     }

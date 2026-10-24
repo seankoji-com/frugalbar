@@ -31,6 +31,7 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         }
 
         let path = databaseURL.path
+        let consideredInputs = [path]
         let resourceValues = try? databaseURL.resourceValues(forKeys: [.contentModificationDateKey])
         let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
 
@@ -41,6 +42,7 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         if let prior = watermarks[path], prior.cursor <= mtime * 1000 {
             cursor = prior.cursor
         }
+        let coverage: ActivityInputCoverage = cursor > 0 ? .appendedRegion : .wholeInput
 
         var db: OpaquePointer?
         let openStatus = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil)
@@ -48,7 +50,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             if let db { sqlite3_close(db) }
             // The file is there and will not open (permissions, corruption).
             // That is a source that could not be read, not an idle one.
-            return ActivityIngestResult(skipped: 1)
+            return ActivityIngestResult(
+                skipped: 1,
+                inputDiagnostics: [ActivityInputDiagnostics(
+                    filePath: path, readFailure: true)],
+                inputsConsidered: consideredInputs)
         }
         defer { sqlite3_close(db) }
 
@@ -78,6 +84,8 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
 
         var records: [ActivityRecord] = []
         var highWaterMark = cursor
+        var malformed = 0
+        var incomplete = 0
 
         while true {
             let step = sqlite3_step(stmt)
@@ -93,7 +101,22 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                 // storing again is harmless (the primary key replaces), but
                 // give the database no watermark, so it is read again from
                 // the old cursor, and count it as skipped.
-                return ActivityIngestResult(records: records, skipped: 1)
+                return ActivityIngestResult(
+                    records: records,
+                    diagnostics: ActivityPassDiagnostics(
+                        scannedInputs: 1,
+                        skippedInputs: 1,
+                        malformedRecords: malformed,
+                        incompleteRecords: incomplete,
+                        recordsObserved: records.count),
+                    inputDiagnostics: [ActivityInputDiagnostics(
+                        filePath: path,
+                        malformedRecords: malformed,
+                        incompleteRecords: incomplete,
+                        recordsObserved: records.count,
+                        readFailure: true,
+                        coverage: coverage)],
+                    inputsConsidered: consideredInputs)
             }
 
             guard let idC = sqlite3_column_text(stmt, 0),
@@ -110,19 +133,30 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
 
             guard let jsonData = dataStr.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                malformed += 1
                 continue
             }
 
             guard let tokens = json["tokens"] as? [String: Any] else {
+                malformed += 1
                 continue
             }
 
-            let inputTokens = tokens["input"] as? Int
-            let outputTokens = tokens["output"] as? Int
+            let inputTokens = nonNegative(tokens["input"], malformed: &malformed)
+            let outputTokens = nonNegative(tokens["output"], malformed: &malformed)
             let cacheDict = tokens["cache"] as? [String: Any]
-            let cacheRead = cacheDict?["read"] as? Int
-            let cacheWrite = cacheDict?["write"] as? Int
+            let cacheRead = nonNegative(cacheDict?["read"], malformed: &malformed)
+            let cacheWrite = nonNegative(cacheDict?["write"], malformed: &malformed)
+            let reasoning = nonNegative(tokens["reasoning"], malformed: &malformed)
+            let publishedTotal = nonNegative(tokens["total"], malformed: &malformed)
             let model = json["modelID"] as? String
+            // Tool identity is `opencode`; the message's published provider
+            // is the only billing identity it records. No account or
+            // workspace is inferred when the message does not name one. The
+            // provider label is public and kept verbatim; the account and
+            // workspace it may also publish are private and reach the ledger
+            // only as fingerprints.
+            let publishedProvider = json["providerID"] as? String
 
             var projectPath: String?
             if let pathObj = json["path"] as? [String: Any] {
@@ -142,7 +176,7 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                 observedAt = Date(timeIntervalSince1970: TimeInterval(createdMs) / 1000.0)
             }
 
-            records.append(ActivityRecord(
+            let record = ActivityRecord(
                 source: sourceIdentifier,
                 recordId: recordId,
                 sessionId: sessionId,
@@ -154,8 +188,21 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                 outputTokens: outputTokens,
                 cacheReadTokens: cacheRead,
                 cacheWriteTokens: cacheWrite,
-                totalTokens: tokens["total"] as? Int
-            ))
+                reasoningTokens: reasoning,
+                totalTokens: publishedTotal,
+                totalKind: publishedTotal == nil ? nil : .published,
+                semantics: .additive,
+                granularity: .request,
+                publishedProvider: publishedProvider,
+                accountHash: IdentityFingerprint.published(
+                    json["accountID"] as? String, in: .account),
+                workspaceHash: IdentityFingerprint.published(
+                    json["workspaceID"] as? String, in: .workspace)
+            )
+            if record.totalKind == .partial || record.totalKind == .unknown {
+                incomplete += 1
+            }
+            records.append(record)
         }
 
         // Only advance the cursor on a pass that actually ran to completion; a
@@ -167,9 +214,33 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             cursor: max(highWaterMark, cursor)
         )
 
-        return ActivityIngestResult(records: records, watermarks: [watermark])
+        return ActivityIngestResult(
+            records: records,
+            watermarks: [watermark],
+            diagnostics: ActivityPassDiagnostics(
+                scannedInputs: 1,
+                skippedInputs: 0,
+                malformedRecords: malformed,
+                incompleteRecords: incomplete,
+                recordsObserved: records.count),
+            inputDiagnostics: [ActivityInputDiagnostics(
+                filePath: path,
+                malformedRecords: malformed,
+                incompleteRecords: incomplete,
+                recordsObserved: records.count,
+                coverage: coverage)],
+            inputsConsidered: consideredInputs)
         #else
         return .empty
         #endif
+    }
+
+    private func nonNegative(_ value: Any?, malformed: inout Int) -> Int? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let exact = TokenCountParsing.nonNegative(value) else {
+            malformed += 1
+            return nil
+        }
+        return exact
     }
 }
