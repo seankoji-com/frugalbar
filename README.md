@@ -1,7 +1,7 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img width="652" height="1280" alt="image" src="https://github.com/user-attachments/assets/35c85ad5-6832-4095-a8d6-c6eaa5d505fa" />
+  <img width="652" alt="FrugalBar quota popover mockup with an inferred reset-token event" src="docs/assets/frugalbar-screenshot.png" />
 </p>
 
 
