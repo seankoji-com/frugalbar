@@ -41,13 +41,19 @@ struct ResetCreditTicketsTests {
         #expect(credits.spoken == "7 banked reset credits")
     }
 
-    @Test("expiry storage is capped at rendered tickets and keeps missing entries nil")
-    func expiryStorageIsCapped() throws {
+    @Test("expiry positions align with tickets, with missing trailing slots unavailable")
+    func expiryPositionsAreCappedAndAligned() throws {
         let expiry = Date(timeIntervalSince1970: 1_800_000_000)
-        let credits = try #require(Credits(total: Int.max, expiries: [expiry, nil]))
-        #expect(credits.tickets == ResetCreditTicketLimit.maxCount)
-        #expect(credits.overflow == Int.max - ResetCreditTicketLimit.maxCount)
-        #expect(credits.expiries == [expiry, nil, nil, nil, nil])
+        let laterExpiry = Date(timeIntervalSince1970: 1_900_000_000)
+        let credits = try #require(Credits(total: 4, expiries: [expiry, nil, laterExpiry]))
+        #expect(credits.expiries == [expiry, nil, laterExpiry, nil])
+        #expect(credits.expiryText(at: 1) == "Expiry not published")
+        #expect(credits.expiryText(at: 3) == "Expiry not published")
+
+        let capped = try #require(Credits(total: Int.max, expiries: [expiry, nil]))
+        #expect(capped.tickets == ResetCreditTicketLimit.maxCount)
+        #expect(capped.overflow == Int.max - ResetCreditTicketLimit.maxCount)
+        #expect(capped.expiries == [expiry, nil, nil, nil, nil])
     }
 
     @Test("task cancellation and Reduce Motion stop an active glint")

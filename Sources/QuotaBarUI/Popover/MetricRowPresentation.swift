@@ -54,7 +54,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
 
         /// nil when there is nothing to draw. A vendor that published no figure
         /// (`nil`), or published zero, draws nothing: "0 reset credits" is
-        /// noise on every account that never had one.
+        /// noise on every account that never had one. `expiries` is positional:
+        /// each index describes the ticket at that index. Include nil entries
+        /// for unknown interior expiries; omitted trailing entries are treated
+        /// as unavailable. Entries beyond the rendered ticket count are ignored.
         public init?(total: Int?, expiries: [Date?] = []) {
             guard let total, total > 0 else { return nil }
             self.total = total

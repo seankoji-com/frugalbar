@@ -82,8 +82,14 @@ struct GoldenTicketView: View {
                     ) else { return }
                 }
             }
-            .onChange(of: animationIdentity) { _, _ in
-                glint = false
+            .onChange(of: animationIdentity) { oldIdentity, newIdentity in
+                if oldIdentity.index != newIdentity.index {
+                    glint = false
+                } else {
+                    glint = GoldenTicketGlintState.motionAdjusted(
+                        isGlinting: glint, reduceMotion: newIdentity.reduceMotion
+                    )
+                }
             }
     }
 }
