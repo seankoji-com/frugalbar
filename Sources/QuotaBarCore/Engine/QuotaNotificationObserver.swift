@@ -24,9 +24,10 @@ public struct QuotaTransitions: Sendable, Equatable {
 /// critical→recovered transitions and window resets as they happen.
 ///
 /// Pure state-keeping over `[QuotaSnapshot]` — no `UserNotifications` or
-/// AppKit import. The actual `osascript` delivery call lives in
-/// `QuotaBarApp/AppMain.swift`, which owns the toggle check and the `Process`
-/// invocation; this type only ever answers "what changed since last time".
+/// AppKit import. The delivery call lives in
+/// `QuotaBarApp/NotificationDelivery.swift`, which owns the toggle check and
+/// the `UNUserNotificationCenter`/`osascript` branch; this type only ever
+/// answers "what changed since last time".
 public actor QuotaNotificationObserver {
 
     private var previous: [String: QuotaSnapshot] = [:]

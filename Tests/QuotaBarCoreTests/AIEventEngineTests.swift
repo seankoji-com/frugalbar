@@ -239,10 +239,10 @@ struct AIEventNotificationTests {
 
     private func event(_ id: String, _ kind: AIEventKind, title: String, detail: String? = "detail",
                        hoursAgo: Double = 1, source: AIEventSource = .resetTracker(name: "claude-resets"),
-                       vendor: VendorIdentifier = .claude) -> AIEvent {
+                       vendor: VendorIdentifier = .claude, url: URL? = nil) -> AIEvent {
         AIEvent(id: id, kind: kind, vendorId: vendor, title: title, detail: detail,
                 occurredAt: now.addingTimeInterval(-hoursAgo * 3600), observedAt: now,
-                source: source)
+                source: source, url: url)
     }
 
     @Test("one banner per kind, consolidated when several")
@@ -259,14 +259,65 @@ struct AIEventNotificationTests {
         ])
     }
 
-    @Test("an outage banner names the vendor the incident title may not")
+    @Test("an outage banner names the vendor, and the incident name is the subtitle")
     func outageNamesVendor() {
         let banners = AIEventNotification.banners(
             for: [event("o", .outageStarted, title: "Outage: Elevated errors across all models",
                         detail: "Major impact", source: .statusPage(name: "claude"))],
             enabledKinds: [.outageStarted], now: now)
-        #expect(banners == [AIEventBanner(title: "Claude · Outage: Elevated errors across all models",
+        #expect(banners == [AIEventBanner(title: "Claude outage",
+                                          subtitle: "Elevated errors across all models",
                                           body: "Major impact")])
+    }
+
+    @Test("a resolved outage says so in the title and keeps the incident name")
+    func outageResolved() {
+        let banners = AIEventNotification.banners(
+            for: [event("r", .outageResolved, title: "Resolved: Elevated errors across all models",
+                        detail: "Resolved after 2h", source: .statusPage(name: "claude"))],
+            enabledKinds: [.outageResolved], now: now)
+        #expect(banners == [AIEventBanner(title: "Claude outage resolved",
+                                          subtitle: "Elevated errors across all models",
+                                          body: "Resolved after 2h")])
+    }
+
+    @Test("several outages list the incident names once, without repeating the prefix")
+    func outagesConsolidated() {
+        let banners = AIEventNotification.banners(
+            for: [event("a", .outageStarted, title: "Outage: Elevated errors",
+                        detail: "Critical impact", source: .statusPage(name: "claude"),
+                        url: URL(string: "https://stspg.io/abc123")),
+                  event("b", .outageStarted, title: "Outage: Slow responses",
+                        detail: "Major impact", source: .statusPage(name: "openai"),
+                        url: URL(string: "https://stspg.io/def456"))],
+            enabledKinds: [.outageStarted], now: now)
+        #expect(banners == [AIEventBanner(title: "2 outages",
+                                          body: "Elevated errors; Slow responses")])
+        // Two incidents, no one page a click could honestly open.
+        #expect(banners.first?.url == nil)
+    }
+
+    @Test("a single event banner carries the page its click should open")
+    func bannerCarriesLink() {
+        let link = URL(string: "https://stspg.io/abc123")!
+        let banners = AIEventNotification.banners(
+            for: [event("o", .outageStarted, title: "Outage: Elevated errors",
+                        detail: "Critical impact", source: .statusPage(name: "claude"), url: link)],
+            enabledKinds: [.outageStarted], now: now)
+        #expect(banners.first?.url == link)
+    }
+
+    /// Regression guard: the incident name used to be the whole banner title,
+    /// which macOS drew as four bold lines and left the body queued behind it.
+    @Test("an outage banner never sets the incident name as its title")
+    func outageTitleStaysShort() {
+        let banners = AIEventNotification.banners(
+            for: [event("o", .outageStarted,
+                        title: "Outage: Elevated errors for a model, another model, and a third one",
+                        detail: "Critical impact", source: .statusPage(name: "claude"))],
+            enabledKinds: [.outageStarted], now: now)
+        #expect(banners.first?.title == "Claude outage")
+        #expect(banners.first?.subtitle == "Elevated errors for a model, another model, and a third one")
     }
 
     /// Regression guard: a first poll backfills months of resets and

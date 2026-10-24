@@ -395,6 +395,32 @@ its code). Provider balance subtitles, the row's value chip
 API-credit card all go through it. Do not add a second money formatting rule
 anywhere: `.formatted(.currency(code:))` is a bug in this codebase.
 
+## Notifications
+
+**A banner is drawn by the application that posts it.** When the executable
+runs from a `.app`, `NotificationDelivery` posts through
+`UNUserNotificationCenter`: macOS shows FrugalBar's name, and a click opens the
+event's page. An unbundled binary has no notification application — the
+embedded `CFBundleIdentifier` is not enough — so it keeps the `osascript`
+`display notification` path, where macOS attributes the banner to Script
+Editor and the click opens it. Do not "simplify" the bundled path back to one
+AppleScript call for both; that is exactly the Script Editor banner this
+replaced. Delivery branches on `LocalNotificationIdentity.isAppBundle`, which
+asks whether `Bundle.main` is a `.app` — not whether a bundle identifier
+exists, which a bare binary also has.
+
+**The title is a phrase; the detail goes in the subtitle or body.** A
+status-page incident name set as the title filled four bold lines on macOS and
+buried the body. Outage banners are `"Claude outage"` with the vendor's own
+incident name as the subtitle. A single-event banner carries the event's link
+in `AIEventBanner.url`; a consolidated banner carries none, because there is no
+one page to promise.
+
+**A denied permission must not look like an enabled toggle.** macOS asks once,
+at launch, when any banner kind is on. `Preferences → Notifications` reads the
+real `UNAuthorizationStatus` and says when FrugalBar is turned off in System
+Settings, rather than leaving every toggle on with nothing arriving.
+
 ## Regression tests must be shown to fail
 
 A test that passes proves nothing about a bug it was written for. Reintroduce
