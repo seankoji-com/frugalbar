@@ -10,7 +10,9 @@ import QuotaBarCore
 /// will render these views from a throwaway store, write PNG and accessibility
 /// artefacts, and exit before the menu bar or any poll starts. It never opens
 /// the live history database, preferences or credentials, and it injects no
-/// quota.
+/// quota: sample mode is passed explicitly as off, never read from the stored
+/// preference, so an enabled preference cannot generate synthetic quota into
+/// the fixture store.
 public enum ActivityEvidenceRenderer {
 
     public static let environmentKey = "FRUGALBAR_ACTIVITY_EVIDENCE_DIR"
@@ -31,6 +33,11 @@ public enum ActivityEvidenceRenderer {
         /// the view drew no attribution card.
         public let attributionWindowStart: Date?
         public let attributionWindowEnd: Date?
+        /// Quota readings left in the fixture store after both hosted views
+        /// ran. The fixture records none, so a non-zero count means a view
+        /// entered sample mode and called `SampleDataGenerator` into the
+        /// controlled store.
+        public let controlledQuotaReadings: Int
 
         public init(
             chartTotalTokens: Int,
@@ -41,7 +48,8 @@ public enum ActivityEvidenceRenderer {
             openCodeProjects: [String],
             openCodeUnattributedMessage: String,
             attributionWindowStart: Date?,
-            attributionWindowEnd: Date?
+            attributionWindowEnd: Date?,
+            controlledQuotaReadings: Int
         ) {
             self.chartTotalTokens = chartTotalTokens
             self.chartLayers = chartLayers
@@ -52,6 +60,7 @@ public enum ActivityEvidenceRenderer {
             self.openCodeUnattributedMessage = openCodeUnattributedMessage
             self.attributionWindowStart = attributionWindowStart
             self.attributionWindowEnd = attributionWindowEnd
+            self.controlledQuotaReadings = controlledQuotaReadings
         }
     }
 
@@ -221,13 +230,20 @@ public enum ActivityEvidenceRenderer {
         // wall clock, and each reports the window it actually queried. The
         // returned project lists below come from those reports, so a render
         // that secretly used `Date()` cannot print a correct-looking result.
+        //
+        // `sampleMode: .explicit(false)` is what keeps this route independent of
+        // the running user's preference: the state below never reads
+        // `CredentialStore.isSampleModeEnabled`, so an enabled preference cannot
+        // turn the fixture store into sample data or call the sample generator
+        // into it. The same store is supplied for both roles on purpose.
         let openAICapture = LoadCapture()
         try await save(
             HistoryRootView(
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
                 subjectSource: { ([openAI], []) }, activityStatus: statusLoader,
                 clock: { fixture.referenceDate },
-                loadObserver: { openAICapture.record($0) })
+                loadObserver: { openAICapture.record($0) },
+                sampleMode: .explicit(false))
                 .frame(width: 880, height: 820),
             name: "activity-attribution-openai", directory: directory,
             settled: { openAICapture.latest != nil })
@@ -237,7 +253,8 @@ public enum ActivityEvidenceRenderer {
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
                 subjectSource: { ([openCode], []) }, activityStatus: statusLoader,
                 clock: { fixture.referenceDate },
-                loadObserver: { openCodeCapture.record($0) })
+                loadObserver: { openCodeCapture.record($0) },
+                sampleMode: .explicit(false))
                 .frame(width: 880, height: 820),
             name: "activity-attribution-opencode", directory: directory,
             settled: { openCodeCapture.latest != nil })
@@ -273,7 +290,11 @@ public enum ActivityEvidenceRenderer {
                 recordsWithoutMatchingBillingIdentity:
                     openCodeAttribution.recordsWithoutMatchingBillingIdentity),
             attributionWindowStart: openAIState.windowStart,
-            attributionWindowEnd: openAIState.referenceDate)
+            attributionWindowEnd: openAIState.referenceDate,
+            // Read last, so it reflects both hosted views. The fixture writes
+            // activities only; a reading here would be the sample generator's.
+            controlledQuotaReadings: try await store.fetchReadings(
+                since: Date.distantPast).count)
     }
 
     /// Runs the renderer for the environment variable, then terminates the
@@ -297,7 +318,7 @@ public enum ActivityEvidenceRenderer {
                     .map { String(Int($0.timeIntervalSince1970)) } ?? "none"
                 let windowEnd = report.attributionWindowEnd
                     .map { String(Int($0.timeIntervalSince1970)) } ?? "none"
-                print("RENDERED total=\(report.chartTotalTokens) layers=\(report.chartLayers.joined(separator: ",")) openai=\(report.openAIProjects.joined(separator: ",")) opencode=\(report.openCodeProjects.joined(separator: ",")) window=\(windowStart)..\(windowEnd)")
+                print("RENDERED total=\(report.chartTotalTokens) layers=\(report.chartLayers.joined(separator: ",")) openai=\(report.openAIProjects.joined(separator: ",")) opencode=\(report.openCodeProjects.joined(separator: ",")) window=\(windowStart)..\(windowEnd) readings=\(report.controlledQuotaReadings)")
                 print("OPENCODE_MESSAGE \(report.openCodeUnattributedMessage)")
                 code = 0
             } catch {

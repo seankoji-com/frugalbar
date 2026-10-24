@@ -156,8 +156,9 @@ FRUGALBAR_ACTIVITY_EVIDENCE_DIR=/tmp/frugalbar-activity-evidence ./frugalbar
 ```
 
 The process prints the chart total, layers, OpenAI project paths, OpenCode
-project paths (empty) and the `window=start..end` that the hosted attribution
-view itself reported, then exits 0. The directory contains the PNGs and
+project paths (empty), the `window=start..end` that the hosted attribution view
+itself reported, and `readings=`, the quota rows left in its throwaway store
+(zero: the fixture writes activities only). The directory contains the PNGs and
 accessibility dumps. The project lists and window come from the view's own
 completed reload, not from a separate attribution computation, so a render that
 quietly fell back to `Date()` cannot print a correct-looking result. The test-host
@@ -185,6 +186,16 @@ through `loadObserver`; the renderer waits for that report instead of sleeping.
 `HistoryViewClockTests` hosts the production view against January 2026 data
 under two references — one that includes it and one that does not — so the
 outcome follows the injected instant rather than the host calendar.
+
+Sample mode is an injected dependency for the same reason. `HistoryRootView`
+takes a `SampleModeConfiguration`; the app default reads and writes the stored
+preference, while the evidence route passes `.explicit(false)`, which is a fixed
+value with a writer that does nothing. It is resolved once in `init`, not by an
+eager stored-property initializer: an initializer that read
+`CredentialStore.isSampleModeEnabled` fired even for an explicit caller, so a
+user who had left sample mode on made the evidence route draw sample mode over
+its fixture store and call `SampleDataGenerator` into it. `readings=0` in the
+printed report is the check that it did not.
 
 Both seams host the views offscreen with `NSHostingView`; they do not prove a
 GUI session against a logged-in desktop, and the accessibility tree of

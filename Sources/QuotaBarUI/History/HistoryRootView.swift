@@ -40,7 +40,13 @@ public struct HistoryRootView: View {
     @State private var timelineEmpty: (title: String, detail: String)?
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
-    @State private var isSampleMode: Bool = CredentialStore.isSampleModeEnabled
+    /// Resolved once, in `init`, from the injected `SampleModeConfiguration`.
+    /// It is deliberately not an eager stored-property initializer: one that
+    /// read `CredentialStore.isSampleModeEnabled` fired even when the caller
+    /// supplied an explicit value, so the controlled evidence route inherited
+    /// whatever the running user had last chosen and generated synthetic quota
+    /// into its fixture store.
+    @State private var isSampleMode: Bool
     @State private var isLoading: Bool = true
     /// Non-nil when the history could not be read at all. Distinct from an empty
     /// history, which is a fact about the user's data rather than about us.
@@ -60,6 +66,10 @@ public struct HistoryRootView: View {
 
     private let liveStore: QuotaHistoryStore
     private let sampleStore: QuotaHistoryStore
+    /// Where the initial sample-mode state came from and where a user's toggle
+    /// goes. Production reads and writes the stored preference; the controlled
+    /// evidence route supplies a fixed value and a writer that does nothing.
+    private let sampleModeConfiguration: SampleModeConfiguration
     private let tabRequest: HistoryTabRequest?
     private let subjectSource: @MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String])
     private let activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)?
@@ -99,6 +109,40 @@ public struct HistoryRootView: View {
         }
     }
 
+    /// Where the History window's sample-mode state comes from, and where the
+    /// user's toggle is written.
+    ///
+    /// The default, `.userPreference`, reads and writes the stored preference
+    /// on demand so ordinary app use keeps its existing behaviour. The
+    /// controlled `ActivityEvidenceRenderer` route supplies `.explicit(false)`:
+    /// hosting a view must not consult the running user's preference at all,
+    /// because an enabled preference would otherwise draw sample mode over the
+    /// fixture store and call `SampleDataGenerator` into it.
+    public struct SampleModeConfiguration {
+        /// Resolved exactly once, when the view is created.
+        public let initial: () -> Bool
+        /// Called when the user flips the sample-mode control.
+        public let persist: (Bool) -> Void
+
+        public init(initial: @escaping () -> Bool, persist: @escaping (Bool) -> Void) {
+            self.initial = initial
+            self.persist = persist
+        }
+
+        /// The user's stored preference, read on creation and written on a
+        /// toggle. Never evaluated for a caller that passes its own value.
+        public static var userPreference: SampleModeConfiguration {
+            SampleModeConfiguration(
+                initial: { CredentialStore.isSampleModeEnabled },
+                persist: { CredentialStore.isSampleModeEnabled = $0 })
+        }
+
+        /// A fixed state that neither reads nor writes any preference.
+        public static func explicit(_ value: Bool) -> SampleModeConfiguration {
+            SampleModeConfiguration(initial: { value }, persist: { _ in })
+        }
+    }
+
     /// - Parameters:
     ///   - subjectSource: the providers to offer and the hidden ones to name.
     ///     Defaults to the user's preferences; a test passes a fixture so a
@@ -109,6 +153,9 @@ public struct HistoryRootView: View {
     ///     clock; the evidence route injects its fixture reference.
     ///   - loadObserver: called once at the end of every reload with the window
     ///     it used and the attribution it drew.
+    ///   - sampleMode: where the starting sample state comes from. Leave it at
+    ///     `.userPreference` for the app; a controlled render passes
+    ///     `.explicit(false)` so no preference is read or written.
     public init(
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
@@ -118,10 +165,12 @@ public struct HistoryRootView: View {
         subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil,
         activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil,
         clock: (@Sendable () -> Date)? = nil,
-        loadObserver: (@MainActor (ReloadedState) -> Void)? = nil
+        loadObserver: (@MainActor (ReloadedState) -> Void)? = nil,
+        sampleMode: SampleModeConfiguration = .userPreference
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
+        self.sampleModeConfiguration = sampleMode
         self.tabRequest = tabRequest
         self.activityStatus = activityStatus
         self.clock = clock ?? { Date() }
@@ -136,6 +185,7 @@ public struct HistoryRootView: View {
         }
         _selectedTab = State(initialValue: initialTab)
         _timeRange = State(initialValue: initialRange)
+        _isSampleMode = State(initialValue: sampleMode.initial())
     }
 
     private var activeStore: QuotaHistoryStore {
@@ -277,7 +327,7 @@ public struct HistoryRootView: View {
                 Button {
                     let next = !isSampleMode
                     isSampleMode = next
-                    CredentialStore.isSampleModeEnabled = next
+                    sampleModeConfiguration.persist(next)
                 } label: {
                     Image(systemName: isSampleMode ? "flask.fill" : "flask")
                         .font(.system(size: 13, weight: .medium))
@@ -348,7 +398,7 @@ public struct HistoryRootView: View {
 
             Button("Exit Sample Mode") {
                 isSampleMode = false
-                CredentialStore.isSampleModeEnabled = false
+                sampleModeConfiguration.persist(false)
             }
             .font(.system(size: 11, weight: .semibold))
             .buttonStyle(.plain)
