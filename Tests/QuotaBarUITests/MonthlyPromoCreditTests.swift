@@ -58,6 +58,43 @@ struct MonthlyPromoCreditTests {
         let noLimit = MonthlyPromoCreditPresentation(entry: entry(limit: 0, end: end), now: now, isStale: false)
         #expect(noLimit.fraction == nil)
         #expect(noLimit.paceMarker == nil)
+        for promo in [entry(limit: nil, end: end), entry(), entry(limit: 0, end: end)] {
+            var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+                category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+                status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+            snapshot.apiCredits = [promo]
+            #expect(!MetricSectionView.showsPaceLegend(for: [snapshot], now: now))
+        }
+    }
+
+    @Test("the promo colour uses the tick it draws, including at exhaustion")
+    func promoColors() {
+        let spent = MonthlyPromoCreditPresentation(entry: entry(end: end), now: now, isStale: false)
+        #expect(spent.paceMarker != nil)
+        #expect(DualBarProgressView.stateColor(for: spent.barMetrics,
+            presentedPaceMarker: spent.paceMarker) == Theme.errorBold)
+        let nearlySpent = MonthlyPromoCreditPresentation(entry: entry(balance: Decimal(string: "0.01")!, end: end),
+            now: now, isStale: false)
+        #expect(nearlySpent.isExhausted)
+        #expect(MonthlyPromoCreditView.figureColor(for: nearlySpent) == Theme.error)
+        let ahead = MonthlyPromoCreditPresentation(entry: entry(balance: 10, end: end), now: now, isStale: false)
+        #expect(DualBarProgressView.stateColor(for: ahead.barMetrics,
+            presentedPaceMarker: ahead.paceMarker) == Color(red: 0.96, green: 0.72, blue: 0.15))
+    }
+
+    @Test("the promo uses the shared calendar month across Sydney daylight saving")
+    func daylightSavingMonth() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "Australia/Sydney"))
+        let end = date("2026-10-15T00:00:00+11:00")
+        let p = MonthlyPromoCreditPresentation(entry: entry(end: end),
+            now: date("2026-09-30T00:00:00+10:00"), isStale: false, calendar: calendar)
+        let length = try #require(p.barMetrics.windowLength)
+        #expect(abs(length - (30 * 86_400.0 - 3600)) < 0.00001)
+        let marker = try #require(p.paceMarker)
+        let expectedMarker = (15 * 86_400.0) / (30 * 86_400.0 - 3600)
+        #expect(abs(marker - expectedMarker) < 0.00001)
+        #expect(p.dayCountdown == "15d")
     }
 
     @Test("calendar month length, partial days and passed periods retain the published end")

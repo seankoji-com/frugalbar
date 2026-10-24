@@ -9,8 +9,9 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
     let dayCountdown: String?
     let spoken: String
     let barMetrics: DualBarMetrics
+    var isExhausted: Bool { fraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } ?? false }
 
-    init(entry: APICreditEntry, now: Date, isStale: Bool) {
+    init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
         figure = APICreditEntryPresentation(entry: entry).figure + " left"
         if case .currency(let balance, let limit?, _, _) = entry.metric,
            limit > 0, balance >= 0 {
@@ -20,18 +21,15 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
             fraction = nil
         }
 
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let periodLength: TimeInterval?
         if let end = entry.monthlyPeriodEnd,
-           let start = calendar.date(byAdding: .month, value: -1, to: end),
-           end.timeIntervalSince(start) > 0 {
-            periodLength = end.timeIntervalSince(start)
+           let length = DualBarMetrics.monthWindowLength(endingAt: end, calendar: calendar) {
+            periodLength = length
             // The confirmed recurring period is a calendar month, not 30 days.
             // Never roll a passed end forward and pretend a refill was read.
             let days = max(0, end.timeIntervalSince(now) / 86_400).rounded(.up)
             dayCountdown = days.isFinite && days < Double(Int.max) ? "\(Int(days))d" : nil
-            let elapsed = now.timeIntervalSince(start) / end.timeIntervalSince(start)
+            let elapsed = 1 - end.timeIntervalSince(now) / length
             // This credit keeps its even-use marker when fully used, as requested.
             paceMarker = fraction != nil && elapsed > 0 && elapsed < 1 ? elapsed : nil
         } else {
@@ -53,7 +51,12 @@ struct MonthlyPromoCreditView: View {
     let presentation: MonthlyPromoCreditPresentation
 
     private var color: Color {
-        DualBarProgressView.stateColor(for: presentation.barMetrics)
+        DualBarProgressView.stateColor(for: presentation.barMetrics, presentedPaceMarker: presentation.paceMarker)
+    }
+
+    nonisolated static func figureColor(for presentation: MonthlyPromoCreditPresentation) -> Color {
+        presentation.isExhausted ? Theme.error : DualBarProgressView.stateColor(
+            for: presentation.barMetrics, presentedPaceMarker: presentation.paceMarker)
     }
 
     var body: some View {
@@ -89,7 +92,7 @@ struct MonthlyPromoCreditView: View {
             }
             HStack {
                 Text(presentation.figure).font(Theme.Typography.chip)
-                    .foregroundStyle(presentation.fraction == 1 ? Theme.error : color)
+                    .foregroundStyle(Self.figureColor(for: presentation))
                 Spacer(minLength: 0)
                 if let countdown = presentation.dayCountdown {
                     Text(countdown).font(Theme.Typography.gridReset).foregroundStyle(Theme.outline)
