@@ -47,19 +47,40 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// Credits beyond the glyph cap, so a truncated run still states its
         /// own count: five glyphs and "+2" is seven, not "5 or more".
         public let overflow: Int
-
-        /// The most glyphs any row draws. Past this the strip stops widening
-        /// and the overflow count carries the rest.
-        public static let maxTickets = 5
+        /// A tickets-length array aligned with the rendered credits. Missing
+        /// entries are nil, meaning the provider published no expiry. Never
+        /// inferred from the reset window or another credit.
+        public let expiries: [Date?]
 
         /// nil when there is nothing to draw. A vendor that published no figure
         /// (`nil`), or published zero, draws nothing: "0 reset credits" is
-        /// noise on every account that never had one.
-        public init?(total: Int?) {
+        /// noise on every account that never had one. `expiries` is positional:
+        /// each index describes the ticket at that index. Include nil entries
+        /// for unknown interior expiries; omitted trailing entries are treated
+        /// as unavailable. Entries beyond the rendered ticket count are ignored.
+        public init?(total: Int?, expiries: [Date?] = []) {
             guard let total, total > 0 else { return nil }
             self.total = total
-            self.tickets = min(total, Self.maxTickets)
-            self.overflow = max(0, total - Self.maxTickets)
+            self.tickets = min(total, ResetCreditTicketLimit.maxCount)
+            self.overflow = max(0, total - ResetCreditTicketLimit.maxCount)
+            self.expiries = (0..<tickets).map { index in
+                index < expiries.count ? expiries[index] : nil
+            }
+        }
+
+        /// The tooltip for one drawn ticket. An expiry the vendor did not
+        /// publish is said plainly rather than replaced with the reset
+        /// window's date, which is a different fact.
+        public func expiryText(at index: Int, now: Date = Date()) -> String {
+            guard index >= 0, index < expiries.count, let expiry = expiries[index] else {
+                return "Expiry not published"
+            }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "d MMM yyyy"
+            let date = formatter.string(from: expiry)
+            return expiry < now ? "Expired \(date)" : "Expires \(date)"
         }
 
         /// The strip in words, for a screen reader. The glyph run is a shape
@@ -112,7 +133,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
-        self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable)
+        self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable,
+                                         expiries: snapshot.resetCreditExpiries)
         self.monthlyPromo = snapshot.apiCredits.first(where: \.isMonthlyPromo)
             .map { MonthlyPromoCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil) }
         self.subscriptionCredits = snapshot.apiCredits.filter { $0.extendsSubscription && !$0.isMonthlyPromo }
@@ -265,7 +287,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         case .count(let remaining, let limit, let unit):
             "\(remaining) of \(limit) \(unit) remaining"
         case .credits(let remaining, let unitName):
-            remaining.map { "\($0) \(unitName) remaining" } ?? "unlimited"
+            remaining.map { "\(CreditText.format($0)) \(unitName) remaining" } ?? "unlimited"
         case .currency(let balance, let limit, let spent, let code):
             if let limit {
                 "\(currency(balance, code)) of \(currency(limit, code)) remaining"

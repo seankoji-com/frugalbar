@@ -7,7 +7,7 @@ import QuotaBarCore
 struct SubscriptionCreditPlacementTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test("fractional credits display under Codex without rounding or changing quota")
+    @Test("fractional credits round to whole credits without changing quota")
     func fractionalSubscriptionCredits() throws {
         let amount = try #require(Decimal(string: "60085.4229770000"))
         let metric = MetricType.credits(remaining: amount, unitName: "credits")
@@ -18,20 +18,35 @@ struct SubscriptionCreditPlacementTests {
         snap.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
                                         label: "Usage credits", metric: metric)]
         let p = MetricRowPresentation(snapshot: snap, now: now)
-        #expect(p.subscriptionCredits.first?.figure == "60,085.422977 credits")
-        #expect(p.subscriptionCredits.first?.spoken.contains("60085.422977 credits remaining") == true)
-        #expect(MetricRowPresentation.value(for: metric) == "60,085.422977 credits")
-        #expect(BalanceSeries.Unit.credits(name: "credits").format(-amount) == "-60,085.422977 credits")
+        #expect(p.subscriptionCredits.first?.figure == "60,085 credits")
+        #expect(p.subscriptionCredits.first?.spoken.contains("60,085 credits remaining") == true)
+        #expect(MetricRowPresentation.value(for: metric) == "60,085 credits")
+        #expect(BalanceSeries.Unit.credits(name: "credits").format(-amount) == "-60,085 credits")
         #expect(CreditText.format(0) == "0")
-        #expect(CreditText.format(Decimal(string: "0.00000001")!) == "0.00000001")
+        #expect(CreditText.format(Decimal(string: "0.00000001")!) == "0")
+        #expect(CreditText.format(Decimal(string: "2.5")!) == "3")
         #expect(snap.consumptionFraction == 0.5)
         #expect(snap.displayBars.count == 1)
         #expect(snap.status == .measured(.warning))
         let balance = QuotaSnapshot(id: "credits", vendorId: .openai, displayName: "OpenAI",
             category: .aiSubscriptions, metric: metric, status: .measured(.none), resetsAt: nil,
             lastUpdated: now, auxiliaryInfo: nil)
-        #expect(MetricDetailPresentation.rawFigure(balance) == "60,085.422977 credits remaining")
+        #expect(MetricDetailPresentation.rawFigure(balance) == "60,085 credits remaining")
         #expect(balance.consumptionFraction == nil)
+    }
+
+    @Test("a reset ticket's tooltip states its published expiry, never an invented one")
+    func resetTicketExpiry() throws {
+        let expiry = try #require(ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z"))
+        let credits = try #require(MetricRowPresentation.ResetCredits(
+            total: 3, expiries: [expiry, nil]))
+        let before = expiry.addingTimeInterval(-86_400)
+        #expect(credits.expiryText(at: 0, now: before) == "Expires 17 Jul 2026")
+        #expect(credits.expiryText(at: 1, now: before) == "Expiry not published")
+        #expect(credits.expiryText(at: 2, now: before) == "Expiry not published")
+        #expect(credits.expiryText(at: -1, now: before) == "Expiry not published")
+        let expired = try #require(MetricRowPresentation.ResetCredits(total: 1, expiries: [expiry]))
+        #expect(expired.expiryText(at: 0, now: expiry.addingTimeInterval(86_400)) == "Expired 17 Jul 2026")
     }
 
     @Test("Codex usage credits stay with the plan and leave its quota figures unchanged")

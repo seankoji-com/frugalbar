@@ -33,12 +33,54 @@ struct ResetCreditTicketsTests {
     @Test("past the cap the overflow count carries the rest, never a vague +")
     func overflowIsExact() throws {
         let credits = try #require(Credits(total: 7))
-        #expect(credits.tickets == Credits.maxTickets)
+        #expect(credits.tickets == ResetCreditTicketLimit.maxCount)
         #expect(credits.overflow == 2)
         // The strip is truncated, the *count* is not: five glyphs and "+2" is
         // seven, and the spoken form says seven.
         #expect(credits.total == 7)
         #expect(credits.spoken == "7 banked reset credits")
+    }
+
+    @Test("expiry positions align with tickets, with missing trailing slots unavailable")
+    func expiryPositionsAreCappedAndAligned() throws {
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let laterExpiry = Date(timeIntervalSince1970: 1_900_000_000)
+        let credits = try #require(Credits(total: 4, expiries: [expiry, nil, laterExpiry]))
+        #expect(credits.expiries == [expiry, nil, laterExpiry, nil])
+        #expect(credits.expiryText(at: 1) == "Expiry not published")
+        #expect(credits.expiryText(at: 3) == "Expiry not published")
+
+        let capped = try #require(Credits(total: Int.max, expiries: [expiry, nil]))
+        #expect(capped.tickets == ResetCreditTicketLimit.maxCount)
+        #expect(capped.overflow == Int.max - ResetCreditTicketLimit.maxCount)
+        #expect(capped.expiries == [expiry, nil, nil, nil, nil])
+    }
+
+    @Test("task cancellation and Reduce Motion stop an active glint")
+    func reduceMotionToggleClearsGlint() {
+        let active = GoldenTicketGlintState.motionAdjusted(isGlinting: true, reduceMotion: false)
+        #expect(active)
+        #expect(!GoldenTicketGlintState.shouldContinueAnimation(
+            isCancelled: true, reduceMotion: false
+        ))
+        let afterCancellation = GoldenTicketGlintState.motionAdjusted(
+            isGlinting: active, reduceMotion: true
+        )
+        #expect(!afterCancellation)
+        #expect(!GoldenTicketGlintState.shouldContinueAnimation(
+            isCancelled: false, reduceMotion: true
+        ))
+        #expect(!GoldenTicketGlintState.motionAdjusted(
+            isGlinting: afterCancellation, reduceMotion: false
+        ))
+    }
+
+    @Test("animation identity changes with slot and Reduce Motion")
+    func animationIdentityTracksSlotAndMotionPreference() {
+        let first = GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: false)
+        #expect(first != GoldenTicketGlintState.taskIdentity(index: 1, reduceMotion: false))
+        #expect(first != GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: true))
+        #expect(first == GoldenTicketGlintState.taskIdentity(index: 0, reduceMotion: false))
     }
 
     @Test("a single credit is spoken in the singular")

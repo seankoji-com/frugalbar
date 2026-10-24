@@ -29,7 +29,8 @@ struct MonthlyPromoCreditTests {
         #expect(promo.extendsSubscription)
         #expect(snapshot.apiCredits.filter { !$0.extendsSubscription }.isEmpty)
         #expect(row.subscriptionCredits.isEmpty)
-        #expect(p.figure == "$0.00 left")
+        #expect(p.percentText == "100%")
+        #expect(p.resetText == "Resets in 12 days")
         #expect(p.fraction == 1)
         #expect(abs(try #require(p.paceMarker) - 19.0 / 31) < 0.00001)
         #expect(p.dayCountdown == "12d")
@@ -38,7 +39,7 @@ struct MonthlyPromoCreditTests {
         #expect(snapshot.displayBars.count == 1)
         #expect(snapshot.status == .measured(.none))
         #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
-            .contains("Monthly promo credit, $0.00 left, subscription month ends in 12 days"))
+            .contains("Usage credits, 100% used, resets in 12 days"))
         snapshot.staleReading = StaleReading(reason: .offline, at: now)
         let stale = try #require(MetricRowPresentation(snapshot: snapshot, now: now).monthlyPromo)
         #expect(stale.fraction == p.fraction)
@@ -76,7 +77,9 @@ struct MonthlyPromoCreditTests {
         let nearlySpent = MonthlyPromoCreditPresentation(entry: entry(balance: Decimal(string: "0.01")!, end: end),
             now: now, isStale: false)
         #expect(nearlySpent.isExhausted)
-        #expect(MonthlyPromoCreditView.figureColor(for: nearlySpent) == Theme.error)
+        #expect(MonthlyPromoCreditView.figureColor(for: nearlySpent) ==
+            DualBarProgressView.stateColor(for: nearlySpent.barMetrics,
+                                           presentedPaceMarker: nearlySpent.paceMarker))
         let ahead = MonthlyPromoCreditPresentation(entry: entry(balance: 10, end: end), now: now, isStale: false)
         #expect(DualBarProgressView.stateColor(for: ahead.barMetrics,
             presentedPaceMarker: ahead.paceMarker) == Color(red: 0.96, green: 0.72, blue: 0.15))
@@ -147,6 +150,6 @@ struct MonthlyPromoCreditTests {
         let without = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
         snapshot.apiCredits = [entry(end: end)]
         let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
-        #expect(withPromo - without > 40)
+        #expect(withPromo - without > 30)
     }
 }

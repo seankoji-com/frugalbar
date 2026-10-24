@@ -54,6 +54,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         } catch {
             snapshot = unavailable(unavailableReason(for: error))
         }
+        // A refused usage read does not erase the plan the credential states.
+        // Without this, a rate-limited Claude header said only "Claude" while
+        // the account's "Max (20x)" was sitting in the same Keychain blob.
+        if snapshot.planName == nil {
+            snapshot.planName = await CredentialStore.claudePlanNameAsync()
+        }
         snapshot.monthlyAPICredit = await credit
         return snapshot
     }
@@ -219,8 +225,43 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // shows no reset-credit row rather than "0 banked".
         snapshot.resetCreditsAvailable = usage.resetGrants?.resetsAvailable
         snapshot.resetCreditsApplicable = usage.resetGrants?.resetsUsableNow
+        // `cedar_ember` grants carry an end for each banked reset. Expand the
+        // count so the ticket glyphs line up with their own expiries; a grant
+        // that published no end contributes nil, not the reset window's date.
+        snapshot.resetCreditExpiries = usage.resetGrants.map { grants in
+            Self.resetCreditExpiries(from: grants.grants)
+        } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
         return snapshot
+    }
+
+    /// Selects up to the display cap, with earliest expiry first and vendor
+    /// order preserved for grants with the same expiry. Missing dates sort last.
+    private static func resetCreditExpiries(from grants: [ClaudeOAuthUsageResponse.ResetGrant]) -> [Date?] {
+        let ordered = grants.enumerated().map {
+            (index: $0.offset, grant: $0.element, expiry: CLIProxyClient.parseResetDate($0.element.endsAt))
+        }.sorted { lhs, rhs in
+            switch (lhs.expiry, rhs.expiry) {
+            case let (left?, right?) where left != right:
+                left < right
+            case (_?, nil):
+                true
+            case (nil, _?):
+                false
+            default:
+                lhs.index < rhs.index
+            }
+        }
+
+        var expiries: [Date?] = []
+        for item in ordered {
+            guard let left = item.grant.resetsLeft, left > 0,
+                  expiries.count < ResetCreditTicketLimit.maxCount
+            else { continue }
+            let count = min(left, ResetCreditTicketLimit.maxCount - expiries.count)
+            expiries.append(contentsOf: Array(repeating: item.expiry, count: count))
+        }
+        return expiries
     }
 
     /// The prepaid API credits this endpoint published alongside the quota, as

@@ -584,11 +584,19 @@ struct ProviderHTTPTests {
         #expect(snap.badgeText == "8% left")
     }
 
-    @Test("OpenAI reads banked reset credits and names them in the row note")
+    @Test("OpenAI reads banked reset credits, their expiries and the row note")
     func openAIResetCredits() async throws {
         let provider = OpenAIQuotaProvider(accessToken: "session-token")
-        let snap = try await withStubbedHTTP({ _ in
-            canned(body: #"""
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.path.hasSuffix("rate-limit-reset-credits") == true {
+                return canned(body: #"""
+                {"credits":[
+                  {"id":"a","status":"available","expires_at":"2026-07-17T12:00:00Z"},
+                  {"id":"b","status":"available","expires_at":null}],
+                 "available_count":2}
+                """#)
+            }
+            return canned(body: #"""
             {"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":30,"reset_at":1787891551}},
              "credits":{"has_credits":true,"unlimited":false,"balance":"12.50"},
              "rate_limit_reset_credits":{"available_count":"2"}}
@@ -596,8 +604,11 @@ struct ProviderHTTPTests {
         }) {
             try await provider.fetchSnapshot()
         }
-        #expect(URLProtocolStub.requestCount == 1)
+        #expect(URLProtocolStub.requestCount == 2)
         #expect(snap.resetCreditsAvailable == 2)
+        #expect(snap.resetCreditExpiries.count == 2)
+        #expect(snap.resetCreditExpiries[0] != nil)
+        #expect(snap.resetCreditExpiries[1] == nil)
         #expect(snap.auxiliaryInfo == "Live ChatGPT subscription quota · 2 reset credits banked")
         #expect(snap.resetCreditsApplicable == nil)
         #expect(snap.row1?.primaryFraction == 0.30)
@@ -1784,7 +1795,33 @@ struct ProviderHTTPTests {
         }
         #expect(snap.resetCreditsAvailable == 2)
         #expect(snap.resetCreditsApplicable == 1)
+        #expect(snap.resetCreditExpiries.count == 2)
+        #expect(snap.resetCreditExpiries[0]
+            == ISO8601DateFormatter().date(from: "2026-10-22T16:00:00Z"))
+        #expect(snap.resetCreditExpiries[1] == nil)
         #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
+    }
+
+    @Test("Claude bounds expiry expansion for an untrusted grant count")
+    func claudeGrantExpiryExpansionIsBounded() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"resets_left":9223372036854775807,"ends_at":"2026-10-22T16:00:00+00:00"}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == Int.max)
+        #expect(snap.resetCreditExpiries.count == ResetCreditTicketLimit.maxCount)
+        #expect(snap.resetCreditExpiries.allSatisfy { $0 != nil })
+    }
+
+    @Test("Claude grant expiry selection keeps the earliest dates before the cap")
+    func claudeGrantExpiriesAreOrderedBeforeCapping() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"resets_left":3,"ends_at":"2026-12-01T00:00:00Z"},{"resets_left":2,"ends_at":"2026-11-01T00:00:00Z"},{"resets_left":2,"ends_at":"2026-11-01T00:00:00Z"},{"resets_left":1}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        let firstExpiry = ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z")
+        let laterExpiry = ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z")
+        #expect(snap.resetCreditExpiries == [firstExpiry, firstExpiry, firstExpiry, firstExpiry, laterExpiry])
     }
 
     /// A grant without its count makes the total unknowable: nil, never a

@@ -220,7 +220,7 @@ struct BalanceHistoryTests {
         let series = try #require(BalanceSeries.of(entry))
         let points = try await recorded(store, series.id, until: now)
         #expect(points.map(\.value) == [amount])
-        #expect(series.unit.format(amount) == "60,085.422977 credits")
+        #expect(series.unit.format(amount) == "60,085 credits")
     }
 
     @Test("several readings in one bucket keep the latest, and nothing is interpolated")
