@@ -41,6 +41,28 @@ struct ResetCreditTicketsTests {
         #expect(credits.spoken == "7 banked reset credits")
     }
 
+    @Test("expiry storage is capped at rendered tickets and keeps missing entries nil")
+    func expiryStorageIsCapped() throws {
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let credits = try #require(Credits(total: Int.max, expiries: [expiry, nil]))
+        #expect(credits.tickets == Credits.maxTickets)
+        #expect(credits.overflow == Int.max - Credits.maxTickets)
+        #expect(credits.expiries == [expiry, nil, nil, nil, nil])
+    }
+
+    @Test("enabling Reduce Motion clears an active glint after task cancellation")
+    func reduceMotionToggleClearsGlint() {
+        let active = GoldenTicketGlintState.motionAdjusted(isGlinting: true, reduceMotion: false)
+        #expect(active)
+        let afterCancellation = GoldenTicketGlintState.motionAdjusted(
+            isGlinting: active, reduceMotion: true
+        )
+        #expect(!afterCancellation)
+        #expect(!GoldenTicketGlintState.motionAdjusted(
+            isGlinting: afterCancellation, reduceMotion: false
+        ))
+    }
+
     @Test("a single credit is spoken in the singular")
     func singularSpoken() throws {
         let credits = try #require(Credits(total: 1))

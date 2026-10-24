@@ -1802,6 +1802,17 @@ struct ProviderHTTPTests {
         #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
     }
 
+    @Test("Claude bounds expiry expansion for an untrusted grant count")
+    func claudeGrantExpiryExpansionIsBounded() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"resets_left":9223372036854775807,"ends_at":"2026-10-22T16:00:00+00:00"}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == Int.max)
+        #expect(snap.resetCreditExpiries.count == 5)
+        #expect(snap.resetCreditExpiries.allSatisfy { $0 != nil })
+    }
+
     /// A grant without its count makes the total unknowable: nil, never a
     /// partial sum.
     @Test("a Claude grant missing resets_left yields no reset-credit figure")

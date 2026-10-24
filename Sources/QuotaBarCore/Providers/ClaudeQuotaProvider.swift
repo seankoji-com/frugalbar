@@ -228,10 +228,13 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // `cedar_ember` grants carry an end for each banked reset. Expand the
         // count so the ticket glyphs line up with their own expiries; a grant
         // that published no end contributes nil, not the reset window's date.
+        var expirySlots = 5
         snapshot.resetCreditExpiries = usage.resetGrants?.grants.flatMap { grant -> [Date?] in
-            guard let left = grant.resetsLeft, left > 0 else { return [] }
+            guard let left = grant.resetsLeft, left > 0, expirySlots > 0 else { return [] }
             let expiry = CLIProxyClient.parseResetDate(grant.endsAt)
-            return Array(repeating: expiry, count: left)
+            let count = min(left, expirySlots)
+            expirySlots -= count
+            return Array(repeating: expiry, count: count)
         } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
         return snapshot

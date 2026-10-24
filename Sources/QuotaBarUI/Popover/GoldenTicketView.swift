@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum GoldenTicketGlintState {
+    static func motionAdjusted(isGlinting: Bool, reduceMotion: Bool) -> Bool {
+        reduceMotion ? false : isGlinting
+    }
+}
+
 /// One banked reset credit, drawn as a golden ticket.
 ///
 /// The action is deliberately small: a soft gold gradient, a scale lift while
@@ -47,6 +53,11 @@ struct GoldenTicketView: View {
                     glint = false
                     try? await Task.sleep(for: .seconds(4.4 + Double(index) * 0.55))
                 }
+            }
+            .onChange(of: reduceMotion) { _, enabled in
+                glint = GoldenTicketGlintState.motionAdjusted(
+                    isGlinting: glint, reduceMotion: enabled
+                )
             }
     }
 }

@@ -63,7 +63,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
             self.total = total
             self.tickets = min(total, Self.maxTickets)
             self.overflow = max(0, total - Self.maxTickets)
-            self.expiries = (0..<total).map { index in
+            self.expiries = (0..<tickets).map { index in
                 index < expiries.count ? expiries[index] : nil
             }
         }
