@@ -63,6 +63,41 @@ public struct HistoryRootView: View {
     private let tabRequest: HistoryTabRequest?
     private let subjectSource: @MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String])
     private let activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)?
+    /// The clock every reload reads. Production leaves it at the real current
+    /// instant; the activity evidence route passes its fixture reference so the
+    /// hosted view queries the window the fixture describes instead of the
+    /// wall clock.
+    private let clock: @Sendable () -> Date
+    /// Reports what a reload resolved, so the evidence route can assert the
+    /// hosted view's own window and attribution rather than recompute them.
+    private let loadObserver: (@MainActor (ReloadedState) -> Void)?
+
+    /// What one `reloadData` pass queried and drew.
+    ///
+    /// `windowStart` and `referenceDate` are the instants that pass actually
+    /// used for its store reads and pace/attribution presentation, so a caller
+    /// cannot mistake a separately computed window for the rendered one.
+    public struct ReloadedState: Sendable, Equatable {
+        public let subjectID: String?
+        public let windowStart: Date?
+        public let referenceDate: Date
+        public let attribution: AttributionSummary?
+        public let failed: Bool
+
+        public init(
+            subjectID: String?,
+            windowStart: Date?,
+            referenceDate: Date,
+            attribution: AttributionSummary?,
+            failed: Bool
+        ) {
+            self.subjectID = subjectID
+            self.windowStart = windowStart
+            self.referenceDate = referenceDate
+            self.attribution = attribution
+            self.failed = failed
+        }
+    }
 
     /// - Parameters:
     ///   - subjectSource: the providers to offer and the hidden ones to name.
@@ -70,6 +105,10 @@ public struct HistoryRootView: View {
     ///     render never depends on the shared preference file.
     ///   - activityStatus: this process's local-activity ingestion status.
     ///     Without it the breakdown never claims to be complete.
+    ///   - clock: the instant a reload treats as "now". Defaults to the real
+    ///     clock; the evidence route injects its fixture reference.
+    ///   - loadObserver: called once at the end of every reload with the window
+    ///     it used and the attribution it drew.
     public init(
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
@@ -77,12 +116,16 @@ public struct HistoryRootView: View {
         initialRange: HistoryPresentation.TimeRange = .last24Hours,
         tabRequest: HistoryTabRequest? = nil,
         subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil,
-        activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
+        activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil,
+        clock: (@Sendable () -> Date)? = nil,
+        loadObserver: (@MainActor (ReloadedState) -> Void)? = nil
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
         self.tabRequest = tabRequest
         self.activityStatus = activityStatus
+        self.clock = clock ?? { Date() }
+        self.loadObserver = loadObserver
         self.subjectSource = subjectSource ?? {
             let prefs = CredentialStore.providerDisplayPreferences
             return (
@@ -822,6 +865,12 @@ public struct HistoryRootView: View {
         lastReloadKey = key
         defer { isLoading = false }
 
+        // One instant for the whole pass. The range edge, every store query and
+        // the pace/attribution presentation read this value, so a reload cannot
+        // ask for `since` from one instant and `until` from another. Production
+        // resolves the real clock; the evidence route resolves its fixture.
+        let referenceDate = clock()
+
         loadError = nil
         hasOnlyElapsedReadings = false
         timelineEmpty = nil
@@ -843,11 +892,12 @@ public struct HistoryRootView: View {
                 segments = []
                 pace = nil
                 attribution = nil
+                report(subject: nil, windowStart: nil, referenceDate: referenceDate, attribution: nil, failed: true)
                 return
             }
         }
 
-        await reloadOverview()
+        await reloadOverview(now: referenceDate)
         // Until the user picks one, lead with the first provider that has
         // something to show rather than an empty chart.
         if !userChoseSubject, let first = overviewCards.first,
@@ -859,13 +909,15 @@ public struct HistoryRootView: View {
             pace = nil
             attribution = nil
             markers = []
+            report(subject: nil, windowStart: nil, referenceDate: referenceDate,
+                   attribution: nil, failed: loadError != nil)
             return
         }
 
-        await reloadMarkers(for: subject)
+        await reloadMarkers(for: subject, now: referenceDate)
 
-        let since = timeRange.startDate()
-        let now = Date()
+        let since = timeRange.startDate(from: referenceDate)
+        let now = referenceDate
 
         do {
             // Every key the subject owns, and no sibling's: the vendor-wide
@@ -915,7 +967,7 @@ public struct HistoryRootView: View {
                 endpoints = (nil, nil)
             }
 
-            self.attribution = AttributionEngine.computeAttribution(
+            let summary = AttributionEngine.computeAttribution(
                 windowStart: since ?? (readings.first?.measuredAt ?? now),
                 windowEnd: now,
                 barLabel: barLabel,
@@ -932,6 +984,9 @@ public struct HistoryRootView: View {
                     ? .matchingPublishedIdentity(AttributionBillingTarget())
                     : .any
             )
+            self.attribution = summary
+            report(subject: subject, windowStart: since, referenceDate: referenceDate,
+                   attribution: summary, failed: false)
         } catch {
             // A failed read must never render as "you have no history".
             NSLog("frugalbar: history read failed: %@", error.localizedDescription)
@@ -939,7 +994,26 @@ public struct HistoryRootView: View {
             segments = []
             pace = nil
             attribution = nil
+            report(subject: subject, windowStart: since, referenceDate: referenceDate,
+                   attribution: nil, failed: true)
         }
+    }
+
+    /// One report per reload, including the early exits: a caller waiting for a
+    /// settled state must not be left waiting on a pass that drew nothing.
+    private func report(
+        subject: HistoryOverviewPresentation.Subject?,
+        windowStart: Date?,
+        referenceDate: Date,
+        attribution: AttributionSummary?,
+        failed: Bool
+    ) {
+        loadObserver?(ReloadedState(
+            subjectID: subject?.id,
+            windowStart: windowStart,
+            referenceDate: referenceDate,
+            attribution: attribution,
+            failed: failed))
     }
 
     /// Re-reads the strip on every reload — a new range, source, subject or
@@ -947,8 +1021,7 @@ public struct HistoryRootView: View {
     /// stays a few thousand rows. It is never served from a cache: a cached
     /// strip kept showing readings older than the chart beneath it, and kept
     /// a failed read failed.
-    private func reloadOverview() async {
-        let now = Date()
+    private func reloadOverview(now: Date) async {
         let store = activeStore
         let retention = await store.retentionInterval
         let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention)
@@ -974,13 +1047,12 @@ public struct HistoryRootView: View {
     }
 
     /// Reset markers for the timeline, from the live store only.
-    private func reloadMarkers(for subject: HistoryOverviewPresentation.Subject) async {
+    private func reloadMarkers(for subject: HistoryOverviewPresentation.Subject, now: Date) async {
         markerLoadFailed = false
         guard !isSampleMode else {
             markers = []
             return
         }
-        let now = Date()
         do {
             let events = try await liveStore.fetchEvents(
                 vendor: subject.vendor,

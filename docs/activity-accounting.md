@@ -156,9 +156,12 @@ FRUGALBAR_ACTIVITY_EVIDENCE_DIR=/tmp/frugalbar-activity-evidence ./frugalbar
 ```
 
 The process prints the chart total, layers, OpenAI project paths, OpenCode
-project paths (empty) and the unattributed-workspace message, then exits 0. The
-directory contains the PNGs and accessibility dumps. The test-host invocation
-remains available:
+project paths (empty) and the `window=start..end` that the hosted attribution
+view itself reported, then exits 0. The directory contains the PNGs and
+accessibility dumps. The project lists and window come from the view's own
+completed reload, not from a separate attribution computation, so a render that
+quietly fell back to `Date()` cannot print a correct-looking result. The test-host
+invocation remains available:
 
 ```sh
 FRUGALBAR_RENDER_DIR=.build/issue128-evidence/render \
@@ -172,6 +175,16 @@ the seven-day window, at any local hour. `Fixture.around(reference:calendar:)`
 derives the same two past days for an injected reference and calendar;
 `ActivityEvidenceClockTests` covers morning, the 10:00 boundary, midday,
 evening and daylight-saving transitions in several time zones.
+
+`HistoryRootView` takes that instant as an explicit `clock` (production defaults
+to `Date()`). One reload reads it once and uses it for the range edge, the
+overview/marker/activity queries, and pace and attribution presentation, so
+`since` and `until` cannot come from different moments. Both evidence views are
+constructed with the fixture reference, and each reports its completed reload
+through `loadObserver`; the renderer waits for that report instead of sleeping.
+`HistoryViewClockTests` hosts the production view against January 2026 data
+under two references — one that includes it and one that does not — so the
+outcome follows the injected instant rather than the host calendar.
 
 Both seams host the views offscreen with `NSHostingView`; they do not prove a
 GUI session against a logged-in desktop, and the accessibility tree of

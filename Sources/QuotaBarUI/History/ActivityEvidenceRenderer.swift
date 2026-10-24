@@ -26,6 +26,11 @@ public enum ActivityEvidenceRenderer {
         public let openAIProjects: [String]
         public let openCodeProjects: [String]
         public let openCodeUnattributedMessage: String
+        /// The window the *hosted HistoryRootView itself* used for its store
+        /// reads and attribution, reported from inside its reload. `nil` when
+        /// the view drew no attribution card.
+        public let attributionWindowStart: Date?
+        public let attributionWindowEnd: Date?
 
         public init(
             chartTotalTokens: Int,
@@ -34,7 +39,9 @@ public enum ActivityEvidenceRenderer {
             sourceNotes: [String],
             openAIProjects: [String],
             openCodeProjects: [String],
-            openCodeUnattributedMessage: String
+            openCodeUnattributedMessage: String,
+            attributionWindowStart: Date?,
+            attributionWindowEnd: Date?
         ) {
             self.chartTotalTokens = chartTotalTokens
             self.chartLayers = chartLayers
@@ -43,12 +50,16 @@ public enum ActivityEvidenceRenderer {
             self.openAIProjects = openAIProjects
             self.openCodeProjects = openCodeProjects
             self.openCodeUnattributedMessage = openCodeUnattributedMessage
+            self.attributionWindowStart = attributionWindowStart
+            self.attributionWindowEnd = attributionWindowEnd
         }
     }
 
     public enum RenderError: Error, LocalizedError {
         case missingDirectory
         case imageEncodingFailed(String)
+        case viewDidNotLoad(String)
+        case viewLoadFailed(String)
 
         public var errorDescription: String? {
             switch self {
@@ -56,6 +67,10 @@ public enum ActivityEvidenceRenderer {
                 "\(ActivityEvidenceRenderer.environmentKey) is not set."
             case .imageEncodingFailed(let name):
                 "Could not encode the controlled render \(name)."
+            case .viewDidNotLoad(let name):
+                "The controlled render \(name) never reported a completed reload."
+            case .viewLoadFailed(let name):
+                "The controlled render \(name) reported a failed reload."
             }
         }
     }
@@ -101,6 +116,16 @@ public enum ActivityEvidenceRenderer {
             return Fixture.around(
                 reference: Date(timeIntervalSince1970: 1_792_497_600), calendar: calendar)
         }()
+    }
+
+    /// Collects the hosted view's own reload reports. The renderer waits on
+    /// this rather than on an arbitrary sleep, so a PNG is encoded only after
+    /// the production view has read its store and built its attribution.
+    @MainActor
+    private final class LoadCapture {
+        private(set) var states: [HistoryRootView.ReloadedState] = []
+        var latest: HistoryRootView.ReloadedState? { states.last }
+        func record(_ state: HistoryRootView.ReloadedState) { states.append(state) }
     }
 
     /// Renders every controlled view to `directory` and returns what was drawn.
@@ -192,29 +217,47 @@ public enum ActivityEvidenceRenderer {
             name: "OpenCode Go · Fixture workspace")
         let statusLoader: @Sendable () async -> ActivityIngestionEngine.Status? = { status }
 
+        // Both hosted attribution views read the fixture's instant, not the
+        // wall clock, and each reports the window it actually queried. The
+        // returned project lists below come from those reports, so a render
+        // that secretly used `Date()` cannot print a correct-looking result.
+        let openAICapture = LoadCapture()
         try await save(
             HistoryRootView(
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
-                subjectSource: { ([openAI], []) }, activityStatus: statusLoader)
+                subjectSource: { ([openAI], []) }, activityStatus: statusLoader,
+                clock: { fixture.referenceDate },
+                loadObserver: { openAICapture.record($0) })
                 .frame(width: 880, height: 820),
-            name: "activity-attribution-openai", directory: directory)
+            name: "activity-attribution-openai", directory: directory,
+            settled: { openAICapture.latest != nil })
+        let openCodeCapture = LoadCapture()
         try await save(
             HistoryRootView(
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
-                subjectSource: { ([openCode], []) }, activityStatus: statusLoader)
+                subjectSource: { ([openCode], []) }, activityStatus: statusLoader,
+                clock: { fixture.referenceDate },
+                loadObserver: { openCodeCapture.record($0) })
                 .frame(width: 880, height: 820),
-            name: "activity-attribution-opencode", directory: directory)
+            name: "activity-attribution-opencode", directory: directory,
+            settled: { openCodeCapture.latest != nil })
 
-        let activities = try await store.fetchActivities(since: window.since, until: now)
-        let openAIAttribution = AttributionEngine.computeAttribution(
-            windowStart: window.since, windowEnd: now,
-            startConsumptionFraction: nil, endConsumptionFraction: nil,
-            activities: activities.filter { $0.source == "codex" })
-        let openCodeAttribution = AttributionEngine.computeAttribution(
-            windowStart: window.since, windowEnd: now,
-            startConsumptionFraction: nil, endConsumptionFraction: nil,
-            activities: activities.filter { $0.source == "opencode" },
-            billingScope: .matchingPublishedIdentity(AttributionBillingTarget()))
+        guard let openAIState = openAICapture.latest,
+              let openCodeState = openCodeCapture.latest else {
+            throw RenderError.viewDidNotLoad("attribution views")
+        }
+        guard !openAIState.failed, !openCodeState.failed,
+              let openAIAttribution = openAIState.attribution,
+              let openCodeAttribution = openCodeState.attribution else {
+            throw RenderError.viewLoadFailed("attribution views")
+        }
+        // Both views must have queried the same explicit window.
+        guard openAIState.referenceDate == fixture.referenceDate,
+              openCodeState.referenceDate == fixture.referenceDate,
+              openAIState.windowStart == openCodeState.windowStart else {
+            throw RenderError.viewLoadFailed(
+                "attribution views did not share the fixture reference")
+        }
 
         return Report(
             chartTotalTokens: chart.totalTokens,
@@ -228,7 +271,9 @@ public enum ActivityEvidenceRenderer {
                 vendorName: openCode.vendor.displayName,
                 recordsWithoutTokenTotals: openCodeAttribution.recordsWithoutTokenTotals,
                 recordsWithoutMatchingBillingIdentity:
-                    openCodeAttribution.recordsWithoutMatchingBillingIdentity))
+                    openCodeAttribution.recordsWithoutMatchingBillingIdentity),
+            attributionWindowStart: openAIState.windowStart,
+            attributionWindowEnd: openAIState.referenceDate)
     }
 
     /// Runs the renderer for the environment variable, then terminates the
@@ -248,7 +293,11 @@ public enum ActivityEvidenceRenderer {
         Task { @MainActor in
             do {
                 let report = try await render(to: directory)
-                print("RENDERED total=\(report.chartTotalTokens) layers=\(report.chartLayers.joined(separator: ",")) openai=\(report.openAIProjects.joined(separator: ",")) opencode=\(report.openCodeProjects.joined(separator: ","))")
+                let windowStart = report.attributionWindowStart
+                    .map { String(Int($0.timeIntervalSince1970)) } ?? "none"
+                let windowEnd = report.attributionWindowEnd
+                    .map { String(Int($0.timeIntervalSince1970)) } ?? "none"
+                print("RENDERED total=\(report.chartTotalTokens) layers=\(report.chartLayers.joined(separator: ",")) openai=\(report.openAIProjects.joined(separator: ",")) opencode=\(report.openCodeProjects.joined(separator: ",")) window=\(windowStart)..\(windowEnd)")
                 print("OPENCODE_MESSAGE \(report.openCodeUnattributedMessage)")
                 code = 0
             } catch {
@@ -270,7 +319,8 @@ public enum ActivityEvidenceRenderer {
     private static func save<V: View>(
         _ view: V,
         name: String,
-        directory: URL
+        directory: URL,
+        settled: @escaping @MainActor () -> Bool = { true }
     ) async throws {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         host.appearance = NSAppearance(named: .darkAqua)
@@ -280,7 +330,16 @@ public enum ActivityEvidenceRenderer {
         window.isReleasedWhenClosed = false
         window.contentView = host
         host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(300))
+        // The production view reports its own completed reload; a fixed sleep
+        // is not evidence that an asynchronous query has finished.
+        let deadline = Date().addingTimeInterval(30)
+        while !settled() {
+            guard Date() < deadline else { throw RenderError.viewDidNotLoad(name) }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        host.layoutSubtreeIfNeeded()
+        // Let AppKit commit the state the view just reported before encoding.
+        try await Task.sleep(for: .milliseconds(50))
         host.layoutSubtreeIfNeeded()
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             throw RenderError.imageEncodingFailed(name)

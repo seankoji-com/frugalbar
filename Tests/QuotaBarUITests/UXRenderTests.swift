@@ -828,10 +828,16 @@ extension UXRenderTests {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         let directory = root.appendingPathComponent("release-seam", isDirectory: true)
         let report = try await ActivityEvidenceRenderer.render(to: directory)
+        let fixture = ActivityEvidenceRenderer.Fixture.standard
         #expect(report.chartTotalTokens == 1_100_177)
         #expect(report.openAIProjects == ["/controlled/codex-alpha", "/controlled/codex-beta"])
         #expect(report.openCodeProjects.isEmpty)
         #expect(report.openCodeUnattributedMessage.contains("not attributed"))
+        // The attributed projects above come from the hosted views' own reload
+        // reports; those views must have queried the fixture's window.
+        #expect(report.attributionWindowEnd == fixture.referenceDate)
+        #expect(report.attributionWindowStart
+            == HistoryPresentation.TimeRange.last7Days.startDate(from: fixture.referenceDate))
     }
 
     /// Controlled, sanitized ledger: a real Codex rollout shape with a model
@@ -929,7 +935,8 @@ extension UXRenderTests {
         try await save(
             HistoryRootView(
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
-                subjectSource: { ([openAI], []) }, activityStatus: statusLoader)
+                subjectSource: { ([openAI], []) }, activityStatus: statusLoader,
+                clock: { now })
                 .frame(width: 880, height: 820),
             name: "activity-attribution-openai", directory: directory)
 
@@ -939,7 +946,8 @@ extension UXRenderTests {
         try await save(
             HistoryRootView(
                 liveStore: store, sampleStore: store, initialRange: .last7Days,
-                subjectSource: { ([openCode], []) }, activityStatus: statusLoader)
+                subjectSource: { ([openCode], []) }, activityStatus: statusLoader,
+                clock: { now })
                 .frame(width: 880, height: 820),
             name: "activity-attribution-opencode", directory: directory)
     }
