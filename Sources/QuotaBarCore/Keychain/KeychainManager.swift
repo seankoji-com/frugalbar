@@ -162,17 +162,18 @@ public enum CredentialStore {
     /// Whether to deliver a local notification when a provider's quota
     /// recovers from critical/exhausted back to having headroom.
     ///
-    /// Off by default — an unbundled executable has no `Bundle` identity to
-    /// request notification authorization under, so delivery goes through an
-    /// `osascript`/`display notification` AppleScript call instead of
-    /// `UNUserNotificationCenter`, and a banner some users never asked for is
-    /// a poor default for that mechanism. Settings exposes this as an
-    /// explicit opt-in.
+    /// Off by default — a banner some users never asked for is a poor
+    /// default. Delivery is FrugalBar's own when the executable runs from a
+    /// `.app` (macOS asks once for permission); the bare binary has no
+    /// notification identity, so it falls back to an
+    /// `osascript`/`display notification` call instead of
+    /// `UNUserNotificationCenter`. Settings exposes this as an explicit
+    /// opt-in.
     public static let notificationsEnabledDefaultsKey = "QuotaBarEnableNotifications"
 
     /// Providers whose window resets the user asked to be told about, stored
     /// as vendor raw values. Empty by default: opt-in per provider, delivered
-    /// through the same `osascript` path as recovery notifications.
+    /// through the same path as recovery notifications.
     public static let resetAlertVendorsDefaultsKey = "QuotaBarResetAlertVendors"
 
     /// Whether to poll OpenRouter's public model catalog and the vendor news

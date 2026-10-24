@@ -2631,14 +2631,16 @@ struct ProviderHTTPTests {
     }
 
     /// `iguana_necktie` states its amounts in dollars already, so they are
-    /// never scaled — and its `resets_at` is an *expiry*, said as an absolute
-    /// date so it cannot read as a countdown to a refill.
-    @Test("promo credit dollars are taken verbatim, with the expiry as a date")
+    /// never scaled. Preserve the published subscription-period end as a date
+    /// so the UI does not have to parse display copy or use another pool's date.
+    @Test("promo credit preserves dollars and the subscription month end")
     func promoCreditIsAlreadyDollars() async throws {
         let snap = try await claudeCredits(#""iguana_necktie":{"limit_dollars":200,"used_dollars":50,"remaining_dollars":150,"resets_at":"2026-11-15T00:00:00+00:00"}"#)
         let entry = try #require(snap.apiCredits.first { $0.id == "claude.promo-credit" })
         #expect(entry.label == "Promo credit")
-        #expect(entry.detail == "Expires 15 Nov 2026")
+        #expect(entry.detail == "Subscription month ends 15 Nov 2026")
+        #expect(entry.monthlyPeriodEnd == ISO8601DateFormatter().date(from: "2026-11-15T00:00:00Z"))
+        #expect(entry.extendsSubscription)
         guard case .currency(let balance, let limit, let spent, _) = entry.metric else {
             Issue.record("expected a currency entry")
             return

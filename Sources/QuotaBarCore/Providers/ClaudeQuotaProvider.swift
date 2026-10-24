@@ -285,8 +285,9 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                     currencyBasis: .prepaidCredit,
                     detail: promo.resetsAt
                         .flatMap(CLIProxyClient.parseResetDate)
-                        .map { "Expires \(Self.shortDate($0))" } ?? "Cloud-session credit",
-                    source: "OAuth usage payload · iguana_necktie"
+                        .map { "Subscription month ends \(Self.shortDate($0))" } ?? "Cloud-session credit",
+                    source: "OAuth usage payload · iguana_necktie",
+                    monthlyPeriodEnd: promo.resetsAt.flatMap(CLIProxyClient.parseResetDate)
                 ))
             }
         }

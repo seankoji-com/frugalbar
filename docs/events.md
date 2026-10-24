@@ -91,14 +91,15 @@ Every candidate goes through one call, `QuotaHistoryStore.recordEvents`, which i
 
 ## Notifications
 
-Banners are posted with `osascript` `display notification`. FrugalBar ships as a bare executable with no bundle id, so macOS attributes the banner to the process that runs it.
+A `.app` posts banners through `UNUserNotificationCenter`, so macOS draws them as FrugalBar's own and a click opens the page the event came from. The release also ships as a bare executable, which macOS never registers as a notification application: there delivery stays an `osascript` `display notification` call, and macOS attributes the banner to Script Editor (with no link of its own).
 
 | Rule | Behaviour |
 |---|---|
 | Per-kind toggles | **Preferences → Notifications → AI events.** Every kind above except Usage reset, all on by default. The preference stores the kinds you switched *off*, so a kind added later notifies by default; a choice saved by an older version is honoured for the kinds it offered. |
 | Usage reset | Per vendor under **Preferences → Notifications → Reset alerts**, off by default. |
+| Permission | macOS asks once, at launch, when any banner kind is on. If the user denies it — or turns FrugalBar off in System Settings — no banner appears, and **Preferences → Notifications** says so and offers the Settings pane. A bare install has no identity to authorize, so it never asks. |
 | Age cutoff | An event whose `occurredAt` is older than **48 hours** is recorded but never announced. This is what keeps the first poll's backfill of months of resets and outages silent. |
-| Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"); outage banners lead with the vendor, since incident names often don't say it. Several events of one kind in one poll become "3 new models" with the titles in the body. |
+| Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"). An outage banner is three lines: the vendor and kind as the title ("Claude outage"), the incident's own published name as the subtitle, and the impact and affected components as the body — the incident name as the title filled four bold lines and buried the body. Several events of one kind in one poll become "3 new models" with the titles in the body. |
 
 ## Where events appear
 
