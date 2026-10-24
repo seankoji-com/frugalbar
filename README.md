@@ -1,7 +1,7 @@
 # frugalbar — track AI usage & dev limits
 
 <p align="center">
-  <img width="652" height="1280" alt="image" src="https://github.com/user-attachments/assets/35c85ad5-6832-4095-a8d6-c6eaa5d505fa" />
+  <img width="652" alt="FrugalBar quota popover mockup with an inferred reset-token event" src="docs/assets/frugalbar-screenshot.png" />
 </p>
 
 
@@ -115,7 +115,7 @@ The running version is shown in the popover footer ("v1.4.2", or "dev" for a loc
 
 The popover groups Gemini, Argon and the shared Claude/GPT pool (shown as **Claude**, with a split Claude/Gemini icon) under one **Antigravity** heading. A matching published plan appears beside that heading; mixed or missing plans stay on their individual rows. Direct **Claude** (Claude Code) and **ChatGPT** (Codex) have separate headings. Each pool keeps its own bars, resets and inspector identity. A spent pool stays inside its service block while another pool remains usable. Grouping changes no stored preferences and combines no quota figures.
 
-ChatGPT usage credits appear below Codex in credits, including published fractions, and retain their exact decimal value in history. The sync-v1 companion format accepts only integer credits; a fractional balance exports as an unavailable `outOfRange` metric rather than a rounded figure.
+ChatGPT usage credits appear below Codex in credits, rounded to whole credits for display, and retain their exact decimal value in history. The sync-v1 companion format accepts only integer credits; a fractional balance exports as an unavailable `outOfRange` metric rather than a rounded figure.
 
 ---
 
@@ -174,7 +174,7 @@ Outages come from the official status pages for Claude, OpenAI (Codex) and GitHu
 
 ## Desktop widget
 
-**Gear menu → Desktop Widget** (⌘D) opens a small panel with three layouts: a stacked **Tokens** chart (the default) of raw token consumption across the providers FrugalBar can count (Claude Code, Codex, OpenCode), a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The Tokens view is what local tools recorded, cache included, and is never a quota; providers with no token counts are named, not drawn as zero. The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → Display**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
+**Gear menu → Desktop Widget** (⌘D) opens a small panel with three layouts: a stacked **Tokens** chart (the default) of raw token consumption across the providers FrugalBar can count (Claude Code, Codex, OpenCode), a **Chart** of your usage windows with current headroom beneath, or an **Overview** with one tile per provider. Filter by vendor, window, range (24h / 7d / 30d) and used or remaining. The Tokens view is what local tools recorded, cache included, and is never a quota; providers with no token counts are named, not drawn as zero. Codex request usage is kept at its observed time, not moved to a session's last turn; older session-level files say so. The provenance, token semantics and migration rules are in [docs/activity-accounting.md](docs/activity-accounting.md). The dashed average line is a mean of real readings from the windows you selected, never a combined quota. Pin it under your desktop icons or float it above windows in **Preferences → Display**. It is a panel FrugalBar owns, not a WidgetKit widget, because the app ships as a bare binary with no `.app` bundle. Details: [docs/desktop-widget.md](docs/desktop-widget.md).
 
 ---
 

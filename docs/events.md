@@ -7,7 +7,7 @@ FrugalBar keeps a log of three things on the platforms you use: **resets**, **ou
 | Kind | Meaning | Evidence | Caption |
 |---|---|---|---|
 | **Vendor reset** | A vendor reset usage for everyone (or a plan tier), or granted a banked reset to apply later. | A community tracker's curated record of the announcement, after it landed, with a link to the post. See [Reset trackers](#reset-trackers). | Via claude-resets.com (community tracker) |
-| **Usage restored** | Used fell by 15 points or more *before* the published reset: how a vendor reset looks from your own account. If the vendor also moved the reset time forward, the event says the window restarted early. | Two measured polls of the same window: both fractions, a previous reset time still in the future, and a current reset time. | From the vendor's usage endpoint |
+| **Usage restored** | Used fell by 15 points or more *before* the published reset: how a vendor reset looks from your own account. If the vendor also moved the reset time forward, the event says the window restarted early. When the same polls show exactly one fewer banked reset credit, it says a reset token was likely consumed. | Two measured polls of the same window: both fractions, a previous reset time still in the future, and a current reset time. The token inference additionally needs a one-credit decrease and an early window restart in the same polls. | From the vendor's usage endpoint |
 | **Reset credit** | The vendor granted your account a banked reset credit. | OpenAI: `rate_limit_reset_credits.available_count` in the Codex usage payload rose between two polls that both carried it. Anthropic: the summed `resets_left` of the `cedar_ember` grants rose (empty today, see below). | From the vendor's usage endpoint |
 | **Outage** | The vendor's official status page opened a **major** or **critical** incident on a product you use. | The status page's incident, its impact, its affected components and its own start time. | From status.claude.com |
 | **Outage resolved** | The status page marked that incident resolved. | The incident's `resolved_at`; the detail gives the duration. | From status.claude.com |
@@ -91,14 +91,15 @@ Every candidate goes through one call, `QuotaHistoryStore.recordEvents`, which i
 
 ## Notifications
 
-Banners are posted with `osascript` `display notification`. FrugalBar ships as a bare executable with no bundle id, so macOS attributes the banner to the process that runs it.
+A `.app` posts banners through `UNUserNotificationCenter`, so macOS draws them as FrugalBar's own and a click opens the page the event came from. The release also ships as a bare executable, which macOS never registers as a notification application: there delivery stays an `osascript` `display notification` call, and macOS attributes the banner to Script Editor (with no link of its own).
 
 | Rule | Behaviour |
 |---|---|
 | Per-kind toggles | **Preferences → Notifications → AI events.** Every kind above except Usage reset, all on by default. The preference stores the kinds you switched *off*, so a kind added later notifies by default; a choice saved by an older version is honoured for the kinds it offered. |
 | Usage reset | Per vendor under **Preferences → Notifications → Reset alerts**, off by default. |
+| Permission | macOS asks once, at launch, when any banner kind is on. If the user denies it — or turns FrugalBar off in System Settings — no banner appears, and **Preferences → Notifications** says so and offers the Settings pane. A bare install has no identity to authorize, so it never asks. |
 | Age cutoff | An event whose `occurredAt` is older than **48 hours** is recorded but never announced. This is what keeps the first poll's backfill of months of resets and outages silent. |
-| Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"); outage banners lead with the vendor, since incident names often don't say it. Several events of one kind in one poll become "3 new models" with the titles in the body. |
+| Wording | A banner is the event's title ("Codex reset for everyone", "GPT-6.2 now available in Codex"). An outage banner is three lines: the vendor and kind as the title ("Claude outage"), the incident's own published name as the subtitle, and the impact and affected components as the body — the incident name as the title filled four bold lines and buried the body. Several events of one kind in one poll become "3 new models" with the titles in the body. |
 
 ## Where events appear
 

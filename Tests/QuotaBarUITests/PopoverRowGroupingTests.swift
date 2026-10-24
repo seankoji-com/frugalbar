@@ -56,8 +56,23 @@ struct PopoverRowGroupingTests {
         }
     }
 
-    @Test func antigravityMissingAndMixedPlansStayTruthful() {
-        for plan: String? in [nil, "", "   ", "Google AI Ultra"] {
+    @Test func claudePlanMovesToTheHeader() {
+        let row = snapshot("Claude", vendor: .claude, plan: "Max (20x)")
+        let group = PopoverRowGrouping.groups(for: [row])[0]
+        #expect(group.header == "Claude")
+        #expect(group.headerPlan == "Max (20x)")
+        #expect(group.suppressPlan)
+        #expect(PopoverRowGrouping.subtitle(for: row, suppressPlan: group.suppressPlan,
+            presentation: MetricRowPresentation(snapshot: row, now: now)).isEmpty)
+        let exhausted = snapshot("Claude", vendor: .claude, plan: "Max (20x)", exhausted: true)
+        let exhaustedGroup = PopoverRowGrouping.groups(for: [exhausted])[0]
+        #expect(exhaustedGroup.headerPlan == "Max (20x)")
+        #expect(PopoverRowGrouping.subtitle(for: exhausted,
+            suppressPlan: exhaustedGroup.suppressPlan,
+            presentation: MetricRowPresentation(snapshot: exhausted, now: now)) == "Resets in 2 weeks")
+    }
+
+    @Test func antigravityMissingAndMixedPlansStayTruthful() {        for plan: String? in [nil, "", "   ", "Google AI Ultra"] {
             let rows = [snapshot("gemini", vendor: .gemini, plan: "Google AI Pro"),
                         snapshot("claude", vendor: .antigravityClaude, plan: plan)]
             let group = PopoverRowGrouping.groups(for: rows)[0]
@@ -95,6 +110,12 @@ struct PopoverRowGroupingTests {
             .allSatisfy { $0.header == nil && !$0.isGrouped && !$0.suppressPlan })
         for group in groups {
             for row in group.snapshots {
+                if row.vendorId == .claude {
+                    #expect(group.header == "Claude")
+                    #expect(group.headerPlan == row.shortPlanName)
+                    #expect(group.suppressPlan)
+                    continue
+                }
                 #expect(PopoverRowGrouping.subtitle(for: row, suppressPlan: group.suppressPlan,
                     presentation: MetricRowPresentation(snapshot: row, now: now)) == row.shortPlanName)
             }
@@ -180,7 +201,10 @@ struct PopoverRowGroupingTests {
         }
         #expect(groups[0].suppressPlan)
         #expect(groups[0].headerPlan == "Google AI Pro")
-        #expect(groups.dropFirst().allSatisfy { !$0.suppressPlan })
+        #expect(groups[1].headerPlan == "Max")
+        #expect(groups[1].suppressPlan)
+        #expect(groups[2].headerPlan == nil)
+        #expect(!groups[2].suppressPlan)
     }
 
     @Test func customOrderingKeepsOneAntigravityBlockIncludingExhaustedMembers() {

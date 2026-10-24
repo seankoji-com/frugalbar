@@ -2,19 +2,31 @@ import Foundation
 
 /// One notification banner's text.
 public struct AIEventBanner: Sendable, Equatable {
+    /// The bold line macOS draws. Kept to a phrase: a two-sentence incident
+    /// name set as the title filled four bold lines and pushed the banner
+    /// past its body (see `subtitle`).
     public let title: String
+    /// A second, quieter line. Only outage banners use it, for the incident's
+    /// own published name.
+    public let subtitle: String?
     public let body: String
+    /// The vendor page a click should open, when the banner describes a
+    /// single event that carried one. Nil on a consolidated banner: there is
+    /// no one page to promise.
+    public let url: URL?
 
-    public init(title: String, body: String) {
+    public init(title: String, subtitle: String? = nil, body: String, url: URL? = nil) {
         self.title = title
+        self.subtitle = subtitle
         self.body = body
+        self.url = url
     }
 }
 
 /// Decides which newly recorded events become banners, and what they say.
 ///
-/// Pure, so the filtering is testable without `osascript`. Delivery stays in
-/// `AppMain`.
+/// Pure, so the filtering is testable without `osascript`. Delivery lives in
+/// `QuotaBarApp/NotificationDelivery.swift`.
 public enum AIEventNotification {
 
     /// An event older than this is recorded but never announced. A feed's
@@ -30,8 +42,10 @@ public enum AIEventNotification {
     /// `AppMain`, and retired catalog and news-feed rows never notify.
     ///
     /// Titles already say what happened ("Codex reset for everyone",
-    /// "Outage: …", "GPT-6.2 now available in Codex"), so a single event's
-    /// banner is its title, with the vendor named where the title may not.
+    /// "GPT-6.2 now available in Codex"), so those banners keep the title as
+    /// is. A status-page incident name is often a full sentence, too long for
+    /// the bold line; the outage banner takes a short title and gives the
+    /// incident name the subtitle.
     public static func banners(for events: [AIEvent], enabledKinds: Set<AIEventKind>, now: Date) -> [AIEventBanner] {
         let cutoff = now.addingTimeInterval(-maximumAge)
         let eligible = events.filter {
@@ -41,24 +55,56 @@ public enum AIEventNotification {
             let group = eligible.filter { $0.kind == kind }
             guard let first = group.first else { return nil }
             if group.count == 1 {
-                return AIEventBanner(
-                    title: bannerTitle(for: first),
-                    body: first.detail ?? first.source.label)
+                return banner(for: first)
             }
             return AIEventBanner(
                 title: "\(group.count) \(kind.pluralTitle)",
-                body: group.map(\.title).joined(separator: "; "))
+                body: group.map(consolidatedTitle).joined(separator: "; "))
         }
     }
 }
 
 extension AIEventNotification {
-    /// Status-page incident names rarely name the vendor ("Elevated errors
-    /// across all models"), so outage banners lead with it.
-    static func bannerTitle(for event: AIEvent) -> String {
+    /// A single event's banner: the title says what happened, an outage's own
+    /// name goes in the subtitle, and the body keeps the measured detail.
+    static func banner(for event: AIEvent) -> AIEventBanner {
+        switch event.kind {
+        case .outageStarted:
+            return AIEventBanner(
+                title: "\(event.vendorId.displayName) outage",
+                subtitle: incidentName(from: event.title),
+                body: event.detail ?? event.source.label,
+                url: event.url)
+        case .outageResolved:
+            return AIEventBanner(
+                title: "\(event.vendorId.displayName) outage resolved",
+                subtitle: incidentName(from: event.title),
+                body: event.detail ?? event.source.label,
+                url: event.url)
+        default:
+            return AIEventBanner(
+                title: event.title,
+                body: event.detail ?? event.source.label,
+                url: event.url)
+        }
+    }
+
+    /// The incident's own name, without the kind prefix the event title
+    /// carries ("Outage: …", "Resolved: …").
+    static func incidentName(from title: String) -> String {
+        for prefix in ["Outage: ", "Resolved: "] where title.hasPrefix(prefix) {
+            return String(title.dropFirst(prefix.count))
+        }
+        return title
+    }
+
+    /// The line one event contributes to a consolidated banner. An outage's
+    /// kind is already in that banner's title, so repeating "Outage:" on
+    /// every item only lengthens the body.
+    static func consolidatedTitle(for event: AIEvent) -> String {
         switch event.kind {
         case .outageStarted, .outageResolved:
-            "\(event.vendorId.displayName) · \(event.title)"
+            incidentName(from: event.title)
         default:
             event.title
         }

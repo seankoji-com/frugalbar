@@ -31,13 +31,22 @@ public struct HistoryRootView: View {
     @State private var lastReloadKey: ReloadKey?
     /// How far local-activity ingestion has got, read before the records.
     @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
+    /// Retained per-source scan diagnostics, read before the records so a
+    /// malformed or incomplete source is named rather than silently averaged.
+    @State private var activitySources: [ActivitySourceStatus] = []
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
     /// What the timeline says when `segments` is empty: no polls recorded,
     /// or polls that returned no figure.
     @State private var timelineEmpty: (title: String, detail: String)?
     @State private var pace: HistoryPresentation.PaceComparison?
     @State private var attribution: AttributionSummary?
-    @State private var isSampleMode: Bool = CredentialStore.isSampleModeEnabled
+    /// Resolved once, in `init`, from the injected `SampleModeConfiguration`.
+    /// It is deliberately not an eager stored-property initializer: one that
+    /// read `CredentialStore.isSampleModeEnabled` fired even when the caller
+    /// supplied an explicit value, so the controlled evidence route inherited
+    /// whatever the running user had last chosen and generated synthetic quota
+    /// into its fixture store.
+    @State private var isSampleMode: Bool
     @State private var isLoading: Bool = true
     /// Non-nil when the history could not be read at all. Distinct from an empty
     /// history, which is a fact about the user's data rather than about us.
@@ -57,9 +66,82 @@ public struct HistoryRootView: View {
 
     private let liveStore: QuotaHistoryStore
     private let sampleStore: QuotaHistoryStore
+    /// Where the initial sample-mode state came from and where a user's toggle
+    /// goes. Production reads and writes the stored preference; the controlled
+    /// evidence route supplies a fixed value and a writer that does nothing.
+    private let sampleModeConfiguration: SampleModeConfiguration
     private let tabRequest: HistoryTabRequest?
     private let subjectSource: @MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String])
     private let activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)?
+    /// The clock every reload reads. Production leaves it at the real current
+    /// instant; the activity evidence route passes its fixture reference so the
+    /// hosted view queries the window the fixture describes instead of the
+    /// wall clock.
+    private let clock: @Sendable () -> Date
+    /// Reports what a reload resolved, so the evidence route can assert the
+    /// hosted view's own window and attribution rather than recompute them.
+    private let loadObserver: (@MainActor (ReloadedState) -> Void)?
+
+    /// What one `reloadData` pass queried and drew.
+    ///
+    /// `windowStart` and `referenceDate` are the instants that pass actually
+    /// used for its store reads and pace/attribution presentation, so a caller
+    /// cannot mistake a separately computed window for the rendered one.
+    public struct ReloadedState: Sendable, Equatable {
+        public let subjectID: String?
+        public let windowStart: Date?
+        public let referenceDate: Date
+        public let attribution: AttributionSummary?
+        public let failed: Bool
+
+        public init(
+            subjectID: String?,
+            windowStart: Date?,
+            referenceDate: Date,
+            attribution: AttributionSummary?,
+            failed: Bool
+        ) {
+            self.subjectID = subjectID
+            self.windowStart = windowStart
+            self.referenceDate = referenceDate
+            self.attribution = attribution
+            self.failed = failed
+        }
+    }
+
+    /// Where the History window's sample-mode state comes from, and where the
+    /// user's toggle is written.
+    ///
+    /// The default, `.userPreference`, reads and writes the stored preference
+    /// on demand so ordinary app use keeps its existing behaviour. The
+    /// controlled `ActivityEvidenceRenderer` route supplies `.explicit(false)`:
+    /// hosting a view must not consult the running user's preference at all,
+    /// because an enabled preference would otherwise draw sample mode over the
+    /// fixture store and call `SampleDataGenerator` into it.
+    public struct SampleModeConfiguration {
+        /// Resolved exactly once, when the view is created.
+        public let initial: () -> Bool
+        /// Called when the user flips the sample-mode control.
+        public let persist: (Bool) -> Void
+
+        public init(initial: @escaping () -> Bool, persist: @escaping (Bool) -> Void) {
+            self.initial = initial
+            self.persist = persist
+        }
+
+        /// The user's stored preference, read on creation and written on a
+        /// toggle. Never evaluated for a caller that passes its own value.
+        public static var userPreference: SampleModeConfiguration {
+            SampleModeConfiguration(
+                initial: { CredentialStore.isSampleModeEnabled },
+                persist: { CredentialStore.isSampleModeEnabled = $0 })
+        }
+
+        /// A fixed state that neither reads nor writes any preference.
+        public static func explicit(_ value: Bool) -> SampleModeConfiguration {
+            SampleModeConfiguration(initial: { value }, persist: { _ in })
+        }
+    }
 
     /// - Parameters:
     ///   - subjectSource: the providers to offer and the hidden ones to name.
@@ -67,18 +149,32 @@ public struct HistoryRootView: View {
     ///     render never depends on the shared preference file.
     ///   - activityStatus: this process's local-activity ingestion status.
     ///     Without it the breakdown never claims to be complete.
+    ///   - clock: the instant a reload treats as "now". Defaults to the real
+    ///     clock; the evidence route injects its fixture reference.
+    ///   - loadObserver: called once at the end of every reload with the window
+    ///     it used and the attribution it drew.
+    ///   - sampleMode: where the starting sample state comes from. Leave it at
+    ///     `.userPreference` for the app; a controlled render passes
+    ///     `.explicit(false)` so no preference is read or written.
     public init(
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
         initialTab: HistoryTab = .timeline,
+        initialRange: HistoryPresentation.TimeRange = .last24Hours,
         tabRequest: HistoryTabRequest? = nil,
         subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil,
-        activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
+        activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil,
+        clock: (@Sendable () -> Date)? = nil,
+        loadObserver: (@MainActor (ReloadedState) -> Void)? = nil,
+        sampleMode: SampleModeConfiguration = .userPreference
     ) {
         self.liveStore = liveStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.databaseURL())
         self.sampleStore = sampleStore ?? QuotaHistoryStore(databaseURL: QuotaHistoryStore.sampleDatabaseURL())
+        self.sampleModeConfiguration = sampleMode
         self.tabRequest = tabRequest
         self.activityStatus = activityStatus
+        self.clock = clock ?? { Date() }
+        self.loadObserver = loadObserver
         self.subjectSource = subjectSource ?? {
             let prefs = CredentialStore.providerDisplayPreferences
             return (
@@ -88,6 +184,8 @@ public struct HistoryRootView: View {
             )
         }
         _selectedTab = State(initialValue: initialTab)
+        _timeRange = State(initialValue: initialRange)
+        _isSampleMode = State(initialValue: sampleMode.initial())
     }
 
     private var activeStore: QuotaHistoryStore {
@@ -229,7 +327,7 @@ public struct HistoryRootView: View {
                 Button {
                     let next = !isSampleMode
                     isSampleMode = next
-                    CredentialStore.isSampleModeEnabled = next
+                    sampleModeConfiguration.persist(next)
                 } label: {
                     Image(systemName: isSampleMode ? "flask.fill" : "flask")
                         .font(.system(size: 13, weight: .medium))
@@ -300,7 +398,7 @@ public struct HistoryRootView: View {
 
             Button("Exit Sample Mode") {
                 isSampleMode = false
-                CredentialStore.isSampleModeEnabled = false
+                sampleModeConfiguration.persist(false)
             }
             .font(.system(size: 11, weight: .semibold))
             .buttonStyle(.plain)
@@ -520,6 +618,13 @@ public struct HistoryRootView: View {
                         activityNote(symbol: activityProgress == .indexing ? "hourglass" : "exclamationmark.triangle",
                                      text: note)
                     }
+                    ForEach(
+                        HistoryPresentation.activitySourceNotes(
+                            activitySources, vendor: selectedSubject?.vendor ?? .claude),
+                        id: \.self
+                    ) { note in
+                        activityNote(symbol: "doc.text.magnifyingglass", text: note)
+                    }
                     projectBars(attribution)
                     caveatList(attribution.caveats)
                 } else {
@@ -528,7 +633,15 @@ public struct HistoryRootView: View {
                         text: HistoryPresentation.activityEmptyMessage(
                             activityProgress,
                             vendorName: selectedSubject?.vendor.displayName ?? "",
-                            recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0))
+                            recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0,
+                            recordsWithoutMatchingBillingIdentity: attribution?.recordsWithoutMatchingBillingIdentity ?? 0))
+                    ForEach(
+                        HistoryPresentation.activitySourceNotes(
+                            activitySources, vendor: selectedSubject?.vendor ?? .claude),
+                        id: \.self
+                    ) { note in
+                        activityNote(symbol: "doc.text.magnifyingglass", text: note)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -802,6 +915,12 @@ public struct HistoryRootView: View {
         lastReloadKey = key
         defer { isLoading = false }
 
+        // One instant for the whole pass. The range edge, every store query and
+        // the pace/attribution presentation read this value, so a reload cannot
+        // ask for `since` from one instant and `until` from another. Production
+        // resolves the real clock; the evidence route resolves its fixture.
+        let referenceDate = clock()
+
         loadError = nil
         hasOnlyElapsedReadings = false
         timelineEmpty = nil
@@ -823,11 +942,12 @@ public struct HistoryRootView: View {
                 segments = []
                 pace = nil
                 attribution = nil
+                report(subject: nil, windowStart: nil, referenceDate: referenceDate, attribution: nil, failed: true)
                 return
             }
         }
 
-        await reloadOverview()
+        await reloadOverview(now: referenceDate)
         // Until the user picks one, lead with the first provider that has
         // something to show rather than an empty chart.
         if !userChoseSubject, let first = overviewCards.first,
@@ -839,13 +959,15 @@ public struct HistoryRootView: View {
             pace = nil
             attribution = nil
             markers = []
+            report(subject: nil, windowStart: nil, referenceDate: referenceDate,
+                   attribution: nil, failed: loadError != nil)
             return
         }
 
-        await reloadMarkers(for: subject)
+        await reloadMarkers(for: subject, now: referenceDate)
 
-        let since = timeRange.startDate()
-        let now = Date()
+        let since = timeRange.startDate(from: referenceDate)
+        let now = referenceDate
 
         do {
             // Every key the subject owns, and no sibling's: the vendor-wide
@@ -882,9 +1004,9 @@ public struct HistoryRootView: View {
             // The status first: records read before it could be from a pass
             // that finished after it, and would then be vouched for wrongly.
             // The sample fixture is written whole before it is read.
-            activityProgress = isSampleMode
-                ? .complete
-                : TokenUsagePresentation.IngestionProgress(await activityStatus?())
+            let status = isSampleMode ? nil : await activityStatus?()
+            activityProgress = isSampleMode ? .complete : TokenUsagePresentation.IngestionProgress(status)
+            activitySources = status?.sources ?? []
             let allActivities = try await activeStore.fetchActivities(since: since, until: now)
             let activities = allActivities.filter { sources.contains($0.source) }
 
@@ -895,15 +1017,26 @@ public struct HistoryRootView: View {
                 endpoints = (nil, nil)
             }
 
-            self.attribution = AttributionEngine.computeAttribution(
+            let summary = AttributionEngine.computeAttribution(
                 windowStart: since ?? (readings.first?.measuredAt ?? now),
                 windowEnd: now,
                 barLabel: barLabel,
                 startConsumptionFraction: endpoints.start,
                 endConsumptionFraction: endpoints.end,
                 activities: activities,
-                configuredVendors: [subject.vendor]
+                configuredVendors: [subject.vendor],
+                // The quota subject is a local workspace name and credential;
+                // neither publishes the account/workspace id a message
+                // records. With no correlation available, an empty target
+                // leaves every OpenCode record explicitly unattributed rather
+                // than assigning another workspace's usage to this one.
+                billingScope: subject.vendor == .opencode
+                    ? .matchingPublishedIdentity(AttributionBillingTarget())
+                    : .any
             )
+            self.attribution = summary
+            report(subject: subject, windowStart: since, referenceDate: referenceDate,
+                   attribution: summary, failed: false)
         } catch {
             // A failed read must never render as "you have no history".
             NSLog("frugalbar: history read failed: %@", error.localizedDescription)
@@ -911,7 +1044,26 @@ public struct HistoryRootView: View {
             segments = []
             pace = nil
             attribution = nil
+            report(subject: subject, windowStart: since, referenceDate: referenceDate,
+                   attribution: nil, failed: true)
         }
+    }
+
+    /// One report per reload, including the early exits: a caller waiting for a
+    /// settled state must not be left waiting on a pass that drew nothing.
+    private func report(
+        subject: HistoryOverviewPresentation.Subject?,
+        windowStart: Date?,
+        referenceDate: Date,
+        attribution: AttributionSummary?,
+        failed: Bool
+    ) {
+        loadObserver?(ReloadedState(
+            subjectID: subject?.id,
+            windowStart: windowStart,
+            referenceDate: referenceDate,
+            attribution: attribution,
+            failed: failed))
     }
 
     /// Re-reads the strip on every reload — a new range, source, subject or
@@ -919,8 +1071,7 @@ public struct HistoryRootView: View {
     /// stays a few thousand rows. It is never served from a cache: a cached
     /// strip kept showing readings older than the chart beneath it, and kept
     /// a failed read failed.
-    private func reloadOverview() async {
-        let now = Date()
+    private func reloadOverview(now: Date) async {
         let store = activeStore
         let retention = await store.retentionInterval
         let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention)
@@ -946,13 +1097,12 @@ public struct HistoryRootView: View {
     }
 
     /// Reset markers for the timeline, from the live store only.
-    private func reloadMarkers(for subject: HistoryOverviewPresentation.Subject) async {
+    private func reloadMarkers(for subject: HistoryOverviewPresentation.Subject, now: Date) async {
         markerLoadFailed = false
         guard !isSampleMode else {
             markers = []
             return
         }
-        let now = Date()
         do {
             let events = try await liveStore.fetchEvents(
                 vendor: subject.vendor,

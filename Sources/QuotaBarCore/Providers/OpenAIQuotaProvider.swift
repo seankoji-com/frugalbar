@@ -12,6 +12,9 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     private let accessToken: String?
     private let accountID: String?
     private let cliProxyConfig: CLIProxyConfig?
+    /// The details endpoint for banked resets. The usage payload only carries
+    /// their count; this one carries each credit's expiry.
+    static let resetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
     /// Resolves the *direct* Codex session token (~/.codex/auth.json), as
     /// opposed to whatever the proxy holds.
     private let directCredential: @Sendable () async -> String?
@@ -135,6 +138,27 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
+    /// The `/rate-limit-reset-credits` response. Only the fields the row uses
+    /// are decoded; a reshaped response costs the expiry, never the quota.
+    struct ResetCreditDetails: Decodable, Sendable, Equatable {
+        struct Credit: Decodable, Sendable, Equatable {
+            let id: String?
+            let status: String?
+            let expiresAt: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case id, status
+                case expiresAt = "expires_at"
+            }
+        }
+
+        let credits: [Credit]
+
+        private enum CodingKeys: String, CodingKey {
+            case credits
+        }
+    }
+
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         try await fetchSnapshot(now: Date())
     }
@@ -183,12 +207,21 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         let (response, account) = try await CLIProxyClient.fetchCodexUsage(config: config, now: now)
         let host = config.url.host ?? "proxy"
         let accountPlan = account.idToken?.chatgptPlanType ?? account.idToken?.planType
-        return makeSnapshot(
+        var snapshot = makeSnapshot(
             response: response,
             accountPlan: accountPlan,
             cliSource: "CLI Proxy (\(host))",
             now: now
         )
+        // The proxy's usage call carries only the count. The credit expiries
+        // come from a second endpoint; read it with this Mac's own token when
+        // one exists, because the management API does not expose that path.
+        if (snapshot.resetCreditsAvailable ?? 0) > 0,
+           let direct = await directCredential() {
+            snapshot.resetCreditExpiries = await fetchResetCreditExpiries(
+                token: direct, accountID: account.idToken?.chatgptAccountId)
+        }
+        return snapshot
     }
 
     private func fetchSnapshotDirect(token: String, now: Date) async throws -> QuotaSnapshot {
@@ -211,17 +244,41 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
             return unavailable(.badResponse)
         }
+        let expiries = (response.rate_limit_reset_credits?.available_count ?? 0) > 0
+            ? await fetchResetCreditExpiries(token: token, accountID: accountID)
+            : []
         return makeSnapshot(
             response: response,
             accountPlan: nil,
+            resetCreditExpiries: expiries,
             cliSource: "Codex ChatGPT login",
             now: now
         )
     }
 
+    /// The usage payload carries only the *count* of banked reset credits;
+    /// their expiries live on a separate endpoint. Read it only when the count
+    /// says there is something to describe, and treat any failure as "no
+    /// expiry published" rather than costing the quota reading.
+    private func fetchResetCreditExpiries(
+        token: String, accountID: String?
+    ) async -> [Date?] {
+        var headers = ["Accept": "application/json"]
+        if let accountID { headers["chatgpt-account-id"] = accountID }
+        guard let result = try? await QuotaHTTP.get(
+            url: Self.resetCreditsURL, headers: headers, auth: .bearer(token)),
+            (200...299).contains(result.1.statusCode),
+            let details = try? JSONDecoder().decode(ResetCreditDetails.self, from: result.0)
+        else { return [] }
+        return details.credits
+            .filter { ($0.status ?? "available") == "available" }
+            .map { $0.expiresAt.flatMap(CLIProxyClient.parseResetDate) }
+    }
+
     func makeSnapshot(
         response: Response,
         accountPlan: String?,
+        resetCreditExpiries: [Date?] = [],
         cliSource: String,
         now: Date = Date()
     ) -> QuotaSnapshot {
@@ -258,6 +315,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         )
         snapshot.resetCreditsAvailable = resetCredits
         snapshot.resetCreditsApplicable = applicableCredits
+        snapshot.resetCreditExpiries = resetCreditExpiries
         snapshot.apiCredits = Self.apiCredits(from: response.credits)
         return snapshot
     }

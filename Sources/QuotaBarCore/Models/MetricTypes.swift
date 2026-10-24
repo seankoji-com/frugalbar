@@ -1,5 +1,12 @@
 import Foundation
 
+/// The row shows at most this many reset-credit tickets before adding an
+/// overflow count. Providers use the same limit when expanding per-credit
+/// metadata so every drawn ticket can retain its own published expiry.
+public enum ResetCreditTicketLimit {
+    public static let maxCount = 5
+}
+
 // MARK: - Vendor identifiers
 
 public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
@@ -401,7 +408,11 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// Length of the calendar month ending at `reset`. Months are 28–31 days,
     /// so a 30-day constant would drift the marker by up to a day.
     public static func monthWindowLength(endingAt reset: Date) -> TimeInterval? {
-        guard let start = Calendar.current.date(byAdding: .month, value: -1, to: reset) else { return nil }
+        monthWindowLength(endingAt: reset, calendar: .current)
+    }
+
+    public static func monthWindowLength(endingAt reset: Date, calendar: Calendar) -> TimeInterval? {
+        guard let start = calendar.date(byAdding: .month, value: -1, to: reset) else { return nil }
         let length = reset.timeIntervalSince(start)
         return length > 0 ? length : nil
     }
@@ -536,6 +547,11 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// "none available" and "the vendor has no such thing" are different
     /// facts. Defaulted here so no initializer or call site has to change.
     public var resetCreditsAvailable: Int? = nil
+    /// When each banked reset credit expires, aligned with the credits the
+    /// vendor counts. `nil` entries mean that credit published no expiry;
+    /// the list itself being empty means none was published at all. Never
+    /// inferred from the reset window or another credit.
+    public var resetCreditExpiries: [Date?] = []
     /// How many of those banked credits the vendor says can be redeemed
     /// against the current window state (OpenAI's
     /// `rate_limit_reset_credits.applicable_available_count`). It flips with

@@ -49,24 +49,44 @@ public struct ActivityWatermark: Sendable, Equatable {
 public struct ActivityIngestResult: Sendable {
     public let records: [ActivityRecord]
     public let watermarks: [ActivityWatermark]
-    /// Inputs that exist but could not be read this pass: a transcript the
-    /// process may not open, a database that will not open or whose table is
-    /// gone. They get no watermark, so the next pass tries them again, and the
-    /// engine reports the pass as incomplete. Returning success without them
-    /// would let their tokens go missing from every total unannounced.
+    /// What this pass could and could not represent. `skippedInputs` counts
+    /// inputs that exist but could not be read: a transcript the process may
+    /// not open, a database that will not open or whose table is gone. They get
+    /// no watermark, so the next pass tries them again, and the engine reports
+    /// the pass as incomplete. Returning success without them would let their
+    /// tokens go missing from every total unannounced.
     ///
     /// An input that is simply absent (no tool installed) is not skipped: there
     /// is nothing to read.
-    public let skipped: Int
+    public let diagnostics: ActivityPassDiagnostics
+    /// Per-input diagnostics for the inputs this pass read or could not read.
+    /// Unchanged inputs are not included; their previously persisted rows are
+    /// retained by the engine.
+    public let inputDiagnostics: [ActivityInputDiagnostics]
+    /// Every input that exists, including unchanged ones. The engine uses this
+    /// to drop diagnostics for inputs that have been removed without touching
+    /// the retained rows of inputs it did not read.
+    public let inputsConsidered: [String]
+
+    /// Inputs that exist but could not be read this pass. Kept as a computed
+    /// alias so existing adapters and callers cannot silently drop the count.
+    public var skipped: Int { diagnostics.skippedInputs }
 
     public init(
         records: [ActivityRecord] = [],
         watermarks: [ActivityWatermark] = [],
-        skipped: Int = 0
+        skipped: Int = 0,
+        diagnostics: ActivityPassDiagnostics? = nil,
+        inputDiagnostics: [ActivityInputDiagnostics] = [],
+        inputsConsidered: [String] = []
     ) {
         self.records = records
         self.watermarks = watermarks
-        self.skipped = skipped
+        self.inputDiagnostics = inputDiagnostics
+        self.inputsConsidered = inputsConsidered
+        self.diagnostics = diagnostics ?? ActivityPassDiagnostics(
+            skippedInputs: skipped,
+            recordsObserved: records.count)
     }
 
     public static let empty = ActivityIngestResult()

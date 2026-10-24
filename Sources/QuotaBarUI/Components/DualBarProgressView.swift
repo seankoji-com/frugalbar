@@ -52,6 +52,12 @@ public struct DualBarProgressView: View {
     /// blocked, neutral with no reading. Shared with the popover grid's
     /// percentage text so a figure and the bar above it never disagree.
     nonisolated static func stateColor(for metrics: DualBarMetrics) -> Color {
+        stateColor(for: metrics, presentedPaceMarker: metrics.paceMarker)
+    }
+
+    /// The promo credit retains its tick when spent. Its caller supplies the
+    /// same marker it draws, rather than borrowing quota-window tick policy.
+    nonisolated static func stateColor(for metrics: DualBarMetrics, presentedPaceMarker: Double?) -> Color {
         let consumed = metrics.primaryFraction.map { max(0, min(1, $0)) }
         if metrics.isBlocked {
             // The vendor told us this window cannot be used: its own colour
@@ -66,9 +72,10 @@ public struct DualBarProgressView: View {
             // No reading and not vendor-flagged blocked: neutral, not a
             // fabricated "healthy" green.
             return Theme.outline
-        } else if let consumed, consumed >= 0.999 {
+        } else if let consumed, consumed >= QuotaSnapshot.exhaustionThreshold {
             return Theme.errorBold
-        } else if metrics.isMeaningfullyAheadOfPace {
+        } else if let consumed, let pace = presentedPaceMarker, pace > 0, pace < 1,
+                  consumed - pace > DualBarMetrics.aheadOfPaceMargin {
             // The model's "meaningfully ahead" margin, not any difference at
             // all: a window barely open would otherwise be amber at 6% used
             // against 2% elapsed.

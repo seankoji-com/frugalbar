@@ -30,6 +30,10 @@ public enum AttributionCaveat: String, Sendable, Equatable {
     case unrecordedExternalActivityPossible = "unrecorded_activity"
     /// Some records carried no total, so the shares are over the subset that did.
     case partialTokenBreakdowns = "partial_token_breakdowns"
+    /// Some records describe local tool use but do not publish the billing
+    /// account/workspace they billed. They are not attributed to a
+    /// subscription's allowance on the strength of the tool identity alone.
+    case unverifiedBillingIdentity = "unverified_billing_identity"
 
     /// One line the UI can show verbatim. Kept next to the cases so a new caveat
     /// cannot be added without deciding how it reads.
@@ -43,7 +47,67 @@ public enum AttributionCaveat: String, Sendable, Equatable {
             "Usage from other machines, the web UI, or tools not listed here is not observed and may account for some of the allowance."
         case .partialTokenBreakdowns:
             "Some sessions reported an incomplete token breakdown; shares cover only sessions reporting a total."
+        case .unverifiedBillingIdentity:
+            "Some local sessions do not record the billing account or workspace being reported on, so they are not attributed to this subscription."
         }
+    }
+}
+
+/// How strictly a breakdown matches local tool activity to a billing subject.
+public enum AttributionBillingScope: Sendable, Equatable {
+    /// Include every record the tool wrote. Used where the subject is the tool
+    /// itself, not one of its subscriptions.
+    case any
+    /// Include only records whose published account/workspace identity matches
+    /// the subject being reported on. A tool identity (for example `opencode`)
+    /// and a published provider id (for example `litellm`) still do not say
+    /// which subscription allowance was consumed. An uncorrelated target
+    /// (neither account nor workspace) matches nothing, so records stay
+    /// explicitly unattributed rather than being assigned to a workspace that
+    /// merely happens to share the tool.
+    case matchingPublishedIdentity(AttributionBillingTarget)
+}
+
+/// The billing identity the caller is reporting on.
+///
+/// Each field is published by the source, never inferred. A target with only a
+/// provider is not enough to identify a workspace: two workspaces can bill
+/// through the same provider, so `isCorrelated` requires an account or
+/// workspace.
+///
+/// The account and workspace are taken as the *published* values the caller
+/// holds and fingerprinted once here, because that is the form the ledger
+/// stores. The raw values are not retained by the target; comparing them
+/// directly against a record would compare a published id against a
+/// fingerprint, so this is the only place the conversion may happen.
+public struct AttributionBillingTarget: Sendable, Equatable {
+    public let billingProvider: String?
+    public let accountHash: IdentityFingerprint?
+    public let workspaceHash: IdentityFingerprint?
+
+    public init(
+        billingProvider: String? = nil,
+        accountId: String? = nil,
+        workspaceId: String? = nil
+    ) {
+        self.billingProvider = billingProvider
+        self.accountHash = IdentityFingerprint.published(accountId, in: .account)
+        self.workspaceHash = IdentityFingerprint.published(workspaceId, in: .workspace)
+    }
+
+    /// A target that names an account or workspace. Without one there is no
+    /// correlation, and a record must not be assigned on provider identity
+    /// alone.
+    public var isCorrelated: Bool { accountHash != nil || workspaceHash != nil }
+
+    /// True when every identity the target publishes is also published by the
+    /// record, and the target names an account or workspace.
+    public func matches(_ record: ActivityRecord) -> Bool {
+        guard isCorrelated else { return false }
+        if let billingProvider, record.publishedProvider != billingProvider { return false }
+        if let accountHash, record.accountHash != accountHash { return false }
+        if let workspaceHash, record.workspaceHash != workspaceHash { return false }
+        return true
     }
 }
 
@@ -59,6 +123,12 @@ public struct AttributionSummary: Sendable, Equatable {
     /// Records in the window that carried no token total, and so are absent from
     /// the shares above.
     public let recordsWithoutTokenTotals: Int
+    /// Records excluded from the shares because their published identity does
+    /// not establish the billing account/workspace being reported on.
+    public let recordsWithoutMatchingBillingIdentity: Int
+    /// Billing providers the included records published, deduplicated. Empty
+    /// means none was published; it does not mean "the default provider".
+    public let publishedBillingProviders: [String]
     public let projectAttributions: [ProjectAttribution]
     public let unmonitoredVendors: [VendorIdentifier]
     public let hasConcurrentSessions: Bool
@@ -73,6 +143,8 @@ public struct AttributionSummary: Sendable, Equatable {
         consumedFractionDelta: Double?,
         totalObservedTokens: Int,
         recordsWithoutTokenTotals: Int = 0,
+        recordsWithoutMatchingBillingIdentity: Int = 0,
+        publishedBillingProviders: [String] = [],
         projectAttributions: [ProjectAttribution],
         unmonitoredVendors: [VendorIdentifier],
         hasConcurrentSessions: Bool,
@@ -86,6 +158,8 @@ public struct AttributionSummary: Sendable, Equatable {
         self.consumedFractionDelta = consumedFractionDelta
         self.totalObservedTokens = totalObservedTokens
         self.recordsWithoutTokenTotals = recordsWithoutTokenTotals
+        self.recordsWithoutMatchingBillingIdentity = recordsWithoutMatchingBillingIdentity
+        self.publishedBillingProviders = publishedBillingProviders
         self.projectAttributions = projectAttributions
         self.unmonitoredVendors = unmonitoredVendors
         self.hasConcurrentSessions = hasConcurrentSessions
@@ -173,11 +247,30 @@ public enum AttributionEngine {
         startConsumptionFraction: Double?,
         endConsumptionFraction: Double?,
         activities: [ActivityRecord],
-        configuredVendors: [VendorIdentifier] = []
+        configuredVendors: [VendorIdentifier] = [],
+        billingScope: AttributionBillingScope = .any
     ) -> AttributionSummary {
         // 1. Filter activities within window
         let inWindow = activities.filter { record in
             record.observedAt >= windowStart && record.observedAt <= windowEnd
+        }
+
+        // 1b. A local tool identity does not establish a billing identity. When
+        // the caller is reporting on a particular subscription, only records
+        // whose published identity matches that subject are counted; the rest
+        // are carried as an explicit exclusion instead of being silently
+        // assigned to it.
+        let scoped: [ActivityRecord]
+        var recordsWithoutMatchingBillingIdentity = 0
+        switch billingScope {
+        case .any:
+            scoped = inWindow
+        case .matchingPublishedIdentity(let target):
+            scoped = inWindow.filter { record in
+                if target.matches(record) { return true }
+                recordsWithoutMatchingBillingIdentity += 1
+                return false
+            }
         }
 
         // 2. Group by project. Sessions are counted from every record, but only
@@ -186,10 +279,14 @@ public enum AttributionEngine {
         var projectTokensMap: [String: Int] = [:]
         var projectSessionsMap: [String: Set<String>] = [:]
         var recordsWithoutTokenTotals = 0
+        var billingProviders = Set<String>()
 
-        for record in inWindow {
+        for record in scoped {
             let path = record.projectPath ?? "Unspecified Directory"
             projectSessionsMap[path, default: []].insert(record.sessionId)
+            if let provider = record.publishedProvider, !provider.isEmpty {
+                billingProviders.insert(provider)
+            }
             if let total = record.totalTokens {
                 projectTokensMap[path, default: 0] += total
             } else {
@@ -228,8 +325,8 @@ public enum AttributionEngine {
 
         // 5. Concurrency check: distinct sessions overlapping within 60s
         var hasConcurrency = false
-        if inWindow.count > 1 {
-            let sortedByTime = inWindow.sorted { $0.observedAt < $1.observedAt }
+        if scoped.count > 1 {
+            let sortedByTime = scoped.sorted { $0.observedAt < $1.observedAt }
             for i in 0..<(sortedByTime.count - 1) {
                 let current = sortedByTime[i]
                 let next = sortedByTime[i + 1]
@@ -253,6 +350,9 @@ public enum AttributionEngine {
         if recordsWithoutTokenTotals > 0 {
             caveats.append(.partialTokenBreakdowns)
         }
+        if recordsWithoutMatchingBillingIdentity > 0 {
+            caveats.append(.unverifiedBillingIdentity)
+        }
         caveats.append(.unrecordedExternalActivityPossible)
 
         return AttributionSummary(
@@ -264,6 +364,8 @@ public enum AttributionEngine {
             consumedFractionDelta: consumedFractionDelta,
             totalObservedTokens: totalObservedTokens,
             recordsWithoutTokenTotals: recordsWithoutTokenTotals,
+            recordsWithoutMatchingBillingIdentity: recordsWithoutMatchingBillingIdentity,
+            publishedBillingProviders: billingProviders.sorted(),
             projectAttributions: attributions,
             unmonitoredVendors: activeUnmonitored,
             hasConcurrentSessions: hasConcurrency,

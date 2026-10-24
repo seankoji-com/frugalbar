@@ -375,13 +375,32 @@ Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
 
-A row's banked reset credits draw as one `ticket` glyph per credit
-(`MetricRowPresentation.ResetCredits`), capped at `maxTickets` with an exact
-`+n` for the remainder, on a line of their own under the row. The glyph strip
-carries no accessibility label — the row is one accessibility element
-(`children: .ignore`), so a label on a child is never announced; the count is
-spoken by `combinedAccessibilityLabel` instead. A vendor that published no
-figure and a vendor that published zero both draw nothing.
+A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
+(`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
+`maxTickets` with an exact `+n` for the remainder, on a line of their own under
+the row. The glyph strip carries no accessibility label — the row is one
+accessibility element (`children: .ignore`), so a label on a child is never
+announced; the count is spoken by `combinedAccessibilityLabel` instead. Each
+glyph carries a `.help` tooltip with that credit's own published expiry; an
+expiry the vendor did not publish says "Expiry not published" rather than
+borrowing the reset window's date. Glints are staggered and disabled under
+Reduce Motion. A vendor that published no figure and a vendor that published
+zero both draw nothing.
+
+**Credit counts are shown rounded to the nearest whole credit.** `CreditText.format`
+rounds for display; the exact `Decimal` stays on the metric, in the history
+table and in the sync export. A figure like "60,085.422977 credits" is noise at
+a glance and implies a precision the vendor's own console does not show. The
+rounding is display-only: no balance, series or quota figure is altered.
+
+**The Claude promo credit is drawn in the window anatomy, not as a second
+kind of row.** It has a published limit, so `MonthlyPromoCreditView` draws it
+with the same name/reset/bar/percentage/countdown alignment as a window cell:
+"Usage credits", its own published reset, the bar, the percentage and the day
+countdown. It is still not quota: no snapshot fraction, urgency, sorting or
+advice reads it. Its reset text and countdown both come from the promo's own
+published period end (`monthlyPeriodEnd`); never substitute the subscription
+renewal or a hardcoded day count.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure
@@ -394,6 +413,32 @@ its code). Provider balance subtitles, the row's value chip
 (`MetricRowPresentation.currency`), the inspector's currency block and the
 API-credit card all go through it. Do not add a second money formatting rule
 anywhere: `.formatted(.currency(code:))` is a bug in this codebase.
+
+## Notifications
+
+**A banner is drawn by the application that posts it.** When the executable
+runs from a `.app`, `NotificationDelivery` posts through
+`UNUserNotificationCenter`: macOS shows FrugalBar's name, and a click opens the
+event's page. An unbundled binary has no notification application — the
+embedded `CFBundleIdentifier` is not enough — so it keeps the `osascript`
+`display notification` path, where macOS attributes the banner to Script
+Editor and the click opens it. Do not "simplify" the bundled path back to one
+AppleScript call for both; that is exactly the Script Editor banner this
+replaced. Delivery branches on `LocalNotificationIdentity.isAppBundle`, which
+asks whether `Bundle.main` is a `.app` — not whether a bundle identifier
+exists, which a bare binary also has.
+
+**The title is a phrase; the detail goes in the subtitle or body.** A
+status-page incident name set as the title filled four bold lines on macOS and
+buried the body. Outage banners are `"Claude outage"` with the vendor's own
+incident name as the subtitle. A single-event banner carries the event's link
+in `AIEventBanner.url`; a consolidated banner carries none, because there is no
+one page to promise.
+
+**A denied permission must not look like an enabled toggle.** macOS asks once,
+at launch, when any banner kind is on. `Preferences → Notifications` reads the
+real `UNAuthorizationStatus` and says when FrugalBar is turned off in System
+Settings, rather than leaving every toggle on with nothing arriving.
 
 ## Regression tests must be shown to fail
 
