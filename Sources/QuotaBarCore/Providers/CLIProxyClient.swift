@@ -230,9 +230,8 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
 
     /// Anthropic's promo / cloud-session credit — the `iguana_necktie` block,
     /// another feature codename. Its amounts are **already dollars**
-    /// (`*_dollars`), so they are never scaled; `resets_at` here is the
-    /// credit's **expiry**, not a recurring reset, which is why it is surfaced
-    /// as an expiry and never as a countdown to a refill.
+    /// (`*_dollars`), so they are never scaled. `resets_at` is the published
+    /// period end for the monthly subscription promo credit.
     public struct PromoCredit: Decodable, Sendable, Equatable {
         public let limitDollars: Decimal?
         public let usedDollars: Decimal?
