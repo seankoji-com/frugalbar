@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import QuotaBarCore
 
@@ -160,6 +161,9 @@ public struct SettingsView: View {
     @AppStorage(CredentialStore.eventTrackingEnabledDefaultsKey, store: CredentialStore.preferences)
     private var eventTracking = true
     @State private var eventNotificationKinds: Set<AIEventKind> = CredentialStore.eventNotificationKinds
+    /// Read from the system when the Notifications pane appears; nil when this
+    /// process has no notification identity to ask about.
+    @State private var notificationPermission: LocalNotificationPermission?
     @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
     /// One row per configured OpenCode Go workspace. Its own key is never read
     /// into view state; `workspaceKeys` holds a transient, initially-empty
@@ -908,19 +912,22 @@ public struct SettingsView: View {
 
     private var notificationsPane: some View {
         Form {
+            if notificationPermission == .denied {
+                Section {
+                    Label("""
+                          Notifications are turned off for FrugalBar in System \
+                          Settings, so none of the banners below will appear.
+                          """, systemImage: "bell.slash")
+                    Button("Open Notification Settings", action: openNotificationSettings)
+                }
+            }
+
             Section {
                 Toggle("Notify when a quota recovers", isOn: $notificationsEnabled)
                 Text("""
                      When on, FrugalBar posts a local notification once a \
                      provider goes from critical/exhausted back to having \
                      headroom. Off by default.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Text("""
-                     Delivered via a `display notification` AppleScript call, \
-                     so macOS attributes the banner to whatever process runs \
-                     it, not to "FrugalBar" specifically.
                      """)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -962,8 +969,28 @@ public struct SettingsView: View {
             } header: {
                 Text("AI events")
             }
+
+            if !LocalNotificationIdentity.isAppBundle {
+                Section {
+                    Text("""
+                         This install runs as the bare `frugalbar` executable. \
+                         macOS has no app identity to attribute its banners to, \
+                         so they are posted through AppleScript and appear as \
+                         Script Editor.
+                         """)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .formStyle(.grouped)
+        .task { notificationPermission = await LocalNotificationIdentity.authorizationStatus() }
+    }
+
+    private func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - Display

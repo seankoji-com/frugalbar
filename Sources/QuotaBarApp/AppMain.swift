@@ -135,6 +135,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // renaming the binary reads as a fresh install.
         CredentialStore.migrateLegacyPreferences()
 
+        // The banner identity and (when a banner kind is on) the one-time
+        // macOS permission prompt. No-op outside an app bundle.
+        NotificationDelivery.prepare()
+
         // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
         // the fetch path (`resolved()` reads without writing) so a poll never
         // writes preferences or posts the refresh such a write triggers.
@@ -170,6 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingController.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hostingController
         self.popover = popover
+
+        // A clicked banner with no link of its own opens this popover; see
+        // `NotificationPresenter.didReceive`.
+        NotificationPresenter.activateHandler = { [weak self] in
+            self?.presentPopoverFromNotification()
+        }
 
 
 
@@ -259,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let banners = AIEventNotification.banners(
             for: fresh, enabledKinds: CredentialStore.eventNotificationKinds, now: now)
         for banner in banners {
-            deliverNotification(title: banner.title, body: banner.body)
+            NotificationDelivery.post(banner)
         }
     }
 
@@ -274,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let names = events.map(\.displayName).joined(separator: ", ")
             body = "\(names) have headroom again."
         }
-        deliverNotification(title: title, body: body)
+        NotificationDelivery.post(AIEventBanner(title: title, body: body))
     }
 
     /// One banner per poll, however many windows reset in it.
@@ -289,57 +299,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let names = events.map { "\($0.displayName) \($0.barLabel)" }.joined(separator: ", ")
             body = "New windows started: \(names)."
         }
-        deliverNotification(title: title, body: body)
+        NotificationDelivery.post(AIEventBanner(title: title, body: body))
     }
 
-    /// Posts one `display notification` via `osascript`.
-    ///
-    /// A poll can surface more than one vendor recovering at once; one
-    /// `Process` per event would fire a burst of separate system banners for
-    /// what is, from the user's point of view, a single poll result, so
-    /// callers consolidate multiple events into one notification.
-    ///
-    /// Keep the existing bare-executable notification delivery. The embedded
-    /// WebKit identity does not register an installed notification application.
-    private func deliverNotification(title: String, body: String) {
-        let script = "display notification \"\(Self.escapeForAppleScript(body))\" with title \"\(Self.escapeForAppleScript(title))\""
-
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
-        task.standardOutput = FileHandle.nullDevice
-        let errorPipe = Pipe()
-        task.standardError = errorPipe
-        task.standardInput = FileHandle.nullDevice
-        // Best-effort: neither a launch failure nor a runtime/compile failure
-        // of the AppleScript itself may crash or block the poll — but they
-        // must not vanish silently either. The app has no logging infra to
-        // plug into, so this uses the one channel that needs none: NSLog,
-        // which lands in the unified log (`log show --predicate 'process ==
-        // "frugalbar"'`) without requiring a bundle identity, matching the
-        // same unbundled-executable constraint that rules out
-        // UNUserNotificationCenter above. Non-zero exit status is captured
-        // via `terminationHandler` (off the caller's thread, so this never
-        // blocks the poll) and its stderr logged.
-        task.terminationHandler = { process in
-            guard process.terminationStatus != 0 else { return }
-            let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let stderrText = String(data: stderrData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            NSLog("frugalbar: osascript exited with status \(process.terminationStatus) delivering notification: \(stderrText)")
-        }
-        do {
-            try task.run()
-        } catch {
-            NSLog("frugalbar: failed to launch osascript for notification: \(error)")
-        }
-    }
-
-    /// Escapes backslashes and double quotes so an interpolated vendor name
-    /// cannot break out of the AppleScript string literal it is placed in.
-    private static func escapeForAppleScript(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-         .replacingOccurrences(of: "\"", with: "\\\"")
+    /// A banner's click lands here when it has no link of its own. FrugalBar
+    /// owns no window, so activating the app alone would show nothing.
+    private func presentPopoverFromNotification() {
+        NSApp.activate(ignoringOtherApps: true)
+        guard let button = statusItem?.button, let popover, !popover.isShown else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        Task { await store.load() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
