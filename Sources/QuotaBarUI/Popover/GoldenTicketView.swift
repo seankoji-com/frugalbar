@@ -4,6 +4,10 @@ enum GoldenTicketGlintState {
     static func motionAdjusted(isGlinting: Bool, reduceMotion: Bool) -> Bool {
         reduceMotion ? false : isGlinting
     }
+
+    static func shouldContinueAnimation(isCancelled: Bool, reduceMotion: Bool) -> Bool {
+        !isCancelled && !reduceMotion
+    }
 }
 
 /// One banked reset credit, drawn as a golden ticket.
@@ -47,7 +51,9 @@ struct GoldenTicketView: View {
                 // Stagger the first glint, then leave several seconds of calm
                 // between them. `.task` cancels when the row scrolls away.
                 try? await Task.sleep(for: .seconds(2.2 + Double(index) * 0.7))
-                while !Task.isCancelled {
+                while GoldenTicketGlintState.shouldContinueAnimation(
+                    isCancelled: Task.isCancelled, reduceMotion: reduceMotion
+                ) {
                     glint = true
                     try? await Task.sleep(for: .seconds(0.42))
                     glint = false

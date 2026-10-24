@@ -50,14 +50,20 @@ struct ResetCreditTicketsTests {
         #expect(credits.expiries == [expiry, nil, nil, nil, nil])
     }
 
-    @Test("enabling Reduce Motion clears an active glint after task cancellation")
+    @Test("task cancellation and Reduce Motion stop an active glint")
     func reduceMotionToggleClearsGlint() {
         let active = GoldenTicketGlintState.motionAdjusted(isGlinting: true, reduceMotion: false)
         #expect(active)
+        #expect(!GoldenTicketGlintState.shouldContinueAnimation(
+            isCancelled: true, reduceMotion: false
+        ))
         let afterCancellation = GoldenTicketGlintState.motionAdjusted(
             isGlinting: active, reduceMotion: true
         )
         #expect(!afterCancellation)
+        #expect(!GoldenTicketGlintState.shouldContinueAnimation(
+            isCancelled: false, reduceMotion: true
+        ))
         #expect(!GoldenTicketGlintState.motionAdjusted(
             isGlinting: afterCancellation, reduceMotion: false
         ))
