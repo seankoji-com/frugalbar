@@ -24,11 +24,19 @@ enum NotificationDelivery {
         let center = UNUserNotificationCenter.current()
         center.delegate = NotificationPresenter.shared
         guard anyBannerEnabled else { return }
-        center.requestAuthorization(options: [.alert]) { granted, error in
-            if let error {
-                NSLog("frugalbar: notification authorization failed: \(error)")
-            } else if !granted {
+        center.getNotificationSettings { settings in
+            // Already refused (or turned off in System Settings): macOS will
+            // not prompt again, and asking would only log a misleading error.
+            guard settings.authorizationStatus != .denied else {
                 NSLog("frugalbar: notifications are turned off for FrugalBar in System Settings")
+                return
+            }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
+                if let error {
+                    NSLog("frugalbar: notification authorization failed: \(error)")
+                } else if !granted {
+                    NSLog("frugalbar: notifications are turned off for FrugalBar in System Settings")
+                }
             }
         }
     }
@@ -45,22 +53,12 @@ enum NotificationDelivery {
         // types from being captured across the boundary.
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
             if let error {
-                // Not a refusal — a refusal arrives as `granted == false`.
-                // The notification API is unusable here, so keep the banner
-                // path alive rather than dropping the event.
                 NSLog("frugalbar: notification request failed: \(error)")
-                Task { @MainActor in postViaAppleScript(banner) }
+                fallBackUnlessDenied(banner)
                 return
             }
             guard granted else {
-                // Respect a refusal. But a system that never presented the
-                // request (status still .notDetermined) has no permission to
-                // refuse, so keep the banner alive through AppleScript rather
-                // than going permanently dark.
-                UNUserNotificationCenter.current().getNotificationSettings { settings in
-                    guard settings.authorizationStatus != .denied else { return }
-                    Task { @MainActor in postViaAppleScript(banner) }
-                }
+                fallBackUnlessDenied(banner)
                 return
             }
 
@@ -80,6 +78,16 @@ enum NotificationDelivery {
                     NSLog("frugalbar: failed to deliver notification: \(error)")
                 }
             }
+        }
+    }
+
+    /// The AppleScript path is the bare binary's delivery, not a way around a
+    /// refusal. A system that cannot authorize this app (still
+    /// `.notDetermined`) keeps it; an explicit `.denied` does not.
+    nonisolated private static func fallBackUnlessDenied(_ banner: AIEventBanner) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus != .denied else { return }
+            Task { @MainActor in postViaAppleScript(banner) }
         }
     }
 
