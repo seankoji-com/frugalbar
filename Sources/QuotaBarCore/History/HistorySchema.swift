@@ -3,6 +3,13 @@ import Foundation
 public enum HistorySchema {
     public static let readingTable = "reading"
     public static let activityTable = "activity"
+    /// Per-request ledger rows written since the accounting change. Kept apart
+    /// from `activity` so legacy rows can never be rewritten in place.
+    public static let activityRequestTable = "activity_request"
+    /// The read-only union the app queries: every ledger row, plus legacy
+    /// `activity` rows that no ledger row has superseded.
+    public static let activityUnifiedView = "activity_unified"
+    public static let activitySourceStatusTable = "activity_source_status"
     public static let ingestWatermarkTable = "ingest_watermark"
     public static let eventTable = "event"
     public static let catalogModelTable = "catalog_model"
@@ -54,6 +61,90 @@ public enum HistorySchema {
 
     CREATE INDEX IF NOT EXISTS activity_time ON activity(observed_at);
     CREATE INDEX IF NOT EXISTS activity_project ON activity(project_path);
+
+    -- The ledger written since the accounting change. New adapter rows go
+    -- here, never into `activity`, so existing rows survive unchanged and the
+    -- old table can always be read as history. See `activity_unified`.
+    CREATE TABLE IF NOT EXISTS activity_request (
+      source        TEXT    NOT NULL,    -- tool/source identity, not billing identity
+      record_id     TEXT    NOT NULL,    -- stable source record id (response_id, message id)
+      session_id    TEXT    NOT NULL,
+      project_path  TEXT,
+      git_branch    TEXT,
+      model         TEXT,
+      observed_at   INTEGER NOT NULL,    -- epoch seconds, at the source's own recorded time
+      input_tokens  INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      reasoning_tokens  INTEGER,         -- a subset of output; never summed
+      total_tokens  INTEGER,             -- NULL = unknown, never zero
+      total_kind    TEXT    NOT NULL,    -- published | derived | partial | unknown
+      semantics     TEXT    NOT NULL,    -- additive | cacheIncludedInInput
+      granularity   TEXT    NOT NULL,    -- request | session
+      billing_provider TEXT,             -- only when the source published one
+      account_id    TEXT,                -- only when the source published one
+      workspace_id  TEXT,                -- only when the source published one
+      PRIMARY KEY (source, record_id)
+    ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS activity_request_time ON activity_request(observed_at);
+    CREATE INDEX IF NOT EXISTS activity_request_session ON activity_request(source, session_id);
+
+    -- What each source last managed to read, and what it could not represent.
+    -- Persisted so an unchanged-file skip cannot erase yesterday's diagnostics.
+    CREATE TABLE IF NOT EXISTS activity_source_status (
+      source        TEXT    NOT NULL,    -- adapter source identifier
+      last_scan_at  INTEGER,             -- epoch seconds, NULL = never scanned here
+      last_successful_scan_at INTEGER,   -- every input found was read
+      read_failures INTEGER NOT NULL,
+      malformed_records INTEGER NOT NULL,
+      inconsistent_records INTEGER NOT NULL,
+      incomplete_records INTEGER NOT NULL,
+      records_observed INTEGER NOT NULL,
+      last_pass_complete INTEGER NOT NULL,
+      PRIMARY KEY (source)
+    ) WITHOUT ROWID;
+
+    -- One read surface for activity. Legacy `activity` rows are used only
+    -- when no ledger row supersedes them:
+    --   * the same (source, record_id) a Claude/OpenCode re-read has written;
+    --   * any Codex request row for the same session, which replaces that
+    --     session's cumulative aggregate so the two can never be added.
+    -- This is the transactional coexistence rule: request rows are committed
+    -- first, and a session aggregate disappears from totals in the same read.
+    CREATE VIEW IF NOT EXISTS activity_unified AS
+    SELECT source, record_id, session_id, project_path, git_branch, model,
+           observed_at, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens,
+           NULL AS reasoning_tokens,
+           total_tokens,
+           'legacy' AS total_kind,
+           CASE WHEN source = 'codex' THEN 'cacheIncludedInInput' ELSE 'additive' END AS semantics,
+           CASE WHEN source = 'codex' THEN 'session' ELSE 'legacy' END AS granularity,
+           NULL AS billing_provider,
+           NULL AS account_id,
+           NULL AS workspace_id
+    FROM activity
+    WHERE NOT EXISTS (
+      SELECT 1 FROM activity_request r
+      WHERE r.source = activity.source
+        AND (r.record_id = activity.record_id
+             OR (activity.source = 'codex' AND r.session_id = activity.session_id))
+    )
+    UNION ALL
+    SELECT r.source, r.record_id, r.session_id, r.project_path, r.git_branch, r.model,
+           r.observed_at, r.input_tokens, r.output_tokens, r.cache_read_tokens,
+           r.cache_write_tokens, r.reasoning_tokens, r.total_tokens, r.total_kind,
+           r.semantics, r.granularity, r.billing_provider, r.account_id, r.workspace_id
+    FROM activity_request r
+    WHERE r.granularity <> 'session'
+       OR NOT EXISTS (
+         SELECT 1 FROM activity_request newer
+         WHERE newer.source = r.source
+           AND newer.session_id = r.session_id
+           AND newer.granularity = 'request'
+       );
 
     CREATE TABLE IF NOT EXISTS ingest_watermark (
       source        TEXT    NOT NULL,
@@ -168,6 +259,9 @@ public enum HistorySchema {
     /// Drops every table. Used only to reset a development database whose schema
     /// predates `version`.
     public static let dropTablesSQL = """
+    DROP VIEW IF EXISTS \(activityUnifiedView);
+    DROP TABLE IF EXISTS \(activityRequestTable);
+    DROP TABLE IF EXISTS \(activitySourceStatusTable);
     DROP TABLE IF EXISTS \(readingTable);
     DROP TABLE IF EXISTS \(activityTable);
     DROP TABLE IF EXISTS \(ingestWatermarkTable);

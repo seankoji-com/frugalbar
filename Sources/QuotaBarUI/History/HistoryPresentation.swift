@@ -398,12 +398,47 @@ extension HistoryPresentation {
         }
     }
 
+    /// Per-source scan facts for the breakdown: what could not be read, what
+    /// could not be parsed, and when the source last read everything it found.
+    /// Read from the retained status, so an unchanged-file skip does not erase
+    /// a malformed-record count.
+    public static func activitySourceNotes(
+        _ sources: [ActivitySourceStatus],
+        vendor: VendorIdentifier
+    ) -> [String] {
+        let wanted = AttributionEngine.localSourceIdentifiers(for: vendor)
+        return sources
+            .filter { wanted.contains($0.source) }
+            .sorted { $0.source < $1.source }
+            .flatMap { status -> [String] in
+                let name = TokenUsagePresentation.sourceDisplayName(status.source)
+                var notes: [String] = []
+                if status.readFailures > 0 {
+                    notes.append("\(name): \(status.readFailures) input\(status.readFailures == 1 ? "" : "s") could not be read on the last scan.")
+                }
+                if status.malformedRecords > 0 {
+                    notes.append("\(name): \(status.malformedRecords) malformed record\(status.malformedRecords == 1 ? "" : "s") could not be counted.")
+                }
+                if status.inconsistentRecords > 0 {
+                    notes.append("\(name): \(status.inconsistentRecords) record\(status.inconsistentRecords == 1 ? "" : "s") disagreed with the source's cumulative counter and \(status.inconsistentRecords == 1 ? "was" : "were") not reconciled.")
+                }
+                if status.incompleteRecords > 0 {
+                    notes.append("\(name): \(status.incompleteRecords) record\(status.incompleteRecords == 1 ? "" : "s") had an incomplete token breakdown.")
+                }
+                if let at = status.lastSuccessfulScanAt {
+                    notes.append("\(name): last successful scan \(TokenUsagePresentation.scanTimestamp(at)).")
+                }
+                return notes
+            }
+    }
+
     /// Said instead of an empty breakdown. Only a finished, clean pass may
     /// say there was no activity.
     public static func activityEmptyMessage(
         _ progress: TokenUsagePresentation.IngestionProgress,
         vendorName: String,
-        recordsWithoutTokenTotals: Int
+        recordsWithoutTokenTotals: Int,
+        recordsWithoutBillingIdentity: Int = 0
     ) -> String {
         switch progress {
         case .indexing:
@@ -411,6 +446,10 @@ extension HistoryPresentation {
         case .incomplete:
             return "Local activity could not be read in full, so an empty breakdown here is not evidence of no activity."
         case .complete:
+            guard recordsWithoutBillingIdentity == 0 else {
+                let singular = recordsWithoutBillingIdentity == 1
+                return "\(recordsWithoutBillingIdentity) local session record\(singular ? "" : "s") in this range did not publish a billing account or workspace, so \(singular ? "it is" : "they are") not attributed to this subscription."
+            }
             guard recordsWithoutTokenTotals == 0 else {
                 return "\(recordsWithoutTokenTotals) session record\(recordsWithoutTokenTotals == 1 ? "" : "s") in this range carried no token total, so nothing can be shared out."
             }

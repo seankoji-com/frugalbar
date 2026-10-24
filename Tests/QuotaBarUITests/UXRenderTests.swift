@@ -817,3 +817,114 @@ struct UXRenderTests {
         return lines
     }
 }
+
+// MARK: - Issue #128 accounting evidence
+
+extension UXRenderTests {
+    /// Controlled, sanitized ledger: a real Codex rollout shape with a model
+    /// change and a resumed day, a Claude row, and an OpenCode row whose only
+    /// published billing identity is `litellm` (never a Go workspace). Renders
+    /// the production Tokens chart and History attribution card.
+    @Test func renderActivityAccountingEvidence() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fixtureRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("frugalbar-128-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let now = Date()
+        let calendar = Calendar.current
+        let dayOne = calendar.startOfDay(for: now.addingTimeInterval(-26 * 3600)).addingTimeInterval(10 * 3600)
+        let dayTwo = dayOne.addingTimeInterval(26 * 3600)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let codexDir = fixtureRoot.appendingPathComponent("codex/sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        let rollout = """
+        {"type":"session_meta","timestamp":"\(iso.string(from: dayOne.addingTimeInterval(-60)))","payload":{"session_id":"fixture-session","cwd":"/controlled/codex-alpha","model_provider":"openai","creator_account_id":"fixture-account"}}
+        {"type":"turn_context","timestamp":"\(iso.string(from: dayOne.addingTimeInterval(-30)))","payload":{"model":"gpt-6.1-sol","cwd":"/controlled/codex-alpha"}}
+        {"type":"token_usage_record","timestamp":"\(iso.string(from: dayOne))","payload":{"session_id":"fixture-session","thread_id":"fixture-session","response_id":"fixture-day-one","turn_id":"fixture-turn-one","usage":{"input_tokens":700000,"cached_input_tokens":650000,"cache_write_input_tokens":0,"output_tokens":300000,"reasoning_output_tokens":0,"total_tokens":1000000},"thread_token_usage":{"input_tokens":700000,"output_tokens":300000,"total_tokens":1000000}}}
+        {"type":"turn_context","timestamp":"\(iso.string(from: dayTwo.addingTimeInterval(-30)))","payload":{"model":"gpt-5.6-luna","cwd":"/controlled/codex-beta"}}
+        {"type":"token_usage_record","timestamp":"\(iso.string(from: dayTwo))","payload":{"session_id":"fixture-session","thread_id":"fixture-session","response_id":"fixture-day-two","turn_id":"fixture-turn-two","usage":{"input_tokens":70000,"cached_input_tokens":65000,"cache_write_input_tokens":0,"output_tokens":30000,"reasoning_output_tokens":0,"total_tokens":100000},"thread_token_usage":{"input_tokens":770000,"output_tokens":330000,"total_tokens":1100000}}}
+        """
+        try rollout.write(to: codexDir.appendingPathComponent("rollout-fixture.jsonl"), atomically: true, encoding: .utf8)
+
+        let store = QuotaHistoryStore(
+            databaseURL: fixtureRoot.appendingPathComponent("history.sqlite3"), isTestHost: true)
+        let engine = ActivityIngestionEngine(store: store, adapters: [CodexAdapter(baseURL: codexDir)])
+        _ = try await engine.ingestAll()
+
+        // Claude: 10 input + 20 output + 5 cache read + 15 cache write = 50.
+        // OpenCode: published total 127, billed through litellm, no workspace.
+        try await store.recordActivities([
+            ActivityRecord(
+                source: "claude_code", recordId: "fixture-claude", sessionId: "fixture-claude-session",
+                projectPath: "/controlled/claude", gitBranch: "main", model: "claude-sonnet",
+                observedAt: now.addingTimeInterval(-3600),
+                inputTokens: 10, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 15),
+            ActivityRecord(
+                source: "opencode", recordId: "fixture-opencode", sessionId: "fixture-opencode-session",
+                projectPath: "/controlled/opencode", model: "gpt-5.6-luna",
+                observedAt: now.addingTimeInterval(-1800),
+                inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 2,
+                totalTokens: 127, billingProvider: "litellm"),
+        ])
+
+        let statuses = [
+            ActivitySourceStatus(source: "codex", lastScanAt: now, lastSuccessfulScanAt: now,
+                                 malformedRecords: 1, incompleteRecords: 0, recordsObserved: 2, lastPassComplete: true),
+            ActivitySourceStatus(source: "claude_code", lastScanAt: now, lastSuccessfulScanAt: now,
+                                 recordsObserved: 1, lastPassComplete: true),
+            ActivitySourceStatus(source: "opencode", lastScanAt: now, lastSuccessfulScanAt: now,
+                                 recordsObserved: 1, lastPassComplete: true),
+        ]
+        let status = ActivityIngestionEngine.Status(
+            hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false, sources: statuses)
+
+        let window = TokenUsagePresentation.window(range: .last7Days, now: now, calendar: calendar)
+        let usage = try await store.fetchTokenUsage(
+            since: window.since, until: now,
+            bucketSeconds: TokenUsagePresentation.bucketSeconds(for: .last7Days), anchor: window.anchor)
+        let chart = TokenUsagePresentation.chart(
+            usage: usage, filters: WidgetFilters(range: .last7Days, layout: .tokens), hidden: [],
+            configured: [.claude, .openai, .opencode], ingestion: .complete, now: now,
+            calendar: calendar, sources: statuses)
+        #expect(chart.totalTokens == 1_100_177)
+        #expect(chart.layers.map(\.vendorId) == [.claude, .openai, .opencode])
+        #expect(chart.hasSessionTotals == false)
+        #expect(chart.sourceNotes.contains { $0.contains("Codex: 1 malformed record") })
+        try await save(
+            VStack(spacing: 8) {
+                Text("Controlled ledger · Codex request rows across two days and mixed models; OpenCode billed through litellm, not a Go workspace")
+                    .font(.caption).foregroundStyle(Theme.outline)
+                TokenUsageChartView(chart: chart, range: .last7Days)
+            }.padding(14).frame(width: 420, height: 300).background(Theme.surface),
+            name: "activity-tokens-ledger", directory: directory)
+
+        let openAI = HistoryOverviewPresentation.Subject(
+            id: VendorIdentifier.openai.rawValue, vendor: .openai, name: VendorIdentifier.openai.displayName)
+        let openCode = HistoryOverviewPresentation.Subject(
+            id: "opencode.fixture-workspace", vendor: .opencode, name: "OpenCode Go · Fixture workspace")
+        let statusLoader: @Sendable () async -> ActivityIngestionEngine.Status? = { status }
+
+        try await save(
+            HistoryRootView(
+                liveStore: store, sampleStore: store, initialRange: .last7Days,
+                subjectSource: { ([openAI], []) }, activityStatus: statusLoader)
+                .frame(width: 880, height: 820),
+            name: "activity-attribution-openai", directory: directory)
+
+        // The OpenCode card must not turn tool activity into this workspace's
+        // usage: the only published billing identity is `litellm`, not a
+        // workspace.
+        try await save(
+            HistoryRootView(
+                liveStore: store, sampleStore: store, initialRange: .last7Days,
+                subjectSource: { ([openCode], []) }, activityStatus: statusLoader)
+                .frame(width: 880, height: 820),
+            name: "activity-attribution-opencode", directory: directory)
+    }
+}

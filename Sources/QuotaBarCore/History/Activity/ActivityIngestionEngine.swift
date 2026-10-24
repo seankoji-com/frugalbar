@@ -63,6 +63,7 @@ public actor ActivityIngestionEngine {
                 skipped += pass.skipped
             } catch {
                 if firstError == nil { firstError = error }
+                try? await recordFailedScan(for: adapter)
             }
         }
 
@@ -74,9 +75,26 @@ public actor ActivityIngestionEngine {
         return totalRecorded
     }
 
+    private func priorStatus(for source: String) async -> ActivitySourceStatus? {
+        guard let statuses = try? await store.activitySourceStatuses() else { return nil }
+        return statuses.first { $0.source == source }
+    }
+
     private func ingest(_ adapter: ActivityAdapter) async throws -> (recorded: Int, skipped: Int) {
         let existing = try await store.watermarks(for: adapter.sourceIdentifier)
-        let result = try await adapter.collectActivities(watermarks: existing)
+        // Codex rebuilt from session aggregates: an install upgrading from the
+        // pre-ledger build has watermarks saying every unchanged rollout was
+        // read, but those rows are session totals. Re-read the still-present
+        // files once, so request history exists; files that are gone keep their
+        // legacy row honestly.
+        let needsLedgerRebuild: Bool
+        if adapter.sourceIdentifier == "codex" {
+            needsLedgerRebuild = !(try await store.hasActivityRequests(source: adapter.sourceIdentifier))
+        } else {
+            needsLedgerRebuild = false
+        }
+        let result = try await adapter.collectActivities(
+            watermarks: needsLedgerRebuild ? [:] : existing)
 
         // Records before watermarks, deliberately: the store de-duplicates on
         // `(source, record_id)`, so re-reading a region is harmless, whereas
@@ -95,7 +113,45 @@ public actor ActivityIngestionEngine {
             )
         }
 
-        return (result.records.count, result.skipped)
+        let diagnostics = result.diagnostics
+        let previous = await priorStatus(for: adapter.sourceIdentifier)
+        let now = Date()
+        let readEverything = diagnostics.skippedInputs == 0
+        let scannedSomething = diagnostics.scannedInputs > 0
+        // An unchanged-file skip must not erase what a previous pass found in
+        // that file. Only a pass that actually read input replaces the counts.
+        let status = ActivitySourceStatus(
+            source: adapter.sourceIdentifier,
+            lastScanAt: now,
+            lastSuccessfulScanAt: readEverything ? now : previous?.lastSuccessfulScanAt,
+            readFailures: diagnostics.skippedInputs,
+            malformedRecords: scannedSomething ? diagnostics.malformedRecords : (previous?.malformedRecords ?? 0),
+            inconsistentRecords: scannedSomething ? diagnostics.inconsistentRecords : (previous?.inconsistentRecords ?? 0),
+            incompleteRecords: scannedSomething ? diagnostics.incompleteRecords : (previous?.incompleteRecords ?? 0),
+            recordsObserved: scannedSomething ? diagnostics.recordsObserved : (previous?.recordsObserved ?? 0),
+            lastPassComplete: readEverything
+        )
+        try await store.recordActivitySourceStatus(status)
+
+        return (result.records.count, diagnostics.skippedInputs)
+    }
+
+    /// A source that threw produced no `ActivityIngestResult`. Its last
+    /// successful scan and what it previously could not represent are retained;
+    /// only the failure itself is new.
+    private func recordFailedScan(for adapter: ActivityAdapter) async throws {
+        let previous = await priorStatus(for: adapter.sourceIdentifier)
+        try await store.recordActivitySourceStatus(ActivitySourceStatus(
+            source: adapter.sourceIdentifier,
+            lastScanAt: Date(),
+            lastSuccessfulScanAt: previous?.lastSuccessfulScanAt,
+            readFailures: max(1, previous?.readFailures ?? 0),
+            malformedRecords: previous?.malformedRecords ?? 0,
+            inconsistentRecords: previous?.inconsistentRecords ?? 0,
+            incompleteRecords: previous?.incompleteRecords ?? 0,
+            recordsObserved: previous?.recordsObserved ?? 0,
+            lastPassComplete: false
+        ))
     }
 
     /// What the activity table can be trusted to contain right now.
@@ -113,18 +169,34 @@ public actor ActivityIngestionEngine {
         public let lastPassIncomplete: Bool
         /// A pass is running now.
         public let isRunning: Bool
+        /// The retained per-source account of the last scan. Persisted, so a
+        /// relaunch still says when each source was last read and what it could
+        /// not represent, even before this run's first pass.
+        public let sources: [ActivitySourceStatus]
 
-        public init(hasCompletedCleanPass: Bool, lastPassIncomplete: Bool, isRunning: Bool) {
+        public init(
+            hasCompletedCleanPass: Bool,
+            lastPassIncomplete: Bool,
+            isRunning: Bool,
+            sources: [ActivitySourceStatus] = []
+        ) {
             self.hasCompletedCleanPass = hasCompletedCleanPass
             self.lastPassIncomplete = lastPassIncomplete
             self.isRunning = isRunning
+            self.sources = sources
+        }
+
+        public func status(for source: String) -> ActivitySourceStatus? {
+            sources.first { $0.source == source }
         }
     }
 
-    public func status() -> Status {
-        Status(
+    public func status() async -> Status {
+        let sources = (try? await store.activitySourceStatuses()) ?? []
+        return Status(
             hasCompletedCleanPass: completedCleanPass,
             lastPassIncomplete: lastPassIncomplete,
-            isRunning: isIngesting)
+            isRunning: isIngesting,
+            sources: sources)
     }
 }

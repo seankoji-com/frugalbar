@@ -48,6 +48,14 @@ struct ActivityIngestionStatusTests {
 
     private typealias Status = ActivityIngestionEngine.Status
 
+    /// Lifecycle facts compared field by field: per-source diagnostics are a
+    /// separate, persisted part of the status and vary with each stub.
+    private func expect(_ status: Status, clean: Bool, incomplete: Bool, running: Bool) {
+        #expect(status.hasCompletedCleanPass == clean, "hasCompletedCleanPass")
+        #expect(status.lastPassIncomplete == incomplete, "lastPassIncomplete")
+        #expect(status.isRunning == running, "isRunning")
+    }
+
     private func record(_ source: String, _ id: String) -> ActivityRecord {
         ActivityRecord(
             source: source, recordId: id, sessionId: "s",
@@ -70,7 +78,7 @@ struct ActivityIngestionStatusTests {
         let (dir, url) = try makeDatabase()
         defer { try? FileManager.default.removeItem(at: dir) }
         let engine = ActivityIngestionEngine(store: store(url), adapters: [StubAdapter(sourceIdentifier: "a")])
-        #expect(await engine.status() == Status(hasCompletedCleanPass: false, lastPassIncomplete: false, isRunning: false))
+        expect(await engine.status(), clean: false, incomplete: false, running: false)
     }
 
     @Test("a pass in which every adapter reads everything completes it")
@@ -81,7 +89,7 @@ struct ActivityIngestionStatusTests {
             store: store(url),
             adapters: [StubAdapter(sourceIdentifier: "a", records: [record("a", "1")]), StubAdapter(sourceIdentifier: "b")])
         _ = try await engine.ingestAll()
-        #expect(await engine.status() == Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false))
+        expect(await engine.status(), clean: true, incomplete: false, running: false)
     }
 
     /// The defect this guards: after a restart the database still holds the
@@ -99,7 +107,7 @@ struct ActivityIngestionStatusTests {
 
         let relaunched = ActivityIngestionEngine(store: store(url), adapters: [StubAdapter(sourceIdentifier: "a")])
         #expect(try await store(url).fetchActivities().count == 1)    // the data is there...
-        #expect(await relaunched.status() == Status(hasCompletedCleanPass: false, lastPassIncomplete: false, isRunning: false))
+        expect(await relaunched.status(), clean: false, incomplete: false, running: false)
         _ = try await relaunched.ingestAll()
         #expect(await relaunched.status().hasCompletedCleanPass)      // ...and this run has caught up
     }
@@ -115,7 +123,7 @@ struct ActivityIngestionStatusTests {
             store: s,
             adapters: [StubAdapter(sourceIdentifier: "a", records: [record("a", "1")]), StubAdapter(sourceIdentifier: "b", fails: true)])
         await #expect(throws: Boom.self) { try await engine.ingestAll() }
-        #expect(await engine.status() == Status(hasCompletedCleanPass: false, lastPassIncomplete: true, isRunning: false))
+        expect(await engine.status(), clean: false, incomplete: true, running: false)
         #expect(try await s.fetchActivities().count == 1)
     }
 
@@ -131,7 +139,7 @@ struct ActivityIngestionStatusTests {
             store: s,
             adapters: [StubAdapter(sourceIdentifier: "a", records: [record("a", "1")], skipped: 2)])
         #expect(try await engine.ingestAll() == 1)       // no throw, records kept
-        #expect(await engine.status() == Status(hasCompletedCleanPass: false, lastPassIncomplete: true, isRunning: false))
+        expect(await engine.status(), clean: false, incomplete: true, running: false)
         #expect(try await s.fetchActivities().count == 1)
     }
 
@@ -152,16 +160,16 @@ struct ActivityIngestionStatusTests {
         let engine = ActivityIngestionEngine(store: store(url), adapters: [Flaky(control: control)])
 
         _ = try await engine.ingestAll()
-        #expect(await engine.status() == Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false))
+        expect(await engine.status(), clean: true, incomplete: false, running: false)
 
         await control.set(true)
         _ = try? await engine.ingestAll()
         // This run did complete a pass once; what matters now is that the latest could not.
-        #expect(await engine.status() == Status(hasCompletedCleanPass: true, lastPassIncomplete: true, isRunning: false))
+        expect(await engine.status(), clean: true, incomplete: true, running: false)
 
         await control.set(false)
         _ = try await engine.ingestAll()
-        #expect(await engine.status() == Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false))
+        expect(await engine.status(), clean: true, incomplete: false, running: false)
     }
 
     @Test("a pass in flight is reported as running, and a second call during it changes nothing")
@@ -175,11 +183,11 @@ struct ActivityIngestionStatusTests {
             if await engine.status().isRunning { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(await engine.status() == Status(hasCompletedCleanPass: false, lastPassIncomplete: false, isRunning: true))
+        expect(await engine.status(), clean: false, incomplete: false, running: true)
         #expect(try await engine.ingestAll() == 0)        // no-op while one is in flight
         #expect(await engine.status().hasCompletedCleanPass == false)
         await gate.release()
         _ = try await pass.value
-        #expect(await engine.status() == Status(hasCompletedCleanPass: true, lastPassIncomplete: false, isRunning: false))
+        expect(await engine.status(), clean: true, incomplete: false, running: false)
     }
 }

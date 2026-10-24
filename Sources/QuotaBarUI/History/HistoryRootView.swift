@@ -31,6 +31,9 @@ public struct HistoryRootView: View {
     @State private var lastReloadKey: ReloadKey?
     /// How far local-activity ingestion has got, read before the records.
     @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
+    /// Retained per-source scan diagnostics, read before the records so a
+    /// malformed or incomplete source is named rather than silently averaged.
+    @State private var activitySources: [ActivitySourceStatus] = []
     @State private var segments: [HistoryPresentation.TimelineSegment] = []
     /// What the timeline says when `segments` is empty: no polls recorded,
     /// or polls that returned no figure.
@@ -71,6 +74,7 @@ public struct HistoryRootView: View {
         liveStore: QuotaHistoryStore? = nil,
         sampleStore: QuotaHistoryStore? = nil,
         initialTab: HistoryTab = .timeline,
+        initialRange: HistoryPresentation.TimeRange = .last24Hours,
         tabRequest: HistoryTabRequest? = nil,
         subjectSource: (@MainActor () -> (subjects: [HistoryOverviewPresentation.Subject], hidden: [String]))? = nil,
         activityStatus: (@Sendable () async -> ActivityIngestionEngine.Status?)? = nil
@@ -88,6 +92,7 @@ public struct HistoryRootView: View {
             )
         }
         _selectedTab = State(initialValue: initialTab)
+        _timeRange = State(initialValue: initialRange)
     }
 
     private var activeStore: QuotaHistoryStore {
@@ -520,6 +525,13 @@ public struct HistoryRootView: View {
                         activityNote(symbol: activityProgress == .indexing ? "hourglass" : "exclamationmark.triangle",
                                      text: note)
                     }
+                    ForEach(
+                        HistoryPresentation.activitySourceNotes(
+                            activitySources, vendor: selectedSubject?.vendor ?? .claude),
+                        id: \.self
+                    ) { note in
+                        activityNote(symbol: "doc.text.magnifyingglass", text: note)
+                    }
                     projectBars(attribution)
                     caveatList(attribution.caveats)
                 } else {
@@ -528,7 +540,15 @@ public struct HistoryRootView: View {
                         text: HistoryPresentation.activityEmptyMessage(
                             activityProgress,
                             vendorName: selectedSubject?.vendor.displayName ?? "",
-                            recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0))
+                            recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0,
+                            recordsWithoutBillingIdentity: attribution?.recordsWithoutBillingIdentity ?? 0))
+                    ForEach(
+                        HistoryPresentation.activitySourceNotes(
+                            activitySources, vendor: selectedSubject?.vendor ?? .claude),
+                        id: \.self
+                    ) { note in
+                        activityNote(symbol: "doc.text.magnifyingglass", text: note)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -882,9 +902,9 @@ public struct HistoryRootView: View {
             // The status first: records read before it could be from a pass
             // that finished after it, and would then be vouched for wrongly.
             // The sample fixture is written whole before it is read.
-            activityProgress = isSampleMode
-                ? .complete
-                : TokenUsagePresentation.IngestionProgress(await activityStatus?())
+            let status = isSampleMode ? nil : await activityStatus?()
+            activityProgress = isSampleMode ? .complete : TokenUsagePresentation.IngestionProgress(status)
+            activitySources = status?.sources ?? []
             let allActivities = try await activeStore.fetchActivities(since: since, until: now)
             let activities = allActivities.filter { sources.contains($0.source) }
 
@@ -902,7 +922,10 @@ public struct HistoryRootView: View {
                 startConsumptionFraction: endpoints.start,
                 endConsumptionFraction: endpoints.end,
                 activities: activities,
-                configuredVendors: [subject.vendor]
+                configuredVendors: [subject.vendor],
+                billingScope: subject.vendor == .opencode
+                    ? .requirePublishedAccountOrWorkspace
+                    : .any
             )
         } catch {
             // A failed read must never render as "you have no history".
