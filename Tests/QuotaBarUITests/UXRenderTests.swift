@@ -821,6 +821,19 @@ struct UXRenderTests {
 // MARK: - Issue #128 accounting evidence
 
 extension UXRenderTests {
+    /// The app-executable seam. It is activated by the app entry point, which
+    /// is outside this repair's source scope; this test keeps the seam itself
+    /// honest and renders its controlled views through the test host.
+    @Test func renderActivityEvidenceSeam() async throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        let directory = root.appendingPathComponent("release-seam", isDirectory: true)
+        let report = try await ActivityEvidenceRenderer.render(to: directory)
+        #expect(report.chartTotalTokens == 1_100_177)
+        #expect(report.openAIProjects == ["/controlled/codex-alpha", "/controlled/codex-beta"])
+        #expect(report.openCodeProjects.isEmpty)
+        #expect(report.openCodeUnattributedMessage.contains("not attributed"))
+    }
+
     /// Controlled, sanitized ledger: a real Codex rollout shape with a model
     /// change and a resumed day, a Claude row, and an OpenCode row whose only
     /// published billing identity is `litellm` (never a Go workspace). Renders

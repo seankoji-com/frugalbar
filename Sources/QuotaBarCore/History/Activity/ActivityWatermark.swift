@@ -59,6 +59,14 @@ public struct ActivityIngestResult: Sendable {
     /// An input that is simply absent (no tool installed) is not skipped: there
     /// is nothing to read.
     public let diagnostics: ActivityPassDiagnostics
+    /// Per-input diagnostics for the inputs this pass read or could not read.
+    /// Unchanged inputs are not included; their previously persisted rows are
+    /// retained by the engine.
+    public let inputDiagnostics: [ActivityInputDiagnostics]
+    /// Every input that exists, including unchanged ones. The engine uses this
+    /// to drop diagnostics for inputs that have been removed without touching
+    /// the retained rows of inputs it did not read.
+    public let inputsConsidered: [String]
 
     /// Inputs that exist but could not be read this pass. Kept as a computed
     /// alias so existing adapters and callers cannot silently drop the count.
@@ -68,10 +76,14 @@ public struct ActivityIngestResult: Sendable {
         records: [ActivityRecord] = [],
         watermarks: [ActivityWatermark] = [],
         skipped: Int = 0,
-        diagnostics: ActivityPassDiagnostics? = nil
+        diagnostics: ActivityPassDiagnostics? = nil,
+        inputDiagnostics: [ActivityInputDiagnostics] = [],
+        inputsConsidered: [String] = []
     ) {
         self.records = records
         self.watermarks = watermarks
+        self.inputDiagnostics = inputDiagnostics
+        self.inputsConsidered = inputsConsidered
         self.diagnostics = diagnostics ?? ActivityPassDiagnostics(
             skippedInputs: skipped,
             recordsObserved: records.count)

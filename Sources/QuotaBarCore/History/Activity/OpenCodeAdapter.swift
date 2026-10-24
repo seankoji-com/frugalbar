@@ -1,5 +1,4 @@
 import Foundation
-import CoreFoundation
 #if canImport(SQLite3)
 import SQLite3
 #endif
@@ -32,6 +31,7 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         }
 
         let path = databaseURL.path
+        let consideredInputs = [path]
         let resourceValues = try? databaseURL.resourceValues(forKeys: [.contentModificationDateKey])
         let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
 
@@ -42,6 +42,7 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
         if let prior = watermarks[path], prior.cursor <= mtime * 1000 {
             cursor = prior.cursor
         }
+        let coverage: ActivityInputCoverage = cursor > 0 ? .appendedRegion : .wholeInput
 
         var db: OpaquePointer?
         let openStatus = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil)
@@ -49,7 +50,11 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
             if let db { sqlite3_close(db) }
             // The file is there and will not open (permissions, corruption).
             // That is a source that could not be read, not an idle one.
-            return ActivityIngestResult(skipped: 1)
+            return ActivityIngestResult(
+                skipped: 1,
+                inputDiagnostics: [ActivityInputDiagnostics(
+                    filePath: path, readFailure: true)],
+                inputsConsidered: consideredInputs)
         }
         defer { sqlite3_close(db) }
 
@@ -103,7 +108,15 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                         skippedInputs: 1,
                         malformedRecords: malformed,
                         incompleteRecords: incomplete,
-                        recordsObserved: records.count))
+                        recordsObserved: records.count),
+                    inputDiagnostics: [ActivityInputDiagnostics(
+                        filePath: path,
+                        malformedRecords: malformed,
+                        incompleteRecords: incomplete,
+                        recordsObserved: records.count,
+                        readFailure: true,
+                        coverage: coverage)],
+                    inputsConsidered: consideredInputs)
             }
 
             guard let idC = sqlite3_column_text(stmt, 0),
@@ -206,7 +219,14 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
                 skippedInputs: 0,
                 malformedRecords: malformed,
                 incompleteRecords: incomplete,
-                recordsObserved: records.count))
+                recordsObserved: records.count),
+            inputDiagnostics: [ActivityInputDiagnostics(
+                filePath: path,
+                malformedRecords: malformed,
+                incompleteRecords: incomplete,
+                recordsObserved: records.count,
+                coverage: coverage)],
+            inputsConsidered: consideredInputs)
         #else
         return .empty
         #endif
@@ -214,16 +234,10 @@ public struct OpenCodeAdapter: ActivityAdapter, Sendable {
 
     private func nonNegative(_ value: Any?, malformed: inout Int) -> Int? {
         guard let value, !(value is NSNull) else { return nil }
-        guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+        guard let exact = TokenCountParsing.nonNegative(value) else {
             malformed += 1
             return nil
         }
-        let double = number.doubleValue
-        guard double.isFinite, double == double.rounded(), double >= 0, double <= Double(Int.max) else {
-            malformed += 1
-            return nil
-        }
-        return Int(double)
+        return exact
     }
 }

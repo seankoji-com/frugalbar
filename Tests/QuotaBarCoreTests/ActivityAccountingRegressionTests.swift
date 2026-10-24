@@ -247,13 +247,14 @@ extension ActivityAccountingRegressionTests {
         #expect(after.first { $0.recordId == "response_resp_m" }?.observedAt == date("2026-10-19T23:59:30Z"))
     }
 
-    @Test("legacy session aggregates are excluded once request rows exist, and other history survives")
+    @Test("a partial request set keeps the legacy total until its tokens are fully reconstructed")
     func legacyCoexistenceAndPreservedHistory() async throws {
         let dir = try makeTempDir("legacy-migration")
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = makeStore(dir)
         // Ensure every table exists before raw seeding.
         _ = try await store.fetchActivities()
+        let aggregateObservedAt = Int64(date("2026-10-20T12:00:00Z").timeIntervalSince1970)
 
         var db: OpaquePointer?
         #expect(sqlite3_open(dir.appendingPathComponent("history.sqlite3").path, &db) == SQLITE_OK)
@@ -263,7 +264,7 @@ extension ActivityAccountingRegressionTests {
         INSERT INTO activity (source, record_id, session_id, project_path, git_branch, model,
             observed_at, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens)
         VALUES ('codex','codex_legacy-session','legacy-session','/repo/legacy','main','gpt-5',
-            1700000000, 500, 500, 0, 0, 1000);
+            \(aggregateObservedAt), 500, 500, 0, 0, 1000);
         INSERT INTO reading (vendor, bar_label, measured_at, fraction, is_blocked, confidence, urgency,
             resets_at, window_length, elapsed_only)
         VALUES ('claude','5H',1700000000,0.4,0,'measured','none',NULL,NULL,0);
@@ -277,32 +278,43 @@ extension ActivityAccountingRegressionTests {
         #expect(before.first?.totalKind == .legacy)
         #expect(before.first?.granularity == .session)
 
-        // A request row for that session supersedes the aggregate in the same
-        // read, transactionally: no code path adds both.
-        try await store.recordActivities([ActivityRecord(
-            source: "codex",
-            recordId: "response_legacy_new",
-            sessionId: "legacy-session",
-            projectPath: "/repo/legacy",
-            model: "gpt-6.1-sol",
-            observedAt: date("2026-10-20T10:00:00Z"),
-            inputTokens: 60, outputTokens: 40, totalTokens: 100,
-            semantics: .cacheIncludedInInput)])
+        // One 100-token request inside a 1000-token session aggregate is not
+        // proof that the other 900 were reconstructed. The aggregate stays
+        // visible, the request is not added to it, and nothing is invented.
+        func request(_ id: String, at: String, tokens: Int) -> ActivityRecord {
+            ActivityRecord(
+                source: "codex",
+                recordId: id,
+                sessionId: "legacy-session",
+                projectPath: "/repo/legacy",
+                model: "gpt-6.1-sol",
+                observedAt: date(at),
+                inputTokens: tokens, outputTokens: 0, totalTokens: tokens,
+                semantics: .cacheIncludedInInput)
+        }
+        try await store.recordActivities([request("response_legacy_a", at: "2026-10-20T10:00:00Z", tokens: 100)])
+
+        let partial = try await store.fetchActivities()
+        #expect(partial.count == 1)
+        #expect(partial.first?.recordId == "codex_legacy-session")
+        #expect(partial.first?.totalTokens == 1_000)
+        #expect(partial.first?.totalKind == .legacy)
+
+        // Completing the reconstruction proves coverage: the aggregate is
+        // superseded by its request rows, and the total is still 1000.
+        try await store.recordActivities([request("response_legacy_b", at: "2026-10-20T11:00:00Z", tokens: 900)])
 
         let after = try await store.fetchActivities()
-        #expect(after.count == 1)
-        #expect(after.first?.recordId == "response_legacy_new")
-        #expect(after.first?.totalTokens == 100)
+        #expect(after.map(\.recordId).sorted() == ["response_legacy_a", "response_legacy_b"])
+        #expect(after.map { $0.totalTokens ?? 0 }.reduce(0, +) == 1_000)
 
-        // The chart's own sum uses the same view: the superseded aggregate
-        // contributes nothing, so 100 is read once rather than 1,100.
         let tokenUsage = try await store.fetchTokenUsage(
             since: date("2023-01-01T00:00:00Z"), until: date("2027-01-01T00:00:00Z"),
             bucketSeconds: 30 * 86_400, anchor: date("2023-01-01T00:00:00Z"))
-        #expect(tokenUsage.buckets.filter { $0.source == "codex" }.map(\.tokens).reduce(0, +) == 100)
+        #expect(tokenUsage.buckets.filter { $0.source == "codex" }.map(\.tokens).reduce(0, +) == 1_000)
 
-        // The legacy row is retained, not rewritten or deleted; the view is
-        // the only place it is superseded.
+        // The legacy row and both requests are retained, not rewritten or
+        // deleted; the view is the only place coexistence is decided.
         var verify: OpaquePointer?
         #expect(sqlite3_open(dir.appendingPathComponent("history.sqlite3").path, &verify) == SQLITE_OK)
         let check = try #require(verify)
@@ -314,7 +326,7 @@ extension ActivityAccountingRegressionTests {
             return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : -1
         }
         #expect(count("activity") == 1)
-        #expect(count("activity_request") == 1)
+        #expect(count("activity_request") == 2)
         #expect(HistorySchema.version == 1)
 
         // Quota and balance history is untouched by the activity ledger.
@@ -325,13 +337,11 @@ extension ActivityAccountingRegressionTests {
             bucketSeconds: 86_400, seriesIds: ["openrouter|currency:USD"])
         #expect(balances["openrouter|currency:USD"]?.last?.value == Decimal(string: "12.34"))
 
-        // A restart reads the same request row and never resurrects the
-        // session aggregate.
+        // A restart reads the same reconciled answer.
         let reopened = QuotaHistoryStore(
             databaseURL: dir.appendingPathComponent("history.sqlite3"), isTestHost: true)
         let restarted = try await reopened.fetchActivities()
-        #expect(restarted.count == 1)
-        #expect(restarted.first?.recordId == "response_legacy_new")
+        #expect(restarted.map(\.recordId).sorted() == ["response_legacy_a", "response_legacy_b"])
     }
 
     @Test("per-source diagnostics survive an unchanged-file skip")
@@ -406,10 +416,10 @@ extension ActivityAccountingRegressionTests {
             windowStart: date("2023-01-01T00:00:00Z"), windowEnd: date("2026-01-01T00:00:00Z"),
             startConsumptionFraction: nil, endConsumptionFraction: nil,
             activities: [record],
-            billingScope: .requirePublishedAccountOrWorkspace)
+            billingScope: .matchingPublishedIdentity(AttributionBillingTarget()))
         #expect(workspaceScoped.projectAttributions.isEmpty)
         #expect(workspaceScoped.totalObservedTokens == 0)
-        #expect(workspaceScoped.recordsWithoutBillingIdentity == 1)
+        #expect(workspaceScoped.recordsWithoutMatchingBillingIdentity == 1)
         #expect(workspaceScoped.caveats.contains(.unverifiedBillingIdentity))
     }
 }
@@ -436,10 +446,13 @@ extension ActivityAccountingRegressionTests {
         #expect(sqlite3_open(dir.appendingPathComponent("history.sqlite3").path, &db) == SQLITE_OK)
         let raw = try #require(db)
         defer { sqlite3_close(raw) }
+        // The aggregate's recorded turn is the session's last token count;
+        // the two request rows reconstruct exactly that total.
+        let aggregateObservedAt = Int64(date("2026-10-19T10:01:30Z").timeIntervalSince1970)
         #expect(sqlite3_exec(raw, """
         INSERT INTO activity (source, record_id, session_id, project_path, observed_at,
             input_tokens, output_tokens, total_tokens)
-        VALUES ('codex','codex_sess-upgrade','sess-upgrade','/repo/upgrade',1700000000,130,20,150);
+        VALUES ('codex','codex_sess-upgrade','sess-upgrade','/repo/upgrade',\(aggregateObservedAt),130,20,150);
         """, nil, nil, nil) == SQLITE_OK)
         // Use the exact path spelling the adapter's enumerator yields: on
         // macOS the temporary directory is reached through `/private/var`.

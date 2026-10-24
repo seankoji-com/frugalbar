@@ -27,6 +27,13 @@ public enum HistorySchema {
     public static let version: Int32 = 1
 
     public static let createTablesSQL = """
+    -- Derived views are rebuilt on every open so a changed coexistence rule
+    -- reaches an existing database without a schema-version bump. They hold
+    -- no rows.
+    DROP VIEW IF EXISTS activity_unified;
+    DROP VIEW IF EXISTS activity_reconciled_aggregate;
+    DROP VIEW IF EXISTS activity_aggregate;
+
     CREATE TABLE IF NOT EXISTS reading (
       vendor        TEXT    NOT NULL,
       bar_label     TEXT    NOT NULL,      -- "5H" / "WK" / "MO" / "CYCLE"
@@ -106,14 +113,38 @@ public enum HistorySchema {
       PRIMARY KEY (source)
     ) WITHOUT ROWID;
 
+    -- Per-input diagnostics. Kept apart from the per-source roll-up so an
+    -- unchanged faulty file keeps its own counts while a different file is
+    -- read cleanly. Rows are added and removed with the input set; no
+    -- history table is rewritten.
+    CREATE TABLE IF NOT EXISTS activity_input_status (
+      source        TEXT    NOT NULL,
+      file_path     TEXT    NOT NULL,
+      malformed_records INTEGER NOT NULL,
+      inconsistent_records INTEGER NOT NULL,
+      incomplete_records INTEGER NOT NULL,
+      records_observed INTEGER NOT NULL,
+      read_failure  INTEGER NOT NULL,
+      last_scanned_at INTEGER NOT NULL,
+      PRIMARY KEY (source, file_path)
+    ) WITHOUT ROWID;
+
     -- One read surface for activity. Legacy `activity` rows are used only
-    -- when no ledger row supersedes them:
+    -- when a ledger row supersedes them:
     --   * the same (source, record_id) a Claude/OpenCode re-read has written;
-    --   * any Codex request row for the same session, which replaces that
-    --     session's cumulative aggregate so the two can never be added.
-    -- This is the transactional coexistence rule: request rows are committed
-    -- first, and a session aggregate disappears from totals in the same read.
-    CREATE VIEW IF NOT EXISTS activity_unified AS
+    --   * for Codex, a session aggregate (legacy or ledger) is shown only
+    --     while its tokens are not fully reconstructed by request rows.
+    --
+    -- A Codex session aggregate is a published cumulative total. When request
+    -- rows for that session, observed at or before the aggregate, have known
+    -- totals summing to at least that total, the aggregate is proven
+    -- superseded and the request rows are the accounting. Otherwise the
+    -- aggregate stays, and request rows observed inside it are withheld from
+    -- totals: they are already part of that total. A request observed after
+    -- the aggregate is additive — the cumulative counter cannot contain it.
+    -- Nothing is allocated to a time the source did not record, and no
+    -- observation is deleted.
+    CREATE VIEW IF NOT EXISTS activity_aggregate AS
     SELECT source, record_id, session_id, project_path, git_branch, model,
            observed_at, input_tokens, output_tokens, cache_read_tokens,
            cache_write_tokens,
@@ -121,30 +152,83 @@ public enum HistorySchema {
            total_tokens,
            'legacy' AS total_kind,
            CASE WHEN source = 'codex' THEN 'cacheIncludedInInput' ELSE 'additive' END AS semantics,
-           CASE WHEN source = 'codex' THEN 'session' ELSE 'legacy' END AS granularity,
+           'session' AS granularity,
            NULL AS billing_provider,
            NULL AS account_id,
            NULL AS workspace_id
     FROM activity
+    WHERE source = 'codex'
+      AND NOT EXISTS (
+        SELECT 1 FROM activity_request r
+        WHERE r.source = activity.source AND r.record_id = activity.record_id
+      )
+    UNION ALL
+    SELECT source, record_id, session_id, project_path, git_branch, model,
+           observed_at, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, reasoning_tokens, total_tokens, total_kind,
+           semantics, granularity, billing_provider, account_id, workspace_id
+    FROM activity_request
+    WHERE granularity = 'session';
+
+    CREATE VIEW IF NOT EXISTS activity_reconciled_aggregate AS
+    SELECT a.source, a.record_id
+    FROM activity_aggregate a
+    WHERE a.total_tokens IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM activity_request r
+        WHERE r.source = a.source
+          AND r.session_id = a.session_id
+          AND r.granularity = 'request'
+          AND r.observed_at <= a.observed_at
+        GROUP BY r.session_id
+        HAVING COUNT(r.total_tokens) = COUNT(*)
+           AND SUM(r.total_tokens) >= a.total_tokens
+      );
+
+    CREATE VIEW IF NOT EXISTS activity_unified AS
+    -- Legacy non-Codex rows stand in for a request the ledger has not
+    -- re-read; any same-id ledger row replaces one.
+    SELECT source, record_id, session_id, project_path, git_branch, model,
+           observed_at, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, NULL AS reasoning_tokens, total_tokens,
+           'legacy' AS total_kind, 'additive' AS semantics, 'legacy' AS granularity,
+           NULL AS billing_provider, NULL AS account_id, NULL AS workspace_id
+    FROM activity
+    WHERE source <> 'codex'
+      AND NOT EXISTS (
+        SELECT 1 FROM activity_request r
+        WHERE r.source = activity.source AND r.record_id = activity.record_id
+      )
+    UNION ALL
+    -- A session aggregate remains until request rows prove they cover it.
+    SELECT a.source, a.record_id, a.session_id, a.project_path, a.git_branch, a.model,
+           a.observed_at, a.input_tokens, a.output_tokens, a.cache_read_tokens,
+           a.cache_write_tokens, a.reasoning_tokens, a.total_tokens, a.total_kind,
+           a.semantics, a.granularity, a.billing_provider, a.account_id, a.workspace_id
+    FROM activity_aggregate a
     WHERE NOT EXISTS (
-      SELECT 1 FROM activity_request r
-      WHERE r.source = activity.source
-        AND (r.record_id = activity.record_id
-             OR (activity.source = 'codex' AND r.session_id = activity.session_id))
+      SELECT 1 FROM activity_reconciled_aggregate reconciled
+      WHERE reconciled.source = a.source AND reconciled.record_id = a.record_id
     )
     UNION ALL
+    -- A request inside an unreconciled aggregate is already counted there.
     SELECT r.source, r.record_id, r.session_id, r.project_path, r.git_branch, r.model,
            r.observed_at, r.input_tokens, r.output_tokens, r.cache_read_tokens,
            r.cache_write_tokens, r.reasoning_tokens, r.total_tokens, r.total_kind,
            r.semantics, r.granularity, r.billing_provider, r.account_id, r.workspace_id
     FROM activity_request r
-    WHERE r.granularity <> 'session'
-       OR NOT EXISTS (
-         SELECT 1 FROM activity_request newer
-         WHERE newer.source = r.source
-           AND newer.session_id = r.session_id
-           AND newer.granularity = 'request'
-       );
+    WHERE r.granularity = 'request'
+      AND NOT EXISTS (
+        SELECT 1 FROM activity_aggregate a
+        WHERE a.source = r.source
+          AND a.session_id = r.session_id
+          AND a.observed_at >= r.observed_at
+          AND a.total_tokens IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM activity_reconciled_aggregate reconciled
+            WHERE reconciled.source = a.source AND reconciled.record_id = a.record_id
+          )
+      );
 
     CREATE TABLE IF NOT EXISTS ingest_watermark (
       source        TEXT    NOT NULL,
@@ -260,8 +344,11 @@ public enum HistorySchema {
     /// predates `version`.
     public static let dropTablesSQL = """
     DROP VIEW IF EXISTS \(activityUnifiedView);
+    DROP VIEW IF EXISTS activity_reconciled_aggregate;
+    DROP VIEW IF EXISTS activity_aggregate;
     DROP TABLE IF EXISTS \(activityRequestTable);
     DROP TABLE IF EXISTS \(activitySourceStatusTable);
+    DROP TABLE IF EXISTS activity_input_status;
     DROP TABLE IF EXISTS \(readingTable);
     DROP TABLE IF EXISTS \(activityTable);
     DROP TABLE IF EXISTS \(ingestWatermarkTable);

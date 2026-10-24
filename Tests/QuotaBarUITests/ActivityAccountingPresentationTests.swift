@@ -103,9 +103,9 @@ struct ActivityAccountingPresentationTests {
 
         let unknown = HistoryPresentation.activityEmptyMessage(
             .complete, vendorName: "OpenCode Go", recordsWithoutTokenTotals: 0,
-            recordsWithoutBillingIdentity: 4)
+            recordsWithoutMatchingBillingIdentity: 4)
         #expect(unknown.contains("4 local session records"))
-        #expect(unknown.contains("did not publish a billing account or workspace"))
+        #expect(unknown.contains("did not publish the billing account or workspace being reported on"))
         #expect(!unknown.contains("No local"))
 
         // A different vendor gets no OpenCode lines.

@@ -541,7 +541,7 @@ public struct HistoryRootView: View {
                             activityProgress,
                             vendorName: selectedSubject?.vendor.displayName ?? "",
                             recordsWithoutTokenTotals: attribution?.recordsWithoutTokenTotals ?? 0,
-                            recordsWithoutBillingIdentity: attribution?.recordsWithoutBillingIdentity ?? 0))
+                            recordsWithoutMatchingBillingIdentity: attribution?.recordsWithoutMatchingBillingIdentity ?? 0))
                     ForEach(
                         HistoryPresentation.activitySourceNotes(
                             activitySources, vendor: selectedSubject?.vendor ?? .claude),
@@ -923,8 +923,13 @@ public struct HistoryRootView: View {
                 endConsumptionFraction: endpoints.end,
                 activities: activities,
                 configuredVendors: [subject.vendor],
+                // The quota subject is a local workspace name and credential;
+                // neither publishes the account/workspace id a message
+                // records. With no correlation available, an empty target
+                // leaves every OpenCode record explicitly unattributed rather
+                // than assigning another workspace's usage to this one.
                 billingScope: subject.vendor == .opencode
-                    ? .requirePublishedAccountOrWorkspace
+                    ? .matchingPublishedIdentity(AttributionBillingTarget())
                     : .any
             )
         } catch {

@@ -6,8 +6,7 @@ import Foundation
 /// failure means every input was unchanged and skipped, so previously
 /// persisted diagnostics remain current: a clean skip must not erase the
 /// malformed records already found in that file.
-public struct ActivityPassDiagnostics: Sendable, Equatable {
-    public let scannedInputs: Int
+public struct ActivityPassDiagnostics: Sendable, Equatable {    public let scannedInputs: Int
     public let skippedInputs: Int
     public let malformedRecords: Int
     public let inconsistentRecords: Int
@@ -31,6 +30,44 @@ public struct ActivityPassDiagnostics: Sendable, Equatable {
     }
 
     public static let empty = ActivityPassDiagnostics()
+}
+
+/// How much of an input one pass actually read. A whole-file read replaces
+/// that input's previous diagnostics; an appended-region read adds to them,
+/// because the earlier region was accounted for by an earlier pass.
+public enum ActivityInputCoverage: String, Sendable, Equatable {
+    case wholeInput
+    case appendedRegion
+}
+
+/// Diagnostics for one input (rollout file or database), persisted by path so
+/// an unchanged faulty input is not erased by a different file's clean scan.
+public struct ActivityInputDiagnostics: Sendable, Equatable {
+    public let filePath: String
+    public let malformedRecords: Int
+    public let inconsistentRecords: Int
+    public let incompleteRecords: Int
+    public let recordsObserved: Int
+    public let readFailure: Bool
+    public let coverage: ActivityInputCoverage
+
+    public init(
+        filePath: String,
+        malformedRecords: Int = 0,
+        inconsistentRecords: Int = 0,
+        incompleteRecords: Int = 0,
+        recordsObserved: Int = 0,
+        readFailure: Bool = false,
+        coverage: ActivityInputCoverage = .wholeInput
+    ) {
+        self.filePath = filePath
+        self.malformedRecords = malformedRecords
+        self.inconsistentRecords = inconsistentRecords
+        self.incompleteRecords = incompleteRecords
+        self.recordsObserved = recordsObserved
+        self.readFailure = readFailure
+        self.coverage = coverage
+    }
 }
 
 /// The persisted, per-source account of the last scan and what it could not
@@ -80,5 +117,43 @@ public struct ActivitySourceStatus: Sendable, Equatable, Identifiable {
         self.incompleteRecords = incompleteRecords
         self.recordsObserved = recordsObserved
         self.lastPassComplete = lastPassComplete
+    }
+}
+
+/// Diagnostics retained for one input, keyed by its path within a source.
+///
+/// The per-source roll-up is the sum of these rows. Keeping them separately
+/// is what stops a clean change to one rollout from erasing a malformed
+/// record in an unchanged sibling — the pass that skipped the sibling
+/// contributes no new row, so its old row stays charged.
+public struct ActivityInputStatus: Sendable, Equatable, Identifiable {
+    public var id: String { "\(source)|\(filePath)" }
+    public let source: String
+    public let filePath: String
+    public let malformedRecords: Int
+    public let inconsistentRecords: Int
+    public let incompleteRecords: Int
+    public let recordsObserved: Int
+    public let readFailure: Bool
+    public let lastScannedAt: Date
+
+    public init(
+        source: String,
+        filePath: String,
+        malformedRecords: Int = 0,
+        inconsistentRecords: Int = 0,
+        incompleteRecords: Int = 0,
+        recordsObserved: Int = 0,
+        readFailure: Bool = false,
+        lastScannedAt: Date = Date()
+    ) {
+        self.source = source
+        self.filePath = filePath
+        self.malformedRecords = malformedRecords
+        self.inconsistentRecords = inconsistentRecords
+        self.incompleteRecords = incompleteRecords
+        self.recordsObserved = recordsObserved
+        self.readFailure = readFailure
+        self.lastScannedAt = lastScannedAt
     }
 }

@@ -746,9 +746,110 @@ public actor QuotaHistoryStore {
         }
     }
 
-    /// The retained per-source account of what the last scan could represent.
-    public func activitySourceStatuses() async throws -> [ActivitySourceStatus] {
+    // MARK: - Input status
+
+    /// Diagnostics retained for each input of one source.
+    public func activityInputStatuses(source: String) async throws -> [ActivityInputStatus] {
         try await ensureOpen()
+        return try await database.perform { db -> [ActivityInputStatus] in
+            #if canImport(SQLite3)
+            let sql = """
+            SELECT source, file_path, malformed_records, inconsistent_records,
+                   incomplete_records, records_observed, read_failure, last_scanned_at
+            FROM activity_input_status
+            WHERE source = ?
+            ORDER BY file_path ASC;
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+            try db.bindText(stmt, 1, source)
+
+            var results: [ActivityInputStatus] = []
+            while true {
+                let status = sqlite3_step(stmt)
+                if status == SQLITE_DONE { break }
+                guard status == SQLITE_ROW else {
+                    throw HistoryDatabaseError.stepFailed(code: status, message: db.lastErrorMessage)
+                }
+                guard let sourceText = sqlite3_column_text(stmt, 0),
+                      let pathText = sqlite3_column_text(stmt, 1) else { continue }
+                results.append(ActivityInputStatus(
+                    source: String(cString: sourceText),
+                    filePath: String(cString: pathText),
+                    malformedRecords: Int(sqlite3_column_int64(stmt, 2)),
+                    inconsistentRecords: Int(sqlite3_column_int64(stmt, 3)),
+                    incompleteRecords: Int(sqlite3_column_int64(stmt, 4)),
+                    recordsObserved: Int(sqlite3_column_int64(stmt, 5)),
+                    readFailure: sqlite3_column_int64(stmt, 6) != 0,
+                    lastScannedAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 7)))
+                ))
+            }
+            return results
+            #else
+            return []
+            #endif
+        }
+    }
+
+    /// Replaces one source's retained input rows transactionally.
+    ///
+    /// The caller has already merged any appended-region counts and kept the
+    /// previous rows of unchanged inputs, so the set it passes is the whole
+    /// account of that source's existing inputs.
+    public func replaceActivityInputStatuses(
+        source: String,
+        inputs: [ActivityInputStatus]
+    ) async throws {
+        try await ensureOpen()
+        try await database.perform { db in
+            #if canImport(SQLite3)
+            try db.beginTransaction()
+            var didCommit = false
+            defer {
+                if !didCommit { try? db.rollbackTransaction() }
+            }
+
+            let delete = try db.prepare(sql: "DELETE FROM activity_input_status WHERE source = ?;")
+            defer { db.finalize(delete) }
+            try db.bindText(delete, 1, source)
+            let deleted = sqlite3_step(delete)
+            guard deleted == SQLITE_DONE else {
+                throw HistoryDatabaseError.stepFailed(code: deleted, message: db.lastErrorMessage)
+            }
+
+            let sql = """
+            INSERT OR REPLACE INTO activity_input_status (
+              source, file_path, malformed_records, inconsistent_records,
+              incomplete_records, records_observed, read_failure, last_scanned_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            let stmt = try db.prepare(sql: sql)
+            defer { db.finalize(stmt) }
+            for input in inputs {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                try db.bindText(stmt, 1, input.source)
+                try db.bindText(stmt, 2, input.filePath)
+                try db.bindInt64(stmt, 3, Int64(input.malformedRecords))
+                try db.bindInt64(stmt, 4, Int64(input.inconsistentRecords))
+                try db.bindInt64(stmt, 5, Int64(input.incompleteRecords))
+                try db.bindInt64(stmt, 6, Int64(input.recordsObserved))
+                try db.bindInt64(stmt, 7, input.readFailure ? 1 : 0)
+                try db.bindInt64(stmt, 8, Int64(input.lastScannedAt.timeIntervalSince1970))
+                let step = sqlite3_step(stmt)
+                guard step == SQLITE_DONE else {
+                    throw HistoryDatabaseError.stepFailed(code: step, message: db.lastErrorMessage)
+                }
+            }
+
+            try db.commitTransaction()
+            didCommit = true
+            #endif
+        }
+    }
+
+    /// The retained per-source account of what the last scan could represent.
+    public func activitySourceStatuses() async throws -> [ActivitySourceStatus] {        try await ensureOpen()
         return try await database.perform { db -> [ActivitySourceStatus] in
             #if canImport(SQLite3)
             let sql = """
@@ -835,6 +936,7 @@ public actor QuotaHistoryStore {
             for table in [
                 HistorySchema.readingTable, HistorySchema.activityTable,
                 HistorySchema.activityRequestTable, HistorySchema.activitySourceStatusTable,
+                "activity_input_status",
                 HistorySchema.ingestWatermarkTable,
                 // Not the retired catalog/feed tables: a new database no
                 // longer has them, and DELETE on a missing table throws.

@@ -48,7 +48,7 @@ public enum AttributionCaveat: String, Sendable, Equatable {
         case .partialTokenBreakdowns:
             "Some sessions reported an incomplete token breakdown; shares cover only sessions reporting a total."
         case .unverifiedBillingIdentity:
-            "Some local sessions do not record which billing account or workspace they used, so they are not attributed to this subscription."
+            "Some local sessions do not record the billing account or workspace being reported on, so they are not attributed to this subscription."
         }
     }
 }
@@ -58,12 +58,51 @@ public enum AttributionBillingScope: Sendable, Equatable {
     /// Include every record the tool wrote. Used where the subject is the tool
     /// itself, not one of its subscriptions.
     case any
-    /// Include only records that publish an account or workspace identity.
-    /// A tool identity (for example `opencode`) and a published provider id
-    /// (for example `litellm`) still do not say which subscription allowance
-    /// was consumed, so they are not enough to attribute a record to a
-    /// particular workspace.
-    case requirePublishedAccountOrWorkspace
+    /// Include only records whose published account/workspace identity matches
+    /// the subject being reported on. A tool identity (for example `opencode`)
+    /// and a published provider id (for example `litellm`) still do not say
+    /// which subscription allowance was consumed. An uncorrelated target
+    /// (neither account nor workspace) matches nothing, so records stay
+    /// explicitly unattributed rather than being assigned to a workspace that
+    /// merely happens to share the tool.
+    case matchingPublishedIdentity(AttributionBillingTarget)
+}
+
+/// The billing identity the caller is reporting on.
+///
+/// Each field is published by the source, never inferred. A target with only a
+/// provider is not enough to identify a workspace: two workspaces can bill
+/// through the same provider, so `isCorrelated` requires an account or
+/// workspace.
+public struct AttributionBillingTarget: Sendable, Equatable {
+    public let billingProvider: String?
+    public let accountId: String?
+    public let workspaceId: String?
+
+    public init(
+        billingProvider: String? = nil,
+        accountId: String? = nil,
+        workspaceId: String? = nil
+    ) {
+        self.billingProvider = billingProvider
+        self.accountId = accountId
+        self.workspaceId = workspaceId
+    }
+
+    /// A target that names an account or workspace. Without one there is no
+    /// correlation, and a record must not be assigned on provider identity
+    /// alone.
+    public var isCorrelated: Bool { accountId != nil || workspaceId != nil }
+
+    /// True when every identity the target publishes is also published by the
+    /// record, and the target names an account or workspace.
+    public func matches(_ record: ActivityRecord) -> Bool {
+        guard isCorrelated else { return false }
+        if let billingProvider, record.billingProvider != billingProvider { return false }
+        if let accountId, record.accountId != accountId { return false }
+        if let workspaceId, record.workspaceId != workspaceId { return false }
+        return true
+    }
 }
 
 public struct AttributionSummary: Sendable, Equatable {
@@ -80,7 +119,7 @@ public struct AttributionSummary: Sendable, Equatable {
     public let recordsWithoutTokenTotals: Int
     /// Records excluded from the shares because their published identity does
     /// not establish the billing account/workspace being reported on.
-    public let recordsWithoutBillingIdentity: Int
+    public let recordsWithoutMatchingBillingIdentity: Int
     /// Billing providers the included records published, deduplicated. Empty
     /// means none was published; it does not mean "the default provider".
     public let publishedBillingProviders: [String]
@@ -98,7 +137,7 @@ public struct AttributionSummary: Sendable, Equatable {
         consumedFractionDelta: Double?,
         totalObservedTokens: Int,
         recordsWithoutTokenTotals: Int = 0,
-        recordsWithoutBillingIdentity: Int = 0,
+        recordsWithoutMatchingBillingIdentity: Int = 0,
         publishedBillingProviders: [String] = [],
         projectAttributions: [ProjectAttribution],
         unmonitoredVendors: [VendorIdentifier],
@@ -113,7 +152,7 @@ public struct AttributionSummary: Sendable, Equatable {
         self.consumedFractionDelta = consumedFractionDelta
         self.totalObservedTokens = totalObservedTokens
         self.recordsWithoutTokenTotals = recordsWithoutTokenTotals
-        self.recordsWithoutBillingIdentity = recordsWithoutBillingIdentity
+        self.recordsWithoutMatchingBillingIdentity = recordsWithoutMatchingBillingIdentity
         self.publishedBillingProviders = publishedBillingProviders
         self.projectAttributions = projectAttributions
         self.unmonitoredVendors = unmonitoredVendors
@@ -211,19 +250,20 @@ public enum AttributionEngine {
         }
 
         // 1b. A local tool identity does not establish a billing identity. When
-        // the caller is reporting on a particular subscription, records that
-        // publish no account/workspace are not counted towards it; they are
-        // carried as an explicit exclusion instead of being silently assigned.
+        // the caller is reporting on a particular subscription, only records
+        // whose published identity matches that subject are counted; the rest
+        // are carried as an explicit exclusion instead of being silently
+        // assigned to it.
         let scoped: [ActivityRecord]
-        var recordsWithoutBillingIdentity = 0
+        var recordsWithoutMatchingBillingIdentity = 0
         switch billingScope {
         case .any:
             scoped = inWindow
-        case .requirePublishedAccountOrWorkspace:
+        case .matchingPublishedIdentity(let target):
             scoped = inWindow.filter { record in
-                let identified = record.accountId != nil || record.workspaceId != nil
-                if !identified { recordsWithoutBillingIdentity += 1 }
-                return identified
+                if target.matches(record) { return true }
+                recordsWithoutMatchingBillingIdentity += 1
+                return false
             }
         }
 
@@ -304,7 +344,7 @@ public enum AttributionEngine {
         if recordsWithoutTokenTotals > 0 {
             caveats.append(.partialTokenBreakdowns)
         }
-        if recordsWithoutBillingIdentity > 0 {
+        if recordsWithoutMatchingBillingIdentity > 0 {
             caveats.append(.unverifiedBillingIdentity)
         }
         caveats.append(.unrecordedExternalActivityPossible)
@@ -318,7 +358,7 @@ public enum AttributionEngine {
             consumedFractionDelta: consumedFractionDelta,
             totalObservedTokens: totalObservedTokens,
             recordsWithoutTokenTotals: recordsWithoutTokenTotals,
-            recordsWithoutBillingIdentity: recordsWithoutBillingIdentity,
+            recordsWithoutMatchingBillingIdentity: recordsWithoutMatchingBillingIdentity,
             publishedBillingProviders: billingProviders.sorted(),
             projectAttributions: attributions,
             unmonitoredVendors: activeUnmonitored,

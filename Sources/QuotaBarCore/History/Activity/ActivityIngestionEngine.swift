@@ -117,18 +117,83 @@ public actor ActivityIngestionEngine {
         let previous = await priorStatus(for: adapter.sourceIdentifier)
         let now = Date()
         let readEverything = diagnostics.skippedInputs == 0
-        let scannedSomething = diagnostics.scannedInputs > 0
-        // An unchanged-file skip must not erase what a previous pass found in
-        // that file. Only a pass that actually read input replaces the counts.
+
+        // Per-input accounting. An input this pass did not read (unchanged)
+        // keeps its own row; an input it did read replaces (or, for an
+        // appended region, adds to) its row. A different file's clean pass
+        // therefore cannot erase this file's malformed count.
+        let existingInputs = (try? await store.activityInputStatuses(source: adapter.sourceIdentifier)) ?? []
+        let priorByPath = Dictionary(uniqueKeysWithValues: existingInputs.map { ($0.filePath, $0) })
+        var mergedInputs: [ActivityInputStatus] = []
+        var emittedPaths = Set<String>()
+        for input in result.inputDiagnostics {
+            let prior = priorByPath[input.filePath]
+            let merged: ActivityInputStatus
+            if input.readFailure, let prior {
+                // A failed read says nothing new about what is inside: keep
+                // the figures it previously yielded and charge the failure.
+                // An appended-region read that failed part-way still saw the
+                // records it counted before the failure.
+                let appending = input.coverage == .appendedRegion
+                merged = ActivityInputStatus(
+                    source: adapter.sourceIdentifier,
+                    filePath: input.filePath,
+                    malformedRecords: prior.malformedRecords + (appending ? input.malformedRecords : 0),
+                    inconsistentRecords: prior.inconsistentRecords + (appending ? input.inconsistentRecords : 0),
+                    incompleteRecords: prior.incompleteRecords + (appending ? input.incompleteRecords : 0),
+                    recordsObserved: prior.recordsObserved + (appending ? input.recordsObserved : 0),
+                    readFailure: true,
+                    lastScannedAt: now)
+            } else if input.coverage == .appendedRegion, let prior {
+                merged = ActivityInputStatus(
+                    source: adapter.sourceIdentifier,
+                    filePath: input.filePath,
+                    malformedRecords: prior.malformedRecords + input.malformedRecords,
+                    inconsistentRecords: prior.inconsistentRecords + input.inconsistentRecords,
+                    incompleteRecords: prior.incompleteRecords + input.incompleteRecords,
+                    recordsObserved: prior.recordsObserved + input.recordsObserved,
+                    readFailure: input.readFailure,
+                    lastScannedAt: now)
+            } else {
+                merged = ActivityInputStatus(
+                    source: adapter.sourceIdentifier,
+                    filePath: input.filePath,
+                    malformedRecords: input.malformedRecords,
+                    inconsistentRecords: input.inconsistentRecords,
+                    incompleteRecords: input.incompleteRecords,
+                    recordsObserved: input.recordsObserved,
+                    readFailure: input.readFailure,
+                    lastScannedAt: now)
+            }
+            mergedInputs.append(merged)
+            emittedPaths.insert(input.filePath)
+        }
+        // Unchanged inputs were not re-read, so their rows stay as they were.
+        // An input that was already known but has no diagnostic row yet gets a
+        // zero row: it was read before this accounting existed.
+        for path in result.inputsConsidered where !emittedPaths.contains(path) {
+            if let prior = priorByPath[path] {
+                mergedInputs.append(prior)
+            } else {
+                mergedInputs.append(ActivityInputStatus(
+                    source: adapter.sourceIdentifier, filePath: path, lastScannedAt: now))
+            }
+        }
+        // Inputs no longer present are dropped with the input set.
+        try await store.replaceActivityInputStatuses(
+            source: adapter.sourceIdentifier, inputs: mergedInputs)
+
+        let readFailures = mergedInputs.filter(\.readFailure).count
         let status = ActivitySourceStatus(
             source: adapter.sourceIdentifier,
             lastScanAt: now,
-            lastSuccessfulScanAt: readEverything ? now : previous?.lastSuccessfulScanAt,
-            readFailures: diagnostics.skippedInputs,
-            malformedRecords: scannedSomething ? diagnostics.malformedRecords : (previous?.malformedRecords ?? 0),
-            inconsistentRecords: scannedSomething ? diagnostics.inconsistentRecords : (previous?.inconsistentRecords ?? 0),
-            incompleteRecords: scannedSomething ? diagnostics.incompleteRecords : (previous?.incompleteRecords ?? 0),
-            recordsObserved: scannedSomething ? diagnostics.recordsObserved : (previous?.recordsObserved ?? 0),
+            lastSuccessfulScanAt: readEverything && readFailures == 0
+                ? now : previous?.lastSuccessfulScanAt,
+            readFailures: readFailures,
+            malformedRecords: mergedInputs.map(\.malformedRecords).reduce(0, +),
+            inconsistentRecords: mergedInputs.map(\.inconsistentRecords).reduce(0, +),
+            incompleteRecords: mergedInputs.map(\.incompleteRecords).reduce(0, +),
+            recordsObserved: mergedInputs.map(\.recordsObserved).reduce(0, +),
             lastPassComplete: readEverything
         )
         try await store.recordActivitySourceStatus(status)

@@ -438,7 +438,7 @@ extension HistoryPresentation {
         _ progress: TokenUsagePresentation.IngestionProgress,
         vendorName: String,
         recordsWithoutTokenTotals: Int,
-        recordsWithoutBillingIdentity: Int = 0
+        recordsWithoutMatchingBillingIdentity: Int = 0
     ) -> String {
         switch progress {
         case .indexing:
@@ -446,9 +446,9 @@ extension HistoryPresentation {
         case .incomplete:
             return "Local activity could not be read in full, so an empty breakdown here is not evidence of no activity."
         case .complete:
-            guard recordsWithoutBillingIdentity == 0 else {
-                let singular = recordsWithoutBillingIdentity == 1
-                return "\(recordsWithoutBillingIdentity) local session record\(singular ? "" : "s") in this range did not publish a billing account or workspace, so \(singular ? "it is" : "they are") not attributed to this subscription."
+            guard recordsWithoutMatchingBillingIdentity == 0 else {
+                let singular = recordsWithoutMatchingBillingIdentity == 1
+                return "\(recordsWithoutMatchingBillingIdentity) local session record\(singular ? "" : "s") in this range did not publish the billing account or workspace being reported on, so \(singular ? "it is" : "they are") not attributed to this subscription."
             }
             guard recordsWithoutTokenTotals == 0 else {
                 return "\(recordsWithoutTokenTotals) session record\(recordsWithoutTokenTotals == 1 ? "" : "s") in this range carried no token total, so nothing can be shared out."

@@ -1,5 +1,4 @@
 import Foundation
-import CoreFoundation
 
 /// Ingests CLI activity from Claude Code's `projects/` directory, located by
 /// `defaultProjectsDirectory(environment:home:fileExists:)`.
@@ -46,6 +45,8 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
         var scanned = 0
         var malformed = 0
         var incomplete = 0
+        var inputDiagnostics: [ActivityInputDiagnostics] = []
+        var consideredInputs: [String] = []
 
         let fileManager = FileManager.default
         let enumerator = fileManager.enumerator(
@@ -74,6 +75,7 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
             let size = Int64(resourceValues?.fileSize ?? 0)
             let mtime = Int64((resourceValues?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
             let path = fileURL.path
+            consideredInputs.append(path)
 
             // Where to resume. Appends resume at the last recorded line boundary;
             // anything else (truncation, in-place rewrite, a shrink) restarts at
@@ -98,9 +100,14 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 chunk = try AppendOnlyLog.readIncrementally(at: fileURL, from: readFrom)
             } catch {
                 skipped += 1
+                inputDiagnostics.append(ActivityInputDiagnostics(
+                    filePath: path, recordsObserved: 0, readFailure: true))
                 continue
             }
             scanned += 1
+            let malformedBefore = malformed
+            let incompleteBefore = incomplete
+            let recordsBefore = records.count
 
             // An unterminated final line is either a half-written record or a
             // complete one the writer never newline-terminated. Parse it if it
@@ -188,6 +195,12 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 modifiedAt: mtime,
                 cursor: cursor
             ))
+            inputDiagnostics.append(ActivityInputDiagnostics(
+                filePath: path,
+                malformedRecords: malformed - malformedBefore,
+                incompleteRecords: incomplete - incompleteBefore,
+                recordsObserved: records.count - recordsBefore,
+                coverage: readFrom > 0 ? .appendedRegion : .wholeInput))
         }
 
         return ActivityIngestResult(
@@ -199,22 +212,18 @@ public struct ClaudeCodeAdapter: ActivityAdapter, Sendable {
                 malformedRecords: malformed,
                 incompleteRecords: incomplete,
                 recordsObserved: records.count
-            )
+            ),
+            inputDiagnostics: inputDiagnostics,
+            inputsConsidered: consideredInputs
         )
     }
 
     private func nonNegative(_ value: Any?, malformed: inout Int) -> Int? {
         guard let value, !(value is NSNull) else { return nil }
-        guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+        guard let exact = TokenCountParsing.nonNegative(value) else {
             malformed += 1
             return nil
         }
-        let double = number.doubleValue
-        guard double.isFinite, double == double.rounded(), double >= 0, double <= Double(Int.max) else {
-            malformed += 1
-            return nil
-        }
-        return Int(double)
+        return exact
     }
 }
