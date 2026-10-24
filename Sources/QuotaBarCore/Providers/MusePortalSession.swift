@@ -14,6 +14,12 @@ public final class MusePortalSession: ObservableObject {
     @Published public private(set) var isEnabled: Bool
     @Published public private(set) var isDisconnecting = false
     @Published public private(set) var teams: [MusePortalTeam] = []
+    // A restored selection needs a Picker tag before membership names load.
+    // This placeholder is not membership evidence; reads still recheck it.
+    public var teamPickerOptions: [MusePortalTeam] {
+        guard !selectedTeamID.isEmpty, !teams.contains(where: { $0.id == selectedTeamID }) else { return teams }
+        return teams + [MusePortalTeam(id: selectedTeamID, name: "Saved selection (refresh teams for name)")]
+    }
     @Published public private(set) var message = "Sign in, then refresh the team list."
     // Session ownership lets a read finish after the sheet closes. The token
     // prevents an old read's cleanup from clearing a reconnected session's flag.
@@ -237,15 +243,23 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
     private var hostWindow: NSWindow?
     private var committedURL: URL?
     private var navigationComplete: (id: UUID, complete: @MainActor @Sendable (Bool) -> Void)?
+    private let makeWebView: @MainActor () -> WKWebView
+
+    init(makeWebView: @escaping @MainActor () -> WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: MusePortalWebKit.storeIdentifier)
+        return WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: configuration)
+    }) {
+        self.makeWebView = makeWebView
+        super.init()
+    }
     var isAtPortal: Bool {
         committedURL?.scheme == "https" && committedURL?.host == "dev.meta.ai"
     }
 
     func open() {
         if webView == nil {
-            let configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
-            let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: configuration)
+            let view = makeWebView()
             view.navigationDelegate = self
             webView = view
             host()
@@ -294,6 +308,15 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
         guard webView === self.webView else { return }
         navigationComplete?.complete(false)
         navigationComplete = nil
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        committedURL = nil
+        let waiter = navigationComplete
+        navigationComplete = nil
+        // Clear before calling back: completion may register a newer waiter.
+        waiter?.complete(false)
     }
 
     func stop() {

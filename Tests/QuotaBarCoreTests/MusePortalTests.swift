@@ -117,11 +117,19 @@ struct MusePortalTests {
         let resumed = MusePortalSession(preferences: preferences, website: resumedWebsite)
         #expect(resumed.isEnabled)
         #expect(resumed.selectedTeamID == "42")
+        #expect(resumed.teams.isEmpty)
+        // These are the exact options consumed by the Settings Picker, not
+        // evidence of membership until the next read checks the portal.
+        #expect(resumed.teamPickerOptions.map(\.id) == ["42"])
+        #expect(resumed.teamPickerOptions.first?.name == "Saved selection (refresh teams for name)")
+        #expect(resumedWebsite.opens == 0 && resumedWebsite.requests.isEmpty)
         guard case .usage = await resumed.read(email: "person@example.com", plan: "Muse Code Power Usage", now: now) else {
             Issue.record("Explicit connection did not resume after restart"); return
         }
         #expect(resumedWebsite.opens == 1)
         #expect(resumedWebsite.requests == ["person@example.com|Muse Code Power Usage|42"])
+        #expect(resumed.teamPickerOptions.map(\.id) == ["42"])
+        #expect(resumed.teamPickerOptions.first?.name == "My team")
         // A saved team never substitutes for a fresh identity/membership/tier check.
         for changed in [body.replacingOccurrences(of: "person@example.com", with: "other@example.com"),
                         body.replacingOccurrences(of: "\"id\":\"42\"", with: "\"id\":\"43\""),

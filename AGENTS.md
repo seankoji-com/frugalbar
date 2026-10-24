@@ -278,9 +278,11 @@ the data, and treat an unknown status as not complete.
 vendors' fetches and removes their cache entries, so they vanish from the
 summary, advice, history recorder and widget, and a vendor shown again is
 fetched at once instead of waiting out `minPollInterval`. `sortedSnapshots()`
-also drops them on read. A `.custom` order is the user's list verbatim, with
-one exception: the exhausted drop to the bottom as a block and everything live
-keeps the user's relative order. "Exhausted" there is `sortBand == 2` — for a
+also drops them on read. A `.custom` order preserves the user's relative order,
+except that visible Antigravity pools form one service block anchored at the
+first visible nonempty member, with stable order inside it. The block moves
+last only when every visible pool has a spent or blocked window. Other exhausted
+vendors also drop to the bottom as blocks. "Exhausted" there is `sortBand == 2` — for a
 single-instance vendor that is `isQuotaExhausted`, deliberately *any* spent or
 blocked window rather than every one; a multi-instance vendor's block moves
 only when every workspace is spent, because the test is the `min()` of its
@@ -304,13 +306,16 @@ headers, never query strings. Never put `error.localizedDescription` in a
 `QuotaSnapshot` — `URLError`'s description carries the request URL. Map errors
 to `UnavailableReason` instead.
 
-**Preferences live in an explicit suite, not `UserDefaults.standard`.** An
-unbundled executable keys `.standard` off its *process name* — `Info.plist`
-applies only inside a real `.app`. The release installs as `frugalbar` and the
-SwiftPM product builds as `QuotaBar`, so `.standard` gave them separate stores:
+**Preferences live in an explicit suite, not `UserDefaults.standard`.** Before
+the executable embedded an Info.plist, `.standard` used its *process name*.
+The release installs as `frugalbar` and the SwiftPM product builds as `QuotaBar`,
+so `.standard` gave them separate stores:
 opting into CLI discovery under one name left the other reporting every
-provider "Not configured", with nothing on screen to explain it. Read and write
-through `CredentialStore.preferences`, including `@AppStorage(_, store:)`.
+provider "Not configured", with nothing on screen to explain it. The Mach-O
+Info.plist now embeds `CFBundleIdentifier` `frugalbar` to preserve the legacy
+WebKit namespace across renames; preferences deliberately stay in
+`com.quotabar.app` to preserve their historical identity. Read and write through
+`CredentialStore.preferences`, including `@AppStorage(_, store:)`.
 
 **Test-host detection cannot rely on XCTest.** Under `swift test` with
 swift-testing, `XCTestCase` is not loaded and no `XCTest*` / `SWIFT_TESTING_*`
