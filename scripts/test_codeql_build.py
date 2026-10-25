@@ -5,7 +5,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("codeql_build", Path(__file__).with_name("codeql-build.py"))
 builder = importlib.util.module_from_spec(spec)
@@ -35,7 +37,8 @@ class CompilerPlanTests(unittest.TestCase):
                 path.touch()
             def command(name, source):
                 return {"moduleName": name, "sources": [str(source)], "executable": "swiftc",
-                        "otherArguments": ["-incremental", "-Onone", "-swift-version", "6"],
+                        "otherArguments": ["-incremental", "-Onone", "-swift-version", "6",
+                                           "-emit-objc-header", "-emit-objc-header-path", f"{name}.h"],
                         "moduleOutputPath": f"{name}.swiftmodule", "outputFileMapPath": f"{name}.json",
                         "importPath": "Modules", "isLibrary": name == "Core"}
             description = {"swiftCommands": {"App": command("App", files[1]), "Core": command("Core", files[0])},
@@ -47,6 +50,10 @@ class CompilerPlanTests(unittest.TestCase):
                 self.assertIn("-c", c["argv"])
                 self.assertEqual(c["argv"][-2:], ["-driver-batch-count", "1"])
                 self.assertIn(c["sources"][0], c["argv"])
+                self.assertNotIn("-emit-module", c["argv"])
+                self.assertNotIn("-emit-module-path", c["argv"])
+                self.assertNotIn("-emit-objc-header", c["argv"])
+                self.assertNotIn(f'{c["module"]}.h', c["argv"])
             for fault in ["missing", "duplicate", "foreign"]:
                 changed = {**description, "swiftCommands": dict(description["swiftCommands"])}
                 if fault == "missing":
@@ -57,6 +64,25 @@ class CompilerPlanTests(unittest.TestCase):
                     changed["swiftCommands"]["Core"] = command("Core", root / "Tests.swift")
                 with self.assertRaises(ValueError):
                     builder.compiler_commands(changed, root)
+
+    def test_replays_independent_object_jobs_concurrently_and_propagates_failure(self):
+        commands = [{"module": str(n), "sources": [str(n)], "argv": [str(n)]} for n in range(3)]
+        for fail in [False, True]:
+            rendezvous = threading.Barrier(3, timeout=5)
+            invoked = []
+            def compiler(argv, check):
+                invoked.append(argv[0])
+                self.assertTrue(check)
+                rendezvous.wait()
+                if fail and argv == ["1"]:
+                    raise subprocess.CalledProcessError(1, argv)
+            with patch.object(builder.subprocess, "run", side_effect=compiler):
+                if fail:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        builder.compile_commands(commands)
+                else:
+                    builder.compile_commands(commands)
+            self.assertEqual(sorted(invoked), ["0", "1", "2"])
 
 
 if __name__ == "__main__":
