@@ -14,6 +14,16 @@ public final class MusePortalSession: ObservableObject {
     @Published public private(set) var isEnabled: Bool
     @Published public private(set) var isDisconnecting = false
     @Published public private(set) var teams: [MusePortalTeam] = []
+    @Published private var hasReceivedTeamList = false
+    // A restored selection needs a Picker tag before membership names load.
+    // This placeholder is not membership evidence; reads still recheck it.
+    public var teamPickerOptions: [MusePortalTeam] {
+        guard !selectedTeamID.isEmpty, !teams.contains(where: { $0.id == selectedTeamID }) else { return teams }
+        let name = hasReceivedTeamList
+            ? "Saved selection (absent from loaded teams)"
+            : "Saved selection (refresh teams for name)"
+        return teams + [MusePortalTeam(id: selectedTeamID, name: name)]
+    }
     @Published public private(set) var message = "Sign in, then refresh the team list."
     // Session ownership lets a read finish after the sheet closes. The token
     // prevents an old read's cleanup from clearing a reconnected session's flag.
@@ -67,6 +77,7 @@ public final class MusePortalSession: ObservableObject {
         teamRefreshID = nil
         website?.stop()
         teams = []
+        hasReceivedTeamList = false
         selectedTeamID = ""
         retryNotBefore = nil
         message = "Sign in, then refresh the team list."
@@ -136,7 +147,10 @@ public final class MusePortalSession: ObservableObject {
         }
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: payload.retryAfter, now: now)
         // Only a published membership list can replace the previous list.
-        if let listed = payload.teams { teams = listed }
+        if let listed = payload.teams {
+            teams = listed
+            hasReceivedTeamList = true
+        }
         message = payload.failure == "timedOut"
             ? "The Muse portal request timed out. Refresh to try again."
             : payload.failure == "offline"
@@ -236,21 +250,33 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
     private(set) var webView: WKWebView?
     private var hostWindow: NSWindow?
     private var committedURL: URL?
+    private var navigationGeneration = UUID()
+    private var hasRecoveredVisibleTermination = false
     private var navigationComplete: (id: UUID, complete: @MainActor @Sendable (Bool) -> Void)?
+    private let makeWebView: @MainActor () -> WKWebView
+
+    init(makeWebView: @escaping @MainActor () -> WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: MusePortalWebKit.storeIdentifier)
+        return WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: configuration)
+    }) {
+        self.makeWebView = makeWebView
+        super.init()
+    }
     var isAtPortal: Bool {
         committedURL?.scheme == "https" && committedURL?.host == "dev.meta.ai"
     }
 
     func open() {
         if webView == nil {
-            let configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier)
-            let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: configuration)
+            let view = makeWebView()
             view.navigationDelegate = self
             webView = view
+            hasRecoveredVisibleTermination = false
             host()
         }
         if !isAtPortal, webView?.isLoading == false {
+            navigationGeneration = UUID()
             webView?.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
         }
     }
@@ -281,6 +307,7 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         guard webView === self.webView else { return }
+        navigationGeneration = UUID()
         committedURL = nil
     }
 
@@ -296,7 +323,30 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
         navigationComplete = nil
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        committedURL = nil
+        let recoveryGeneration = UUID()
+        navigationGeneration = recoveryGeneration
+        let waiter = navigationComplete
+        navigationComplete = nil
+        // Clear before calling back: completion may register a newer waiter.
+        waiter?.complete(false)
+        // This delegate suppresses WebKit's own crash reload. Recover a visible
+        // connection sheet once per view; hidden reads recover through open().
+        // Completion may have stopped, replaced or navigated the owned view.
+        guard self.webView === webView, navigationGeneration == recoveryGeneration,
+              !hasRecoveredVisibleTermination, let window = webView.window,
+              window !== hostWindow, window.isVisible else { return }
+        // The dead process can still report isLoading inside this callback.
+        // Its navigation is gone, so load directly; ordinary open() stays guarded.
+        navigationGeneration = UUID()
+        hasRecoveredVisibleTermination = true
+        webView.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
+    }
+
     func stop() {
+        navigationGeneration = UUID()
         navigationComplete?.complete(false)
         navigationComplete = nil
         committedURL = nil

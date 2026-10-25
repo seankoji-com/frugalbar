@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import WebKit
 @testable import QuotaBarCore
 @testable import QuotaBarUI
 
@@ -38,6 +39,35 @@ struct UXRenderTests {
             snapshot("Long workspace name", plus: true, blocked: false)
         ]).padding(12).frame(width: 384).background(Theme.surface),
             name: "opencode-go-plus", directory: directory)
+    }
+
+    @Test func renderRestoredMuseTeamSelection() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suite = "MusePortalRender.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: MusePortalSession.enabledKey)
+        preferences.set("42", forKey: MusePortalSession.teamKey)
+        let session = MusePortalSession(preferences: preferences, website: RenderPortalWebsite())
+        #expect(session.teams.isEmpty && session.teamPickerOptions.map(\.id) == ["42"])
+        try await save(MusePortalConnectionView(session: session), name: "muse-restored-team", directory: directory)
+    }
+
+    private final class RenderPortalWebsite: MusePortalWebsite {
+        var webView: WKWebView? { nil }
+        var isAtPortal: Bool { false }
+        func open() { Issue.record("A render must not open the portal") }
+        func host() {}
+        func waitUntilPortal(id: UUID, complete: @escaping @MainActor @Sendable (Bool) -> Void) { complete(false) }
+        func cancelPortalWait(id: UUID) {}
+        func stop() {}
+        func clear() async {}
+        func evaluate(email: String, plan: String, teamID: String,
+                      complete: @escaping @MainActor @Sendable (String?) -> Void) {
+            Issue.record("A render must not request portal data")
+            complete(nil)
+        }
     }
 
     private struct FixtureProvider: QuotaProvider {

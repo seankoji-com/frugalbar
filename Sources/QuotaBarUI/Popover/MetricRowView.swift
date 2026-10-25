@@ -180,7 +180,9 @@ struct MetricRowView: View {
     ) -> String {
         let label = presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
             forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
-        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(label)" } ?? label
+        let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
+        let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
+        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(namedLabel)" } ?? namedLabel
     }
 
     /// Only for a provider we are currently reading: a forecast under an
