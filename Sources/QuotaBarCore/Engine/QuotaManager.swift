@@ -670,6 +670,8 @@ public actor QuotaManager {
             // them flicker out whenever a hand-entered cycle row is attached.
             rebuilt.apiCredits = updated.apiCredits
             rebuilt.monthlyAPICredit = updated.monthlyAPICredit
+            rebuilt.openAIAccountKey = updated.openAIAccountKey
+            rebuilt.resetCreditExpiries = updated.resetCreditExpiries
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             // A fact about the poll, not a figure that was re-fetched: the
@@ -736,6 +738,8 @@ public actor QuotaManager {
         )
         rebuilt.apiCredits = updated.apiCredits
         rebuilt.monthlyAPICredit = updated.monthlyAPICredit
+        rebuilt.openAIAccountKey = updated.openAIAccountKey
+        rebuilt.resetCreditExpiries = updated.resetCreditExpiries
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         // Same rule as the catalog failure above: this snapshot's figures are

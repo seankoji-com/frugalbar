@@ -119,7 +119,7 @@ struct MonthlyPromoCreditTests {
         #expect(before.paceMarker == nil)
     }
 
-    @Test("ticket strip and exact usage credits fit one line at the title inset")
+    @Test("ticket expiry lines fit the name column and preserve a separate balance fallback")
     @MainActor
     func creditLineFits() {
         var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
@@ -132,12 +132,17 @@ struct MonthlyPromoCreditTests {
         for count in [2, 5, 7] {
             snapshot.resetCreditsAvailable = count
             let p = MetricRowPresentation(snapshot: snapshot, now: now)
-            let natural = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p).fixedSize())
-            let constrained = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p).frame(width: 332))
+            let natural = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p, showsTickets: false).fixedSize())
+            let constrained = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p, showsTickets: false).frame(width: 332))
             #expect(natural.fittingSize.width <= 332)
             #expect(constrained.fittingSize.height < 22)
+            let tickets = NSHostingView(rootView: ResetTicketsView(credits: p.resetCredits!).frame(width: 112))
+            #expect(tickets.fittingSize.width == 112)
+            #expect(tickets.fittingSize.height >= CGFloat(min(count, ResetCreditTicketLimit.maxCount)) * 12)
+            #expect(tickets.fittingSize.height < 125)
             let row = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true).frame(width: 332))
-            #expect(abs(row.fittingSize.height - creditOnlyHeight) < 1)
+            #expect(row.fittingSize.width == 332)
+            #expect(row.fittingSize.height > creditOnlyHeight)
         }
     }
 

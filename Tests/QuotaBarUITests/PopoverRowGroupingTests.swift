@@ -203,8 +203,8 @@ struct PopoverRowGroupingTests {
         #expect(groups[0].headerPlan == "Google AI Pro")
         #expect(groups[1].headerPlan == "Max")
         #expect(groups[1].suppressPlan)
-        #expect(groups[2].headerPlan == nil)
-        #expect(!groups[2].suppressPlan)
+        #expect(groups[2].headerPlan == "Pro")
+        #expect(groups[2].suppressPlan)
     }
 
     @Test func customOrderingKeepsOneAntigravityBlockIncludingExhaustedMembers() {

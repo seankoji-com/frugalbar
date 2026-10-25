@@ -54,6 +54,8 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     /// Published end of the recurring monthly promo period. Never taken from
     /// the separate Console API-credit entitlement or its next grant date.
     public let monthlyPeriodEnd: Date?
+    /// User-confirmed allowance for this account's non-recurring credit pool.
+    public let creditGrant: OpenAICreditGrant?
 
     public init(
         id: String,
@@ -63,7 +65,8 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         currencyBasis: CurrencyBasis? = nil,
         detail: String? = nil,
         source: String? = nil,
-        monthlyPeriodEnd: Date? = nil
+        monthlyPeriodEnd: Date? = nil,
+        creditGrant: OpenAICreditGrant? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -73,5 +76,6 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         self.detail = detail
         self.source = source
         self.monthlyPeriodEnd = monthlyPeriodEnd
+        self.creditGrant = creditGrant
     }
 }

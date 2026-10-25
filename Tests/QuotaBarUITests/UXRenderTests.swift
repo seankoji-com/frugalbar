@@ -9,6 +9,32 @@ import WebKit
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    @Test func renderAgreedChatGPTLayout() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro 200", renewalDate: nil),
+            status: .measured(.none), resetsAt: now.addingTimeInterval(7 * 86_400),
+            lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.24, label: "WK", resetsAt: now.addingTimeInterval(7 * 86_400)),
+            planName: "Pro 200")
+        snapshot.resetCreditsAvailable = 1
+        snapshot.resetCreditExpiries = [now.addingTimeInterval(12 * 86_400)]
+        snapshot.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
+            label: "Usage credits", metric: .credits(remaining: 59_641, unitName: "credits"),
+            creditGrant: OpenAICreditGrant(total: 75_000, expiresAt: now.addingTimeInterval(68 * 86_400)))]
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
+            .padding(12).frame(width: 384).background(Theme.surface), name: "chatgpt-agreed-layout", directory: directory)
+        snapshot.resetCreditsAvailable = 7
+        snapshot.resetCreditExpiries = [now.addingTimeInterval(86_400), nil, now, now.addingTimeInterval(12 * 86_400)]
+        snapshot.staleReading = StaleReading(reason: .offline, at: now)
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
+            .padding(12).frame(width: 384).background(Theme.surface), name: "chatgpt-ticket-overflow-stale", directory: directory)
+        try await save(Form { OpenAIAccountSettingsView(accountKey: "render-fixture") }
+            .formStyle(.grouped).frame(width: 500, height: 360), name: "chatgpt-account-settings", directory: directory)
+    }
+
     @Test func renderOpenCodeGoPlus() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         let now = Date()

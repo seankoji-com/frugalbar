@@ -541,6 +541,9 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var apiCredits: [APICreditEntry] = []
     /// Independently observed linked Console entitlement, with its own reading time.
     public var monthlyAPICredit: ClaudeMonthlyCredit? = nil
+    /// Opaque account binding for user-entered ChatGPT grant and plan details.
+    /// Never a token, and absent when the provider cannot identify the account.
+    public var openAIAccountKey: String? = nil
     /// Banked usage-reset credits the vendor says the user can redeem right
     /// now (OpenAI's `rate_limit_reset_credits.available_count`). `nil` when
     /// the vendor published no such figure — never 0 as a stand-in, since

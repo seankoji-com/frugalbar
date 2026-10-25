@@ -82,7 +82,7 @@ struct PopoverRowGrouping {
             let sharedPlan = plan.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 == true && run.allSatisfy { $0.planName == plan }
             if let service {
-                let headerPlan = (service == "Antigravity" || service == "Claude") && sharedPlan ? plan : nil
+                let headerPlan = sharedPlan ? plan : nil
                 groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
                                     snapshots: run, headerPlan: headerPlan))
             } else if grouped {
