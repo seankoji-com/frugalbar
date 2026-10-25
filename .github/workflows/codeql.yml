@@ -47,9 +47,10 @@ jobs:
 
   analyze-swift:
     name: Analyze (swift)
-    # The arm64 run spent minutes preparing traced binaries before extraction.
-    # Use native Intel tracing; keep the same OS, Xcode and complete analysis.
-    runs-on: macos-15-intel
+    # Complete-job measurements: arm64 1017s, Intel 1137s. Intel's faster
+    # trace did not offset slower preparation and analysis. Keep full analysis
+    # on arm64 while further performance work is verified against the 600s goal.
+    runs-on: macos-15
     # Keep the failure deadline while measuring the complete job against 600s.
     timeout-minutes: 30
     permissions:
