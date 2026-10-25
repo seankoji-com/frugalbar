@@ -16,6 +16,15 @@ public struct DualBarProgressView: View {
     /// Draw the window token beside the track. Off in the popover grid, where
     /// the column header names the window and the cell prints the figure.
     let showsLabel: Bool
+    /// A tick the caller draws itself, where quota-window policy would
+    /// suppress `metrics.paceMarker`. The Claude promo credit keeps its
+    /// even-use marker when fully used; a spent quota window never does.
+    let presentedPaceMarker: Double?
+
+    /// Where this bar draws its tick: the caller's marker when it supplied
+    /// one, otherwise `DualBarMetrics.paceMarker` — the one definition the
+    /// colour, the tooltip and the spoken label also read.
+    var drawnPaceMarker: Double? { presentedPaceMarker ?? metrics.paceMarker }
 
     /// Track and fill thickness.
     static let barHeight: CGFloat = 6
@@ -23,9 +32,10 @@ public struct DualBarProgressView: View {
     static let tickHeight: CGFloat = barHeight + 3.5
     static let tickWidth: CGFloat = 2
 
-    public init(metrics: DualBarMetrics, showsLabel: Bool = true) {
+    public init(metrics: DualBarMetrics, showsLabel: Bool = true, presentedPaceMarker: Double? = nil) {
         self.metrics = metrics
         self.showsLabel = showsLabel
+        self.presentedPaceMarker = presentedPaceMarker
     }
 
     /// nil when the vendor declared this window blocked/critical but reported
@@ -127,7 +137,7 @@ public struct DualBarProgressView: View {
                     .clipShape(Capsule())
 
                     // The single marker: where an even pace would be by now.
-                    if let pace = metrics.paceMarker {
+                    if let pace = drawnPaceMarker {
                         Capsule()
                             .fill(Color.white.opacity(0.9))
                             .frame(width: Self.tickWidth, height: Self.tickHeight)
@@ -179,11 +189,11 @@ public struct DualBarProgressView: View {
             : "no reading reported"
     }
 
-    private var helpText: String { Self.helpText(for: metrics) }
+    private var helpText: String { Self.helpText(for: metrics, presentedPaceMarker: presentedPaceMarker) }
 
     /// The tooltip. Its pace wording is the colour's own rule: "ahead" only
     /// when the fill is amber, so a green bar is never called overuse.
-    nonisolated static func helpText(for metrics: DualBarMetrics) -> String {
+    nonisolated static func helpText(for metrics: DualBarMetrics, presentedPaceMarker: Double? = nil) -> String {
         guard let consumed = metrics.primaryFraction.map({ max(0, min(1, $0)) }) else {
             // No percentage with no usedText: say so plainly rather than
             // printing a "0% used" that would misreport an unmeasured window
@@ -194,7 +204,7 @@ public struct DualBarProgressView: View {
         }
         let usedPctInt = Int((consumed * 100).rounded())
         let detail = metrics.usedText ?? "\(usedPctInt)% used"
-        guard let paceStatus = paceStatusText(for: metrics) else {
+        guard let paceStatus = paceStatusText(for: metrics, presentedPaceMarker: presentedPaceMarker) else {
             return "\(metrics.label): \(usedPctInt)% used • \(detail)"
         }
         return "\(metrics.label): \(usedPctInt)% used • \(paceStatus) • \(detail)"
@@ -204,15 +214,17 @@ public struct DualBarProgressView: View {
     /// no pace marker (none published, at an end of the track, spent, or
     /// unread) or is blocked: the tooltip describes the tick, never a pace
     /// the bar does not show.
-    nonisolated static func paceStatusText(for metrics: DualBarMetrics) -> String? {
-        guard !metrics.isBlocked,
-              let used = metrics.primaryFraction.map({ max(0, min(1, $0)) }),
-              let pace = metrics.paceMarker
+    nonisolated static func paceStatusText(for metrics: DualBarMetrics, presentedPaceMarker: Double? = nil) -> String? {
+        guard let used = metrics.primaryFraction.map({ max(0, min(1, $0)) }),
+              let pace = presentedPaceMarker ?? metrics.paceMarker,
+              let standing = metrics.paceStanding(presented: pace)
         else { return nil }
         let points = Int(((used - pace) * 100).rounded())
-        if metrics.isMeaningfullyAheadOfPace { return "\(points)% ahead of an even pace" }
-        if used - pace < -DualBarMetrics.aheadOfPaceMargin { return "\(-points)% behind an even pace" }
-        return "close to an even pace"
+        switch standing {
+        case .ahead: return "\(points)% ahead of an even pace"
+        case .behind: return "\(-points)% behind an even pace"
+        case .even: return "close to an even pace"
+        }
     }
 }
 

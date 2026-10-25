@@ -129,15 +129,6 @@ struct MetricRowView: View {
                 OpenAIUsageCreditView(presentation: credits)
                     .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
             }
-            if let monthly = p.monthlyCreditLine {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(monthly, systemImage: "calendar")
-                    if let detail = p.monthlyCreditDetail { Text(detail) }
-                }
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
-            }
             if let promo = p.monthlyPromo {
                 MonthlyPromoCreditView(presentation: promo)
                     .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)

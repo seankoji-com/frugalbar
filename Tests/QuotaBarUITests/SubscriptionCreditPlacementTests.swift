@@ -79,30 +79,26 @@ struct SubscriptionCreditPlacementTests {
         #expect(stale.staleNote != nil)
     }
 
-    @Test("Claude monthly entitlement is a separate line with no balance or quota")
+    @Test("the monthly entitlement draws no row of its own and stays out of quota")
     func monthlyEntitlementPlacement() throws {
         let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
         var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
             status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        #expect(MetricRowPresentation(snapshot: snapshot, now: now).monthlyCreditLine == nil)
         snapshot.monthlyAPICredit = grant
         let p = MetricRowPresentation(snapshot: snapshot, now: now)
-        #expect(p.monthlyCreditLine == "Monthly API credit: $123.45 per month")
-        #expect(p.monthlyCreditDetail?.contains("Next credit") == true)
+        // The promo row's own "Usage credits" line already carries the
+        // period, so the entitlement is not repeated above it.
+        #expect(p.monthlyPromo == nil)
         #expect(p.subscriptionCredits.isEmpty)
         #expect(snapshot.apiCredits.isEmpty)
         #expect(snapshot.consumptionFraction == nil)
         #expect(snapshot.quotaBars.isEmpty)
-        #expect(MetricRowPresentation(snapshot: snapshot, now: now.addingTimeInterval(330))
-            .monthlyCreditDetail?.contains("Stale monthly credit") != true)
-        snapshot.monthlyAPICredit?.refreshFailed = true
-        #expect(MetricRowPresentation(snapshot: snapshot, now: now)
-            .monthlyCreditDetail?.contains("Stale monthly credit") == true)
+        #expect(snapshot.monthlyAPICredit == grant)
     }
 
-    @Test("the row speaks monthly allowance, next credit and failed refresh state")
+    @Test("the row does not repeat the monthly entitlement in its spoken label")
     func monthlyCreditSpokenLabel() throws {
         let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
@@ -115,16 +111,11 @@ struct SubscriptionCreditPlacementTests {
         }
         #expect(!spoken(snapshot).contains("Monthly API credit"))
         snapshot.monthlyAPICredit = grant
-        let next = "Next credit " + (try #require(grant.nextGrantAt)).formatted(date: .abbreviated, time: .omitted)
         let current = spoken(snapshot)
-        #expect(current.contains("Monthly API credit: $123.45 per month"))
-        #expect(current.contains(next))
-        #expect(!current.contains("Stale monthly credit reading"))
+        #expect(!current.contains("Monthly API credit"))
+        #expect(!current.contains("Next credit"))
         snapshot.monthlyAPICredit?.refreshFailed = true
-        let stale = spoken(snapshot)
-        #expect(stale.contains("Monthly API credit: $123.45 per month"))
-        #expect(stale.contains(next))
-        #expect(stale.contains("Stale monthly credit reading"))
+        #expect(!spoken(snapshot).contains("Monthly API credit"))
     }
 
     @Test("other credit pools remain separate and missing credits draw nothing")

@@ -72,6 +72,11 @@ struct MonthlyPromoCreditTests {
     func promoColors() {
         let spent = MonthlyPromoCreditPresentation(entry: entry(end: end), now: now, isStale: false)
         #expect(spent.paceMarker != nil)
+        // Quota-window policy hides a spent window's tick; the promo row
+        // presents its own, and that is what the bar draws.
+        #expect(spent.barMetrics.paceMarker == nil)
+        #expect(DualBarProgressView(metrics: spent.barMetrics, showsLabel: false,
+            presentedPaceMarker: spent.paceMarker).drawnPaceMarker == spent.paceMarker)
         #expect(DualBarProgressView.stateColor(for: spent.barMetrics,
             presentedPaceMarker: spent.paceMarker) == Theme.errorBold)
         let nearlySpent = MonthlyPromoCreditPresentation(entry: entry(balance: Decimal(string: "0.01")!, end: end),
@@ -83,6 +88,33 @@ struct MonthlyPromoCreditTests {
         let ahead = MonthlyPromoCreditPresentation(entry: entry(balance: 10, end: end), now: now, isStale: false)
         #expect(DualBarProgressView.stateColor(for: ahead.barMetrics,
             presentedPaceMarker: ahead.paceMarker) == Color(red: 0.96, green: 0.72, blue: 0.15))
+    }
+
+    @Test("the promo row draws its even-use tick even when fully used")
+    @MainActor
+    func renderedSpentMarker() throws {
+        func whitePixels(_ presentation: MonthlyPromoCreditPresentation) throws -> Int {
+            let host = NSHostingView(rootView: MonthlyPromoCreditView(presentation: presentation)
+                .frame(width: 332).background(Theme.card).environment(\.colorScheme, .dark))
+            host.frame.size = host.fittingSize
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            var count = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    if c.redComponent > 0.9, c.greenComponent > 0.9, c.blueComponent > 0.9 { count += 1 }
+                }
+            }
+            return count
+        }
+        let spent = MonthlyPromoCreditPresentation(entry: entry(end: end), now: now, isStale: false)
+        let withoutMarker = MonthlyPromoCreditPresentation(entry: entry(end: nil), now: now, isStale: false)
+        #expect(withoutMarker.paceMarker == nil)
+        // The tick is the only near-white mark in the row; its fill, figure
+        // and labels are all darker tones.
+        #expect(try whitePixels(spent) > whitePixels(withoutMarker) + 8)
     }
 
     @Test("the promo uses the shared calendar month across Sydney daylight saving")

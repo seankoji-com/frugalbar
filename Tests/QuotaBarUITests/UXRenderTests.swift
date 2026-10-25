@@ -252,6 +252,10 @@ struct UXRenderTests {
         var claudeMonthly = snapshot(.claude, "Claude", 0.65)
         claudeMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date())
+        claudeMonthly.apiCredits = [APICreditEntry(id: "claude.promo-credit", vendorId: .claude,
+            label: "Promo credit",
+            metric: .currency(balance: 0, limit: 200, spent: nil, currencyCode: "USD"),
+            currencyBasis: .prepaidCredit, monthlyPeriodEnd: Date().addingTimeInterval(11 * 86_400))]
         var staleMonthly = claudeMonthly
         staleMonthly.staleReading = StaleReading(reason: .rateLimited(
             retryAfter: Date().addingTimeInterval(300)), at: Date())
@@ -261,7 +265,7 @@ struct UXRenderTests {
         // Use the actual card so the 384pt popover's 12pt margins and
         // 14pt card padding leave exactly 332pt for each production row.
         try await save(VStack(spacing: 12) {
-            Text("Monthly entitlement · current and throttled").font(.caption)
+            Text("Usage credits · the entitlement is not repeated above it").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: [claudeMonthly, subscription])
             MetricSectionView(category: .aiSubscriptions, snapshots: [staleMonthly, staleSubscription])
         }.padding(12).frame(width: 384).background(Theme.surface),
