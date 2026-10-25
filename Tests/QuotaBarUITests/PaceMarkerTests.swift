@@ -60,6 +60,7 @@ struct PaceMarkerTests {
     /// definition keeps suppressing one, and the tooltip describes the tick
     /// the caller actually draws.
     @Test("a spent bar draws a caller-presented marker and reports its pace")
+    @MainActor
     func presentedMarkerOnSpentBar() {
         let spent = bar(used: 1.0)
         #expect(spent.paceMarker == nil)

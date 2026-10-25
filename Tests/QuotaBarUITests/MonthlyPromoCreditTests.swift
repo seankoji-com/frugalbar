@@ -69,6 +69,7 @@ struct MonthlyPromoCreditTests {
     }
 
     @Test("the promo colour uses the tick it draws, including at exhaustion")
+    @MainActor
     func promoColors() {
         let spent = MonthlyPromoCreditPresentation(entry: entry(end: end), now: now, isStale: false)
         #expect(spent.paceMarker != nil)
