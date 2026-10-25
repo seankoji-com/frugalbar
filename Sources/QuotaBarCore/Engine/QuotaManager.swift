@@ -211,9 +211,10 @@ public actor QuotaManager {
     /// A hidden vendor is dropped here as well as purged at fetch time, so
     /// hiding one takes effect on the very next read, before any poll.
     ///
-    /// A custom order keeps the user's relative order and moves only the
-    /// exhausted: a vendor with nothing left drops to the bottom as a block.
-    /// See the comment at the custom branch below.
+    /// A custom order collects visible nonempty Antigravity pools at their first
+    /// member's position, preserving their within-service order. That block drops
+    /// last only when every visible pool has a spent or blocked window. Other
+    /// vendors keep their relative order, with exhausted vendors moved as blocks.
     static func arrange(
         _ snapshots: [QuotaSnapshot],
         preferences prefs: ProviderDisplayPreferences,
@@ -254,14 +255,14 @@ public actor QuotaManager {
             return prefs.visibleOrder.filter { antigravity.contains($0) }.flatMap { byVendor[$0] ?? [] }
         }
 
-        // A custom order is the user's, verbatim — with one exception. A
-        // provider whose best instance has nothing left is not somewhere to
-        // send work, however high the user put it, so the exhausted move to the
-        // bottom as a block: the same "best instance" rule the automatic sort
-        // uses below, applied to the user's order instead of a deadline.
+        // A custom order has two exceptions: visible nonempty Antigravity pools
+        // are collected at their first member's position in stable within-service
+        // order, then exhausted blocks move to the bottom. Antigravity's whole
+        // block moves last only when every visible pool has a spent or blocked
+        // window. Other vendors use the same "best instance" rule as below.
         //
         // Deliberately a stable split rather than a re-sort: everything live
-        // keeps the user's relative order, and the workspaces of one vendor
+        // keeps the resulting service-block order, and the workspaces of one vendor
         // stay together, placed by whichever of them is most usable. Splitting
         // a block would scatter two OpenCode Go workspaces to opposite ends of
         // the list.

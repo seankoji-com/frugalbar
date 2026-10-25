@@ -142,6 +142,45 @@ struct MusePortalTests {
         #expect(resumedWebsite.requests.count == 4)
     }
 
+    @Test @MainActor func savedTeamPlaceholderTracksReceivedLists() async throws {
+        let suite = "MusePortalTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: MusePortalSession.enabledKey)
+        preferences.set("42", forKey: MusePortalSession.teamKey)
+        let website = PortalWebsiteStub(body: #"{"email":"person@example.com"}"#)
+        let session = MusePortalSession(preferences: preferences, website: website)
+        let initial = "Saved selection (refresh teams for name)"
+        let absent = "Saved selection (absent from loaded teams)"
+        #expect(session.teamPickerOptions.first?.name == initial)
+        // Missing/failed payloads cannot claim a list was received.
+        for response in [website.body, "not JSON", #"{"failure":"offline"}"#] {
+            website.body = response
+            await session.refreshTeams()
+            #expect(session.teamPickerOptions.first?.name == initial)
+        }
+        for response in [#"{"teams":[]}"#, #"{"failure":"team","teams":[{"id":"43","name":"Other team"}]}"#] {
+            website.body = response
+            await session.refreshTeams()
+            #expect(session.teamPickerOptions.last?.name == absent)
+            #expect(session.selectedTeamID == "42")
+        }
+        // A later failed/missing list preserves the already received state.
+        for response in [#"{"email":"person@example.com"}"#, "not JSON", #"{"failure":"offline"}"#] {
+            website.body = response
+            await session.refreshTeams()
+            #expect(session.teamPickerOptions.last?.name == absent)
+        }
+        website.body = body
+        await session.refreshTeams()
+        #expect(session.teamPickerOptions.map(\.name) == ["My team"])
+        await session.disconnect()
+        #expect(session.teamPickerOptions.isEmpty && session.selectedTeamID.isEmpty)
+        session.connect()
+        session.selectedTeamID = "42"
+        #expect(session.teamPickerOptions.first?.name == initial)
+    }
+
     @Test @MainActor func disabledOrMalformedSavedScopeCannotSelectATeam() async throws {
         let suite = "MusePortalTests.\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
