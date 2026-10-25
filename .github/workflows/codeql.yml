@@ -48,10 +48,7 @@ jobs:
   analyze-swift:
     name: Analyze (swift)
     runs-on: macos-15
-    # A traced `swift build -c debug` costs ~16-19 min here even on a cache
-    # hit with no source changes. 20 minutes left no room for init + analyze +
-    # runner noise: run 34107996448 was killed at the 20m0s limit with the
-    # analysis step never allowed to run. 30 keeps the worst observed case in.
+    # Keep the failure deadline while measuring the complete job against 600s.
     timeout-minutes: 30
     permissions:
       security-events: write
@@ -64,20 +61,31 @@ jobs:
       - name: Select Xcode 16
         run: scripts/select-xcode.sh 16
 
-      # In job 121185714143, manifest preparation took 7s but traced build
-      # planning still took 438s before compilation began. Cache the complete
-      # plan, not compiled objects: every application source is built below.
-      - name: Prepare SwiftPM build plan
-        run: swift build -c debug --print-manifest-job-graph > "$RUNNER_TEMP/swift-build-plan.dot"
+      - name: Prepare SDK modules and compiler commands outside tracing
+        run: |
+          python3 -m unittest discover -s scripts -p test_codeql_build.py
+          python3 scripts/codeql-build.py prepare "$RUNNER_TEMP/swift-compiler-plan.json"
 
       - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        id: codeql
         with:
           languages: swift
           build-mode: manual
+          db-location: ${{ runner.temp }}/codeql-databases
+          debug: true
 
       - name: Build (traced)
-        run: swift build -c debug
+        run: python3 scripts/codeql-build.py compile "$RUNNER_TEMP/swift-compiler-plan.json"
 
       - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: "/language:swift"
+
+      - name: Require extraction of every application source
+        env:
+          CODEQL: ${{ steps.codeql.outputs.codeql-path }}
+        run: |
+          "$CODEQL" bqrs decode --format=json \
+            "$RUNNER_TEMP/codeql-databases/swift/results/codeql/swift-queries/diagnostics/ExtractedFiles.bqrs" \
+            > "$RUNNER_TEMP/swift-extracted-files.json"
+          python3 scripts/codeql-build.py coverage "$RUNNER_TEMP/swift-extracted-files.json"
