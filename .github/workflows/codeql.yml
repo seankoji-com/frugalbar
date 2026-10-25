@@ -77,6 +77,9 @@ jobs:
       - name: Build (traced)
         run: python3 scripts/codeql-build.py compile "$RUNNER_TEMP/swift-compiler-plan.json"
 
+      - name: Reject Swift extractor compiler errors
+        run: python3 scripts/codeql-build.py diagnostics "$RUNNER_TEMP/codeql-databases/swift/log/swift/extractor"
+
       - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: "/language:swift"

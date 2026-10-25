@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Prepare SwiftPM outside tracing, then force compilation of every source directly."""
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shlex
 import subprocess
@@ -23,65 +22,59 @@ def compiler_commands(description, root):
         arguments = []
         original = iter(command["otherArguments"])
         for argument in original:
-            if argument == "-emit-objc-header-path":
-                next(original)  # This header was emitted by the preparation build.
-            elif argument not in {"-incremental", "-emit-objc-header"}:
+            if argument in {"-emit-objc-header-path", "-index-store-path"}:
+                # Header is already prepared; IDE index output is unrelated to analysis.
+                next(original)
+            elif argument not in {"-incremental", "-emit-objc-header", "-enable-batch-mode", "-index-system-modules", "-serialize-diagnostics"}:
                 arguments.append(argument)
-        # The untraced build already emitted dependency modules. Emitting them
-        # again makes CodeQL extract every source twice (object + module pass).
-        # Only object outputs are replayed, so module inputs remain immutable.
-        argv = [command["executable"], "-module-name", command["moduleName"], "-emit-dependencies",
-                "-output-file-map", command["outputFileMapPath"], "-I", command["importPath"]]
+        # CodeQL uses its own Swift compiler. Re-emit modules under tracing in
+        # dependency order so dependent extraction gets compatible modules.
+        # A module-only frontend type-checks and extracts every source once.
+        argv = [command["executable"], "-module-name", command["moduleName"], "-emit-module",
+                "-emit-module-path", command["moduleOutputPath"], "-I", command["importPath"]]
         if command["isLibrary"]:
             argv.append("-parse-as-library")
-        # Bound the serial extractor work per frontend while retaining the full
-        # module as input for type checking. The driver partitions primary files.
-        batches = (len(sources) + 31) // 32
-        argv += ["-c", *map(str, sources), *arguments, "-driver-batch-count", str(batches)]
+        argv += [*map(str, sources), *arguments, "-whole-module-optimization"]
         commands.append({"module": command["moduleName"], "sources": list(map(str, sources)), "argv": argv})
     if not expected or set(seen) != expected or len(seen) != len(expected):
         raise ValueError("SwiftPM commands must cover every Sources file exactly once")
-    # Retain deterministic plan order; prepared module inputs need no replay.
+    # A dependency must finish emission before a dependent module is extracted.
     dependencies = description["targetDependencyMap"]
     return sorted(commands, key=lambda c: (len(dependencies[c["module"]]), c["module"]))
 
 
 def frontend_commands(commands):
-    # Resolve the driver outside tracing. macOS tracer executable rewriting took
-    # over two minutes before swiftc/driver reached the first frontend in CI.
+    # Resolve the driver outside tracing. CI logs have multi-minute gaps before
+    # swiftc/driver interception; this avoids replaying those extra processes.
     result = []
     outputs = []
     for command in commands:
         printed = subprocess.check_output([*command["argv"], "-driver-print-jobs"], text=True)
-        seen = []
-        for line in printed.splitlines():
-            argv = shlex.split(line)
-            if not argv:
-                continue
-            if "-frontend" not in argv or "-c" not in argv or "-emit-module" in argv:
-                raise ValueError("Expected only object-compiling Swift frontends")
-            primary = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-primary-file"]
-            objects = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-o"]
-            if not primary or len(primary) > 32 or len(objects) != len(primary):
-                raise ValueError("Frontend must compile at most 32 primary sources to distinct objects")
-            seen.extend(primary)
-            outputs.extend(objects)
-            result.append({"module": command["module"], "sources": primary, "argv": argv})
-        if sorted(seen) != sorted(command["sources"]):
-            raise ValueError("Frontend primary files must cover every module source exactly once")
+        jobs = [shlex.split(line) for line in printed.splitlines() if line.strip()]
+        if len(jobs) != 1:
+            raise ValueError("Expected one complete module frontend")
+        argv = jobs[0]
+        if "-frontend" not in argv or "-emit-module" not in argv or "-c" in argv or "-primary-file" in argv:
+            raise ValueError("Expected whole-module emission with all source bodies")
+        if any("skip" in arg and "function-bodies" in arg for arg in argv):
+            raise ValueError("Source bodies must not be skipped during analysis")
+        sources = [arg for arg in argv if arg.endswith(".swift")]
+        output = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-o"]
+        if sorted(sources) != sorted(command["sources"]) or len(output) != 1:
+            raise ValueError("Frontend must emit one module covering every source exactly once")
+        outputs.extend(output)
+        result.append({"module": command["module"], "sources": sources, "argv": argv})
     if len(outputs) != len(set(outputs)):
-        raise ValueError("Frontend object outputs must not overlap")
+        raise ValueError("Frontend module outputs must not overlap")
     return result
 
 
 def compile_commands(commands):
-    # Every module reads the prebuilt modules and writes separate object paths.
-    # Bound concurrency to the same three workers as the preparation build.
-    def compile_one(command):
+    # Preserve CodeQL's dependency-module remapping. Concurrent object replay
+    # imported incompatible untraced modules and took 1660s in CI.
+    for command in commands:
         print(f'Forcing compilation of {command["module"]}: {len(command["sources"])} sources', flush=True)
         subprocess.run(command["argv"], check=True)
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        list(pool.map(compile_one, commands))
 
 
 def main():
@@ -95,6 +88,15 @@ def main():
         subprocess.run([*build, "--jobs", "3"], check=True)
         binary = Path(subprocess.check_output([*build, "--show-bin-path"], text=True).strip())
         commands = frontend_commands(compiler_commands(json.loads((binary / "description.json").read_text()), root))
+        # -driver-print-jobs may write auxiliary output maps into a temporary
+        # directory. Keep their exact bytes beside the plan across init/compile.
+        for command in commands:
+            argv = command["argv"]
+            if "-supplementary-output-file-map" in argv:
+                index = argv.index("-supplementary-output-file-map") + 1
+                output_map = plan.with_name(f'{plan.stem}-{command["module"]}-outputs.json')
+                output_map.write_bytes(Path(argv[index]).read_bytes())
+                argv[index] = str(output_map.resolve())
         plan.write_text(json.dumps({"root": str(root), "commands": commands}, indent=2) + "\n")
     elif mode == "compile":
         prepared = json.loads(plan.read_text())
@@ -104,6 +106,15 @@ def main():
         if set(sources) != set(root.glob("Sources/**/*.swift")) or len(sources) != len(set(sources)):
             raise ValueError("Compiler plan no longer covers every application source")
         compile_commands(prepared["commands"])
+    elif mode == "diagnostics":
+        logs = list(plan.glob("*.log"))
+        if not logs:
+            raise ValueError("No Swift extractor logs were produced")
+        errors = [line for path in logs for line in path.read_text().splitlines()
+                  if "ERRO [extractor/compiler]" in line]
+        if errors:
+            raise ValueError("Swift extraction compiler errors: " + "\n".join(errors))
+        print(f'No Swift compiler errors in {len(logs)} extractor logs')
     elif mode == "coverage":
         # ExtractedFiles.ql selects (File, message). BQRS JSON labels are source paths.
         decoded = json.loads(plan.read_text())
@@ -114,7 +125,7 @@ def main():
             raise ValueError(f"CodeQL did not extract application sources: {missing}")
         print(f'CodeQL extracted all {len(list(root.glob("Sources/**/*.swift")))} application sources')
     else:
-        raise ValueError("Use prepare, compile or coverage")
+        raise ValueError("Use prepare, compile, diagnostics or coverage")
 
 
 if __name__ == "__main__":

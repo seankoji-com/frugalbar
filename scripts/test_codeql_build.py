@@ -6,7 +6,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 
@@ -39,7 +38,8 @@ class CompilerPlanTests(unittest.TestCase):
             def command(name, source):
                 return {"moduleName": name, "sources": [str(source)], "executable": "swiftc",
                         "otherArguments": ["-incremental", "-Onone", "-swift-version", "6",
-                                           "-emit-objc-header", "-emit-objc-header-path", f"{name}.h"],
+                                           "-emit-objc-header", "-emit-objc-header-path", f"{name}.h",
+                                           "-index-store-path", "Index", "-index-system-modules", "-serialize-diagnostics"],
                         "moduleOutputPath": f"{name}.swiftmodule", "outputFileMapPath": f"{name}.json",
                         "importPath": "Modules", "isLibrary": name == "Core"}
             description = {"swiftCommands": {"App": command("App", files[1]), "Core": command("Core", files[0])},
@@ -48,13 +48,15 @@ class CompilerPlanTests(unittest.TestCase):
             self.assertEqual([c["module"] for c in commands], ["Core", "App"])
             for c in commands:
                 self.assertNotIn("-incremental", c["argv"])
-                self.assertIn("-c", c["argv"])
-                self.assertEqual(c["argv"][-2:], ["-driver-batch-count", "1"])
+                self.assertNotIn("-c", c["argv"])
                 self.assertIn(c["sources"][0], c["argv"])
-                self.assertNotIn("-emit-module", c["argv"])
-                self.assertNotIn("-emit-module-path", c["argv"])
+                self.assertIn("-emit-module", c["argv"])
+                self.assertIn("-emit-module-path", c["argv"])
                 self.assertNotIn("-emit-objc-header", c["argv"])
                 self.assertNotIn(f'{c["module"]}.h', c["argv"])
+                self.assertNotIn("-index-store-path", c["argv"])
+                self.assertNotIn("-index-system-modules", c["argv"])
+                self.assertNotIn("-serialize-diagnostics", c["argv"])
             for fault in ["missing", "duplicate", "foreign"]:
                 changed = {**description, "swiftCommands": dict(description["swiftCommands"])}
                 if fault == "missing":
@@ -66,15 +68,13 @@ class CompilerPlanTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     builder.compiler_commands(changed, root)
 
-    def test_replays_independent_object_jobs_concurrently_and_propagates_failure(self):
+    def test_replays_dependencies_serially_and_stops_on_failure(self):
         commands = [{"module": str(n), "sources": [str(n)], "argv": [str(n)]} for n in range(3)]
         for fail in [False, True]:
-            rendezvous = threading.Barrier(3, timeout=5)
             invoked = []
             def compiler(argv, check):
                 invoked.append(argv[0])
                 self.assertTrue(check)
-                rendezvous.wait()
                 if fail and argv == ["1"]:
                     raise subprocess.CalledProcessError(1, argv)
             with patch.object(builder.subprocess, "run", side_effect=compiler):
@@ -83,41 +83,40 @@ class CompilerPlanTests(unittest.TestCase):
                         builder.compile_commands(commands)
                 else:
                     builder.compile_commands(commands)
-            self.assertEqual(sorted(invoked), ["0", "1", "2"])
+            self.assertEqual(invoked, ["0", "1"] if fail else ["0", "1", "2"])
 
-    def test_frontend_batches_cover_each_source_once_without_shared_outputs(self):
+    def test_module_frontend_covers_every_source_and_keeps_bodies(self):
         sources = [f"/repo/Sources/File {n}.swift" for n in range(65)]
-        command = {"module": "Core", "sources": sources, "argv": ["swiftc", "-c", *sources]}
-        def frontend(primary, outputs=None):
-            return shlex.join(["swift-frontend", "-frontend", "-c",
-                               *[v for p in primary for v in ("-primary-file", p)],
-                               *[v for p in (outputs or primary) for v in ("-o", p + ".o")]])
-        valid = "\n".join(frontend(sources[i:i+32]) for i in range(0, len(sources), 32))
+        command = {"module": "Core", "sources": sources, "argv": ["swiftc", "-emit-module", *sources]}
+        def frontend(inputs):
+            return shlex.join(["swift-frontend", "-frontend", "-emit-module", *inputs, "-o", "Core.swiftmodule"])
+        valid = frontend(sources)
         with patch.object(builder.subprocess, "check_output", return_value=valid) as driver:
             batches = builder.frontend_commands([command])
             driver.assert_called_once_with([*command["argv"], "-driver-print-jobs"], text=True)
-        self.assertEqual([len(b["sources"]) for b in batches], [32, 32, 1])
+        self.assertEqual([len(b["sources"]) for b in batches], [65])
         self.assertEqual([p for b in batches for p in b["sources"]], sources)
-        for invalid in ["", valid.splitlines()[0], valid + "\n" + valid.splitlines()[0],
-                        valid.replace("-c", "-emit-module"), frontend(sources),
-                        valid.replace(shlex.quote(sources[32] + ".o"), shlex.quote(sources[0] + ".o"))]:
+        for invalid in ["", frontend(sources[:-1]), frontend(sources + [sources[0]]), valid + "\n" + valid,
+                        valid.replace("-emit-module", "-c"), valid + " -primary-file " + shlex.quote(sources[0]),
+                        valid + " -experimental-skip-non-inlinable-function-bodies-without-types"]:
             with patch.object(builder.subprocess, "check_output", return_value=invalid):
                 with self.assertRaises(ValueError):
                     builder.frontend_commands([command])
 
-    def test_large_module_uses_multiple_frontends(self):
+        with patch.object(builder.subprocess, "check_output", return_value=valid):
+            with self.assertRaises(ValueError):
+                builder.frontend_commands([command, command])
+
+    def test_extractor_compiler_errors_fail_even_when_sources_were_reported(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "Sources").mkdir()
-            sources = [root / "Sources" / f"File{n}.swift" for n in range(65)]
-            for source in sources:
-                source.touch()
-            command = {"moduleName": "Core", "sources": list(map(str, sources)),
-                       "executable": "swiftc", "otherArguments": [], "outputFileMapPath": "map.json",
-                       "importPath": "Modules", "isLibrary": True}
-            plan = builder.compiler_commands({"swiftCommands": {"Core": command},
-                                              "targetDependencyMap": {"Core": []}}, root)
-            self.assertEqual(plan[0]["argv"][-2:], ["-driver-batch-count", "3"])
+            logs = Path(directory)
+            command = [sys.executable, str(Path(builder.__file__).resolve()), "diagnostics", str(logs)]
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            log = logs / "extractor.log"
+            for message, ok in [("INFO [extractor/main] > Sources/Core.swift", True),
+                                ("ERRO [extractor/compiler] module compiled with Swift 6.1 cannot be imported", False)]:
+                log.write_text(message)
+                self.assertEqual(subprocess.run(command, capture_output=True).returncode == 0, ok)
 
 
 if __name__ == "__main__":
