@@ -4,7 +4,7 @@ import QuotaBarCore
 
 struct MusePortalConnectionView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var session = MusePortalSession.shared
+    @ObservedObject var session = MusePortalSession.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -14,7 +14,7 @@ struct MusePortalConnectionView: View {
             HStack {
                 Picker("Subscription team", selection: $session.selectedTeamID) {
                     Text("Choose a team").tag("")
-                    ForEach(session.teams) { team in Text(team.name).tag(team.id) }
+                    ForEach(session.teamPickerOptions) { team in Text(team.name).tag(team.id) }
                 }.disabled(!session.isEnabled || session.isDisconnecting)
                 // The read and its in-flight flag belong to the session, which
                 // outlives this sheet and clears the flag on every exit.

@@ -74,19 +74,44 @@ struct AntigravityRowLayoutTests {
     @Test("the row's composed accessibility label retains service, pool, usage and failure")
     func composedAccessibilityLabels() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        for status: ProviderStatus in [.measured(.warning), .unavailable(.badResponse)] {
-            let snapshot = QuotaSnapshot(id: "antigravity_claude", vendorId: .antigravityClaude,
-                displayName: "AGY Claude/GPT", category: .aiSubscriptions,
-                metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
-                status: status, resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
-                row1: status.confidence == .measured ? DualBarMetrics(primaryFraction: 0.8, label: "5H") : nil)
-            let row = MetricRowView(snapshot: snapshot, isGrouped: true)
-            let label = row.combinedAccessibilityLabel(grid: WindowGridPresentation(snapshot: snapshot, now: now),
-                presentation: MetricRowPresentation(snapshot: snapshot, now: now))
-            #expect(label.hasPrefix("Antigravity shared Claude/GPT pool. "))
-            #expect(label.contains("AGY Claude/GPT"))
-            if status.confidence == .measured { #expect(label.contains("80")) }
-            else { #expect(label.contains("Unexpected response")) }
+        let titles: [(VendorIdentifier, String, String)] = [
+            (.gemini, "Gemini", "Antigravity"), (.antigravityArgon, "Argon", "Antigravity"),
+            (.antigravityClaude, "Claude", "Antigravity shared Claude/GPT pool"),
+            (.claude, "Claude Code", "Claude"), (.openai, "Codex", "ChatGPT")]
+        for (vendor, title, service) in titles {
+            for (status, isStale): (ProviderStatus, Bool) in [
+                (.measured(.warning), false), (.unavailable(.badResponse), false), (.measured(.warning), true)] {
+                var snapshot = QuotaSnapshot(id: vendor.rawValue, vendorId: vendor,
+                    displayName: vendor.displayName, category: .aiSubscriptions,
+                    metric: .subscription(tierName: "Fixture plan", renewalDate: nil),
+                    status: status, resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                    row1: status.confidence == .measured ? DualBarMetrics(primaryFraction: 0.8, label: "5H",
+                        resetsAt: now.addingTimeInterval(3600), windowLength: 18000) : nil)
+                snapshot.resetCreditsAvailable = 2
+                if isStale { snapshot.staleReading = StaleReading(reason: .offline, at: now) }
+                if vendor == .openai {
+                    snapshot.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: vendor,
+                        label: "Usage credits", metric: .credits(remaining: 123, unitName: "credits"))]
+                }
+                let row = MetricRowView(snapshot: snapshot, isGrouped: true)
+                let label = row.combinedAccessibilityLabel(grid: WindowGridPresentation(snapshot: snapshot, now: now),
+                    presentation: MetricRowPresentation(snapshot: snapshot, now: now))
+                #expect(PopoverRowGrouping.rowTitle(for: snapshot) == title)
+                #expect(label.hasPrefix("\(service). "))
+                // Match a complete spoken name, so "Claude" cannot accidentally
+                // pass for the visible "Claude Code" title.
+                #expect(label.contains("\(title). ") || label.contains("\(title), "))
+                #expect(label.contains("2 banked reset credits"))
+                if vendor == .openai { #expect(label.contains("123 credits remaining")) }
+                if isStale {
+                    #expect(label.contains("Offline"))
+                    #expect(label.contains("stale, the last poll failed"))
+                }
+                if status.confidence == .measured {
+                    #expect(label.contains("5-hour 80% used"))
+                    #expect(label.contains("resets in 1 hour"))
+                } else { #expect(label.contains("Unexpected response")) }
+            }
         }
     }
 
