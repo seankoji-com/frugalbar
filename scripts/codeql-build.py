@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Prepare SwiftPM outside tracing, then force compilation of every source directly."""
+import heapq
 import json
 from pathlib import Path
 import shlex
@@ -39,8 +40,32 @@ def compiler_commands(description, root):
     if not expected or set(seen) != expected or len(seen) != len(expected):
         raise ValueError("SwiftPM commands must cover every Sources file exactly once")
     # A dependency must finish emission before a dependent module is extracted.
-    dependencies = description["targetDependencyMap"]
-    return sorted(commands, key=lambda c: (len(dependencies[c["module"]]), c["module"]))
+    dependencies = description.get("targetDependencyMap", {})
+    modules = {command["module"] for command in commands}
+    dependents = {module: [] for module in modules}
+    remaining = {module: set() for module in modules}
+    for module in modules:
+        # Some SwiftPM descriptions omit targets with no dependencies.
+        for dependency in dependencies.get(module, []):
+            if dependency in modules:
+                remaining[module].add(dependency)
+                dependents[dependency].append(module)
+
+    ready = [module for module, required in remaining.items() if not required]
+    heapq.heapify(ready)
+    ordered = []
+    by_module = {command["module"]: command for command in commands}
+    while ready:
+        module = heapq.heappop(ready)
+        ordered.append(by_module[module])
+        for dependent in sorted(dependents[module]):
+            remaining[dependent].remove(module)
+            if not remaining[dependent]:
+                heapq.heappush(ready, dependent)
+
+    if len(ordered) != len(commands):
+        raise ValueError("Target dependency map contains a cycle")
+    return ordered
 
 
 def frontend_commands(commands):
