@@ -64,13 +64,11 @@ jobs:
       - name: Select Xcode 16
         run: scripts/select-xcode.sh 16
 
-      - name: Cache SwiftPM build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .build
-          key: spm-codeql-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**/*.swift') }}
-          restore-keys: |
-            spm-codeql-${{ runner.os }}-
+      # The restored build took 539s before SwiftPM even planned compilation in
+      # run 40158842748. Prepare the manifest with this runner's toolchain before
+      # tracing; do not restore compiled sources that extraction must rebuild.
+      - name: Prepare SwiftPM manifest
+        run: swift package describe > /dev/null
 
       - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
