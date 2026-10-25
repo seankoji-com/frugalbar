@@ -15,6 +15,7 @@ import SQLite3
 private final class NewProviderStub: URLProtocol {
     nonisolated(unsafe) private static var _stubs: [String: @Sendable (URLRequest) -> Stubbed] = [:]
     nonisolated(unsafe) private static var _lastRequests: [String: URLRequest] = [:]
+    nonisolated(unsafe) private static var _requests: [String: [URLRequest]] = [:]
     /// The request bodies, captured at request time. A `URLProtocol` sees a
     /// POST body as a stream rather than `httpBody`, and that stream is spent
     /// by the time a test reads `lastRequest`, so it is drained here.
@@ -28,21 +29,25 @@ private final class NewProviderStub: URLProtocol {
     }
 
     static func install(_ stub: Stubbed, host: String) {
-        lock.withLock { _stubs[host] = { _ in stub } }
+        lock.withLock { _stubs[host] = { _ in stub }; _requests[host] = [] }
     }
 
     /// For a provider that calls several paths on one host — Grok reads its
     /// usage and its plan name from two different endpoints.
     static func install(host: String, responder: @escaping @Sendable (URLRequest) -> Stubbed) {
-        lock.withLock { _stubs[host] = responder }
+        lock.withLock { _stubs[host] = responder; _requests[host] = [] }
     }
 
     static func remove(host: String) {
-        lock.withLock { _stubs[host] = nil }
+        lock.withLock { _stubs[host] = nil; _requests[host] = nil }
     }
 
     static func lastRequest(host: String) -> URLRequest? {
         lock.withLock { _lastRequests[host] }
+    }
+
+    static func requests(host: String) -> [URLRequest] {
+        lock.withLock { _requests[host] ?? [] }
     }
 
     /// The body that went out in the most recent request to `host`.
@@ -83,6 +88,7 @@ private final class NewProviderStub: URLProtocol {
         }
         let responder: (@Sendable (URLRequest) -> Stubbed)? = Self.lock.withLock {
             Self._lastRequests[host] = request
+            Self._requests[host, default: []].append(request)
             Self._lastBodies[host] = Self.drain(request)
             return Self._stubs[host]
         }
@@ -759,6 +765,93 @@ struct DevPassQuotaProviderTests {
 /// rows this provider deliberately builds get drawn.
 @Suite("OpenCodeGoProvider", .serialized)
 struct OpenCodeGoProviderTests {
+
+    @Test("the current API product controls the plan, including fully blocked subscriptions",
+          arguments: ["go", "go-plus"], [false, true])
+    func currentProduct(product: String, blocked: Bool) async throws {
+        let window = blocked ? #"{"status":"rate-limited"}"# : #"{"status":"ok","percent":40}"#
+        let renewal = product == "go-plus" ? "go" : "go-plus"
+        let (snapshot, requests) = try await withRoutedHTTP(host: StubHost.opencode, routes: [
+            "/zen/go/v1/usage": "{\"usage\":{\"monthly\":\(window)}}",
+            "/console/api/go/status": "{\"product\":\"\(product)\",\"renewalProduct\":\"\(renewal)\"}"
+        ]) {
+            let snapshot = try await OpenCodeGoProvider(apiKey: "fixture-key").fetchSnapshot()
+            return (snapshot, NewProviderStub.requests(host: StubHost.opencode))
+        }
+        let tier = product == "go-plus" ? "Go Plus" : "Go"
+        #expect(snapshot.planName == "OpenCode \(tier)")
+        #expect(snapshot.metric == .subscription(tierName: tier, renewalDate: nil))
+        #expect(snapshot.row3?.isBlocked == blocked)
+        #expect(snapshot.row3?.primaryFraction == (blocked ? nil : 0.4))
+        #expect(snapshot.status.confidence == .measured)
+        #expect(Set(requests.compactMap { $0.url?.path }) == ["/zen/go/v1/usage", "/console/api/go/status"])
+        #expect(requests.count == 2)
+        for request in requests {
+            #expect(request.httpMethod == "GET")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key")
+            #expect(request.url?.query == nil)
+        }
+    }
+
+    @Test("a plan change is read on every fetch, with no remembered Plus assignment")
+    func planChanges() async throws {
+        let provider = OpenCodeGoProvider(apiKey: "fixture-key")
+        for product in ["go-plus", "go", "go-plus"] {
+            let snapshot = try await withRoutedHTTP(host: StubHost.opencode, routes: [
+                "/zen/go/v1/usage": #"{"usage":{"weekly":{"percent":25}}}"#,
+                "/console/api/go/status": "{\"product\":\"\(product)\"}"
+            ]) { try await provider.fetchSnapshot() }
+            #expect(snapshot.planName == (product == "go-plus" ? "OpenCode Go Plus" : "OpenCode Go"))
+            #expect(snapshot.row2?.primaryFraction == 0.25)
+        }
+    }
+
+    @Test("an unknown or failed plan lookup keeps the quota and publishes no plan",
+          arguments: [
+            (200, "{}"), (200, #"{"renewalProduct":"go-plus"}"#),
+            (200, #"{"product":"future-plan"}"#), (200, #"{"product":null}"#),
+            (200, #"{"product":42}"#),
+            (200, "not JSON"), (401, #"{"product":"go-plus"}"#),
+            (403, #"{"product":"go-plus"}"#), (429, #"{"product":"go-plus"}"#),
+            (500, #"{"product":"go-plus"}"#)
+          ])
+    func unavailablePlan(testCase: (Int, String)) async throws {
+        let (status, body) = testCase
+        NewProviderStub.install(host: StubHost.opencode) { request in
+            if request.url?.path == "/console/api/go/status" {
+                return NewProviderStub.Stubbed(status: status, body: Data(body.utf8))
+            }
+            return NewProviderStub.Stubbed(status: 200,
+                body: Data(#"{"usage":{"weekly":{"percent":25}}}"#.utf8))
+        }
+        defer { NewProviderStub.remove(host: StubHost.opencode) }
+        let snapshot = try await QuotaHTTP.$session.withValue(NewProviderStub.makeSession()) {
+            try await OpenCodeGoProvider(apiKey: "fixture-key").fetchSnapshot()
+        }
+        #expect(snapshot.planName == nil)
+        #expect(snapshot.metric == .subscription(tierName: nil, renewalDate: nil))
+        #expect(snapshot.status.confidence == .measured)
+        #expect(snapshot.row2?.primaryFraction == 0.25)
+        #expect(NewProviderStub.requests(host: StubHost.opencode).count == 2)
+    }
+
+    @Test("a successful Plus lookup cannot turn a failed quota response into a reading",
+          arguments: [401, 403, 429, 500])
+    func planCannotMaskQuotaFailure(status: Int) async throws {
+        NewProviderStub.install(host: StubHost.opencode) { request in
+            let isPlan = request.url?.path == "/console/api/go/status"
+            return NewProviderStub.Stubbed(status: isPlan ? 200 : status,
+                body: Data((isPlan ? #"{"product":"go-plus"}"#
+                            : #"{"usage":{"weekly":{"percent":25}}}"#).utf8))
+        }
+        defer { NewProviderStub.remove(host: StubHost.opencode) }
+        let snapshot = try await QuotaHTTP.$session.withValue(NewProviderStub.makeSession()) {
+            try await OpenCodeGoProvider(apiKey: "fixture-key").fetchSnapshot()
+        }
+        #expect(snapshot.status.confidence == .unavailable)
+        #expect(snapshot.consumptionFraction == nil)
+        #expect(snapshot.planName == nil)
+    }
 
     @Test("a fully rate-limited account renders blocked placeholders, not 'unsupported'")
     func fullyRateLimited() async throws {

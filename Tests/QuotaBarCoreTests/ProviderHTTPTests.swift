@@ -1646,8 +1646,9 @@ struct ProviderHTTPTests {
         // Fractional seconds in `resetsAt` must parse, or every reset is lost.
         #expect(snap.row2?.resetText != nil)
 
-        let req = try #require(URLProtocolStub.capturedRequests.first)
-        #expect(req.url?.absoluteString == "https://opencode.ai/zen/go/v1/usage")
+        let req = try #require(URLProtocolStub.capturedRequests.first {
+            $0.url?.absoluteString == "https://opencode.ai/zen/go/v1/usage"
+        })
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer super-secret-key")
         #expect(req.url?.absoluteString.contains("super-secret-key") == false)
     }

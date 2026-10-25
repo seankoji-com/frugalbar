@@ -75,6 +75,29 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         let usage: Usage?
     }
 
+    enum Plan: String, Decodable, Sendable {
+        case go
+        case plus = "go-plus"
+
+        var tierName: String { self == .plus ? "Go Plus" : "Go" }
+        var name: String { "OpenCode \(tierName)" }
+    }
+
+    private struct GoStatus: Decodable {
+        // renewalProduct can describe a scheduled downgrade. Only product
+        // identifies the subscription that is active now.
+        let product: Plan?
+    }
+
+    private static func fetchPlan(key: String) async -> Plan? {
+        guard let (data, http) = try? await QuotaHTTP.get(
+            url: "https://opencode.ai/console/api/go/status",
+            headers: ["Accept": "application/json"], auth: .bearer(key)),
+              http.statusCode == 200
+        else { return nil }
+        return (try? JSONDecoder().decode(GoStatus.self, from: data))?.product
+    }
+
     /// Resolves this provider's API key.
     ///
     /// The unnamed provider keeps the original vendor-level lookup (Keychain
@@ -97,11 +120,15 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             return unavailable(.notConfigured)
         }
 
-        let (data, http) = try await QuotaHTTP.get(
+        async let usageRequest = QuotaHTTP.get(
             url: "https://opencode.ai/zen/go/v1/usage",
             headers: ["Accept": "application/json"],
             auth: .bearer(key)
         )
+        // A missing or slow plan label must not lose the quota reading. Read
+        // it afresh with the same key on each poll so plan changes follow it.
+        async let planOutcome = withDeadline(seconds: 2) { await Self.fetchPlan(key: key) }
+        let (data, http) = try await usageRequest
         if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
         guard let response = try? JSONDecoder().decode(Response.self, from: data),
               let usage = response.usage
@@ -112,6 +139,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
         // published nothing", not a malformed payload.
         let measured = windows.compactMap { $0?.fraction }
         let anyBlocked = windows.contains(where: { $0?.isBlocked == true })
+        let plan: Plan? = if case .success(let value) = await planOutcome { value } else { nil }
         guard let worst = measured.max() else {
             // No window publishes a percent. A blocked window still counts as
             // a reading here: a fully rate-limited account (every window
@@ -120,7 +148,8 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             guard anyBlocked else {
                 return unavailable(.unsupported("OpenCode reported no usage window"))
             }
-            return Self.blockedSnapshot(usage: usage, now: Date(), instanceID: instanceID, displayName: displayName)
+            return Self.blockedSnapshot(usage: usage, now: Date(), instanceID: instanceID,
+                                        displayName: displayName, plan: plan)
         }
 
         // A blocked window cannot be used at all, whatever its percentage
@@ -135,7 +164,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             vendorId: vendorId,
             displayName: displayName,
             category: category,
-            metric: .subscription(tierName: "Go", renewalDate: nil),
+            metric: .subscription(tierName: plan?.tierName, renewalDate: nil),
             status: .measured(urgency),
             resetsAt: usage.rolling?.reset ?? usage.weekly?.reset ?? usage.monthly?.reset,
             lastUpdated: now,
@@ -148,7 +177,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
             row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
             badgeText: worst >= 1.0 ? "Exhausted" : "\(Int(((1 - worst) * 100).rounded()))% left",
-            planName: "OpenCode Go",
+            planName: plan?.name,
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"
         )
@@ -163,14 +192,14 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
     /// Reuses `Self.row`, which already draws a blocked window with no percent
     /// as a placeholder instead of dropping it.
     private static func blockedSnapshot(
-        usage: Response.Usage, now: Date, instanceID: String, displayName: String
+        usage: Response.Usage, now: Date, instanceID: String, displayName: String, plan: Plan?
     ) -> QuotaSnapshot {
         QuotaSnapshot(
             id: instanceID,
             vendorId: .opencode,
             displayName: displayName,
             category: .aiSubscriptions,
-            metric: .subscription(tierName: "Go", renewalDate: nil),
+            metric: .subscription(tierName: plan?.tierName, renewalDate: nil),
             status: .measured(.critical),
             resetsAt: usage.rolling?.reset ?? usage.weekly?.reset ?? usage.monthly?.reset,
             lastUpdated: now,
@@ -179,7 +208,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
             row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
             badgeText: "Blocked",
-            planName: "OpenCode Go",
+            planName: plan?.name,
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"
         )
