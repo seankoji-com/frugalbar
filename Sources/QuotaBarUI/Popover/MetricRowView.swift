@@ -5,14 +5,15 @@ import QuotaBarCore
 /// the ticket count and credit figure, so these children stay decorative.
 struct SubscriptionCreditLineView: View {
     let presentation: MetricRowPresentation
+    var showsTickets: Bool = true
 
     var body: some View {
         HStack(spacing: 8) {
-            if let credits = presentation.resetCredits {
+            if showsTickets, let credits = presentation.resetCredits {
                 HStack(spacing: 3) {
                     ForEach(0..<credits.tickets, id: \.self) { index in
                         GoldenTicketView(index: index)
-                            .help(credits.expiryText(at: index))
+                            .help(credits.expiryText(at: index, now: credits.now))
                     }
                     if credits.overflow > 0 {
                         Text("+\(credits.overflow)")
@@ -121,8 +122,12 @@ struct MetricRowView: View {
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
-            if p.resetCredits != nil || !p.subscriptionCredits.isEmpty {
-                SubscriptionCreditLineView(presentation: p)
+            if (snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
+                SubscriptionCreditLineView(presentation: p, showsTickets: snapshot.vendorId != .openai)
+            }
+            if let credits = p.openAIUsageCredit {
+                OpenAIUsageCreditView(presentation: credits)
+                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
             }
             if let monthly = p.monthlyCreditLine {
                 VStack(alignment: .leading, spacing: 2) {
@@ -283,6 +288,9 @@ struct MetricRowView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
+                }
+                if snapshot.vendorId == .openai, let credits = p.resetCredits {
+                    ResetTicketsView(credits: credits)
                 }
                 // A money provider has no plan, but it does have the one figure
                 // that matters at a glance: what is left. It takes the subtitle

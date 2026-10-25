@@ -849,6 +849,9 @@ public struct SettingsView: View {
     /// confused with one typed in here.
     private var cyclesTab: some View {
         Form {
+            OpenAIAccountSettingsView(accountKey: store?.snapshots.first(where: { $0.vendorId == .openai })?.openAIAccountKey) {
+                Task { await store?.forceRefresh() }
+            }
             Section {
                 ForEach(Self.cycleVendors, id: \.self) { vendor in
                     CycleEditorRow(

@@ -12,6 +12,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     private let accessToken: String?
     private let accountID: String?
     private let cliProxyConfig: CLIProxyConfig?
+    private let accountPreferences: @Sendable (String) -> OpenAIAccountPreferences?
     /// The details endpoint for banked resets. The usage payload only carries
     /// their count; this one carries each credit's expiry.
     static let resetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
@@ -26,11 +27,15 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         // Injectable so a test can drive the proxy-failure fall-through below
         // without depending on whether this Mac happens to be signed in to
         // Codex. Nil means the production path.
-        directCredential: (@Sendable () async -> String?)? = nil
+        directCredential: (@Sendable () async -> String?)? = nil,
+        accountPreferences: @escaping @Sendable (String) -> OpenAIAccountPreferences? = {
+            OpenAIAccountPreferences.load(accountKey: $0)
+        }
     ) {
         self.accessToken = accessToken
         self.accountID = accountID
         self.cliProxyConfig = cliProxyConfig
+        self.accountPreferences = accountPreferences
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .openai) }
     }
@@ -210,6 +215,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         var snapshot = makeSnapshot(
             response: response,
             accountPlan: accountPlan,
+            accountID: account.idToken?.chatgptAccountId,
             cliSource: "CLI Proxy (\(host))",
             now: now
         )
@@ -250,6 +256,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         return makeSnapshot(
             response: response,
             accountPlan: nil,
+            accountID: accountID,
             resetCreditExpiries: expiries,
             cliSource: "Codex ChatGPT login",
             now: now
@@ -278,6 +285,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     func makeSnapshot(
         response: Response,
         accountPlan: String?,
+        accountID: String? = nil,
         resetCreditExpiries: [Date?] = [],
         cliSource: String,
         now: Date = Date()
@@ -296,7 +304,9 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         let urgency: Urgency = worst > 0.90 ? .critical : worst > 0.70 ? .warning : .none
         // An unread plan is nil, not the vendor's name wearing a tier's
         // clothes. `shortPlanName` renders nil as nothing at all.
-        let plan = response.plan_type?.capitalized ?? accountPlan?.capitalized
+        let accountKey = OpenAIAccountPreferences.accountKey(for: accountID)
+        let preferences = accountKey.flatMap(accountPreferences)
+        let plan = (preferences ?? OpenAIAccountPreferences()).planName(reported: response.plan_type ?? accountPlan)
 
         // The vendor's own count, or nil when the payload carried none —
         // never 0 standing in for "not reported".
@@ -316,7 +326,8 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         snapshot.resetCreditsAvailable = resetCredits
         snapshot.resetCreditsApplicable = applicableCredits
         snapshot.resetCreditExpiries = resetCreditExpiries
-        snapshot.apiCredits = Self.apiCredits(from: response.credits)
+        snapshot.openAIAccountKey = accountKey
+        snapshot.apiCredits = Self.apiCredits(from: response.credits, grant: preferences?.creditGrant)
         return snapshot
     }
 
@@ -337,7 +348,7 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     /// `unlimited: true` is the vendor saying the account is not metered by
     /// this figure, so it is *said*, not counted — a count there would have to
     /// be invented.
-    static func apiCredits(from credits: Response.Credits?) -> [APICreditEntry] {
+    static func apiCredits(from credits: Response.Credits?, grant: OpenAICreditGrant? = nil) -> [APICreditEntry] {
         guard let credits else { return [] }
         if credits.unlimited == true {
             return [APICreditEntry(
@@ -357,7 +368,8 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             vendorId: .openai,
             label: "Usage credits",
             metric: .credits(remaining: count, unitName: "credits"),
-            source: "Codex usage payload · credits.balance"
+            source: "Codex usage payload · credits.balance",
+            creditGrant: grant
         )]
     }
 

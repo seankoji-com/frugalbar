@@ -51,6 +51,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// entries are nil, meaning the provider published no expiry. Never
         /// inferred from the reset window or another credit.
         public let expiries: [Date?]
+        public let now: Date
 
         /// nil when there is nothing to draw. A vendor that published no figure
         /// (`nil`), or published zero, draws nothing: "0 reset credits" is
@@ -58,9 +59,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// each index describes the ticket at that index. Include nil entries
         /// for unknown interior expiries; omitted trailing entries are treated
         /// as unavailable. Entries beyond the rendered ticket count are ignored.
-        public init?(total: Int?, expiries: [Date?] = []) {
+        public init?(total: Int?, expiries: [Date?] = [], now: Date = Date()) {
             guard let total, total > 0 else { return nil }
             self.total = total
+            self.now = now
             self.tickets = min(total, ResetCreditTicketLimit.maxCount)
             self.overflow = max(0, total - ResetCreditTicketLimit.maxCount)
             self.expiries = (0..<tickets).map { index in
@@ -83,10 +85,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
             return expiry < now ? "Expired \(date)" : "Expires \(date)"
         }
 
+        public func expiryCountdown(at index: Int) -> String {
+            CreditExpiryText.countdown(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
+        }
+
         /// The strip in words, for a screen reader. The glyph run is a shape
         /// channel, so the count must also be spoken (WCAG 1.4.1).
         public var spoken: String {
-            "\(total) banked reset credit\(total == 1 ? "" : "s")"
+            let count = "\(total) banked reset credit\(total == 1 ? "" : "s")"
+            guard expiries.contains(where: { $0 != nil }) else { return count }
+            return ([count] + (0..<tickets).map { "Ticket \($0 + 1): \(expiryCountdown(at: $0))" })
+                .joined(separator: ", ")
         }
     }
 
@@ -102,6 +111,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let staleSpoken: String?
     public let subscriptionCredits: [APICreditEntryPresentation]
     public let monthlyPromo: MonthlyPromoCreditPresentation?
+    public let openAIUsageCredit: OpenAIUsageCreditPresentation?
     public let monthlyCreditLine: String?
     public let monthlyCreditDetail: String?
 
@@ -117,6 +127,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
         if let monthlyPromo { parts.append(monthlyPromo.spoken) }
+        if let openAIUsageCredit { parts.append(openAIUsageCredit.spoken) }
         return parts.joined(separator: ". ")
     }
 
@@ -134,10 +145,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
         self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable,
-                                         expiries: snapshot.resetCreditExpiries)
+                                         expiries: snapshot.resetCreditExpiries, now: now)
+        let usageCredit = snapshot.apiCredits.compactMap {
+            OpenAIUsageCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil)
+        }.first
+        self.openAIUsageCredit = usageCredit
         self.monthlyPromo = snapshot.apiCredits.first(where: \.isMonthlyPromo)
             .map { MonthlyPromoCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil) }
-        self.subscriptionCredits = snapshot.apiCredits.filter { $0.extendsSubscription && !$0.isMonthlyPromo }
+        self.subscriptionCredits = snapshot.apiCredits.filter {
+            $0.extendsSubscription && !$0.isMonthlyPromo
+                && !(usageCredit != nil && $0.vendorId == .openai && $0.id == "openai.api-credits")
+        }
             .map { APICreditEntryPresentation(entry: $0) }
 
         // An unreadable provider has no bars, so this reads false there — a
