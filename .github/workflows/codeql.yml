@@ -64,11 +64,11 @@ jobs:
       - name: Select Xcode 16
         run: scripts/select-xcode.sh 16
 
-      # The restored build took 539s before SwiftPM even planned compilation in
-      # run 40158842748. Prepare the manifest with this runner's toolchain before
-      # tracing; do not restore compiled sources that extraction must rebuild.
-      - name: Prepare SwiftPM manifest
-        run: swift package describe > /dev/null
+      # In job 121185714143, manifest preparation took 7s but traced build
+      # planning still took 438s before compilation began. Cache the complete
+      # plan, not compiled objects: every application source is built below.
+      - name: Prepare SwiftPM build plan
+        run: swift build -c debug --print-manifest-job-graph > "$RUNNER_TEMP/swift-build-plan.dot"
 
       - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
