@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,40 @@ class CompilerPlanTests(unittest.TestCase):
                 else:
                     builder.compile_commands(commands)
             self.assertEqual(sorted(invoked), ["0", "1", "2"])
+
+    def test_frontend_batches_cover_each_source_once_without_shared_outputs(self):
+        sources = [f"/repo/Sources/File {n}.swift" for n in range(65)]
+        command = {"module": "Core", "sources": sources, "argv": ["swiftc", "-c", *sources]}
+        def frontend(primary, outputs=None):
+            return shlex.join(["swift-frontend", "-frontend", "-c",
+                               *[v for p in primary for v in ("-primary-file", p)],
+                               *[v for p in (outputs or primary) for v in ("-o", p + ".o")]])
+        valid = "\n".join(frontend(sources[i:i+32]) for i in range(0, len(sources), 32))
+        with patch.object(builder.subprocess, "check_output", return_value=valid) as driver:
+            batches = builder.frontend_commands([command])
+            driver.assert_called_once_with([*command["argv"], "-driver-print-jobs"], text=True)
+        self.assertEqual([len(b["sources"]) for b in batches], [32, 32, 1])
+        self.assertEqual([p for b in batches for p in b["sources"]], sources)
+        for invalid in ["", valid.splitlines()[0], valid + "\n" + valid.splitlines()[0],
+                        valid.replace("-c", "-emit-module"), frontend(sources),
+                        valid.replace(shlex.quote(sources[32] + ".o"), shlex.quote(sources[0] + ".o"))]:
+            with patch.object(builder.subprocess, "check_output", return_value=invalid):
+                with self.assertRaises(ValueError):
+                    builder.frontend_commands([command])
+
+    def test_large_module_uses_multiple_frontends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Sources").mkdir()
+            sources = [root / "Sources" / f"File{n}.swift" for n in range(65)]
+            for source in sources:
+                source.touch()
+            command = {"moduleName": "Core", "sources": list(map(str, sources)),
+                       "executable": "swiftc", "otherArguments": [], "outputFileMapPath": "map.json",
+                       "importPath": "Modules", "isLibrary": True}
+            plan = builder.compiler_commands({"swiftCommands": {"Core": command},
+                                              "targetDependencyMap": {"Core": []}}, root)
+            self.assertEqual(plan[0]["argv"][-2:], ["-driver-batch-count", "3"])
 
 
 if __name__ == "__main__":

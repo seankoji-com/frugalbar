@@ -3,6 +3,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -33,13 +34,44 @@ def compiler_commands(description, root):
                 "-output-file-map", command["outputFileMapPath"], "-I", command["importPath"]]
         if command["isLibrary"]:
             argv.append("-parse-as-library")
-        argv += ["-c", *map(str, sources), *arguments, "-driver-batch-count", "1"]
+        # Bound the serial extractor work per frontend while retaining the full
+        # module as input for type checking. The driver partitions primary files.
+        batches = (len(sources) + 31) // 32
+        argv += ["-c", *map(str, sources), *arguments, "-driver-batch-count", str(batches)]
         commands.append({"module": command["moduleName"], "sources": list(map(str, sources)), "argv": argv})
     if not expected or set(seen) != expected or len(seen) != len(expected):
         raise ValueError("SwiftPM commands must cover every Sources file exactly once")
     # Retain deterministic plan order; prepared module inputs need no replay.
     dependencies = description["targetDependencyMap"]
     return sorted(commands, key=lambda c: (len(dependencies[c["module"]]), c["module"]))
+
+
+def frontend_commands(commands):
+    # Resolve the driver outside tracing. macOS tracer executable rewriting took
+    # over two minutes before swiftc/driver reached the first frontend in CI.
+    result = []
+    outputs = []
+    for command in commands:
+        printed = subprocess.check_output([*command["argv"], "-driver-print-jobs"], text=True)
+        seen = []
+        for line in printed.splitlines():
+            argv = shlex.split(line)
+            if not argv:
+                continue
+            if "-frontend" not in argv or "-c" not in argv or "-emit-module" in argv:
+                raise ValueError("Expected only object-compiling Swift frontends")
+            primary = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-primary-file"]
+            objects = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-o"]
+            if not primary or len(primary) > 32 or len(objects) != len(primary):
+                raise ValueError("Frontend must compile at most 32 primary sources to distinct objects")
+            seen.extend(primary)
+            outputs.extend(objects)
+            result.append({"module": command["module"], "sources": primary, "argv": argv})
+        if sorted(seen) != sorted(command["sources"]):
+            raise ValueError("Frontend primary files must cover every module source exactly once")
+    if len(outputs) != len(set(outputs)):
+        raise ValueError("Frontend object outputs must not overlap")
+    return result
 
 
 def compile_commands(commands):
@@ -62,7 +94,7 @@ def main():
         build = ["swift", "build", "--build-system", "native", "-c", "debug"]
         subprocess.run([*build, "--jobs", "3"], check=True)
         binary = Path(subprocess.check_output([*build, "--show-bin-path"], text=True).strip())
-        commands = compiler_commands(json.loads((binary / "description.json").read_text()), root)
+        commands = frontend_commands(compiler_commands(json.loads((binary / "description.json").read_text()), root))
         plan.write_text(json.dumps({"root": str(root), "commands": commands}, indent=2) + "\n")
     elif mode == "compile":
         prepared = json.loads(plan.read_text())
