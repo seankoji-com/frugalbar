@@ -70,7 +70,7 @@ jobs:
       - name: Select Xcode 16
         run: scripts/select-xcode.sh 16
 
-      - name: Prepare SDK modules and compiler commands outside tracing
+      - name: Plan compiler commands outside tracing without building the app twice
         run: |
           python3 -m unittest discover -s scripts -p 'test_codeql*.py'
           python3 scripts/codeql-build.py prepare "$RUNNER_TEMP/swift-compiler-plan.json"

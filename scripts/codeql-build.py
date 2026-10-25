@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare SwiftPM outside tracing, then force compilation of every source directly."""
+"""Plan SwiftPM outside tracing, then compile every source in dependency order."""
 import heapq
 import json
 from pathlib import Path
@@ -102,27 +102,30 @@ def compile_commands(commands):
         subprocess.run(command["argv"], check=True)
 
 
+def prepare_plan(root, plan):
+    # Planning writes description.json without compiling objects or linking the
+    # app. Each replay emits its native module before CodeQL extracts it; later
+    # replays therefore have both native and CodeQL-compatible dependencies.
+    build = ["swift", "build", "--build-system", "native", "-c", "debug"]
+    subprocess.run([*build, "--print-manifest-job-graph"], check=True, stdout=subprocess.DEVNULL)
+    binary = Path(subprocess.check_output([*build, "--show-bin-path"], text=True).strip())
+    commands = frontend_commands(compiler_commands(json.loads((binary / "description.json").read_text()), root))
+    for command in commands:
+        argv = command["argv"]
+        if "-supplementary-output-file-map" in argv:
+            index = argv.index("-supplementary-output-file-map") + 1
+            output_map = plan.with_name(f'{plan.stem}-{command["module"]}-outputs.json')
+            output_map.write_bytes(Path(argv[index]).read_bytes())
+            argv[index] = str(output_map.resolve())
+    plan.write_text(json.dumps({"root": str(root), "commands": commands}, indent=2) + "\n")
+
+
 def main():
     mode, filename = sys.argv[1:]
     root = Path.cwd().resolve()
     plan = Path(filename)
     if mode == "prepare":
-        # SwiftPM startup under CodeQL took 540s before any application compilation.
-        # Warm SDK/modules and resolve the full compiler plan without tracing SwiftPM.
-        build = ["swift", "build", "--build-system", "native", "-c", "debug"]
-        subprocess.run([*build, "--jobs", "3"], check=True)
-        binary = Path(subprocess.check_output([*build, "--show-bin-path"], text=True).strip())
-        commands = frontend_commands(compiler_commands(json.loads((binary / "description.json").read_text()), root))
-        # -driver-print-jobs may write auxiliary output maps into a temporary
-        # directory. Keep their exact bytes beside the plan across init/compile.
-        for command in commands:
-            argv = command["argv"]
-            if "-supplementary-output-file-map" in argv:
-                index = argv.index("-supplementary-output-file-map") + 1
-                output_map = plan.with_name(f'{plan.stem}-{command["module"]}-outputs.json')
-                output_map.write_bytes(Path(argv[index]).read_bytes())
-                argv[index] = str(output_map.resolve())
-        plan.write_text(json.dumps({"root": str(root), "commands": commands}, indent=2) + "\n")
+        prepare_plan(root, plan)
     elif mode == "compile":
         prepared = json.loads(plan.read_text())
         if prepared["root"] != str(root):

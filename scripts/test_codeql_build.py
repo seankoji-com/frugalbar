@@ -15,6 +15,28 @@ spec.loader.exec_module(builder)
 
 
 class CompilerPlanTests(unittest.TestCase):
+    def test_prepare_only_plans_and_keeps_auxiliary_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary = root / 'debug'
+            binary.mkdir()
+            (binary / 'description.json').write_text('{}')
+            auxiliary = root / 'outputs.json'
+            auxiliary.write_text('{"output": "module"}')
+            commands = [{'module': 'Core', 'sources': [], 'argv': [
+                'swift-frontend', '-supplementary-output-file-map', str(auxiliary)]}]
+            with patch.object(builder.subprocess, 'run') as run, \
+                    patch.object(builder.subprocess, 'check_output', return_value=str(binary)), \
+                    patch.object(builder, 'compiler_commands', return_value=[]), \
+                    patch.object(builder, 'frontend_commands', return_value=commands):
+                builder.prepare_plan(root, root / 'plan.json')
+            run.assert_called_once_with(['swift', 'build', '--build-system', 'native', '-c', 'debug',
+                                         '--print-manifest-job-graph'], check=True, stdout=subprocess.DEVNULL)
+            prepared = json.loads((root / 'plan.json').read_text())
+            retained = Path(prepared['commands'][0]['argv'][-1])
+            self.assertEqual(retained.read_bytes(), auxiliary.read_bytes())
+            self.assertNotEqual(retained, auxiliary)
+
     def test_extracted_files_must_include_every_application_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
