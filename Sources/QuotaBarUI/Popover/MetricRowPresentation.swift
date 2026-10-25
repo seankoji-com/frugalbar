@@ -112,8 +112,6 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let subscriptionCredits: [APICreditEntryPresentation]
     public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let openAIUsageCredit: OpenAIUsageCreditPresentation?
-    public let monthlyCreditLine: String?
-    public let monthlyCreditDetail: String?
 
     /// The actual row is one accessibility element with children ignored.
     public func combinedAccessibilityLabel(windows: String?, forecast: String?, creditsStale: Bool) -> String {
@@ -121,10 +119,6 @@ public struct MetricRowPresentation: Equatable, Sendable {
         if let windows { parts.append(windows) }
         if let forecast { parts.append(forecast) }
         if let resetCredits { parts.append(resetCredits.spoken) }
-        if let monthlyCreditLine {
-            parts.append(monthlyCreditLine)
-            if let monthlyCreditDetail { parts.append(monthlyCreditDetail) }
-        }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
         if let monthlyPromo { parts.append(monthlyPromo.spoken) }
         if let openAIUsageCredit { parts.append(openAIUsageCredit.spoken) }
@@ -138,8 +132,6 @@ public struct MetricRowPresentation: Equatable, Sendable {
     static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
-        self.monthlyCreditLine = snapshot.monthlyAPICredit?.line
-        self.monthlyCreditDetail = snapshot.monthlyAPICredit?.detail()
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured

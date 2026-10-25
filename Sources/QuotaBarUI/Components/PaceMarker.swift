@@ -37,8 +37,14 @@ extension DualBarMetrics {
     /// drawn. The inspector's verdict and History's pace card both read this,
     /// so the two cannot call one reading "ahead" and "on pace" with
     /// different margins (History once used ten points, the bar four).
-    var paceStanding: PaceStanding? {
-        guard !isBlocked, let used = primaryFraction, let pace = paceMarker else { return nil }
+    var paceStanding: PaceStanding? { paceStanding(presented: nil) }
+
+    /// The same verdict against a marker the caller draws itself. The promo
+    /// credit keeps its tick when spent, where `paceMarker` — a quota window's
+    /// definition — would suppress it, so its tooltip must compare against the
+    /// tick actually on screen.
+    func paceStanding(presented: Double?) -> PaceStanding? {
+        guard !isBlocked, let used = primaryFraction, let pace = presented ?? paceMarker else { return nil }
         let delta = used - pace
         if delta > Self.aheadOfPaceMargin { return .ahead }
         if delta < -Self.aheadOfPaceMargin { return .behind }

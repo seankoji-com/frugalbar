@@ -55,6 +55,23 @@ struct PaceMarkerTests {
         #expect(bar(used: 0.99).paceMarker == 0.5)
     }
 
+    /// The promo credit is read against its month, so it keeps the tick at
+    /// full usage. It presents that marker itself; the quota-window
+    /// definition keeps suppressing one, and the tooltip describes the tick
+    /// the caller actually draws.
+    @Test("a spent bar draws a caller-presented marker and reports its pace")
+    @MainActor
+    func presentedMarkerOnSpentBar() {
+        let spent = bar(used: 1.0)
+        #expect(spent.paceMarker == nil)
+        #expect(DualBarProgressView(metrics: spent, showsLabel: false).drawnPaceMarker == nil)
+        let kept = DualBarProgressView(metrics: spent, showsLabel: false, presentedPaceMarker: 0.5)
+        #expect(kept.drawnPaceMarker == 0.5)
+        #expect(DualBarProgressView.helpText(for: spent, presentedPaceMarker: 0.5)
+            .contains("50% ahead of an even pace"))
+        #expect(!DualBarProgressView.helpText(for: spent).contains("even pace"))
+    }
+
     @Test("no marker on a blocked window with no reading; one with a reading keeps it")
     func blocked() {
         #expect(bar(used: nil, blocked: true).paceMarker == nil)

@@ -96,7 +96,8 @@ struct MonthlyPromoCreditView: View {
 
             VStack(spacing: 4) {
                 if presentation.fraction != nil {
-                    DualBarProgressView(metrics: presentation.barMetrics, showsLabel: false)
+                    DualBarProgressView(metrics: presentation.barMetrics, showsLabel: false,
+                        presentedPaceMarker: presentation.paceMarker)
                 }
                 HStack(spacing: 2) {
                     if let percent = presentation.percentText {
