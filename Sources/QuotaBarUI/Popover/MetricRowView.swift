@@ -197,13 +197,29 @@ struct MetricRowView: View {
 
     /// Shared with the default-suite layout check at the actual name width.
     var titleView: some View {
-        Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
-            .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
-            .tracking(isGrouped ? 0 : Theme.Tracking.title)
-            .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
-            .lineLimit(snapshot.instanceIdOrNil == nil && (isGrouped || snapshot.vendorId != .antigravityClaude) ? 1 : 2)
-            .fixedSize(horizontal: false, vertical: true)
-            .minimumScaleFactor(0.85)
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
+                .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
+                .tracking(isGrouped ? 0 : Theme.Tracking.title)
+                .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
+                .lineLimit(snapshot.instanceIdOrNil == nil && (isGrouped || snapshot.vendorId != .antigravityClaude) ? 1 : 2)
+                .fixedSize(horizontal: false, vertical: true)
+                .minimumScaleFactor(0.85)
+            if let badge = PopoverRowGrouping.planBadge(for: snapshot) {
+                Text(badge)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color(red: 0xd9 / 255.0, green: 0xbd / 255.0, blue: 1))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color(red: 0x30 / 255.0, green: 0x29 / 255.0, blue: 0x3c / 255.0),
+                                in: RoundedRectangle(cornerRadius: 4))
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color(red: 0xb4 / 255.0, green: 0x90 / 255.0, blue: 0xe5 / 255.0)
+                            .opacity(0.42), lineWidth: 0.5))
+                    .fixedSize()
+                    .help("OpenCode Go Plus")
+            }
+        }
     }
 
     private func forecastBubble(_ text: String) -> some View {

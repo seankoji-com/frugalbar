@@ -8,6 +8,38 @@ import Testing
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    @Test func renderOpenCodeGoPlus() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        let now = Date()
+        func snapshot(_ name: String, plus: Bool, blocked: Bool) -> QuotaSnapshot {
+            let reset = now.addingTimeInterval(86_400)
+            return QuotaSnapshot(id: "opencode-go:\(name)", vendorId: .opencode, displayName: name,
+                category: .aiSubscriptions,
+                metric: .subscription(tierName: plus ? "Go Plus" : "Go", renewalDate: nil),
+                status: .measured(blocked ? .critical : .none), resetsAt: reset,
+                lastUpdated: now, auxiliaryInfo: nil,
+                row1: DualBarMetrics(primaryFraction: blocked ? 1 : 0.2, label: "5H",
+                    blockedColor: blocked ? "#ffb4ab" : nil,
+                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
+                row2: DualBarMetrics(primaryFraction: blocked ? 1 : 0.4, label: "WK",
+                    blockedColor: blocked ? "#ffb4ab" : nil,
+                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
+                row3: DualBarMetrics(primaryFraction: blocked ? 1 : 0.22, label: "MO",
+                    blockedColor: blocked ? "#ffb4ab" : nil,
+                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
+                planName: plus ? "OpenCode Go Plus" : "OpenCode Go")
+        }
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
+            snapshot("Alpha", plus: false, blocked: true),
+            snapshot("Beta", plus: false, blocked: true),
+            snapshot("Gamma", plus: true, blocked: true),
+            snapshot("Delta", plus: true, blocked: false),
+            snapshot("Epsilon", plus: false, blocked: false),
+            snapshot("Long workspace name", plus: true, blocked: false)
+        ]).padding(12).frame(width: 384).background(Theme.surface),
+            name: "opencode-go-plus", directory: directory)
+    }
+
     private struct FixtureProvider: QuotaProvider {
         let snapshot: QuotaSnapshot
         var vendorId: VendorIdentifier { snapshot.vendorId }

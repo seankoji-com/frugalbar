@@ -34,10 +34,15 @@ struct PopoverRowGrouping {
     }
 
     static func accessibilityPrefix(for snapshot: QuotaSnapshot) -> String? {
+        if planBadge(for: snapshot) != nil { return "OpenCode Go Plus" }
         if snapshot.vendorId == .antigravityClaude {
             return "Antigravity shared Claude/GPT pool"
         }
         return service(for: snapshot.vendorId)
+    }
+
+    static func planBadge(for snapshot: QuotaSnapshot) -> String? {
+        snapshot.vendorId == .opencode && snapshot.planName == "OpenCode Go Plus" ? "Plus" : nil
     }
 
     /// - Parameter ordering: informational here, and deliberately not
@@ -81,10 +86,13 @@ struct PopoverRowGrouping {
                 groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
                                     snapshots: run, headerPlan: headerPlan))
             } else if grouped {
+                let isGoGroup = vendor == .opencode && run.allSatisfy {
+                    $0.planName == "OpenCode Go" || $0.planName == "OpenCode Go Plus"
+                }
                 groups.append(Group(
                     id: run[0].id,
-                    header: sharedPlan ? plan : vendor.displayName,
-                    suppressPlan: sharedPlan,
+                    header: isGoGroup ? "OpenCode Go" : sharedPlan ? plan : vendor.displayName,
+                    suppressPlan: isGoGroup || sharedPlan,
                     snapshots: run
                 ))
             } else {
