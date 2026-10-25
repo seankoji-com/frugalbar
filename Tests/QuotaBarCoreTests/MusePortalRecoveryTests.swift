@@ -23,7 +23,7 @@ struct MusePortalRecoveryTests {
 
         // Deliver the platform callback to the production navigation delegate.
         // Leave view.url at the old portal, exactly as a dead process can do.
-        view.navigationDelegate?.webViewWebContentProcessDidTerminate?(view)
+        view.terminate()
         #expect(!website.isAtPortal)
         #expect(view.loads == 1) // The hidden host must not reload immediately.
         #expect(session.isEnabled && session.selectedTeamID == "42")
@@ -40,6 +40,37 @@ struct MusePortalRecoveryTests {
         view.commitPortal()
         guard case .usage = await read.value else { Issue.record("Fresh commit did not resume the read"); return }
         #expect(view.evaluations == 1)
+        #expect(view.requests.map(\.absoluteString) == ["https://dev.meta.ai/", "https://dev.meta.ai/"])
+    }
+
+    @Test("a visible portal terminated mid-navigation recovers while the callback still reports loading")
+    func visibleInFlightTerminationRecovers() async throws {
+        let view = RecoveryWebView()
+        let website = MusePortalWebKit(makeWebView: { view })
+        defer { website.stop() }
+        website.open()
+        let window = show(view)
+        defer { window.close() }
+        #expect(view.isLoading && view.loads == 1)
+        view.terminate()
+        #expect(view.loads == 2)
+        #expect(view.isLoading) // The old process reset must not erase the new load.
+        #expect(!website.isAtPortal)
+        website.open() // Ordinary reads still leave an in-flight navigation alone.
+        #expect(view.loads == 2)
+        var outcomes: [Bool] = []
+        website.waitUntilPortal(id: UUID()) { outcomes.append($0) }
+        website.evaluate(email: "person@example.com", plan: "Muse Code Power Usage", teamID: "42") { _ in }
+        #expect(outcomes.isEmpty && view.evaluations == 0)
+        view.commitPortal()
+        #expect(outcomes == [true])
+        let evaluation = ClaudeMonthlyCreditEvaluation()
+        let text = await evaluation.value { complete in
+            website.evaluate(email: "person@example.com", plan: "Muse Code Power Usage", teamID: "42", complete: complete)
+        }
+        #expect(text != nil && view.evaluations == 1)
+        view.terminate()
+        #expect(view.loads == 2 && !view.isLoading && !website.isAtPortal)
         #expect(view.requests.map(\.absoluteString) == ["https://dev.meta.ai/", "https://dev.meta.ai/"])
     }
 
@@ -142,6 +173,8 @@ struct MusePortalRecoveryTests {
             if action != "navigate" { website.stop() }
             if action != "stop" {
                 website.open()
+                // This newer navigation must survive the termination callback.
+                #expect((action == "navigate" ? view : replacement).isLoading)
                 website.waitUntilPortal(id: newerID) { outcomes.append($0) }
             }
         }
@@ -155,6 +188,7 @@ struct MusePortalRecoveryTests {
             #expect(replacement.loads == 1)
             replacement.commitPortal()
         } else if action == "navigate" {
+            #expect(view.isLoading)
             view.commitPortal()
         } else {
             #expect(website.webView == nil)
@@ -246,8 +280,12 @@ private final class RecoveryWebView: WKWebView {
     }
 
     func terminate() {
-        simulatedLoading = false
+        // WebKit commits the terminated process's load-state reset after the
+        // delegate returns. Keep its pre-termination state during the callback,
+        // but do not reset a new load issued by recovery or reentrant completion.
+        let previousLoads = loads
         navigationDelegate?.webViewWebContentProcessDidTerminate?(self)
+        if loads == previousLoads { simulatedLoading = false }
     }
 
     override func __callAsyncJavaScript(_ functionBody: String, arguments: [String: Any]?,

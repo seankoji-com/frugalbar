@@ -338,8 +338,11 @@ final class MusePortalWebKit: NSObject, MusePortalWebsite, WKNavigationDelegate 
         guard self.webView === webView, navigationGeneration == recoveryGeneration,
               !hasRecoveredVisibleTermination, let window = webView.window,
               window !== hostWindow, window.isVisible else { return }
+        // The dead process can still report isLoading inside this callback.
+        // Its navigation is gone, so load directly; ordinary open() stays guarded.
+        navigationGeneration = UUID()
         hasRecoveredVisibleTermination = true
-        open()
+        webView.load(URLRequest(url: URL(string: "https://dev.meta.ai/")!))
     }
 
     func stop() {
