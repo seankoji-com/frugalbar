@@ -68,6 +68,28 @@ class CompilerPlanTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     builder.compiler_commands(changed, root)
 
+    def test_orders_transitive_dependencies_topologically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Sources").mkdir()
+            modules = ["X", "Y", "Z1", "Z2"]
+            commands = {}
+            for module in modules:
+                source = root / "Sources" / f"{module}.swift"
+                source.touch()
+                commands[module] = {
+                    "moduleName": module, "sources": [str(source)], "executable": "swiftc",
+                    "otherArguments": [], "moduleOutputPath": f"{module}.swiftmodule",
+                    "importPath": "Modules", "isLibrary": True,
+                }
+            description = {
+                "swiftCommands": commands,
+                # Z2 is intentionally omitted: absent leaves have no dependencies.
+                "targetDependencyMap": {"X": ["Y"], "Y": ["Z1", "Z2"], "Z1": []},
+            }
+            ordered = builder.compiler_commands(description, root)
+            self.assertEqual([command["module"] for command in ordered], ["Z1", "Z2", "Y", "X"])
+
     def test_replays_dependencies_serially_and_stops_on_failure(self):
         commands = [{"module": str(n), "sources": [str(n)], "argv": [str(n)]} for n in range(3)]
         for fail in [False, True]:
