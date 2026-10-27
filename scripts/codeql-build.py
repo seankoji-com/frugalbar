@@ -133,12 +133,20 @@ def partial_module_commands(command, plan):
         elif argument not in sources:
             options.append(argument)
     batches = []
-    size = (len(sources) + 2) // 3
-    for start in range(0, len(sources), size):
-        primary = sources[start:start + size]
+    # Contiguous filename ranges can concentrate large SwiftUI bodies in one
+    # worker. Keep three workers, assigning the largest sources to the lightest.
+    groups = [[] for _ in range(min(3, len(sources)))]
+    loads = [0] * len(groups)
+    for source in sorted(sources, key=lambda path: (-Path(path).stat().st_size, path)):
+        index = min(range(len(groups)), key=lambda i: (loads[i], i))
+        groups[index].append(source)
+        loads[index] += max(1, Path(source).stat().st_size)
+    for group in groups:
+        primary = [source for source in sources if source in group]
         inputs = [argument for source in sources
                   for argument in (["-primary-file", source] if source in primary else [source])]
-        output_arguments = [argument for output in outputs[start:start + size] for argument in ["-o", output]]
+        output_arguments = [argument for source, output in zip(sources, outputs)
+                            if source in group for argument in ["-o", output]]
         batches.append({"module": f'{command["module"]}_part_{len(batches)}', "sources": primary,
                         "argv": [*options, *inputs, *output_arguments]})
     # The merge's first input replaces the original source as the map key.
@@ -159,6 +167,17 @@ def compile_commands(commands):
     def compile_one(command):
         print(f'Forcing compilation of {command["module"]}: {len(command["sources"])} sources', flush=True)
         subprocess.run(command["argv"], check=True)
+    # The macOS tracer copies/signs a compiler on first use. Concurrent cold
+    # launches duplicate that work. A serial info query primes the same binary
+    # without -frontend, so CodeQL does not treat it as an extraction command.
+    frontends = set()
+    for command in commands:
+        for batch in command.get("batches", []):
+            argv = batch["argv"]
+            if "-frontend" in argv:
+                frontends.add(argv[argv.index("-frontend") - 1])
+    for frontend in sorted(frontends):
+        subprocess.run([frontend, "-version"], check=True)
     for command in commands:
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(compile_one, command.get("batches", [])))

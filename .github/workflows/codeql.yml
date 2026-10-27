@@ -52,8 +52,8 @@ jobs:
 
   analyze-swift:
     name: Analyze (swift)
-    # Bound parallel primary-file batches to this runner's three cores, then
-    # trace the partial-module merge before starting dependent modules.
+    # Prime the traced compiler once, balance primary files over three workers,
+    # then trace the partial-module merge before starting dependent modules.
     runs-on: macos-15
     # Keep the failure deadline while measuring the complete job against 600s.
     timeout-minutes: 30
