@@ -43,6 +43,9 @@ class CompilerPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = [str(root / f"dir {n}" / "File.swift") for n in range(7)]
+            for source in sources:
+                Path(source).parent.mkdir()
+                Path(source).write_text("public func value() {}\n")
             output_map = root / "outputs.json"
             output_map.write_text(json.dumps({sources[0]: {"swiftdoc": "Core.swiftdoc"}}))
             original = {"module": "Core", "sources": sources, "argv": [
@@ -74,7 +77,7 @@ class CompilerPlanTests(unittest.TestCase):
                 primaries.extend(primary)
                 outputs.extend(output)
             self.assertEqual(len(command["batches"]), 3)
-            self.assertEqual(primaries, sources)
+            self.assertCountEqual(primaries, sources)
             self.assertEqual(len(outputs), len(set(outputs)))
             merge = command["argv"]
             self.assertIn("-merge-modules", merge)
@@ -88,6 +91,49 @@ class CompilerPlanTests(unittest.TestCase):
             self.assertIn("Core.abi.json", merge)
             self.assertIn("Core.swiftmodule", merge)
             self.assertEqual(command["sources"], sources)
+
+    def test_primary_batches_balance_large_sources_and_keep_output_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            sources = [str(root / f"File{n}.swift") for n in range(9)]
+            for source, size in zip(sources, [90, 80, 70, 1, 1, 1, 1, 1, 1]):
+                Path(source).write_bytes(b"x" * size)
+            command = {"module": "Core", "sources": sources, "argv": [
+                "swift-frontend", "-frontend", "-emit-module", *sources, "-o", "Core.swiftmodule"]}
+            prepared = builder.partial_module_commands(command, root / "plan.json")
+            loads, primaries = [], []
+            for batch in prepared["batches"]:
+                primary = batch["sources"]
+                self.assertEqual(primary, [source for source in sources if source in primary])
+                loads.append(sum(Path(source).stat().st_size for source in primary))
+                outputs = [batch["argv"][n + 1] for n, arg in enumerate(batch["argv"][:-1]) if arg == "-o"]
+                self.assertEqual(outputs, [str(root / "plan-Core-partials" / f"{sources.index(source)}.swiftmodule")
+                                           for source in primary])
+                primaries.extend(primary)
+            self.assertCountEqual(primaries, sources)
+            self.assertLessEqual(max(loads), 92)  # Contiguous thirds put 240 bytes on one worker.
+            self.assertEqual(prepared, builder.partial_module_commands(command, root / "plan.json"))
+
+    def test_serial_info_query_precedes_parallel_frontends_and_failure_stops_replay(self):
+        batches = [{"module": f"Core_part_{n}", "sources": [str(n)],
+                    "argv": ["swift-frontend", "-frontend", "-emit-module", str(n)]} for n in range(3)]
+        commands = [{"module": "Core", "sources": ["0", "1", "2"], "batches": batches,
+                     "argv": ["swift-frontend", "-frontend", "-merge-modules"]}]
+        invoked = []
+        def compiler(argv, check):
+            self.assertTrue(check)
+            if "-frontend" in argv:
+                self.assertTrue(invoked, "Compiler info query must finish before any batch starts")
+                self.assertEqual(invoked[0], ["swift-frontend", "-version"])
+            invoked.append(argv)
+        with patch.object(builder.subprocess, "run", side_effect=compiler):
+            builder.compile_commands(commands)
+        self.assertEqual(invoked.count(["swift-frontend", "-version"]), 1)
+        self.assertEqual(invoked[-1], commands[0]["argv"])
+        with patch.object(builder.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "version")) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                builder.compile_commands(commands)
+        run.assert_called_once_with(["swift-frontend", "-version"], check=True)
 
     def test_native_partial_merge_preserves_outputs_and_dependency_imports(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +173,7 @@ class CompilerPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = str(root / 'Source "quoted".swift')
+            Path(source).touch()
             output_map = root / "legacy.map"
             # Swift 6.1 ArgsResolver.createFileList emits this implicit YAML
             # mapping with double-quoted paths, not OutputFileMap.store's JSON.
