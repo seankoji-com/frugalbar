@@ -48,7 +48,8 @@ treat them as the review checklist, not hypotheticals.
 - `packaging/frugalbar.rb.tmpl` — templated Homebrew formula.
 - Compiler warnings or formatting nits — CI builds with
   `-Xswiftc -warnings-as-errors`, so any warning already fails the build.
-- Generic injection/taint patterns — `codeql.yml` already scans every PR.
+- Generic injection/taint patterns in workflow files — `codeql.yml` scans them on
+  every PR. It no longer analyses Swift, so Swift sources still need a look.
 
 ## Comment style
 
