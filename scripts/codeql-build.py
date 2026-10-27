@@ -2,6 +2,7 @@
 """Plan SwiftPM outside tracing, then compile every source in dependency order."""
 import heapq
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shlex
 import subprocess
@@ -94,12 +95,57 @@ def frontend_commands(commands):
     return result
 
 
+def partial_module_commands(command, plan):
+    # CodeQL supports primary-file module emission and a subsequent traced
+    # -merge-modules invocation. Every batch sees the entire module, but only
+    # its primary bodies are extracted. Never import untraced dependency modules.
+    sources = command["sources"]
+    directory = plan.with_name(f'{plan.stem}-{command["module"]}-partials').resolve()
+    directory.mkdir(exist_ok=True)
+    outputs = [str(directory / f"{index}.swiftmodule") for index in range(len(sources))]
+    options = []
+    original = iter(command["argv"])
+    for argument in original:
+        if argument in {"-o", "-supplementary-output-file-map", "-emit-module-doc-path",
+                        "-emit-module-source-info-path", "-emit-abi-descriptor-path"}:
+            next(original)
+        elif argument not in sources:
+            options.append(argument)
+    batches = []
+    size = (len(sources) + 2) // 3
+    for start in range(0, len(sources), size):
+        primary = sources[start:start + size]
+        inputs = [argument for source in sources
+                  for argument in (["-primary-file", source] if source in primary else [source])]
+        output_arguments = [argument for output in outputs[start:start + size] for argument in ["-o", output]]
+        batches.append({"module": f'{command["module"]}_part_{len(batches)}', "sources": primary,
+                        "argv": [*options, *inputs, *output_arguments]})
+    # Swift's output map is keyed by the original source, not a partial module.
+    # Preserve every output as an explicit flag on the merge instead.
+    merge = []
+    original = iter(command["argv"])
+    output_flags = {"swiftdoc": "-emit-module-doc-path", "swiftsourceinfo": "-emit-module-source-info-path",
+                    "abi-baseline-json": "-emit-abi-descriptor-path"}
+    for argument in original:
+        if argument == "-supplementary-output-file-map":
+            entries = json.loads(Path(next(original)).read_text())
+            if len(entries) != 1:
+                raise ValueError("Expected one whole-module supplementary output entry")
+            for kind, path in next(iter(entries.values())).items():
+                merge.extend([output_flags[kind], path])
+        elif argument not in sources:
+            merge.append(argument)
+    return {**command, "batches": batches, "argv": [*merge, "-merge-modules", *outputs]}
+
+
 def compile_commands(commands):
-    # Preserve CodeQL's dependency-module remapping. Concurrent object replay
-    # imported incompatible untraced modules and took 1660s in CI.
-    for command in commands:
+    def compile_one(command):
         print(f'Forcing compilation of {command["module"]}: {len(command["sources"])} sources', flush=True)
         subprocess.run(command["argv"], check=True)
+    for command in commands:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(compile_one, command.get("batches", [])))
+        compile_one(command)
 
 
 def prepare_plan(root, plan):
@@ -117,6 +163,7 @@ def prepare_plan(root, plan):
             output_map = plan.with_name(f'{plan.stem}-{command["module"]}-outputs.json')
             output_map.write_bytes(Path(argv[index]).read_bytes())
             argv[index] = str(output_map.resolve())
+    commands = [partial_module_commands(command, plan) for command in commands]
     plan.write_text(json.dumps({"root": str(root), "commands": commands}, indent=2) + "\n")
 
 

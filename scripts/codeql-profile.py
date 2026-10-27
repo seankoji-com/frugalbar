@@ -23,18 +23,20 @@ def write_json(path, value):
 
 def instrument(prepared, directory):
     """Keep the original compiler, cache, outputs, source bodies and order."""
-    commands = []
-    for command in prepared["commands"]:
+    def instrument_command(command):
         module = command["module"]
         if not module.isidentifier():
             raise ValueError("Unexpected module name")
         stats = directory / f"{module}-stats"
         stats.mkdir()
-        commands.append({**command, "argv": [
+        measured = {**command, "argv": [
             "/usr/bin/time", "-l", "-o", str(directory / f"{module}-time.txt"),
             *command["argv"], "-stats-output-dir", str(stats), "-Rmodule-interface-rebuild",
-        ]})
-    return {**prepared, "commands": commands}
+        ]}
+        if "batches" in command:
+            measured["batches"] = [instrument_command(batch) for batch in command["batches"]]
+        return measured
+    return {**prepared, "commands": [instrument_command(command) for command in prepared["commands"]]}
 
 
 def run_phase(plan, directory, phase):
@@ -55,7 +57,7 @@ def run_phase(plan, directory, phase):
                "commands": prepared["commands"]}
     started = time.monotonic()
     try:
-        # Use the normal helper's checkout/complete-source validation and serial replay.
+        # Use the normal helper's validation, batch joins and dependency order.
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("codeql-build.py")),
                                  "compile", str(measured_path)])
         receipt["exit_code"] = result.returncode

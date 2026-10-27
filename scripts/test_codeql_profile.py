@@ -14,6 +14,22 @@ spec.loader.exec_module(profile)
 
 
 class ProfileTests(unittest.TestCase):
+    def test_instruments_each_parallel_batch_and_merge_with_distinct_outputs(self):
+        batches = [{"module": f"Core_part_{n}", "sources": [str(n)], "argv": ["swift-frontend", str(n)]}
+                   for n in range(3)]
+        prepared = {"commands": [{"module": "Core", "sources": ["0", "1", "2"],
+                                 "batches": batches, "argv": ["swift-frontend", "-merge-modules"]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            measured = profile.instrument(prepared, Path(directory))["commands"][0]
+            steps = [*measured["batches"], measured]
+            originals = [*batches, prepared["commands"][0]]
+            self.assertEqual(len({step["argv"][3] for step in steps}), 4)
+            for step, original in zip(steps, originals):
+                self.assertEqual(step["argv"][0], "/usr/bin/time")
+                self.assertEqual(step["argv"][4:-3], original["argv"])
+                self.assertEqual(step["sources"], original["sources"])
+            self.assertEqual(len(list(Path(directory).glob("*-stats"))), 4)
+
     def test_instrumentation_preserves_full_ordered_commands(self):
         prepared = {"root": "/repo", "commands": [
             {"module": name, "sources": [f"Sources/{name}.swift"], "argv": [

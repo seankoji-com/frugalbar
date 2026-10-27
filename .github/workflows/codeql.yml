@@ -52,10 +52,8 @@ jobs:
 
   analyze-swift:
     name: Analyze (swift)
-    # Keep the diagnostic on arm64 to compare with cf30823's tracer intervals.
-    # Historical totals: arm64 cf30823 1017s; Intel e8f1b5b 1137s.
-    # Intel 6853cc0 later passed extraction gates in 896s, still above 600s.
-    # Source, runner and cache differ; these samples do not establish causality.
+    # Bound parallel primary-file batches to this runner's three cores, then
+    # trace the partial-module merge before starting dependent modules.
     runs-on: macos-15
     # Keep the failure deadline while measuring the complete job against 600s.
     timeout-minutes: 30

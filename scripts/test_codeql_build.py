@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -28,7 +29,8 @@ class CompilerPlanTests(unittest.TestCase):
             with patch.object(builder.subprocess, 'run') as run, \
                     patch.object(builder.subprocess, 'check_output', return_value=str(binary)), \
                     patch.object(builder, 'compiler_commands', return_value=[]), \
-                    patch.object(builder, 'frontend_commands', return_value=commands):
+                    patch.object(builder, 'frontend_commands', return_value=commands), \
+                    patch.object(builder, 'partial_module_commands', side_effect=lambda command, plan: command):
                 builder.prepare_plan(root, root / 'plan.json')
             run.assert_called_once_with(['swift', 'build', '--build-system', 'native', '-c', 'debug',
                                          '--print-manifest-job-graph'], check=True, stdout=subprocess.DEVNULL)
@@ -36,6 +38,102 @@ class CompilerPlanTests(unittest.TestCase):
             retained = Path(prepared['commands'][0]['argv'][-1])
             self.assertEqual(retained.read_bytes(), auxiliary.read_bytes())
             self.assertNotEqual(retained, auxiliary)
+
+    def test_partial_modules_cover_every_body_without_shared_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = [str(root / f"dir {n}" / "File.swift") for n in range(7)]
+            output_map = root / "outputs.json"
+            output_map.write_text(json.dumps({sources[0]: {"swiftdoc": "Core.swiftdoc"}}))
+            original = {"module": "Core", "sources": sources, "argv": [
+                "swift-frontend", "-frontend", "-emit-module", *sources,
+                "-target", "arm64-apple-macosx15.0", "-sdk", "/sdk", "-I", "/modules",
+                "-module-name", "Core", "-parse-as-library", "-swift-version", "6",
+                "-supplementary-output-file-map", str(output_map),
+                "-emit-module-source-info-path", "Core.swiftsourceinfo", "-emit-abi-descriptor-path", "Core.abi.json",
+                "-o", "Core.swiftmodule"]}
+            command = builder.partial_module_commands(original, root / "plan.json")
+            primaries, outputs = [], []
+            for batch in command["batches"]:
+                argv = batch["argv"]
+                self.assertTrue(batch["module"].isidentifier())
+                self.assertIn("-emit-module", argv)
+                self.assertNotIn("-merge-modules", argv)
+                self.assertFalse(any("skip" in arg and "function-bodies" in arg for arg in argv))
+                self.assertEqual([arg for arg in argv if arg.endswith(".swift")], sources)
+                primary = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-primary-file"]
+                output = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-o"]
+                self.assertEqual(primary, batch["sources"])
+                self.assertEqual(len(primary), len(output))
+                self.assertLessEqual(len(primary), 3)
+                self.assertEqual(argv[argv.index("-module-name") + 1], "Core")
+                self.assertEqual(argv[argv.index("-sdk") + 1], "/sdk")
+                self.assertEqual(argv[argv.index("-I") + 1], "/modules")
+                for shared in [str(output_map), "Core.swiftdoc", "Core.swiftsourceinfo", "Core.abi.json", "Core.swiftmodule"]:
+                    self.assertNotIn(shared, argv)
+                primaries.extend(primary)
+                outputs.extend(output)
+            self.assertEqual(len(command["batches"]), 3)
+            self.assertEqual(primaries, sources)
+            self.assertEqual(len(outputs), len(set(outputs)))
+            merge = command["argv"]
+            self.assertIn("-merge-modules", merge)
+            self.assertTrue(all(output in merge for output in outputs))
+            self.assertFalse(any(source in merge for source in sources))
+            self.assertNotIn("-supplementary-output-file-map", merge)
+            self.assertIn("-emit-module-doc-path", merge)
+            self.assertIn("Core.swiftdoc", merge)
+            self.assertIn("Core.swiftmodule", merge)
+            self.assertEqual(command["sources"], sources)
+
+    def test_native_partial_merge_preserves_outputs_and_dependency_imports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = [root / f"File{n}.swift" for n in range(4)]
+            for n, source in enumerate(sources):
+                value = f"f{n + 1}()" if n < 3 else "3"
+                source.write_text(f"public func f{n}() -> Int {{ {value} }}\n")
+            command = {"module": "Core", "sources": list(map(str, sources)), "argv": [
+                "swiftc", "-emit-module", "-whole-module-optimization", "-module-name", "Core",
+                "-parse-as-library", *map(str, sources), "-emit-module-path", str(root / "Core.swiftmodule")]}
+            frontend = builder.frontend_commands([command])[0]
+            # Exercise the actual driver's source-keyed auxiliary output map.
+            self.assertIn("-supplementary-output-file-map", frontend["argv"])
+            prepared = builder.partial_module_commands(frontend, root / "plan.json")
+            builder.compile_commands([prepared])
+            self.assertTrue((root / "Core.swiftmodule").is_file())
+            self.assertTrue((root / "Core.swiftdoc").is_file())
+            self.assertTrue((root / "Core.swiftsourceinfo").is_file())
+            dependent = root / "Dependent.swift"
+            dependent.write_text("import Core\npublic func useCore() -> Int { f0() }\n")
+            subprocess.run(["swiftc", "-typecheck", "-I", str(root), str(dependent)], check=True, capture_output=True)
+
+    def test_parallel_batches_join_before_merge_and_dependent_module(self):
+        for fail in [False, True]:
+            barrier = threading.Barrier(3)
+            completed = []
+            invoked = []
+            batches = [{"module": f"Core_part_{n}", "sources": [str(n)], "argv": [str(n)]} for n in range(3)]
+            commands = [{"module": "Core", "sources": ["0", "1", "2"], "batches": batches, "argv": ["merge"]},
+                        {"module": "App", "sources": ["App"], "argv": ["app"]}]
+            def compiler(argv, check):
+                self.assertTrue(check)
+                invoked.append(argv[0])
+                if argv[0] in {"0", "1", "2"}:
+                    barrier.wait(timeout=5)
+                    completed.append(argv[0])
+                    if fail and argv == ["1"]:
+                        raise subprocess.CalledProcessError(1, argv)
+                else:
+                    self.assertCountEqual(completed, ["0", "1", "2"])
+            with patch.object(builder.subprocess, "run", side_effect=compiler):
+                if fail:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        builder.compile_commands(commands)
+                else:
+                    builder.compile_commands(commands)
+            self.assertCountEqual(invoked[:3], ["0", "1", "2"])
+            self.assertEqual(invoked[3:], [] if fail else ["merge", "app"])
 
     def test_extracted_files_must_include_every_application_source(self):
         with tempfile.TemporaryDirectory() as directory:
