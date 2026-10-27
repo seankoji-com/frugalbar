@@ -2,6 +2,7 @@
 """Plan SwiftPM outside tracing, then compile every source in dependency order."""
 import heapq
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shlex
@@ -95,6 +96,26 @@ def frontend_commands(commands):
     return result
 
 
+def rekey_output_map(source, destination, first_input):
+    contents = source.read_text()
+    if contents.lstrip().startswith("{"):
+        entries = json.loads(contents)
+        if len(entries) != 1:
+            raise ValueError("Expected one whole-module supplementary output entry")
+        rewritten = json.dumps({first_input: next(iter(entries.values()))}, indent=2) + "\n"
+    else:
+        # Swift 6.1 ArgsResolver emits implicit YAML with quoted keys. Preserve
+        # its values and escaping verbatim; the frontend remains their parser.
+        lines = contents.splitlines(keepends=True)
+        headers = [i for i, line in enumerate(lines) if line.strip() and not line[0].isspace()]
+        match = re.fullmatch(r'"(?:[^"\\\r\n]|\\.)*"(:[ \t]*(?:\{\})?[ \t]*(?:\r?\n)?)', lines[headers[0]]) if len(headers) == 1 else None
+        if match is None:
+            raise ValueError("Expected one quoted Swift driver output-map key")
+        lines[headers[0]] = json.dumps(first_input, ensure_ascii=False) + match[1]
+        rewritten = "".join(lines)
+    destination.write_text(rewritten)
+
+
 def partial_module_commands(command, plan):
     # CodeQL supports primary-file module emission and a subsequent traced
     # -merge-modules invocation. Every batch sees the entire module, but only
@@ -120,19 +141,15 @@ def partial_module_commands(command, plan):
         output_arguments = [argument for output in outputs[start:start + size] for argument in ["-o", output]]
         batches.append({"module": f'{command["module"]}_part_{len(batches)}', "sources": primary,
                         "argv": [*options, *inputs, *output_arguments]})
-    # Swift's output map is keyed by the original source, not a partial module.
-    # Preserve every output as an explicit flag on the merge instead.
+    # The merge's first input replaces the original source as the map key.
+    # Keep all output kinds/paths, including those in older YAML driver maps.
     merge = []
     original = iter(command["argv"])
-    output_flags = {"swiftdoc": "-emit-module-doc-path", "swiftsourceinfo": "-emit-module-source-info-path",
-                    "abi-baseline-json": "-emit-abi-descriptor-path"}
     for argument in original:
         if argument == "-supplementary-output-file-map":
-            entries = json.loads(Path(next(original)).read_text())
-            if len(entries) != 1:
-                raise ValueError("Expected one whole-module supplementary output entry")
-            for kind, path in next(iter(entries.values())).items():
-                merge.extend([output_flags[kind], path])
+            output_map = plan.with_name(f'{plan.stem}-{command["module"]}-merge-outputs.map').resolve()
+            rekey_output_map(Path(next(original)), output_map, outputs[0])
+            merge.extend([argument, str(output_map)])
         elif argument not in sources:
             merge.append(argument)
     return {**command, "batches": batches, "argv": [*merge, "-merge-modules", *outputs]}

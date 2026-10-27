@@ -80,9 +80,12 @@ class CompilerPlanTests(unittest.TestCase):
             self.assertIn("-merge-modules", merge)
             self.assertTrue(all(output in merge for output in outputs))
             self.assertFalse(any(source in merge for source in sources))
-            self.assertNotIn("-supplementary-output-file-map", merge)
-            self.assertIn("-emit-module-doc-path", merge)
-            self.assertIn("Core.swiftdoc", merge)
+            rewritten = Path(merge[merge.index("-supplementary-output-file-map") + 1])
+            self.assertNotEqual(rewritten, output_map)
+            self.assertEqual(json.loads(rewritten.read_text()), {outputs[0]: {"swiftdoc": "Core.swiftdoc"}})
+            self.assertEqual(json.loads(output_map.read_text()), {sources[0]: {"swiftdoc": "Core.swiftdoc"}})
+            self.assertIn("Core.swiftsourceinfo", merge)
+            self.assertIn("Core.abi.json", merge)
             self.assertIn("Core.swiftmodule", merge)
             self.assertEqual(command["sources"], sources)
 
@@ -99,14 +102,56 @@ class CompilerPlanTests(unittest.TestCase):
             frontend = builder.frontend_commands([command])[0]
             # Exercise the actual driver's source-keyed auxiliary output map.
             self.assertIn("-supplementary-output-file-map", frontend["argv"])
-            prepared = builder.partial_module_commands(frontend, root / "plan.json")
-            builder.compile_commands([prepared])
-            self.assertTrue((root / "Core.swiftmodule").is_file())
-            self.assertTrue((root / "Core.swiftdoc").is_file())
-            self.assertTrue((root / "Core.swiftsourceinfo").is_file())
             dependent = root / "Dependent.swift"
             dependent.write_text("import Core\npublic func useCore() -> Int { f0() }\n")
-            subprocess.run(["swiftc", "-typecheck", "-I", str(root), str(dependent)], check=True, capture_output=True)
+            for dialect in ["driver", "legacy"]:
+                argv = list(frontend["argv"])
+                outputs = {"swiftdoc": str(root / "Core.swiftdoc"),
+                           "swiftsourceinfo": str(root / "Core.swiftsourceinfo")}
+                if dialect == "legacy":
+                    legacy = root / "legacy.map"
+                    outputs = {"swiftdoc": str(root / 'Doc "quoted".swiftdoc'),
+                               "swiftsourceinfo": str(root / "Info: é.swiftsourceinfo")}
+                    legacy.write_text(json.dumps(str(sources[0])) + ":\n" + "".join(
+                        f"  {kind}: {json.dumps(path)}\n" for kind, path in outputs.items()))
+                    argv[argv.index("-supplementary-output-file-map") + 1] = str(legacy)
+                prepared = builder.partial_module_commands({**frontend, "argv": argv}, root / f"{dialect}.json")
+                (root / "Core.swiftmodule").unlink(missing_ok=True)
+                builder.compile_commands([prepared])
+                self.assertTrue((root / "Core.swiftmodule").is_file())
+                for output in outputs.values():
+                    self.assertTrue(Path(output).is_file(), output)
+                subprocess.run(["swiftc", "-typecheck", "-I", str(root), str(dependent)], check=True, capture_output=True)
+
+    def test_legacy_driver_yaml_preserves_every_output_and_escaped_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = str(root / 'Source "quoted".swift')
+            output_map = root / "legacy.map"
+            # Swift 6.1 ArgsResolver.createFileList emits this implicit YAML
+            # mapping with double-quoted paths, not OutputFileMap.store's JSON.
+            outputs = {"swiftdoc": 'Doc "quoted".swiftdoc', "swiftsourceinfo": "Info: é.swiftsourceinfo"}
+            payload = json.dumps(source) + ":\n" + "".join(
+                f"  {kind}: {json.dumps(path, ensure_ascii=False)}\n" for kind, path in outputs.items())
+            output_map.write_text(payload)
+            command = {"module": "Core", "sources": [source], "argv": [
+                "swift-frontend", "-frontend", "-emit-module", source,
+                "-supplementary-output-file-map", str(output_map), "-o", "Core.swiftmodule"]}
+            prepared = builder.partial_module_commands(command, root / "plan.json")
+            merge = prepared["argv"]
+            remapped = Path(merge[merge.index("-supplementary-output-file-map") + 1]).read_text()
+            first_partial = next(arg for arg in merge if arg.endswith("/0.swiftmodule"))
+            self.assertEqual(remapped, json.dumps(first_partial, ensure_ascii=False) + payload[payload.index(':\n'):])
+            self.assertEqual(output_map.read_text(), payload)
+
+    def test_output_map_rekey_rejects_multiple_or_unrecognised_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original.map"
+            for payload in ['{}', '{"a": {}, "b": {}}', '"a": {}\n"b": {}\n', 'unquoted: {}\n']:
+                original.write_text(payload)
+                with self.assertRaises(ValueError):
+                    builder.rekey_output_map(original, root / "merge.map", "partial.swiftmodule")
 
     def test_parallel_batches_join_before_merge_and_dependent_module(self):
         for fail in [False, True]:
