@@ -1,7 +1,11 @@
 # CodeQL scans this repository's GitHub Actions workflows. Swift analysis was removed on
 # 27 October 2026 with the owner's approval: its traced build took 16 minutes on main,
 # beyond the 10-minute job budget. The Swift build, test and lint gates in
-# quotabar-ci.yml are unchanged.
+# quotabar-ci.yml are unchanged. Decision record: docs/swift-codeql-removal.md.
+#
+# The push.paths filter below is deliberately narrow (workflow files only). Widen it to
+# Sources/** and Package*.swift at the same time as any re-added Swift job, or Swift
+# pushes to main will never be analysed and nothing will report the gap.
 name: CodeQL
 
 on:
