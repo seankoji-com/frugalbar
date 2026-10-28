@@ -1,26 +1,21 @@
-# Required checks and scanning rules need real Swift analysis for each PR head.
-# Missing SARIF can block the scanning rule; a fabricated empty result would
-# hide findings. Documentation-only PRs therefore pay the traced-build cost too.
+# CodeQL scans this repository's GitHub Actions workflows. Swift analysis was removed on
+# 27 October 2026 with the owner's approval: its traced build took 16 minutes on main,
+# beyond the 10-minute job budget. The Swift build, test and lint gates in
+# quotabar-ci.yml are unchanged. Decision record: docs/swift-codeql-removal.md.
+#
+# The push.paths filter below is deliberately narrow (workflow files only). Widen it to
+# Sources/** and Package*.swift at the same time as any re-added Swift job, or Swift
+# pushes to main will never be analysed and nothing will report the gap.
 name: CodeQL
 
 on:
   push:
     branches: [main]
     paths:
-      - "Sources/**"
-      - "Tests/**"
-      - "Package.swift"
-      - "Package.resolved"
-      - ".github/workflows/codeql.yml"
-      - ".github/workflows/*.yml"
+      - ".github/workflows/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      profile:
-        description: "Diagnostic only: compare native and traced Swift replay (not budget acceptance)"
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,90 +44,3 @@ jobs:
       - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: "/language:actions"
-
-  analyze-swift:
-    name: Analyze (swift)
-    # Prime the traced compiler once, balance primary files over three workers,
-    # then trace the partial-module merge before starting dependent modules.
-    runs-on: macos-15
-    # Keep the failure deadline while measuring the complete job against 600s.
-    timeout-minutes: 30
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Select Xcode 16
-        run: scripts/select-xcode.sh 16
-
-      - name: Plan compiler commands outside tracing without building the app twice
-        run: |
-          python3 -m unittest discover -s scripts -p 'test_codeql*.py'
-          python3 scripts/codeql-build.py prepare "$RUNNER_TEMP/swift-compiler-plan.json"
-
-      - name: Profile native replay and start bounded sampler before tracing
-        if: inputs.profile == true
-        run: |
-          mkdir "$RUNNER_TEMP/swift-profile"
-          xcodebuild -version > "$RUNNER_TEMP/swift-profile/xcode-version.txt"
-          grep -Fx 'Xcode 16.4' "$RUNNER_TEMP/swift-profile/xcode-version.txt"
-          swift --version > "$RUNNER_TEMP/swift-profile/swift-version.txt"
-          xcrun swift-frontend -help-hidden > "$RUNNER_TEMP/swift-profile/frontend-help.txt"
-          grep -F -- '-stats-output-dir' "$RUNNER_TEMP/swift-profile/frontend-help.txt"
-          grep -F -- '-Rmodule-interface-rebuild' "$RUNNER_TEMP/swift-profile/frontend-help.txt"
-          python3 scripts/codeql-profile.py untraced "$RUNNER_TEMP/swift-profile" --plan "$RUNNER_TEMP/swift-compiler-plan.json"
-          python3 scripts/codeql-profile.py start "$RUNNER_TEMP/swift-profile"
-
-      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
-        id: codeql
-        with:
-          languages: swift
-          build-mode: manual
-          db-location: ${{ runner.temp }}/codeql-databases
-          debug: ${{ inputs.profile != true }}
-
-      - name: Build (traced)
-        env:
-          SWIFT_PROFILE_ENABLED: ${{ inputs.profile == true }}
-        run: |
-          if [ "$SWIFT_PROFILE_ENABLED" = true ]; then
-            echo "$$" > "$RUNNER_TEMP/swift-profile/trace-root"
-            trap 'touch "$RUNNER_TEMP/swift-profile/trace-done"' EXIT
-            python3 scripts/codeql-profile.py traced "$RUNNER_TEMP/swift-profile" --plan "$RUNNER_TEMP/swift-compiler-plan.json"
-          else
-            python3 scripts/codeql-build.py compile "$RUNNER_TEMP/swift-compiler-plan.json"
-          fi
-
-      - name: Reject Swift extractor compiler errors
-        run: python3 scripts/codeql-build.py diagnostics "$RUNNER_TEMP/codeql-databases/swift/log/swift/extractor"
-
-      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
-        with:
-          category: "/language:swift"
-
-      - name: Require extraction of every application source
-        env:
-          CODEQL: ${{ steps.codeql.outputs.codeql-path }}
-        run: |
-          "$CODEQL" bqrs decode --format=json \
-            "$RUNNER_TEMP/codeql-databases/swift/results/codeql/swift-queries/diagnostics/ExtractedFiles.bqrs" \
-            > "$RUNNER_TEMP/swift-extracted-files.json"
-          python3 scripts/codeql-build.py coverage "$RUNNER_TEMP/swift-extracted-files.json"
-
-      - name: Collect bounded diagnostic evidence
-        if: always() && inputs.profile == true
-        run: |
-          python3 scripts/codeql-profile.py pack "$RUNNER_TEMP/swift-profile" \
-            --database "$RUNNER_TEMP/codeql-databases" --output "$RUNNER_TEMP/swift-profile-upload"
-
-      - name: Upload diagnostic profile (not budget acceptance)
-        if: always() && inputs.profile == true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: swift-profile-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/swift-profile-upload
-          retention-days: 3
-          if-no-files-found: error
