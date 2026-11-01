@@ -51,7 +51,11 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
             detail: detail(),
             source: "OpenAI Platform billing · credit grants",
             monthlyPeriodEnd: periodEnd,
-            monthlyPeriodStart: periodStart
+            // `periodStart` is when the (possibly prorated) grant was issued,
+            // not when the subscription month began. The row's even-use marker
+            // belongs to the billing cycle, so leave the start unset and let
+            // the presentation use the calendar month ending at the cycle end.
+            monthlyPeriodStart: nil
         )
     }
 

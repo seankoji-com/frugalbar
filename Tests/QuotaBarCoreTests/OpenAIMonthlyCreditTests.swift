@@ -45,7 +45,10 @@ struct OpenAIMonthlyCreditTests {
         #expect(entry.label == "Monthly credit")
         #expect(entry.isMonthlyPromo)
         #expect(entry.extendsSubscription)
-        #expect(entry.monthlyPeriodStart == date("2026-10-19T00:25:31Z"))
+        // The grant's issue date is kept on the reading, not used as the
+        // billing month's start for the pace marker.
+        #expect(credit.periodStart == date("2026-10-19T00:25:31Z"))
+        #expect(entry.monthlyPeriodStart == nil)
         #expect(entry.monthlyPeriodEnd == date("2026-11-19T00:25:31Z"))
         #expect(entry.metric == .currency(balance: Decimal(string: "187.66")!, limit: 200,
                                            spent: nil, currencyCode: "USD"))

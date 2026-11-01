@@ -194,7 +194,7 @@ struct MonthlyPromoCreditTests {
     /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo,
     /// but its period comes from the grant's own effective/expiry instants —
     /// not a calendar month inferred from the end date.
-    @Test("the OpenAI monthly grant uses its own period and draws in the row")
+    @Test("the OpenAI monthly grant uses the subscription month and draws in the row")
     @MainActor
     func openAIMonthlyCredit() throws {
         let start = date("2026-10-19T00:25:31Z")
@@ -207,6 +207,8 @@ struct MonthlyPromoCreditTests {
             entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false)
         #expect(entry.isMonthlyPromo)
         #expect(entry.extendsSubscription)
+        // The grant's issue date is not the billing cycle's start.
+        #expect(entry.monthlyPeriodStart == nil)
         #expect(presentation.fraction == 0.75)
         #expect(presentation.percentText == "75%")
         #expect(presentation.resetText == "Resets in 10 days")
@@ -248,6 +250,26 @@ struct MonthlyPromoCreditTests {
         let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
             .frame(width: 332)).fittingSize.height
         #expect(withPromo - without > 30)
+    }
+
+    /// The API-credits grant is prorated from its issue date, but the row is a
+    /// month of the subscription. The marker must follow the billing cycle
+    /// (19 Oct–19 Nov), not the 18-day prorated grant (1–19 Nov).
+    @Test("a prorated OpenAI grant keeps the subscription month's pace")
+    func proratedGrantUsesSubscriptionMonth() throws {
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 116, remainingUSD: 116,
+            periodStart: date("2026-11-01T02:15:38Z"),
+            periodEnd: date("2026-11-19T00:25:31Z"),
+            measuredAt: date("2026-11-01T12:00:00Z"))
+        let entry = credit.entry
+        #expect(entry.monthlyPeriodStart == nil)
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: entry, now: date("2026-11-01T12:00:00Z"), isStale: false)
+        #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0)
+        let marker = try #require(presentation.paceMarker)
+        // 19 Oct 00:25:31 → 1 Nov 12:00 is ~13.48 of 31 days.
+        #expect(marker > 0.40 && marker < 0.50)
     }
 
     /// A 30-day grant must not borrow a 31-day calendar month: the exact
