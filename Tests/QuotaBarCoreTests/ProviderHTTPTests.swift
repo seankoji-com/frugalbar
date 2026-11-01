@@ -675,7 +675,7 @@ struct ProviderHTTPTests {
             periodStart: now.addingTimeInterval(-20 * 86_400),
             periodEnd: now.addingTimeInterval(10 * 86_400), measuredAt: now)
         let read = OpenAIMonthlyCreditRead(credit: credit, didRead: true)
-        let provider = OpenAIQuotaProvider(accessToken: "session-token", monthlyCredit: { _ in read })
+        let provider = OpenAIQuotaProvider(accessToken: "session-token", monthlyCredit: { _, _ in read })
 
         let measured = try await withStubbedHTTP({ _ in
             canned(body: #"""

@@ -12,8 +12,9 @@ import Foundation
 /// The Platform's `credit_grants` summary also totals purchased credits, so
 /// `total_available` is deliberately never used: a purchased pool is different
 /// money with a different expiry. The row is built from one grant's own
-/// published `grant_amount` and `used_amount`, only when the vendor labelled
-/// it as the subscription benefit and published both ends of a monthly span.
+/// published `grant_amount` and `used_amount`, only when the grant publishes
+/// both ends of a monthly span and either expires at the ChatGPT subscription's
+/// published cycle end or carries the vendor's subscription-benefit label.
 /// A response that does not expose those facts yields no entry rather than a
 /// derived figure, and more than one matching grant is refused as ambiguous.
 public struct OpenAIMonthlyCredit: Sendable, Equatable {
@@ -60,14 +61,18 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
         return parts.joined(separator: " · ")
     }
 
-    /// Reads the Platform's credit-grant summary. Returns nil when no current
-    /// monthly grant publishes both an allowance and a usage figure — absent
-    /// is the honest outcome, never a total assembled from other grants.
-    public static func decode(_ data: Data, now: Date) throws -> Self? {
+    /// Reads the Platform's credit-grant summary. `expectedPeriodEnd` is the
+    /// ChatGPT subscription's published cycle end; the API-credits grant
+    /// expires there. When it is unavailable, only a grant the vendor labelled
+    /// as the subscription benefit is eligible.
+    public static func decode(_ data: Data, now: Date,
+                              expectedPeriodEnd: Date? = nil) throws -> Self? {
         let root = try JSONSerialization.jsonObject(with: data)
         guard let summary = summaryObject(root) else { return nil }
         let grants = grantObjects(summary).compactMap { Grant(json: $0) }
-        let candidates = grants.compactMap { $0.monthlyCredit(now: now) }
+        let candidates = grants.compactMap {
+            $0.monthlyCredit(now: now, expectedPeriodEnd: expectedPeriodEnd)
+        }
         // One grant only. A second matching grant could be a prorated extra or
         // a purchased pool with a short expiry, and the summary does not say
         // which one supersedes the other; summing or choosing between them
@@ -118,17 +123,26 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
         let expiresAt: Date?
         let hasPromotionalLabel: Bool
 
-        /// A current grant the vendor labelled as the subscription benefit and
-        /// whose own published span is monthly. A missing start is not a
-        /// monthly period: remaining lifetime cannot say how long the grant
-        /// originally ran, so it is refused rather than inferred.
-        func monthlyCredit(now: Date) -> Grant? {
-            guard hasPromotionalLabel,
-                  let effectiveAt, let expiresAt,
+        /// A current grant whose own published span is monthly. With the
+        /// subscription's cycle end, the grant must expire at that end; without
+        /// it, the vendor must have labelled the grant as the subscription
+        /// benefit. A missing start is not a monthly period: remaining
+        /// lifetime cannot say how long the grant originally ran.
+        func monthlyCredit(now: Date, expectedPeriodEnd: Date?) -> Grant? {
+            guard let effectiveAt, let expiresAt,
                   effectiveAt <= now, expiresAt > now else { return nil }
             let span = expiresAt.timeIntervalSince(effectiveAt)
             guard span.isFinite, span > 0, span <= OpenAIMonthlyCredit.maximumMonthlyPeriod
             else { return nil }
+            if let expectedPeriodEnd {
+                // The benefit grant expires at the end of the ChatGPT billing
+                // cycle. Match either the published renewal or expiry instant;
+                // the two can differ by hours within the same cycle.
+                guard abs(expiresAt.timeIntervalSince(expectedPeriodEnd)) <= 12 * 3600
+                else { return nil }
+            } else {
+                guard hasPromotionalLabel else { return nil }
+            }
             return self
         }
 
