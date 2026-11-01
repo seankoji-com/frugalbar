@@ -187,6 +187,11 @@ public final class QuotaStore {
         await reloadFromCache()
     }
 
+    public func clearOpenAIMonthlyCredit() async {
+        await manager.clearOpenAIMonthlyCredit()
+        await reloadFromCache()
+    }
+
     /// Explicit user action — bypasses the cache.
     public func forceRefresh() async {
         if isRefreshing {

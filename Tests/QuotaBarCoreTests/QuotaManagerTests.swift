@@ -854,6 +854,191 @@ struct QuotaManagerTests {
         #expect(failed["claude"]?.staleReading?.reason == .timedOut)
     }
 
+    @Test("a fresh OpenAI monthly credit survives quota failure and a valid empty read clears it")
+    func openAIMonthlyCreditFreshnessIsIndependentOfQuotaFailure() async throws {
+        struct SnapshotProvider: QuotaProvider {
+            let snapshot: QuotaSnapshot
+            var vendorId: VendorIdentifier { .openai }
+            var displayName: String { "OpenAI" }
+            var category: MetricCategory { .aiSubscriptions }
+            func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 180,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400), measuredAt: now)
+        let updated = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 150,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400),
+            measuredAt: now.addingTimeInterval(400))
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                let pass = counter.increment()
+                var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+                    category: .aiSubscriptions,
+                    metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+                    status: pass == 1 ? .measured(.warning) : .unavailable(.offline),
+                    resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+                if pass == 1 {
+                    snapshot.openAIMonthlyCredit = first
+                    snapshot.openAIMonthlyCreditReadAt = now
+                } else if pass == 2 {
+                    snapshot.openAIMonthlyCredit = updated
+                    snapshot.openAIMonthlyCreditReadAt = now.addingTimeInterval(400)
+                } else {
+                    // A valid read that found no current grant clears the row.
+                    snapshot.openAIMonthlyCredit = nil
+                    snapshot.openAIMonthlyCreditReadAt = now.addingTimeInterval(800)
+                }
+                return [SnapshotProvider(snapshot: snapshot)]
+            })
+        let cached = await manager.forceRefresh()
+        #expect(cached["openai"]?.openAIMonthlyCredit == first)
+        let second = await manager.forceRefresh()
+        #expect(second["openai"]?.staleReading?.reason == .offline)
+        #expect(second["openai"]?.openAIMonthlyCredit == updated)
+        #expect(second["openai"]?.openAIMonthlyCredit?.refreshFailed == false)
+        let third = await manager.forceRefresh()
+        #expect(third["openai"]?.staleReading?.reason == .offline)
+        #expect(third["openai"]?.openAIMonthlyCredit == nil)
+    }
+
+    @Test("a quota failure with no billing read keeps the last OpenAI monthly credit")
+    func openAIMonthlyCreditSurvivesUnreadQuotaFailure() async throws {
+        struct SnapshotProvider: QuotaProvider {
+            let snapshot: QuotaSnapshot
+            var vendorId: VendorIdentifier { .openai }
+            var displayName: String { "OpenAI" }
+            var category: MetricCategory { .aiSubscriptions }
+            func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let credit = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 180,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400), measuredAt: now)
+        let counter = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                let pass = counter.increment()
+                var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+                    category: .aiSubscriptions,
+                    metric: .percentage(usedFraction: 0.5, displayDetails: nil),
+                    status: pass == 1 ? .measured(.warning) : .unavailable(.offline),
+                    resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+                if pass == 1 {
+                    snapshot.openAIMonthlyCredit = credit
+                    snapshot.openAIMonthlyCreditReadAt = now
+                }
+                // No billing session observation this pass: readAt stays nil.
+                return [SnapshotProvider(snapshot: snapshot)]
+            })
+        _ = await manager.forceRefresh()
+        let failed = await manager.forceRefresh()
+        #expect(failed["openai"]?.staleReading?.reason == .offline)
+        #expect(failed["openai"]?.openAIMonthlyCredit == credit)
+    }
+
+    @Test("disconnect clears a cached OpenAI monthly credit without polling quota")
+    func disconnectClearsCachedOpenAIMonthlyCredit() async throws {
+        struct CreditProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .openai
+            let displayName = "OpenAI"
+            let category: MetricCategory = .aiSubscriptions
+            let credit: OpenAIMonthlyCredit
+            let calls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                calls.increment()
+                var snapshot = try await StubProvider(vendorId: .openai, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.openAIMonthlyCredit = credit
+                snapshot.openAIMonthlyCreditReadAt = Date(timeIntervalSince1970: 1_800_000_000)
+                return snapshot
+            }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let credit = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 180,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400), measuredAt: now)
+        let calls = InvocationCounter()
+        let manager = QuotaManager(providerFactory: { [CreditProvider(credit: credit, calls: calls)] })
+        #expect(await manager.refresh()["openai"]?.openAIMonthlyCredit == credit)
+        await manager.clearOpenAIMonthlyCredit()
+        #expect(await manager.cachedSnapshots()["openai"]?.openAIMonthlyCredit == nil)
+        #expect(await manager.refresh()["openai"]?.openAIMonthlyCredit == nil)
+        #expect(await manager.sortedSnapshots().first?.openAIMonthlyCredit == nil)
+        #expect(calls.value == 1)
+    }
+
+    @Test("disconnect rejects a pending OpenAI monthly credit result")
+    func disconnectRejectsPendingOpenAIMonthlyCredit() async throws {
+        struct PendingProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .openai
+            let displayName = "OpenAI"
+            let category: MetricCategory = .aiSubscriptions
+            let credit: OpenAIMonthlyCredit
+            let calls: InvocationCounter
+            let gate: AutomaticFetchGate
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                if calls.increment() > 1 { await gate.run() }
+                var snapshot = try await StubProvider(vendorId: .openai, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.openAIMonthlyCredit = credit
+                snapshot.openAIMonthlyCreditReadAt = Date(timeIntervalSince1970: 1_800_000_000)
+                return snapshot
+            }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let credit = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 180,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400), measuredAt: now)
+        let calls = InvocationCounter()
+        let gate = AutomaticFetchGate()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [PendingProvider(credit: credit, calls: calls, gate: gate)] })
+        #expect(await manager.refresh()["openai"]?.openAIMonthlyCredit == credit)
+        let pending = Task { await manager.refresh() }
+        await gate.waitForEntry()
+        await manager.clearOpenAIMonthlyCredit()
+        await gate.resume()
+        let result = await pending.value
+        #expect(result["openai"]?.openAIMonthlyCredit == nil)
+        #expect(await manager.cachedSnapshots()["openai"]?.openAIMonthlyCredit == nil)
+        #expect(calls.value == 2)
+    }
+
+    @Test("a whole-provider timeout retains the OpenAI monthly credit as stale")
+    func openAIMonthlyCreditSurvivesProviderDeadline() async throws {
+        struct DeadlineProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .openai
+            let displayName = "OpenAI"
+            let category: MetricCategory = .aiSubscriptions
+            let credit: OpenAIMonthlyCredit
+            let calls: InvocationCounter
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                if calls.increment() > 1 { try await Task.sleep(for: .seconds(60)) }
+                var snapshot = try await StubProvider(vendorId: .openai, behavior: .succeed(.none)).fetchSnapshot()
+                snapshot.openAIMonthlyCredit = credit
+                snapshot.openAIMonthlyCreditReadAt = Date(timeIntervalSince1970: 1_800_000_000)
+                return snapshot
+            }
+        }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let credit = OpenAIMonthlyCredit(grantUSD: 200, remainingUSD: 180,
+            periodStart: now, periodEnd: now.addingTimeInterval(30 * 86_400), measuredAt: now)
+        let calls = InvocationCounter()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [DeadlineProvider(credit: credit, calls: calls)] })
+        _ = await manager.refresh()
+        let failed = await manager.refresh()
+        #expect(calls.value == 2)
+        #expect(failed["openai"]?.openAIMonthlyCredit?.remainingUSD == 180)
+        #expect(failed["openai"]?.openAIMonthlyCredit?.refreshFailed == true)
+        #expect(failed["openai"]?.openAIMonthlyCreditReadAt != nil)
+        #expect(failed["openai"]?.staleReading?.reason == .timedOut)
+    }
+
     /// Two failures in a row report the newest reason. Retention exists to keep
     /// *figures*, and a placeholder carries none, so freezing the first failure's
     /// reason would leave a provider whose key was rejected reading "Not

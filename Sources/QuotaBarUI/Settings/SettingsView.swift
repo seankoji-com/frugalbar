@@ -136,6 +136,8 @@ public struct SettingsView: View {
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
     @State private var claudeMonthlyEnabled = false
+    @State private var showOpenAIMonthlyCredit = false
+    @State private var openAIMonthlyEnabled = false
     @State private var showMusePortal = false
     @ObservedObject private var musePortal = MusePortalSession.shared
     @State private var showGeminiClient = false
@@ -343,6 +345,23 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("OpenAI monthly API credit") {
+                Text("Connect the OpenAI Platform billing page to read the linked organization's monthly API credit. This is the Pro/Business API-credits benefit, not the ChatGPT usage credit count, and it is never shown as a quota.")
+                    .font(.caption)
+                Button(openAIMonthlyEnabled ? "Open OpenAI billing connection" : "Connect OpenAI billing") {
+                    OpenAIMonthlyCreditSession.shared.connect()
+                    openAIMonthlyEnabled = true
+                    showOpenAIMonthlyCredit = true
+                }
+                if openAIMonthlyEnabled {
+                    Button("Disconnect OpenAI monthly credit") {
+                        OpenAIMonthlyCreditSession.shared.disconnect()
+                        openAIMonthlyEnabled = false
+                        Task { await store?.clearOpenAIMonthlyCredit() }
+                    }
+                }
+            }
+
             Section {
                 ForEach(Self.slots) { slot in
                     slotRow(slot)
@@ -420,10 +439,16 @@ public struct SettingsView: View {
 
         }
         .formStyle(.grouped)
-        .onAppear { claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled }
+        .onAppear {
+            claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
+            openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
+        }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
             Task { await store?.load() }
         }) { ClaudeMonthlyCreditConnectionView() }
+        .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
+            Task { await store?.forceRefresh() }
+        }) { OpenAIMonthlyCreditConnectionView() }
         .sheet(isPresented: $showMusePortal, onDismiss: {
             Task { await store?.forceRefresh() }
         }) { MusePortalConnectionView() }

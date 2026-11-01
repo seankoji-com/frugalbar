@@ -8,6 +8,10 @@ import QuotaBarCore
 /// It still has no place in quota maths: `fraction` is presentation-only and
 /// never reaches `consumptionFraction`, urgency, sorting or advice.
 public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
+    /// "Usage credits" for Claude's promo, "Monthly credit" for OpenAI's
+    /// API-organization grant, so the OpenAI row is not mistaken for the
+    /// separate ChatGPT usage-credit count.
+    let title: String
     let fraction: Double?
     let paceMarker: Double?
     /// "12d" — the reset countdown under the bar.
@@ -21,6 +25,7 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
     var isExhausted: Bool { fraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } ?? false }
 
     init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
+        title = entry.vendorId == .openai ? "Monthly credit" : "Usage credits"
         if case .currency(let balance, let limit?, _, _) = entry.metric,
            limit > 0, balance >= 0 {
             let used = NSDecimalNumber(decimal: (limit - balance) / limit).doubleValue
@@ -31,8 +36,17 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
         percentText = fraction.map { "\(Int(($0 * 100).rounded()))%" }
 
         let periodLength: TimeInterval?
+        // A grant that states its own start has a measured period; the exact
+        // span wins over the calendar-month approximation. Claude's promo
+        // publishes only the end, so it keeps that fallback.
+        let exactLength = entry.monthlyPeriodStart.flatMap { start -> TimeInterval? in
+            guard let end = entry.monthlyPeriodEnd, end > start else { return nil }
+            let length = end.timeIntervalSince(start)
+            return length > 0 ? length : nil
+        }
         if let end = entry.monthlyPeriodEnd,
-           let length = DualBarMetrics.monthWindowLength(endingAt: end, calendar: calendar) {
+           let length = exactLength
+            ?? DualBarMetrics.monthWindowLength(endingAt: end, calendar: calendar) {
             periodLength = length
             // The confirmed recurring period is a calendar month, not 30 days.
             // Never roll a passed end forward and pretend a refill was read.
@@ -45,7 +59,12 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
                 dayCountdown = nil
                 resetText = nil
             }
-            let elapsed = 1 - end.timeIntervalSince(now) / length
+            let elapsed: TimeInterval
+            if let start = entry.monthlyPeriodStart {
+                elapsed = now.timeIntervalSince(start) / length
+            } else {
+                elapsed = 1 - end.timeIntervalSince(now) / length
+            }
             // This credit keeps its even-use marker when fully used, as requested.
             paceMarker = fraction != nil && elapsed > 0 && elapsed < 1 ? elapsed : nil
         } else {
@@ -54,7 +73,13 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
             dayCountdown = nil
             resetText = nil
         }
-        var parts = ["Usage credits", percentText.map { "\($0) used" } ?? "no reading"]
+        var parts = [title, percentText.map { "\($0) used" } ?? "no reading"]
+        if entry.vendorId == .openai,
+           case .currency(let balance, let limit?, _, let code) = entry.metric {
+            parts.append("\(MoneyText.format(balance, code: code)) of "
+                + "\(MoneyText.format(limit, code: code)) remaining")
+        }
+        if entry.vendorId == .openai, let detail = entry.detail { parts.append(detail) }
         if let resetText { parts.append(resetText.lowercased()) }
         if let paceMarker { parts.append("even-use marker at \(Int((paceMarker * 100).rounded())) percent of the month") }
         if isStale { parts.append("stale, the last poll failed") }
@@ -79,7 +104,7 @@ struct MonthlyPromoCreditView: View {
     var body: some View {
         HStack(alignment: .top, spacing: Theme.rowSpacing) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Usage credits")
+                Text(presentation.title)
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .lineLimit(1)

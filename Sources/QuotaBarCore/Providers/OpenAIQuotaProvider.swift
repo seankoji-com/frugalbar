@@ -13,6 +13,10 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     private let accountID: String?
     private let cliProxyConfig: CLIProxyConfig?
     private let accountPreferences: @Sendable (String) -> OpenAIAccountPreferences?
+    /// The independently read API-organization monthly credit. It comes from
+    /// the signed-in Platform billing page, not the ChatGPT usage payload, so
+    /// a usage failure must not erase it and it never enters quota maths.
+    private let monthlyCredit: @Sendable (Date) async -> OpenAIMonthlyCreditRead
     /// The details endpoint for banked resets. The usage payload only carries
     /// their count; this one carries each credit's expiry.
     static let resetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
@@ -30,7 +34,8 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         directCredential: (@Sendable () async -> String?)? = nil,
         accountPreferences: @escaping @Sendable (String) -> OpenAIAccountPreferences? = {
             OpenAIAccountPreferences.load(accountKey: $0)
-        }
+        },
+        monthlyCredit: (@Sendable (Date) async -> OpenAIMonthlyCreditRead)? = nil
     ) {
         self.accessToken = accessToken
         self.accountID = accountID
@@ -38,6 +43,12 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         self.accountPreferences = accountPreferences
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .openai) }
+        self.monthlyCredit = monthlyCredit ?? { now in
+            guard !TestHost.isActive else {
+                return OpenAIMonthlyCreditRead(credit: nil, didRead: false)
+            }
+            return await OpenAIMonthlyCreditSession.shared.read(now: now)
+        }
     }
 
     public struct Response: Decodable, Sendable, Equatable {
@@ -169,6 +180,31 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     }
 
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
+        // The Platform billing read is independent of the ChatGPT usage read:
+        // a slow web process must not add its whole wait to the quota request,
+        // and a quota transport failure must not erase a fresh grant.
+        async let credit = monthlyCredit(now)
+        var snapshot: QuotaSnapshot
+        do {
+            snapshot = try await fetchUsageSnapshot(now: now)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Map the transport failure through the shared closed mapping so
+            // the engine still gets the right reason, then attach the
+            // independently completed billing read below. A thrown error must
+            // not discard a fresh grant.
+            snapshot = unavailable(unavailableReason(for: error))
+        }
+        let reading = await credit
+        if reading.didRead {
+            snapshot.openAIMonthlyCredit = reading.credit
+            snapshot.openAIMonthlyCreditReadAt = now
+        }
+        return snapshot
+    }
+
+    private func fetchUsageSnapshot(now: Date) async throws -> QuotaSnapshot {
         if let injectedToken = accessToken, !injectedToken.isEmpty {
             return try await fetchSnapshotDirect(token: injectedToken, now: now)
         }

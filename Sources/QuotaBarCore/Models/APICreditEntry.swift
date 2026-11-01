@@ -27,7 +27,14 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         (vendorId == .openai && id == "openai.api-credits") || isMonthlyPromo
     }
 
-    public var isMonthlyPromo: Bool { vendorId == .claude && id == "claude.promo-credit" }
+    /// A recurring monthly credit drawn in the window anatomy: Claude's promo
+    /// credit and OpenAI's API-organization monthly grant. Both have a
+    /// published allowance, a remaining figure and a period end, so the row
+    /// can draw a bar without either becoming a quota.
+    public var isMonthlyPromo: Bool {
+        (vendorId == .claude && id == "claude.promo-credit")
+            || (vendorId == .openai && id == "openai.monthly-credit")
+    }
 
     /// Stable id, built from the facts — the vendor and which of its pools —
     /// never a UUID or prose, so the same entry re-renders as the same row.
@@ -54,6 +61,10 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     /// Published end of the recurring monthly promo period. Never taken from
     /// the separate Console API-credit entitlement or its next grant date.
     public let monthlyPeriodEnd: Date?
+    /// Published start of the same period, when the vendor stated it. The
+    /// monthly row uses this exact length for its even-use marker instead of
+    /// inferring a calendar month from the end date.
+    public let monthlyPeriodStart: Date?
     /// User-confirmed allowance for this account's non-recurring credit pool.
     public let creditGrant: OpenAICreditGrant?
 
@@ -66,6 +77,7 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         detail: String? = nil,
         source: String? = nil,
         monthlyPeriodEnd: Date? = nil,
+        monthlyPeriodStart: Date? = nil,
         creditGrant: OpenAICreditGrant? = nil
     ) {
         self.id = id
@@ -76,6 +88,7 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         self.detail = detail
         self.source = source
         self.monthlyPeriodEnd = monthlyPeriodEnd
+        self.monthlyPeriodStart = monthlyPeriodStart
         self.creditGrant = creditGrant
     }
 }

@@ -541,6 +541,14 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var apiCredits: [APICreditEntry] = []
     /// Independently observed linked Console entitlement, with its own reading time.
     public var monthlyAPICredit: ClaudeMonthlyCredit? = nil
+    /// Independently observed OpenAI API-organization monthly credit. Kept
+    /// outside `apiCredits` so quota retention cannot erase it or label it
+    /// with the quota poll's freshness; the field carries its own failure flag.
+    public var openAIMonthlyCredit: OpenAIMonthlyCredit? = nil
+    /// When the billing session completed a read this pass, even one that
+    /// found no current grant. Nil means the session was not observed, so a
+    /// failed quota poll must keep the previous grant rather than clear it.
+    public var openAIMonthlyCreditReadAt: Date? = nil
     /// Opaque account binding for user-entered ChatGPT grant and plan details.
     /// Never a token, and absent when the provider cannot identify the account.
     public var openAIAccountKey: String? = nil
