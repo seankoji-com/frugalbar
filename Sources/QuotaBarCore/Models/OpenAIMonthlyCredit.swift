@@ -55,10 +55,11 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
             // not when the subscription month began. The row's even-use marker
             // belongs to the billing cycle, so leave the start unset and let
             // the presentation derive a calendar month ending at the cycle
-            // end. That fallback is an approximation: when the cycle crosses a
-            // daylight-saving transition, the derived span can differ from the
-            // true billing period by the DST hour. The vendor publishes no
-            // cycle start, so there is no exact span to use here.
+            // end. That fallback is an approximation: a local calendar month
+            // is not exactly the billing cycle when the span crosses a
+            // daylight-saving transition, so the derived start can be off by
+            // the DST hour. The vendor publishes no cycle start, so there is
+            // no exact span to use here.
             monthlyPeriodStart: nil
         )
     }
@@ -141,8 +142,9 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
                   effectiveAt <= now, expiresAt > now else { return nil }
             let span = expiresAt.timeIntervalSince(effectiveAt)
             // A cycle-end match is not enough by itself: an annual Business
-            // grant can also expire at that instant. Both identification
-            // branches below therefore require a monthly span.
+            // grant can also expire at that instant. The monthly-span guard
+            // therefore covers both identification branches below, including
+            // the cycle-end match.
             guard span.isFinite, span > 0, span <= OpenAIMonthlyCredit.maximumMonthlyPeriod
             else { return nil }
             if let expectedPeriodEnd {
