@@ -142,8 +142,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
             OpenAIUsageCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil)
         }.first
         self.openAIUsageCredit = usageCredit
-        self.monthlyPromo = snapshot.apiCredits.first(where: \.isMonthlyPromo)
-            .map { MonthlyPromoCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil) }
+        // OpenAI's grant has its own read time and failure flag; a quota
+        // outage must not label it stale. Claude's promo still rides the
+        // snapshot's quota freshness.
+        if let openAI = snapshot.openAIMonthlyCredit {
+            self.monthlyPromo = MonthlyPromoCreditPresentation(entry: openAI.entry, now: now,
+                isStale: openAI.refreshFailed)
+        } else {
+            self.monthlyPromo = snapshot.apiCredits.first(where: \.isMonthlyPromo)
+                .map { MonthlyPromoCreditPresentation(entry: $0, now: now,
+                    isStale: snapshot.staleReading != nil) }
+        }
         self.subscriptionCredits = snapshot.apiCredits.filter {
             $0.extendsSubscription && !$0.isMonthlyPromo
                 && !(usageCredit != nil && $0.vendorId == .openai && $0.id == "openai.api-credits")

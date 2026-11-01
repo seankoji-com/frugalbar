@@ -36,6 +36,7 @@ public actor QuotaManager {
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
     private let monthlyCreditConnection: @Sendable () async -> String?
     private var monthlyCreditInvalidation = 0
+    private var openAIMonthlyCreditInvalidation = 0
     private var activeTaskIsForced = false
     private var forcedPassPending = false
 
@@ -146,6 +147,21 @@ public actor QuotaManager {
             guard let entry = cache[id] else { continue }
             var snapshot = entry.snapshot
             snapshot.monthlyAPICredit = nil
+            cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
+    }
+
+    /// Disconnecting the OpenAI billing session is a local state change, not a
+    /// reason to poll quota. Clear the independently read grant immediately so
+    /// it cannot survive a later quota outage through retention.
+    public func clearOpenAIMonthlyCredit() {
+        openAIMonthlyCreditInvalidation += 1
+        for id in Array(cache.keys) {
+            guard let entry = cache[id] else { continue }
+            var snapshot = entry.snapshot
+            snapshot.openAIMonthlyCredit = nil
+            snapshot.openAIMonthlyCreditReadAt = nil
             cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
                 lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
         }
@@ -490,6 +506,7 @@ public actor QuotaManager {
         let cycleLookup = self.cycleLookup
 
         let creditInvalidation = monthlyCreditInvalidation
+        let openAICreditInvalidation = openAIMonthlyCreditInvalidation
         let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
         await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
@@ -527,6 +544,7 @@ public actor QuotaManager {
         let currentCreditConnection = await monthlyCreditConnection()
         let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
             && creditInvalidation == monthlyCreditInvalidation
+        let acceptsOpenAIMonthlyCredit = openAICreditInvalidation == openAIMonthlyCreditInvalidation
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })
@@ -537,8 +555,17 @@ public actor QuotaManager {
             if deadlineFailures.contains(id) {
                 snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
                 snap.monthlyAPICredit?.refreshFailed = true
+                snap.openAIMonthlyCredit = cache[id]?.snapshot.openAIMonthlyCredit
+                snap.openAIMonthlyCredit?.refreshFailed = true
+                snap.openAIMonthlyCreditReadAt = cache[id]?.snapshot.openAIMonthlyCreditReadAt
             }
             if !acceptsMonthlyCredit { snap.monthlyAPICredit = nil }
+            // A disconnect while this pass was in flight rejects the pass's
+            // independent OpenAI grant, including one already read.
+            if !acceptsOpenAIMonthlyCredit {
+                snap.openAIMonthlyCredit = nil
+                snap.openAIMonthlyCreditReadAt = nil
+            }
             // Keep the old cache entry's snapshot if a previously successful
             // provider now fails transiently, so we don't wipe out the
             // measured reading the UI is showing. But always bump fetchedAt
@@ -577,6 +604,14 @@ public actor QuotaManager {
                 // them with a fresh timestamp.
                 retained.staleReading = StaleReading(reason: reason, at: now)
                 retained.monthlyAPICredit = snap.monthlyAPICredit
+                // The billing session is independent of the quota poll. A
+                // read completed this pass — including a valid read that
+                // found no grant — replaces the retained one; no read keeps
+                // the last known grant.
+                if let readAt = snap.openAIMonthlyCreditReadAt {
+                    retained.openAIMonthlyCredit = snap.openAIMonthlyCredit
+                    retained.openAIMonthlyCreditReadAt = readAt
+                }
                 displaySnapshot = retained
             } else {
                 displaySnapshot = snap
@@ -670,6 +705,8 @@ public actor QuotaManager {
             // them flicker out whenever a hand-entered cycle row is attached.
             rebuilt.apiCredits = updated.apiCredits
             rebuilt.monthlyAPICredit = updated.monthlyAPICredit
+            rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
+            rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
             rebuilt.openAIAccountKey = updated.openAIAccountKey
             rebuilt.resetCreditExpiries = updated.resetCreditExpiries
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
@@ -738,6 +775,8 @@ public actor QuotaManager {
         )
         rebuilt.apiCredits = updated.apiCredits
         rebuilt.monthlyAPICredit = updated.monthlyAPICredit
+        rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
+        rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
         rebuilt.openAIAccountKey = updated.openAIAccountKey
         rebuilt.resetCreditExpiries = updated.resetCreditExpiries
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable

@@ -53,6 +53,9 @@ jobs:
       - name: Verify monthly credit WebKit scripts offline
         run: node scripts/test-claude-monthly-credit-scripts.mjs
 
+      - name: Verify OpenAI monthly credit WebKit script offline
+        run: node scripts/test-openai-monthly-credit-scripts.mjs
+
       - name: Verify Gemini proof failure bookkeeping offline
         run: python3 scripts/test_verify_gemini_regression.py
 

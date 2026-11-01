@@ -190,4 +190,80 @@ struct MonthlyPromoCreditTests {
         let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
         #expect(withPromo - without > 30)
     }
+
+    /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo,
+    /// but its period comes from the grant's own effective/expiry instants —
+    /// not a calendar month inferred from the end date.
+    @Test("the OpenAI monthly grant uses its own period and draws in the row")
+    @MainActor
+    func openAIMonthlyCredit() throws {
+        let start = date("2026-10-19T00:25:31Z")
+        let end = date("2026-11-19T00:25:31Z")
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: 50, periodStart: start, periodEnd: end,
+            measuredAt: date("2026-11-09T00:25:31Z"))
+        let entry = credit.entry
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false)
+        #expect(entry.isMonthlyPromo)
+        #expect(entry.extendsSubscription)
+        #expect(presentation.fraction == 0.75)
+        #expect(presentation.percentText == "75%")
+        #expect(presentation.resetText == "Resets in 10 days")
+        #expect(presentation.dayCountdown == "10d")
+        #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0)
+        #expect(abs(try #require(presentation.paceMarker) - 21.0 / 31) < 0.00001)
+        #expect(presentation.spoken.contains("$50.00 of $200.00 remaining"))
+
+        var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.2, label: "5H"))
+        let without = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
+            .frame(width: 332)).fittingSize.height
+        snapshot.openAIMonthlyCredit = credit
+        let row = MetricRowPresentation(snapshot: snapshot, now: date("2026-11-09T00:25:31Z"))
+        let promo = try #require(row.monthlyPromo)
+        #expect(promo.fraction == 0.75)
+        #expect(row.subscriptionCredits.isEmpty)
+        // The grant is a presentation row only: the quota reading is unchanged.
+        #expect(snapshot.row1?.primaryFraction == 0.2)
+        #expect(snapshot.status == .measured(.none))
+        #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+            .contains("Monthly credit, 75% used"))
+        // The billing read is independent: a quota outage does not make this
+        // grant stale. Only the session's own failed refresh does.
+        var quotaStale = snapshot
+        quotaStale.staleReading = StaleReading(reason: .offline, at: now)
+        let current = try #require(MetricRowPresentation(snapshot: quotaStale,
+            now: date("2026-11-09T00:25:31Z")).monthlyPromo)
+        #expect(!current.spoken.contains("stale"))
+        var failedCredit = credit
+        failedCredit.refreshFailed = true
+        var billingFailed = snapshot
+        billingFailed.openAIMonthlyCredit = failedCredit
+        let stale = try #require(MetricRowPresentation(snapshot: billingFailed,
+            now: date("2026-11-09T00:25:31Z")).monthlyPromo)
+        #expect(stale.spoken.contains("stale, the last poll failed"))
+        let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
+            .frame(width: 332)).fittingSize.height
+        #expect(withPromo - without > 30)
+    }
+
+    /// A 30-day grant must not borrow a 31-day calendar month: the exact
+    /// published span is the only length its even-use marker may use.
+    @Test("an exact grant span wins over the calendar-month fallback")
+    func exactGrantSpan() throws {
+        let start = date("2026-10-10T00:00:00Z")
+        let end = date("2026-11-09T00:00:00Z")
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: APICreditEntry(
+                id: "openai.monthly-credit", vendorId: .openai, label: "Monthly credit",
+                metric: .currency(balance: 100, limit: 200, spent: nil, currencyCode: "USD"),
+                currencyBasis: .prepaidCredit, monthlyPeriodEnd: end, monthlyPeriodStart: start),
+            now: date("2026-10-25T00:00:00Z"), isStale: false)
+        #expect(try #require(presentation.barMetrics.windowLength) == 30 * 86_400.0)
+        #expect(abs(try #require(presentation.paceMarker) - 0.5) < 0.00001)
+        #expect(presentation.fraction == 0.5)
+    }
 }

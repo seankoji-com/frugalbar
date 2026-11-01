@@ -664,6 +664,51 @@ struct ProviderHTTPTests {
     /// The live `wham/usage` shape from a Pro account (2026-10-03), credit
     /// blocks included. `balance` is decoded but its unit is unverified, so
     /// nothing may render it.
+    /// The Platform billing read is independent of the ChatGPT usage read, so
+    /// it rides the same snapshot without becoming part of the quota. A failed
+    /// usage read must still carry a grant that was read successfully.
+    @Test("an independently read OpenAI monthly credit never enters quota maths")
+    func openAIMonthlyCredit() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: Decimal(string: "187.66")!,
+            periodStart: now.addingTimeInterval(-20 * 86_400),
+            periodEnd: now.addingTimeInterval(10 * 86_400), measuredAt: now)
+        let read = OpenAIMonthlyCreditRead(credit: credit, didRead: true)
+        let provider = OpenAIQuotaProvider(accessToken: "session-token", monthlyCredit: { _ in read })
+
+        let measured = try await withStubbedHTTP({ _ in
+            canned(body: #"""
+            {"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":30,
+             "reset_at":1787891551,"limit_window_seconds":18000}}}
+            """#)
+        }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(measured.openAIMonthlyCredit == credit)
+        #expect(measured.openAIMonthlyCreditReadAt != nil)
+        #expect(measured.apiCredits.isEmpty)
+        #expect(measured.row1?.primaryFraction == 0.30)
+        #expect(measured.status == .measured(.none))
+
+        let failed = try await withStubbedHTTP({ _ in canned(status: 500, body: "{}") }) {
+            try await provider.fetchSnapshot()
+        }
+        #expect(failed.openAIMonthlyCredit == credit)
+        #expect(failed.openAIMonthlyCreditReadAt != nil)
+        #expect(failed.status.unavailableReason == .badResponse)
+
+        // A thrown transport failure must not discard a completed billing
+        // read either; the shared mapping still supplies the reason.
+        let transport = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            URLProtocolStub.failNextRequest = true
+            return try await provider.fetchSnapshot()
+        }
+        #expect(transport.openAIMonthlyCredit == credit)
+        #expect(transport.openAIMonthlyCreditReadAt != nil)
+        #expect(transport.status.unavailableReason == .offline)
+    }
+
     @Test("OpenAI decodes the live Pro payload's credit blocks")
     func openAILivePayload() throws {
         let live = #"""
