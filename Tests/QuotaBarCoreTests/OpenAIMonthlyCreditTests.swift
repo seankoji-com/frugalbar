@@ -67,6 +67,40 @@ struct OpenAIMonthlyCreditTests {
                                                   spent: nil, currencyCode: "USD"))
     }
 
+    /// The live Platform payload has no grant labels. The API-credits grant is
+    /// the one whose expiry is the ChatGPT subscription's cycle end; the other
+    /// grant is a longer-lived purchased pool. This is the exact shape seen on
+    /// the account this feature was built for.
+    @Test("an unlabelled grant is identified by the subscription cycle end")
+    func identifiesBySubscriptionCycleEnd() throws {
+        let actualNow = date("2026-11-02T00:00:00Z")
+        let cycleEnd = date("2026-11-19T00:25:31Z")
+        let apiCredit = #"""
+        {"object":"credit_grant","grant_amount":116,"used_amount":0,
+         "effective_at":"2026-11-01T02:15:38Z","expires_at":"2026-11-19T00:25:31Z"}
+        """#
+        let purchased = #"""
+        {"object":"credit_grant","grant_amount":5,"used_amount":2.01776339,
+         "effective_at":"2026-02-01T00:00:00Z","expires_at":"2027-03-01T00:00:00Z"}
+        """#
+        // A second monthly-span grant with a different expiry must be excluded
+        // by the cycle-end match, not merely by its duration.
+        let otherMonthly = #"""
+        {"object":"credit_grant","grant_amount":50,"used_amount":0,
+         "effective_at":"2026-10-25T00:00:00Z","expires_at":"2026-11-24T00:00:00Z"}
+        """#
+        let credit = try #require(try OpenAIMonthlyCredit.decode(
+            summary(apiCredit + "," + purchased + "," + otherMonthly), now: actualNow,
+            expectedPeriodEnd: cycleEnd))
+        #expect(credit.grantUSD == 116)
+        #expect(credit.remainingUSD == 116)
+        #expect(credit.periodEnd == cycleEnd)
+        // Without the cycle end, the API sends no label and no row is safe.
+        #expect(try OpenAIMonthlyCredit.decode(
+            summary(apiCredit + "," + purchased + "," + otherMonthly),
+            now: actualNow) == nil)
+    }
+
     @Test("an expired grant or a summary with no grants yields no monthly credit")
     func requiresCurrentGrant() throws {
         let expired = #"""
@@ -151,6 +185,12 @@ struct OpenAIMonthlyCreditTests {
          "description":"ChatGPT subscription API credits"}
         """#
         #expect(try OpenAIMonthlyCredit.decode(summary(unlabelled), now: now) == nil)
+        // With the subscription's cycle end, the unlabelled grant is eligible
+        // and the labelled one is excluded unless it expires there too.
+        let cycleEnd = date("2026-11-19T00:25:31Z")
+        let byCycle = try #require(try OpenAIMonthlyCredit.decode(
+            summary(unlabelled), now: now, expectedPeriodEnd: cycleEnd))
+        #expect(byCycle.grantUSD == 50)
         let credit = try #require(try OpenAIMonthlyCredit.decode(
             summary(unlabelled + "," + labelled), now: now))
         #expect(credit.grantUSD == 200)
@@ -177,6 +217,24 @@ struct OpenAIMonthlyCreditTests {
         state.observe(payload: #"{"object":"credit_summary","total_available":0}"#,
                       now: now.addingTimeInterval(20))
         #expect(state.credit == nil)
+    }
+
+    @Test("a failed subscription lookup keeps the last cycle end and grant")
+    func cycleEndFailureKeepsCredit() throws {
+        var state = OpenAIMonthlyCreditSessionState()
+        let cycleEnd = date("2026-11-19T00:25:31Z")
+        let at = date("2026-11-02T00:00:00Z")
+        let grant = #"""
+        {"object":"credit_grant","grant_amount":116,"used_amount":0,
+         "effective_at":"2026-11-01T02:15:38Z","expires_at":"2026-11-19T00:25:31Z"}
+        """#
+        state.setExpectedPeriodEnd(cycleEnd)
+        state.observe(payload: String(data: summary(grant), encoding: .utf8)!, now: at)
+        #expect(state.credit?.grantUSD == 116)
+        // The lookup failed this pass; that is not evidence the cycle ended.
+        state.setExpectedPeriodEnd(nil)
+        #expect(state.expectedPeriodEnd == cycleEnd)
+        #expect(state.credit?.grantUSD == 116)
     }
 
     @Test("the session generation and connection reset with a disconnect")

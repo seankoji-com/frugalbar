@@ -16,7 +16,10 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
     /// The independently read API-organization monthly credit. It comes from
     /// the signed-in Platform billing page, not the ChatGPT usage payload, so
     /// a usage failure must not erase it and it never enters quota maths.
-    private let monthlyCredit: @Sendable (Date) async -> OpenAIMonthlyCreditRead
+    private let monthlyCredit: @Sendable (Date, Date?) async -> OpenAIMonthlyCreditRead
+    /// The ChatGPT subscription's published cycle end, used to identify the
+    /// unlabelled API-credits grant. Nil when disabled or unavailable.
+    private let subscriptionPeriodEnd: @Sendable (Date) async -> Date?
     /// The details endpoint for banked resets. The usage payload only carries
     /// their count; this one carries each credit's expiry.
     static let resetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
@@ -35,19 +38,30 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         accountPreferences: @escaping @Sendable (String) -> OpenAIAccountPreferences? = {
             OpenAIAccountPreferences.load(accountKey: $0)
         },
-        monthlyCredit: (@Sendable (Date) async -> OpenAIMonthlyCreditRead)? = nil
+        monthlyCredit: (@Sendable (Date, Date?) async -> OpenAIMonthlyCreditRead)? = nil,
+        subscriptionPeriodEnd: (@Sendable (Date) async -> Date?)? = nil
     ) {
+        let direct = directCredential
+            ?? { await CredentialStore.apiKeyAsync(for: .openai) }
         self.accessToken = accessToken
         self.accountID = accountID
         self.cliProxyConfig = cliProxyConfig
         self.accountPreferences = accountPreferences
-        self.directCredential = directCredential
-            ?? { await CredentialStore.apiKeyAsync(for: .openai) }
-        self.monthlyCredit = monthlyCredit ?? { now in
+        self.directCredential = direct
+        self.monthlyCredit = monthlyCredit ?? { now, periodEnd in
             guard !TestHost.isActive else {
                 return OpenAIMonthlyCreditRead(credit: nil, didRead: false)
             }
-            return await OpenAIMonthlyCreditSession.shared.read(now: now)
+            return await OpenAIMonthlyCreditSession.shared.read(
+                now: now, expectedPeriodEnd: periodEnd)
+        }
+        self.subscriptionPeriodEnd = subscriptionPeriodEnd ?? { _ in
+            guard !TestHost.isActive else { return nil }
+            let enabled = await MainActor.run { OpenAIMonthlyCreditSession.shared.isEnabled }
+            guard enabled,
+                  let token = await direct().flatMap({ $0.isEmpty ? nil : $0 }) else { return nil }
+            return await Self.fetchSubscriptionPeriodEnd(
+                token: token, accountID: accountID)
         }
     }
 
@@ -175,6 +189,47 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
+    /// The ChatGPT subscription's cycle-end fields. Only the two dates the
+    /// billing grant must match are decoded.
+    struct SubscriptionCheck: Decodable, Sendable, Equatable {
+        struct Entry: Decodable, Sendable, Equatable {
+            struct Entitlement: Decodable, Sendable, Equatable {
+                let renews_at: String?
+                let expires_at: String?
+            }
+            let entitlement: Entitlement?
+        }
+        let accounts: [String: Entry]
+    }
+
+    /// Reads the cycle end from the same ChatGPT account the Codex session
+    /// uses. A failure is nil: the monthly session then requires the vendor's
+    /// label rather than guessing which grant is the benefit.
+    static func fetchSubscriptionPeriodEnd(
+        token: String, accountID: String?
+    ) async -> Date? {
+        var headers = ["Accept": "application/json"]
+        let account: String?
+        if let accountID {
+            account = accountID
+        } else {
+            account = await CredentialStore.openAIAccountIDAsync()
+        }
+        if let account { headers["chatgpt-account-id"] = account }
+        guard let result = try? await QuotaHTTP.get(
+            url: "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27",
+            headers: headers, auth: .bearer(token)),
+            (200...299).contains(result.1.statusCode),
+            let check = try? JSONDecoder().decode(SubscriptionCheck.self, from: result.0)
+        else { return nil }
+        let entry = account.flatMap { check.accounts[$0] } ?? check.accounts["default"]
+        let text = entry?.entitlement?.renews_at ?? entry?.entitlement?.expires_at
+        guard let text else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         try await fetchSnapshot(now: Date())
     }
@@ -183,10 +238,16 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
         // The Platform billing read is independent of the ChatGPT usage read:
         // a slow web process must not add its whole wait to the quota request,
         // and a quota transport failure must not erase a fresh grant.
-        async let credit = monthlyCredit(now)
+        async let usage = fetchUsageSnapshot(now: now)
+        async let period = subscriptionPeriodEnd(now)
+        // The billing session identifies the unlabelled API-credits grant by
+        // its expiry at the subscription's cycle end. The usage read continues
+        // concurrently while that date and the page are read.
+        let expectedPeriodEnd = await period
+        let reading = await monthlyCredit(now, expectedPeriodEnd)
         var snapshot: QuotaSnapshot
         do {
-            snapshot = try await fetchUsageSnapshot(now: now)
+            snapshot = try await usage
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -196,7 +257,6 @@ public final class OpenAIQuotaProvider: QuotaProvider, Sendable {
             // not discard a fresh grant.
             snapshot = unavailable(unavailableReason(for: error))
         }
-        let reading = await credit
         if reading.didRead {
             snapshot.openAIMonthlyCredit = reading.credit
             snapshot.openAIMonthlyCreditReadAt = now

@@ -87,10 +87,11 @@ public final class OpenAIMonthlyCreditSession: NSObject, WKScriptMessageHandler 
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
-    public func read(now: Date) async -> OpenAIMonthlyCreditRead {
+    public func read(now: Date, expectedPeriodEnd: Date? = nil) async -> OpenAIMonthlyCreditRead {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else {
             return OpenAIMonthlyCreditRead(credit: nil, didRead: false)
         }
+        state.setExpectedPeriodEnd(expectedPeriodEnd)
         // A page observation is a reading with its own time. Reuse it for the
         // same five minutes the platform connection uses, so a 120 s quota
         // loop does not reload a billing page every cycle.
@@ -217,6 +218,8 @@ struct OpenAIMonthlyCreditSessionState {
     var credit: OpenAIMonthlyCredit?
     var attemptedAt: Date?
     var hasObserved = false
+    var expectedPeriodEnd: Date?
+    var lastPayload: String?
 
     mutating func reset() { self = Self() }
 
@@ -230,9 +233,23 @@ struct OpenAIMonthlyCreditSessionState {
         credit?.refreshFailed = true
     }
 
+    /// The subscription cycle end arrives shortly after the page's first
+    /// observation. Re-decode the last payload when it changes so a grant seen
+    /// before the date is not lost until the next reload.
+    mutating func setExpectedPeriodEnd(_ value: Date?) {
+        // A failed subscription lookup is not evidence that the cycle end
+        // changed. Keep the last known date so a transient metadata failure
+        // cannot turn an unlabelled, already-measured grant into "no grant".
+        guard let value else { return }
+        guard expectedPeriodEnd != value else { return }
+        expectedPeriodEnd = value
+        if let lastPayload { apply(payload: lastPayload, now: Date()) }
+    }
+
     mutating func observe(payload: String, now: Date) {
         hasObserved = true
         attemptedAt = now
+        lastPayload = payload
         apply(payload: payload, now: now)
     }
 
@@ -242,6 +259,7 @@ struct OpenAIMonthlyCreditSessionState {
             markRefreshFailed()
             return
         }
+        lastPayload = payload
         apply(payload: payload, now: now)
     }
 
@@ -254,7 +272,8 @@ struct OpenAIMonthlyCreditSessionState {
             // A valid summary with no current monthly grant means the grant is
             // gone or expired: clear the row rather than keep a figure the
             // vendor no longer publishes.
-            credit = try OpenAIMonthlyCredit.decode(data, now: now)
+            credit = try OpenAIMonthlyCredit.decode(data, now: now,
+                expectedPeriodEnd: expectedPeriodEnd)
         } catch {
             markRefreshFailed()
         }
