@@ -104,6 +104,20 @@ struct OpenAIMonthlyCreditTests {
             now: actualNow) == nil)
     }
 
+    /// An annual Business grant can expire at the same instant as the
+    /// subscription cycle. Sharing that expiry does not make it a monthly
+    /// grant, so the cycle-end path still requires a monthly span.
+    @Test("an annual grant is excluded even when it expires at the cycle end")
+    func annualGrantAtCycleEndIsRejected() throws {
+        let cycleEnd = date("2026-11-19T00:25:31Z")
+        let annual = #"""
+        {"object":"credit_grant","grant_amount":6000,"used_amount":1000,
+         "effective_at":"2026-01-01T00:00:00Z","expires_at":"2026-11-19T00:25:31Z"}
+        """#
+        #expect(try OpenAIMonthlyCredit.decode(
+            summary(annual), now: now, expectedPeriodEnd: cycleEnd) == nil)
+    }
+
     @Test("an expired grant or a summary with no grants yields no monthly credit")
     func requiresCurrentGrant() throws {
         let expired = #"""
