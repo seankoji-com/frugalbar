@@ -288,10 +288,14 @@ struct MonthlyPromoCreditTests {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
         let end = date("2026-11-19T00:25:31Z")
-        let entry = APICreditEntry(
-            id: "openai.monthly-credit", vendorId: .openai, label: "Monthly credit",
-            metric: .currency(balance: 100, limit: 200, spent: nil, currencyCode: "USD"),
-            currencyBasis: .prepaidCredit, monthlyPeriodEnd: end)
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: 100, periodStart: date("2026-10-19T00:25:31Z"),
+            periodEnd: end, measuredAt: date("2026-11-09T00:25:31Z"))
+        let entry = credit.entry
+        // The production entry keeps the grant issue date off the row's start,
+        // so the presentation takes the documented calendar-month fallback.
+        #expect(credit.periodStart == date("2026-10-19T00:25:31Z"))
+        #expect(entry.monthlyPeriodStart == nil)
         let presentation = MonthlyPromoCreditPresentation(
             entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false,
             calendar: calendar)

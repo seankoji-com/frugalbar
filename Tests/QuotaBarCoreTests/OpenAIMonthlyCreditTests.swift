@@ -112,8 +112,11 @@ struct OpenAIMonthlyCreditTests {
         let cycleEnd = date("2026-11-19T00:25:31Z")
         let annual = #"""
         {"object":"credit_grant","grant_amount":6000,"used_amount":1000,
-         "effective_at":"2026-01-01T00:00:00Z","expires_at":"2026-11-19T00:25:31Z"}
+         "effective_at":"2026-01-01T00:00:00Z","expires_at":"2026-11-19T00:25:31Z",
+         "grant_type":"promotion"}
         """#
+        // Even with the promotional label and a cycle-end match, the span
+        // guard runs before either identification branch.
         #expect(try OpenAIMonthlyCredit.decode(
             summary(annual), now: now, expectedPeriodEnd: cycleEnd) == nil)
     }

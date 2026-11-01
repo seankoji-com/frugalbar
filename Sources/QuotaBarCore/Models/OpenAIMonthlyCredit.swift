@@ -54,12 +54,12 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
             // `periodStart` is when the (possibly prorated) grant was issued,
             // not when the subscription month began. The row's even-use marker
             // belongs to the billing cycle, so leave the start unset and let
-            // the presentation derive a calendar month ending at the cycle
-            // end. That fallback is an approximation: a local calendar month
-            // is not exactly the billing cycle when the span crosses a
-            // daylight-saving transition, so the derived start can be off by
-            // the DST hour. The vendor publishes no cycle start, so there is
-            // no exact span to use here.
+            // the presentation derive a local calendar month ending at the
+            // cycle end (`DualBarMetrics.monthWindowLength(endingAt:calendar:)`).
+            // That fallback is an intentional approximation, not an exact
+            // cycle: the vendor publishes no cycle start, so a span that
+            // crosses a daylight-saving transition can be off by the DST
+            // hour. Tests pin this approximation and the exact-span override.
             monthlyPeriodStart: nil
         )
     }
