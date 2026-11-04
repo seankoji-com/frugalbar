@@ -73,9 +73,10 @@ public struct QuotaTimelineChart: View {
     /// The state carries across a window's segments in time order: a 5-hour
     /// window resets five times a day and every failed poll splits the line,
     /// so starting each segment afresh put a symbol on nearly every segment's
-    /// first reading — the bands round 5 still showed. Marks of the same
-    /// severity also keep `span / minSpacingDivisor` apart; an escalation
-    /// (healthy → warning → critical → blocked) is always marked.
+    /// first reading — the bands round 5 still showed. A step from one
+    /// non-healthy level to a worse one (warning → critical → blocked) is
+    /// always marked; any other entry into a state keeps
+    /// `span / minSpacingDivisor` from a mark at least as severe.
     static func stateChangePoints(
         in segments: [HistoryPresentation.TimelineSegment], minSpacingDivisor: Double = 150
     ) -> Set<String> {
@@ -246,10 +247,8 @@ public struct QuotaTimelineChart: View {
                     // non-healthy state begins (`symbolPointIDs`); the line's
                     // colour carries the state between. Short ranges keep a
                     // symbol on every reading.
-                    // A one-reading segment has no line to carry it, so it
-                    // always keeps its symbol (code review cr-03).
-                    if !isThinned || segment.points.count == 1
-                        || symbolPointIDs.contains(segment.id + "#" + point.id) {
+                    let marksState = !isThinned || symbolPointIDs.contains(segment.id + "#" + point.id)
+                    if marksState {
                         PointMark(
                             x: .value("Time", point.timestamp),
                             y: .value("Used %", point.fraction * 100)
@@ -257,6 +256,21 @@ public struct QuotaTimelineChart: View {
                         .foregroundStyle(colorForPoint(point))
                         .symbol(symbol(for: point))
                         .symbolSize(point.isBlocked ? 28 : 18)
+                    } else if segment.points.count == 1 {
+                        // A one-reading segment has no line to carry it, so it
+                        // keeps a mark (code review cr-03) — a small dot in the
+                        // line's colour, not a state shape: a blocked window
+                        // polled between failures is hundreds of one-reading
+                        // segments, and full-size shapes on each read as a solid
+                        // band (round-7 judging). Its state began earlier, where
+                        // the shape is drawn.
+                        PointMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Used %", point.fraction * 100)
+                        )
+                        .foregroundStyle(colorForPoint(point))
+                        .symbol(.circle)
+                        .symbolSize(5)
                     }
                 }
             }
