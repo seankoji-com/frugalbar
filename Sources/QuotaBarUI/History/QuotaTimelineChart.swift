@@ -99,7 +99,10 @@ public struct QuotaTimelineChart: View {
             // The legend sits under the plot: above it, the event symbols that
             // annotate the plot's top edge collided with it.
             VStack(alignment: .leading, spacing: 6) {
+                // Room above the plot for the event symbols annotating its top
+                // edge, which otherwise overlapped the card's title.
                 chart
+                    .padding(.top, markerClusters.isEmpty ? 0 : 18)
                 if labels.count > 1 {
                     WindowDashLegend(labels: labels)
                 }
