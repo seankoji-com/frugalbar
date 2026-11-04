@@ -28,6 +28,15 @@ public struct QuotaTimelineChart: View {
     /// the keyboard stepped to. Drives the readout.
     @State private var hoverDate: Date?
 
+    /// What the marks draw: `segments` thinned to real readings at about one
+    /// per bucket (`HistoryPresentation.thinnedForDisplay`). Computed once here,
+    /// not per body evaluation, because the body re-runs on every pointer move.
+    /// Inspection and the spoken summary read the full `segments`.
+    private let drawnSegments: [HistoryPresentation.TimelineSegment]
+    /// Nearby events merged into one rule, so a month of resets does not stack
+    /// dozens of symbols along the top edge.
+    private let markerClusters: [MarkerCluster]
+
     public init(
         segments: [HistoryPresentation.TimelineSegment],
         timeRange: HistoryPresentation.TimeRange,
@@ -40,6 +49,42 @@ public struct QuotaTimelineChart: View {
         self.markers = markers
         self.emptyMessage = emptyMessage
         self.emptyTitle = emptyTitle
+        self.drawnSegments = HistoryPresentation.thinnedForDisplay(segments)
+        let times = segments.flatMap { $0.points.map(\.timestamp) } + markers.map(\.occurredAt)
+        let span = (times.max() ?? Date()).timeIntervalSince(times.min() ?? Date())
+        self.markerClusters = Self.clusters(markers, span: span)
+    }
+
+    /// One or more recorded events drawn as a single rule.
+    struct MarkerCluster: Identifiable, Equatable {
+        var id: String { events[0].id }
+        let events: [AIEvent]
+        var date: Date { events[0].occurredAt }
+    }
+
+    /// Events grouped while each falls within `span / slots` of its group's
+    /// first event: about `slots` rules across the chart at most. Every event
+    /// stays in exactly one group, so the help text and the count can name all
+    /// of them; nothing is dropped.
+    static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 48) -> [MarkerCluster] {
+        let sorted = markers.sorted { $0.occurredAt < $1.occurredAt }
+        let width = max(span / Double(max(slots, 1)), 0)
+        var out: [[AIEvent]] = []
+        for event in sorted {
+            if let start = out.last?.first,
+               event.occurredAt.timeIntervalSince(start.occurredAt) <= width {
+                out[out.count - 1].append(event)
+            } else {
+                out.append([event])
+            }
+        }
+        return out.map { MarkerCluster(events: $0) }
+    }
+
+    private static func clusterHelp(_ cluster: MarkerCluster) -> String {
+        let lines = cluster.events.prefix(6).map { "\($0.kind.title): \($0.title)" }
+        let more = cluster.events.count > 6 ? ["and \(cluster.events.count - 6) more"] : []
+        return (lines + more).joined(separator: "\n")
     }
 
     public var body: some View {
@@ -115,7 +160,7 @@ public struct QuotaTimelineChart: View {
 
     private var chart: some View {
         Chart {
-            ForEach(segments) { segment in
+            ForEach(drawnSegments) { segment in
                 ForEach(segment.points) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
@@ -137,15 +182,22 @@ public struct QuotaTimelineChart: View {
             }
 
             // Shape (the kind's symbol) carries the marker, not the tint.
-            ForEach(markers) { event in
-                RuleMark(x: .value("Event", event.occurredAt))
-                    .foregroundStyle(EventsPresentation.kindTint(event.kind).opacity(0.7))
+            ForEach(markerClusters) { cluster in
+                let kind = cluster.events[0].kind
+                RuleMark(x: .value("Event", cluster.date))
+                    .foregroundStyle(EventsPresentation.kindTint(kind).opacity(0.55))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .annotation(position: .top, alignment: .center, spacing: 2) {
-                        Image(systemName: event.kind.symbolName)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(EventsPresentation.kindTint(event.kind))
-                            .help("\(event.kind.title): \(event.title)")
+                        HStack(spacing: 1) {
+                            Image(systemName: kind.symbolName)
+                                .font(.system(size: 10, weight: .semibold))
+                            if cluster.events.count > 1 {
+                                Text("\(cluster.events.count)")
+                                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            }
+                        }
+                        .foregroundStyle(EventsPresentation.kindTint(kind))
+                        .help(Self.clusterHelp(cluster))
                     }
             }
 

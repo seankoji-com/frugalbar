@@ -155,6 +155,51 @@ public enum HistoryPresentation {
     /// Pass every label an instance recorded and name the window in
     /// `barLabel`, rather than filtering to the window first, which drops the
     /// failed polls with the other labels.
+    /// The points a chart *draws*, thinned to about `buckets` per visible span.
+    ///
+    /// A two-minute poll over 30 days is ~21,600 readings per window, and the
+    /// timeline drew a line mark and a symbol for each: tens of thousands of
+    /// marks rebuilt on every pointer move, which held All Time on "Loading"
+    /// for seconds and then left the window unresponsive. Every kept point is a
+    /// real reading — never an average or an interpolation: each segment keeps
+    /// its first and last reading and, per time bucket, the reading with the
+    /// highest fraction (a blocked reading wins a tie), so a peak, a spent
+    /// window or a block is never thinned away. Segments are thinned
+    /// independently, so a gap or reset that split them still breaks the line.
+    /// Inspection reads the full segments, so the readout stays exact.
+    public static func thinnedForDisplay(
+        _ segments: [TimelineSegment], buckets: Int = 360
+    ) -> [TimelineSegment] {
+        let all = segments.flatMap(\.points).map(\.timestamp)
+        guard let first = all.min(), let last = all.max(), buckets > 0 else { return segments }
+        let span = last.timeIntervalSince(first)
+        guard span > 0, segments.reduce(0, { $0 + $1.points.count }) > buckets * 2 else { return segments }
+        let width = span / Double(buckets)
+        return segments.map { segment in
+            let points = segment.points
+            guard points.count > 2 else { return segment }
+            var kept: [TimelinePoint] = [points[0]]
+            var bucketBest: TimelinePoint?
+            var bucketIndex = -1
+            func flush() { if let best = bucketBest { kept.append(best) } }
+            for point in points.dropFirst().dropLast() {
+                let index = Int(point.timestamp.timeIntervalSince(first) / width)
+                if index != bucketIndex {
+                    flush()
+                    bucketIndex = index
+                    bucketBest = point
+                } else if let best = bucketBest,
+                          point.fraction > best.fraction || (point.fraction == best.fraction && point.isBlocked && !best.isBlocked) {
+                    bucketBest = point
+                }
+            }
+            flush()
+            kept.append(points[points.count - 1])
+            return TimelineSegment(vendor: segment.vendor, barLabel: segment.barLabel,
+                                   resetsAt: segment.resetsAt, points: kept)
+        }
+    }
+
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
         barLabel: String? = nil,
