@@ -62,9 +62,26 @@ public struct QuotaTimelineChart: View {
         self.labels = Self.labels(of: segments)
         self.isThinned = drawnSegments != segments
         self.symbolPointIDs = Self.stateChangePoints(in: drawnSegments)
-        let times = segments.flatMap { $0.points.map(\.timestamp) } + markers.map(\.occurredAt)
+        self.plottedMarkers = Self.plottedMarkers(markers, segments: segments, range: timeRange)
+        let times = segments.flatMap { $0.points.map(\.timestamp) } + plottedMarkers.map(\.occurredAt)
         let span = (times.max() ?? Date()).timeIntervalSince(times.min() ?? Date())
-        self.markerClusters = Self.clusters(markers, span: span)
+        self.markerClusters = Self.clusters(plottedMarkers, span: span)
+    }
+
+    /// The events drawn on the plot. All Time starts at the first recorded
+    /// reading: events from months before it stretched the axis back to them
+    /// and squeezed every reading into the right-hand fifth of the chart
+    /// (round-8 judging). Earlier events stay in the Events tab. Other ranges
+    /// already bound both by their own window.
+    private let plottedMarkers: [AIEvent]
+
+    static func plottedMarkers(
+        _ markers: [AIEvent], segments: [HistoryPresentation.TimelineSegment],
+        range: HistoryPresentation.TimeRange
+    ) -> [AIEvent] {
+        guard range == .allTime,
+              let firstReading = segments.compactMap({ $0.points.first?.timestamp }).min() else { return markers }
+        return markers.filter { $0.occurredAt >= firstReading }
     }
 
     /// Ids (segment id + point id) of the drawn points that begin a run of one
@@ -345,7 +362,7 @@ public struct QuotaTimelineChart: View {
             segments: segments, selection: $hoverDate, tolerance: tolerance,
             label: "Quota timeline, \(timeRange.title)",
             summary: (segments.map(accessibilityDescription(for:))
-                      + [EventsPresentation.markerAccessibilitySummary(count: markers.count)].compactMap { $0 })
+                      + [EventsPresentation.markerAccessibilitySummary(count: plottedMarkers.count)].compactMap { $0 })
                 .joined(separator: ". ")))
     }
 

@@ -108,6 +108,23 @@ struct TimelineThinningTests {
         #expect(marked == Set([0, 2].map { seg.id + "#" + points[$0].id }))
     }
 
+    /// All Time starts at the first recorded reading; an event from months
+    /// earlier no longer stretches the axis. Bounded ranges keep every marker
+    /// they were given.
+    @Test("All Time plots only events from the first reading on")
+    @MainActor
+    func allTimeMarkersStartAtFirstReading() {
+        func event(_ minute: Int) -> AIEvent {
+            let at = start.addingTimeInterval(Double(minute) * 60)
+            return AIEvent(id: "e\(minute)", kind: .usageReset, vendorId: .claude, title: "Reset \(minute)",
+                           detail: nil, occurredAt: at, observedAt: at, source: .quotaPoll)
+        }
+        let seg = segment([point(100, 0.2), point(200, 0.3)])
+        let events = [event(-50_000), event(100), event(150)]
+        #expect(QuotaTimelineChart.plottedMarkers(events, segments: [seg], range: .allTime).map(\.id) == ["e100", "e150"])
+        #expect(QuotaTimelineChart.plottedMarkers(events, segments: [seg], range: .last30Days).count == 3)
+    }
+
     @Test("nearby events share one marker and none is dropped")
     @MainActor
     func eventsCluster() {
