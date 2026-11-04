@@ -14,10 +14,36 @@ import QuotaBarCore
 /// Past `maxContentHeight` the rows scroll rather than grow. That ceiling was
 /// declared but never applied for several revisions, so the "falls back to
 /// scrolling" this comment used to claim was not true of the code.
+/// Which row's inspector is open, shared with the status-item owner.
+///
+/// NSPopover handles Escape itself, before SwiftUI's `onExitCommand` on the
+/// inspector ever sees it, so Escape closed the whole popover and reopening it
+/// came back to the inspector — while the inspector's close button advertised
+/// Escape as "back to the list". The app delegate reads this from
+/// `popoverShouldClose` and turns an Escape into closing the inspector.
+@MainActor
+@Observable
+public final class PopoverInspection {
+    public var snapshot: QuotaSnapshot?
+    public init() {}
+
+    /// Closes the open inspector, if any. Returns whether one was open.
+    @discardableResult
+    public func dismiss() -> Bool {
+        guard snapshot != nil else { return false }
+        withAnimation(.easeOut(duration: 0.2)) { snapshot = nil }
+        return true
+    }
+}
+
 public struct PopoverRootView: View {
 
     @State private var store: QuotaStore
-    @State private var selectedSnapshot: QuotaSnapshot? = nil
+    @State private var inspection: PopoverInspection
+    private var selectedSnapshot: QuotaSnapshot? {
+        get { inspection.snapshot }
+        nonmutating set { inspection.snapshot = newValue }
+    }
     @State private var contentHeight: CGFloat = 0
     @State private var availableHeight: CGFloat
     @State private var footerHeight: CGFloat = 44
@@ -32,12 +58,14 @@ public struct PopoverRootView: View {
 
     public init(
         store: QuotaStore = QuotaStore(),
+        inspection: PopoverInspection = PopoverInspection(),
         onOpenSettings: (@MainActor () -> Void)? = nil,
         availableHeightProvider: @escaping @MainActor () -> CGFloat? = {
             NSScreen.main?.visibleFrame.height
         }
     ) {
         _store = State(initialValue: store)
+        _inspection = State(initialValue: inspection)
         _availableHeight = State(initialValue: availableHeightProvider() ?? Self.maxContentHeight + 100)
         self.availableHeightProvider = availableHeightProvider
         self.onOpenSettings = onOpenSettings

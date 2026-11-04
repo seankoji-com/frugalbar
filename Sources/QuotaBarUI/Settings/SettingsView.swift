@@ -265,7 +265,7 @@ public struct SettingsView: View {
                 .accessibilityAddTraits(.isHeader)
             Text(pane.summary)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.systemSecondaryText)
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
@@ -292,7 +292,21 @@ public struct SettingsView: View {
         case .data:
             dataPane
         case .about:
-            ScrollView { AboutView().frame(maxWidth: .infinity) }
+            // The dark identity card sits inset under the pane header with the
+            // same rounded, outlined container the grouped forms use, rather
+            // than as a bare black rectangle floating in the light pane.
+            ScrollView {
+                AboutView()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+            }
         }
     }
 
@@ -374,7 +388,7 @@ public struct SettingsView: View {
                      row only to override one, or when it says "Not configured".
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -385,7 +399,7 @@ public struct SettingsView: View {
             } footer: {
                 Text("Each workspace has its own key, set in the OpenCode Go section.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section("Google (Gemini, AGY Claude/GPT and Argon)") {
@@ -396,7 +410,7 @@ public struct SettingsView: View {
                 }
                 Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
 
                 // Folded away by default. This is the OAuth *client* identity,
                 // not a credential of the user's — it is the one thing here
@@ -421,18 +435,22 @@ public struct SettingsView: View {
                          OAUTH_CONFIG.
                          """)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 } label: {
                     HStack(spacing: 6) {
                         Text("OAuth client")
                         Spacer()
-                        Label(
-                            geminiSecretIsStored ? "Configured" : "Needs a client",
-                            systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
-                        )
-                        .labelStyle(.titleAndIcon)
+                        // The symbol carries the tone; the words stay in a text
+                        // colour. System green text on the light form measured
+                        // 1.8:1 (design-loop sol-15).
+                        HStack(spacing: 4) {
+                            Image(systemName: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle")
+                                .foregroundStyle(geminiSecretIsStored ? Color.green : Theme.systemSecondaryText)
+                            Text(geminiSecretIsStored ? "Configured" : "Needs a client")
+                                .foregroundStyle(Theme.systemSecondaryText)
+                        }
                         .font(.caption)
-                        .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -495,12 +513,12 @@ public struct SettingsView: View {
             if let note = slot.note {
                 Text(note)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
             if let status = perKeyStatus[slot.id] {
                 Text(status)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         } label: {
             HStack(spacing: 8) {
@@ -518,7 +536,7 @@ public struct SettingsView: View {
                 Spacer()
                 Text(Self.describe(source))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
             .accessibilityElement(children: .combine)
         }
@@ -584,7 +602,7 @@ public struct SettingsView: View {
                  written to the Keychain and never shown again.
                  """)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.systemSecondaryText)
         }
     }
 
@@ -604,7 +622,7 @@ public struct SettingsView: View {
                     .onSubmit(persistWorkspaces)
 
                 Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .help("Drag to reorder")
                     .accessibilityHidden(true)
 
@@ -613,7 +631,7 @@ public struct SettingsView: View {
                 if let hasKey = workspaceHasKey[instanceID] {
                     Text(hasKey ? "Stored in Keychain" : "No key in Keychain")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
 
                 Button { moveWorkspace(workspace.id, by: -1) } label: {
@@ -658,13 +676,13 @@ public struct SettingsView: View {
                 Label("Original workspace: uses your existing OpenCode key and the CLI login",
                       systemImage: "key")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             if let status = workspaceStatus[instanceID] {
                 Text(status)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } else if let live = liveWorkspaceStatus(workspace) {
                 ConnectionStatusLine(status: live)
             }
@@ -899,7 +917,7 @@ public struct SettingsView: View {
                      always wins where one exists.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .padding(.top, 4)
             }
         }
@@ -930,7 +948,7 @@ public struct SettingsView: View {
                  credentials you have not explicitly given the app.
                  """)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.systemSecondaryText)
         } header: {
             Text("Credential discovery")
         }
@@ -958,7 +976,7 @@ public struct SettingsView: View {
                      headroom. Off by default.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Quota-recovery notifications")
             }
@@ -973,7 +991,7 @@ public struct SettingsView: View {
                      itself reports. Off for every provider by default.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Reset alerts")
             }
@@ -984,7 +1002,7 @@ public struct SettingsView: View {
                         Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
                         Text(kind.notificationCaption)
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.systemSecondaryText)
                     }
                     .disabled(!eventTracking)
                 }
@@ -992,7 +1010,7 @@ public struct SettingsView: View {
                     Label("Event tracking is off in History & Data, so there is nothing to notify about.",
                           systemImage: "info.circle")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             } header: {
                 Text("AI events")
@@ -1007,7 +1025,7 @@ public struct SettingsView: View {
                          Script Editor.
                          """)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             }
         }
@@ -1049,7 +1067,7 @@ public struct SettingsView: View {
                      does not have.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Desktop widget")
             }
@@ -1067,7 +1085,7 @@ public struct SettingsView: View {
                      another.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -1082,7 +1100,7 @@ public struct SettingsView: View {
                      vendor blocks a window, whatever its level.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -1100,7 +1118,7 @@ public struct SettingsView: View {
                      outline.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         }
         .formStyle(.grouped)
@@ -1113,7 +1131,7 @@ public struct SettingsView: View {
                     Text(entry.title)
                     Text(entry.detail)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             } icon: {
                 Image(systemName: entry.symbol)
@@ -1251,18 +1269,23 @@ public struct SettingsView: View {
                      forecasts.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("AI events")
             }
 
             Section {
+                // A form row's value is drawn in the system secondary label
+                // (3.8:1 on this ground) unless styled; these are facts the
+                // user came here to read, so they take the readable style.
                 LabeledContent("Kept for") {
                     Text("\(Int(QuotaHistoryStore.defaultRetentionInterval / 86_400)) days")
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
                 LabeledContent("Location") {
                     Text(QuotaHistoryStore.databaseURL().path(percentEncoded: false))
                         .font(.caption.monospaced())
+                        .foregroundStyle(Theme.systemSecondaryText)
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -1280,7 +1303,7 @@ public struct SettingsView: View {
                      chart these readings; a hidden provider records nothing.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Quota history")
             }

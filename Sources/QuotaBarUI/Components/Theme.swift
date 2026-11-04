@@ -22,7 +22,10 @@ public enum Theme {
     // MARK: - Content colors
     public static let onSurface = Color(red: 0xe3 / 255.0, green: 0xe2 / 255.0, blue: 0xe7 / 255.0)        // #e3e2e7
     public static let onSurfaceVariant = Color(red: 0xc1 / 255.0, green: 0xc6 / 255.0, blue: 0xd7 / 255.0) // #c1c6d7
-    public static let outline = Color(red: 0x8b / 255.0, green: 0x90 / 255.0, blue: 0xa0 / 255.0)          // #8b90a0
+    /// Lightened from #8b90a0, which measured 4.27:1 as tile metadata on the
+    /// History window's selected tile (#2b2e36): under WCAG's 4.5:1 for small
+    /// text. #9a9fae is about 5.1:1 there and 6.4:1 on `card`.
+    public static let outline = Color(red: 0x9a / 255.0, green: 0x9f / 255.0, blue: 0xae / 255.0)          // #9a9fae
     public static let outlineVariant = Color(red: 0x41 / 255.0, green: 0x47 / 255.0, blue: 0x55 / 255.0)   // #414755
 
     // MARK: - Accent & Status colors
@@ -39,6 +42,13 @@ public enum Theme {
     /// over-pace delta keeps `error`; only "there is nothing left" gets this.
     public static let errorBold = Color(red: 0xe5 / 255.0, green: 0x3d / 255.0, blue: 0x3d / 255.0)        // #e53d3d
 
+    /// Secondary text in the system-appearance windows (Settings). The system
+    /// `.secondary` label is 50% black, which on a grouped form's #ebebec ground
+    /// renders #767676 — 3.8:1, under WCAG's 4.5:1 for text this size — and
+    /// `.tertiary` was fainter still. `primary` is itself black at 85% in the
+    /// light appearance, so 62% of it measured #707070 (4.2:1); 75% renders
+    /// about #555555 (6.6:1) there, stays adaptive, and is light grey on dark.
+    public static let systemSecondaryText = Color.primary.opacity(0.75)
 
     // MARK: - Spacing & Geometry
     public static let popoverWidth: CGFloat = 384

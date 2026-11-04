@@ -28,6 +28,12 @@ public struct HistoryRootView: View {
     /// Bumped when a poll records new readings, and by the reload button, so
     /// the page follows the data instead of only the controls.
     @State private var dataSerial = 0
+    /// The "At a glance" grid folded to its header. Its tiles fill more than
+    /// the first screen with a dozen providers, which pushed the selected
+    /// provider's chart below the fold on every visit; folding it is
+    /// remembered. A view preference only — no figure depends on it.
+    @AppStorage("historyOverviewCollapsed", store: CredentialStore.preferences)
+    private var overviewCollapsed = false
     @State private var lastReloadKey: ReloadKey?
     /// How far local-activity ingestion has got, read before the records.
     @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
@@ -48,6 +54,9 @@ public struct HistoryRootView: View {
     /// into its fixture store.
     @State private var isSampleMode: Bool
     @State private var isLoading: Bool = true
+    /// The chart is drawn; the local activity behind the attribution card is
+    /// still being read.
+    @State private var isAttributionLoading: Bool = false
     /// Non-nil when the history could not be read at all. Distinct from an empty
     /// history, which is a fact about the user's data rather than about us.
     @State private var loadError: String?
@@ -237,16 +246,31 @@ public struct HistoryRootView: View {
                             failureCard(loadError)
                         }
 
-                        overviewSection
-
+                        // The selected provider's answer first, the small
+                        // multiples after it. With a dozen providers the grid
+                        // filled the first screen and every visit to a chart
+                        // started with a scroll. The header's provider picker
+                        // and the tiles below both change the selection.
                         if selectedSubject != nil {
                             if !isLoading, let pace {
                                 paceCard(pace)
                             }
 
                             chartCard
+                        }
 
-                            if !isLoading { attributionCard }
+                        overviewSection
+
+                        if selectedSubject != nil {
+                            if !isLoading {
+                                if isAttributionLoading, attribution == nil,
+                                   let vendor = selectedSubject?.vendor,
+                                   !AttributionEngine.localSourceIdentifiers(for: vendor).isEmpty {
+                                    attributionLoadingCard
+                                } else {
+                                    attributionCard
+                                }
+                            }
 
                             telemetryCard
                         }
@@ -577,6 +601,27 @@ public struct HistoryRootView: View {
 
     // MARK: - Attribution Card
 
+    /// The chart is up; the project breakdown is still reading local activity.
+    private var attributionLoadingCard: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Project Activity Breakdown")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.onSurface)
+                Text("Reading local activity for this range…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+            }
+            Spacer()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
     @ViewBuilder
     private var attributionCard: some View {
         if AttributionEngine.localSourceIdentifiers(for: selectedSubject?.vendor ?? .claude).isEmpty {
@@ -822,17 +867,36 @@ public struct HistoryRootView: View {
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("At a glance")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.onSurface)
-                    .accessibilityAddTraits(.isHeader)
-                Text("· \(timeRange.title.lowercased()), each provider's longest window")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { overviewCollapsed.toggle() }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .rotationEffect(.degrees(overviewCollapsed ? 0 : 90))
+                        Text("At a glance")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.onSurface)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel("At a glance")
+                .accessibilityValue(overviewCollapsed ? "Collapsed" : "Expanded")
+                .accessibilityHint(overviewCollapsed ? "Show every provider's tile" : "Fold the tiles to this line")
+                Text(overviewCollapsed
+                     ? "· \(subjects.count) providers, folded"
+                     : "· \(timeRange.title.lowercased()), each provider's longest window")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                 Spacer()
             }
 
-            if subjects.isEmpty {
+            if overviewCollapsed {
+                EmptyView()
+            } else if subjects.isEmpty {
                 overviewNote(
                     symbol: "eye.slash",
                     text: "Every provider is hidden in Preferences → Providers, so there is nothing to chart.")
@@ -858,7 +922,7 @@ public struct HistoryRootView: View {
             }
 
             // Polled but nothing to draw: explained, never called an absence.
-            if overviewLoaded, !overviewFailed {
+            if !overviewCollapsed, overviewLoaded, !overviewFailed {
                 ForEach(overviewUnread) { unread in
                     overviewNote(
                         symbol: unread.symbol,
@@ -866,12 +930,12 @@ public struct HistoryRootView: View {
                 }
             }
 
-            if !overviewEmpty.isEmpty, !(overviewCards.isEmpty && overviewUnread.isEmpty) {
+            if !overviewCollapsed, !overviewEmpty.isEmpty, !(overviewCards.isEmpty && overviewUnread.isEmpty) {
                 overviewNote(
                     symbol: "circle.dashed",
                     text: "No readings in this range: \(overviewEmpty.map(\.name).joined(separator: ", ")).")
             }
-            if !hiddenNames.isEmpty {
+            if !overviewCollapsed, !hiddenNames.isEmpty {
                 overviewNote(
                     symbol: "eye.slash",
                     text: "Hidden in Preferences, so not polled or shown: \(hiddenNames.joined(separator: ", ")).")
@@ -911,9 +975,17 @@ public struct HistoryRootView: View {
         let key = reloadKey
         // New readings reload in place; anything the user changed shows the
         // loading state, so a stale chart is never mistaken for the new pick.
-        if !key.isDataRefresh(of: lastReloadKey) { isLoading = true }
+        if !key.isDataRefresh(of: lastReloadKey) {
+            isLoading = true
+            // The previous pick's breakdown must not sit under the new chart
+            // while this one's activity is still being read.
+            attribution = nil
+        }
         lastReloadKey = key
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            isAttributionLoading = false
+        }
 
         // One instant for the whole pass. The range edge, every store query and
         // the pace/attribution presentation read this value, so a reload cannot
@@ -997,6 +1069,14 @@ public struct HistoryRootView: View {
             self.pace = HistoryPresentation.currentPaceReading(readings: allReadings, barLabel: barLabel)
                 .flatMap { HistoryPresentation.computePace(reading: $0, now: now) }
 
+            // The chart and pace are complete: draw them now. The activity
+            // read below can take many seconds over a long range (it walks the
+            // local transcript ledger), and holding the whole timeline on
+            // "Loading readings…" for it made 30 Days and All Time look stuck.
+            // The attribution card says it is still reading until it lands.
+            isAttributionLoading = true
+            isLoading = false
+
             // Activity is restricted to the sources that can actually speak for
             // the selected vendor. Showing Codex and OpenCode tokens beneath a
             // "Claude" heading asserted an attribution nothing measured.
@@ -1007,8 +1087,18 @@ public struct HistoryRootView: View {
             let status = isSampleMode ? nil : await activityStatus?()
             activityProgress = isSampleMode ? .complete : TokenUsagePresentation.IngestionProgress(status)
             activitySources = status?.sources ?? []
-            let allActivities = try await activeStore.fetchActivities(since: since, until: now)
-            let activities = allActivities.filter { sources.contains($0.source) }
+            // Ask the store for this vendor's sources only, rather than every
+            // tool's rows filtered here afterwards: decoding the other tools'
+            // rows was nearly all of a long range's load time. A vendor with no
+            // local adapter reads nothing at all. One source per vendor today;
+            // several are merged back into the store's own order.
+            var activities: [ActivityRecord] = []
+            for source in sources.sorted() {
+                activities += try await activeStore.fetchActivities(source: source, since: since, until: now)
+            }
+            if sources.count > 1 {
+                activities.sort { ($0.observedAt, $0.recordId) < ($1.observedAt, $1.recordId) }
+            }
 
             let endpoints: (start: Double?, end: Double?)
             if let barLabel {

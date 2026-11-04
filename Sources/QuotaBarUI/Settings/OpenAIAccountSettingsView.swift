@@ -43,7 +43,7 @@ struct OpenAIAccountSettingsView: View {
                         onSave()
                     }
                     .disabled(hasGrant && grant == nil)
-                    if saved { Text("Saved").foregroundStyle(.secondary) }
+                    if saved { Text("Saved").foregroundStyle(Theme.systemSecondaryText) }
                 }
                 .task(id: accountKey) { load(accountKey) }
                 .onChange(of: proTier) { saved = false }
@@ -53,13 +53,13 @@ struct OpenAIAccountSettingsView: View {
                 .onChange(of: expiryDay) { saved = false }
             } else {
                 Text("Refresh ChatGPT to identify the account before saving its credit grant or plan detail.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         } header: {
             Text("ChatGPT account details")
         } footer: {
             Text("Enter the original credit allowance and expiry from your grant. The balance stays live; these details apply only to this account. Pro detail refines a reported Pro plan and does not override a different plan.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.systemSecondaryText)
         }
     }
 

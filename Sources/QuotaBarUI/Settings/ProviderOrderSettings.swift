@@ -64,7 +64,7 @@ struct ProviderOrderSettings: View {
                        only when every member has a spent or blocked window.
                        """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Order")
             }
@@ -92,7 +92,7 @@ struct ProviderOrderSettings: View {
                      Its key stays where it is, so showing it again is instant.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .padding(.top, 4)
             }
         }
@@ -158,7 +158,7 @@ struct ProviderOrderSettings: View {
         return HStack(spacing: 8) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.systemSecondaryText)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(workspace.name)
@@ -208,11 +208,13 @@ struct ConnectionStatusLine: View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Image(systemName: status.symbol)
                 .foregroundStyle(color)
+            // The symbol carries the tone in colour and shape. The words stay
+            // in text colours: system orange on a light form is about 2.2:1.
             Text(status.title)
-                .foregroundStyle(status.tone == .attention ? color : .secondary)
+                .foregroundStyle(status.tone == .attention ? Color.primary : Theme.systemSecondaryText)
             if let detail = status.detail {
                 Text("· \(detail)")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .lineLimit(2)
             }
         }

@@ -79,6 +79,18 @@ struct MetricRowView: View {
         PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
     }
 
+    /// Words for what a measured money row's chip figure is, or nil. Follows
+    /// the chip's own choice of figure (`MetricRowPresentation.valueLabel`):
+    /// a capped key prints "left of", a spend total prints "spent", and only a
+    /// bare balance needs naming here — by the vendor's basis when known.
+    static func moneyCaption(for snapshot: QuotaSnapshot) -> String? {
+        guard case .currency(_, let limit, let spent, _) = snapshot.metric,
+              snapshot.status.confidence == .measured,
+              limit == nil, spent == nil else { return nil }
+        guard let basis = snapshot.currencyBasis else { return "Balance" }
+        return String(basis.balanceLabel.dropLast(basis.balanceLabel.hasSuffix(":") ? 1 : 0))
+    }
+
     private func subtitleColor(_ p: MetricRowPresentation) -> Color {
         p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
@@ -283,19 +295,14 @@ struct MetricRowView: View {
                 if snapshot.vendorId == .openai, let credits = p.resetCredits {
                     ResetTicketsView(credits: credits)
                 }
-                // A money provider has no plan, but it does have the one figure
-                // that matters at a glance: what is left. It takes the subtitle
-                // slot rather than competing for the row's right-hand side.
-                if case .currency(let balance, _, _, let code) = snapshot.metric,
-                   snapshot.status.confidence == .measured {
-                    // Set as a figure, not as a second title. Two 17pt bolds
-                    // stacked made this the heaviest row in the popover for no
-                    // reason other than that it happens to hold money.
-                    Text(MoneyText.format(balance, code: code))
-                        .font(Theme.Typography.numeric)
-                        .tracking(Theme.Tracking.numeric)
-                        .foregroundStyle(snapshot.status.urgency == .none
-                                         ? Theme.healthy : Theme.error)
+                // A money provider has no plan. Its figure is printed once, in
+                // the value chip on the right where every other row's figures
+                // sit; this line says what that figure *is*. Printing the
+                // balance here as well put the same number on the row twice.
+                if let caption = Self.moneyCaption(for: snapshot), subtitle(p).isEmpty {
+                    Text(caption)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 }
@@ -307,7 +314,10 @@ struct MetricRowView: View {
                 // a third of the row with a dash either side (GitHub Copilot's
                 // monthly, OpenAI's weekly). `soleColumn` decides when; the
                 // bar's own track fills whatever width the cell is given.
-                gridCell(sole, grid: grid)
+                // The spanning bar sits under all three column headings, so it
+                // names its own window: without the token, a weekly-only row
+                // read as if its bar belonged to every heading above it.
+                gridCell(sole, grid: grid, showsToken: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if grid.usesGrid {
                 HStack(alignment: .center, spacing: Theme.gridColumnSpacing) {
@@ -327,8 +337,8 @@ struct MetricRowView: View {
 
                 // A money row's trend, in the free space beside its figure. The
                 // strip only answers "which way is this moving" — the exact
-                // figure is already on the row, in the name column's subtitle
-                // and in the chip below, so the strip itself is speakable
+                // figure is already on the row, in the chip beside it, so the
+                // strip itself is speakable
                 // nothing and carries no label.
                 if let trend = BalanceSparklinePresentation.make(from: balancePoints) {
                     BalanceSparklineView(presentation: trend)
@@ -352,7 +362,8 @@ struct MetricRowView: View {
     /// beneath it in the bar's state colour. A column the vendor does not
     /// publish stays empty — never a 0% bar.
     @ViewBuilder
-    private func gridCell(_ column: WindowColumn, grid: WindowGridPresentation) -> some View {
+    private func gridCell(_ column: WindowColumn, grid: WindowGridPresentation,
+                          showsToken: Bool = false) -> some View {
         if let bar = grid.bars[column] {
             VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
@@ -360,31 +371,47 @@ struct MetricRowView: View {
                 // reset on the right, high-contrast. Together they answer "how much,
                 // and until when" without opening the row.
                 HStack(spacing: 2) {
+                    if showsToken {
+                        Text(column.label)
+                            .font(Theme.Typography.token)
+                            .tracking(Theme.Tracking.token)
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .padding(.trailing, 4)
+                            .accessibilityHidden(true)
+                    }
                     // Blocked yet measured: a shape, since the vendor's
                     // blocked colour is too close to amber to carry it.
                     if WindowGridPresentation.showsBlockedGlyph(for: bar) {
                         BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                     }
+                    // The figure keeps its full width; the countdown gives way
+                    // first. A blocked glyph, "100%" and "45m" overflowed a
+                    // column, and the shared scale factor truncated the
+                    // figure to "10…" (design-loop sol-16).
                     Text(WindowGridPresentation.percentText(for: bar)
                          ?? WindowGridPresentation.unmeasuredText(for: bar))
                         .font(Theme.Typography.gridPercent)
                         .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+                        .fixedSize()
+                        .layoutPriority(1)
                     Spacer(minLength: 0)
                     if let reset = grid.compactReset(for: column) {
                         Text(reset)
                             .font(Theme.Typography.gridReset)
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                            .minimumScaleFactor(0.7)
                     }
                 }
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
             }
         } else {
-            // A window this vendor does not publish: a faint dash keeps the
-            // columns aligned. Not a track, which would read as 0% used.
+            // A window this vendor does not publish: a quiet dash keeps the
+            // columns aligned. Not a track, which would read as 0% used. At
+            // 35% it measured 1.9:1 on the card, too faint to be seen as "not
+            // published" at all; 60% is about 3.2:1 (WCAG 1.4.11's 3:1).
             Text("–")
                 .font(Theme.Typography.token)
-                .foregroundStyle(Theme.outline.opacity(0.35))
+                .foregroundStyle(Theme.outline.opacity(0.6))
                 .frame(maxWidth: .infinity)
         }
     }

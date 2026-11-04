@@ -18,7 +18,7 @@ struct SyncSettingsPane: View {
                     .font(.headline)
                     .accessibilityLabel("\(SyncSettingsText.toggleTitle): \(presentation.statusLine)")
                 if let detail = presentation.detail {
-                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                    Text(detail).font(.callout).foregroundStyle(Theme.systemSecondaryText)
                 }
                 if let line = presentation.lastPublishedLine {
                     Text(line).font(.callout)
@@ -110,7 +110,7 @@ struct SyncSettingsPane: View {
                 }
             } else if presentation.signInTimedOut {
                 Label(SyncSettingsText.signInTimedOut, systemImage: "clock.badge.exclamationmark")
-                Text(SyncSettingsText.signInInstruction).font(.callout).foregroundStyle(.secondary)
+                Text(SyncSettingsText.signInInstruction).font(.callout).foregroundStyle(Theme.systemSecondaryText)
                 Button(SyncSettingsText.retryButton) { controller.beginSignIn() }
             } else if let error = presentation.signInError {
                 Label(error, systemImage: "exclamationmark.triangle")

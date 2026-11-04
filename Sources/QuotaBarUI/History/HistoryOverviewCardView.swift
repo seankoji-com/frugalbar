@@ -94,7 +94,8 @@ struct HistoryOverviewCardView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityHint("Charts this provider below")
+        // Position-free: the selected chart sits above the tiles now.
+        .accessibilityHint("Shows this provider's chart")
     }
 
     /// Real readings only, on a fixed 0–100% scale so two cards compare by

@@ -385,7 +385,7 @@ struct DesktopWidgetView: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+            AxisMarks(preset: .aligned, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Theme.outlineVariant.opacity(0.2))
                 AxisValueLabel {
@@ -505,6 +505,20 @@ struct DesktopWidgetView: View {
                     overviewWindow(window, now: now)
                 }
             }
+            // The popover's stale line in short: the triangle is the shape
+            // channel, the words say the figures are old and from when.
+            if let stale = OverviewPresentation.staleText(for: tile, now: now) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary)
+                    Text(stale)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -534,6 +548,16 @@ struct DesktopWidgetView: View {
                     Text(window.isBlocked ? "blocked" : "—")
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                }
+                // When it comes back, as in the popover's grid: a spent or
+                // blocked tile otherwise answered "how much" but not "until
+                // when" without hovering. Only a published reset is drawn.
+                if let reset = ResetCountdownBadge.compact(window.resetsAt, now: now) {
+                    Text(reset)
+                        .font(Theme.Typography.gridReset)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             // Fill and caption follow the same selected metric.

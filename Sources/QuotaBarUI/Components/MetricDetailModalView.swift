@@ -68,6 +68,18 @@ public struct MetricDetailModalView: View {
         !BalanceSeries.all(of: snapshot).isEmpty
     }
 
+    /// Whether the quota chart card (burndown / usage history) is drawn.
+    ///
+    /// A balance-only provider (OpenRouter, DeepSeek) has no consumable window
+    /// and records no usage fractions, so the card could only ever say "no
+    /// burndown to draw" — and it did, at the top of the body, pushing the
+    /// balance history the user opened the inspector for below the fold. The
+    /// card stays whenever there is a window to chart, and whenever there is no
+    /// balance card either, so an inspector never loses its only chart area.
+    static func showsQuotaChart(for snapshot: QuotaSnapshot) -> Bool {
+        !snapshot.quotaBars.isEmpty || !showsBalanceCard(for: snapshot)
+    }
+
     /// The per-series reads one pass records: one entry per series the snapshot
     /// publishes, each carrying its read's own outcome.
     ///
@@ -350,7 +362,9 @@ public struct MetricDetailModalView: View {
             if !presentation.windows.isEmpty {
                 windowsCard
             }
-            chartCard
+            if Self.showsQuotaChart(for: snapshot) {
+                chartCard
+            }
             if Self.showsBalanceCard(for: snapshot) {
                 balanceCard
             }
@@ -493,6 +507,11 @@ public struct MetricDetailModalView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                         DualBarProgressView(metrics: line.metrics, showsLabel: false)
+                            // Carried-over figures: the bar recedes, the words
+                            // do not. Dimming the whole line took its reset
+                            // caption to 3.0:1 (design-loop sol-15); the title
+                            // above already says these predate the failed poll.
+                            .opacity(asOf == nil ? 1 : 0.55)
                         HStack(spacing: 3) {
                             if line.metrics.isBlocked, line.percentText != nil {
                                 BlockedGlyph(color: DualBarProgressView.stateColor(for: line.metrics))
@@ -512,7 +531,6 @@ public struct MetricDetailModalView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .opacity(asOf == nil ? 1 : 0.55)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(asOf.map {
                     "\(line.accessibilityLabel), as of \(MetricDetailPresentation.clockText($0, now: now))"

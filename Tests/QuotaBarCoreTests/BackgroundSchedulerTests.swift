@@ -166,6 +166,12 @@ struct BackgroundSchedulerTests {
         await scheduler.start(interval: 0.05)
         try? await Task.sleep(nanoseconds: 200_000_000)
         await scheduler.stop()
+        // `stop()` prevents new cycles; it does not cancel one already inside
+        // a handler. Reading the baseline at the instant of `stop()` raced a
+        // cycle suspended in `withDeadline`, whose `record()` then landed after
+        // the read — the parallel-run flake. Let that cycle finish first; what
+        // this test asserts is that no *new* cycle starts.
+        try? await Task.sleep(nanoseconds: 100_000_000)
         let countAtStop = await spy.callCount
         // Wait another interval: count should not increase
         try? await Task.sleep(nanoseconds: 100_000_000)

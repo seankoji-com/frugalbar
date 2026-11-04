@@ -41,6 +41,16 @@ public enum OverviewPresentation {
         /// Set when the provider could not be read.
         public let unavailableHeadline: String?
         public let unavailableRemedy: String?
+        /// When the figures on a stale tile were really measured: the newest
+        /// poll failed and these were carried over. nil on a fresh reading.
+        /// The panel's header already said "a reading is stale"; without this
+        /// the tile it belongs to looked exactly like a live one.
+        public var staleFiguresAt: Date? = nil
+    }
+
+    /// The tile's stale line, "Stale · figures from 14:05", or nil.
+    public static func staleText(for tile: Tile, now: Date = Date()) -> String? {
+        tile.staleFiguresAt.map { "Stale · figures from \(MetricDetailPresentation.clockText($0, now: now))" }
     }
 
     /// Tiles for the snapshots, in the order given (the store's order, which
@@ -86,7 +96,8 @@ public enum OverviewPresentation {
                 isExhausted: measured && exhausted,
                 windows: windows,
                 unavailableHeadline: reason?.headline,
-                unavailableRemedy: reason?.remedy
+                unavailableRemedy: reason?.remedy,
+                staleFiguresAt: measured && snapshot.staleReading != nil ? snapshot.lastUpdated : nil
             )
         }
     }
@@ -139,6 +150,9 @@ public enum OverviewPresentation {
             case .warning: parts.append("running low")
             case .critical: parts.append("critically low")
             }
+        }
+        if let at = tile.staleFiguresAt {
+            parts.append("stale, the last poll failed, figures from \(MetricDetailPresentation.clockText(at, now: now))")
         }
         return parts.joined(separator: ". ")
     }
