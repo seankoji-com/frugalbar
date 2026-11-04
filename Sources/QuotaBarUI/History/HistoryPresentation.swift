@@ -180,17 +180,34 @@ public enum HistoryPresentation {
             guard points.count > 2 else { return segment }
             var kept: [TimelinePoint] = [points[0]]
             var bucketBest: TimelinePoint?
+            // A blocked reading is kept in its own right, not only when it is
+            // also the bucket's peak: a blocked 55% beside an unblocked 60%
+            // was thinned away, and the chart hid that the vendor had blocked
+            // the window (code review cr-01).
+            var bucketBlocked: TimelinePoint?
             var bucketIndex = -1
-            func flush() { if let best = bucketBest { kept.append(best) } }
+            func flush() {
+                let both = [bucketBest, bucketBlocked].compactMap { $0 }
+                for point in both.sorted(by: { $0.timestamp < $1.timestamp })
+                    where kept.last?.timestamp != point.timestamp {
+                    kept.append(point)
+                }
+            }
             for point in points.dropFirst().dropLast() {
                 let index = Int(point.timestamp.timeIntervalSince(first) / width)
                 if index != bucketIndex {
                     flush()
                     bucketIndex = index
                     bucketBest = point
-                } else if let best = bucketBest,
-                          point.fraction > best.fraction || (point.fraction == best.fraction && point.isBlocked && !best.isBlocked) {
-                    bucketBest = point
+                    bucketBlocked = point.isBlocked ? point : nil
+                } else {
+                    if let best = bucketBest,
+                       point.fraction > best.fraction || (point.fraction == best.fraction && point.isBlocked && !best.isBlocked) {
+                        bucketBest = point
+                    }
+                    if point.isBlocked, bucketBlocked.map({ point.fraction > $0.fraction }) ?? true {
+                        bucketBlocked = point
+                    }
                 }
             }
             flush()

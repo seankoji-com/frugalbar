@@ -99,7 +99,14 @@ public struct QuotaTimelineChart: View {
                 let level = severity(point)
                 defer { previous = level }
                 guard level > 0, previous != level else { continue }
-                if let mark = lastMark, level <= mark.severity,
+                // A step up from one non-healthy state to a worse one is always
+                // marked. Spacing only thins a re-entry into a state (from
+                // healthy, or stepping down) shortly after a mark at least as
+                // severe; comparing with the last *mark* alone suppressed a
+                // warning → critical step after an earlier critical mark, and
+                // that run showed its state in colour only (code review cr-02).
+                let escalation = (previous ?? 0) > 0 && level > (previous ?? 0)
+                if !escalation, let mark = lastMark, level <= mark.severity,
                    point.timestamp.timeIntervalSince(mark.at) < minSpacing { continue }
                 out.insert(segment.id + "#" + point.id)
                 lastMark = (point.timestamp, level)
@@ -239,7 +246,10 @@ public struct QuotaTimelineChart: View {
                     // non-healthy state begins (`symbolPointIDs`); the line's
                     // colour carries the state between. Short ranges keep a
                     // symbol on every reading.
-                    if !isThinned || symbolPointIDs.contains(segment.id + "#" + point.id) {
+                    // A one-reading segment has no line to carry it, so it
+                    // always keeps its symbol (code review cr-03).
+                    if !isThinned || segment.points.count == 1
+                        || symbolPointIDs.contains(segment.id + "#" + point.id) {
                         PointMark(
                             x: .value("Time", point.timestamp),
                             y: .value("Used %", point.fraction * 100)
