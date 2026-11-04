@@ -507,6 +507,11 @@ public struct MetricDetailModalView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                         DualBarProgressView(metrics: line.metrics, showsLabel: false)
+                            // Carried-over figures: the bar recedes, the words
+                            // do not. Dimming the whole line took its reset
+                            // caption to 3.0:1 (design-loop sol-15); the title
+                            // above already says these predate the failed poll.
+                            .opacity(asOf == nil ? 1 : 0.55)
                         HStack(spacing: 3) {
                             if line.metrics.isBlocked, line.percentText != nil {
                                 BlockedGlyph(color: DualBarProgressView.stateColor(for: line.metrics))
@@ -526,7 +531,6 @@ public struct MetricDetailModalView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .opacity(asOf == nil ? 1 : 0.55)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(asOf.map {
                     "\(line.accessibilityLabel), as of \(MetricDetailPresentation.clockText($0, now: now))"

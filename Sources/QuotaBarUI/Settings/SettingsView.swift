@@ -440,13 +440,17 @@ public struct SettingsView: View {
                     HStack(spacing: 6) {
                         Text("OAuth client")
                         Spacer()
-                        Label(
-                            geminiSecretIsStored ? "Configured" : "Needs a client",
-                            systemImage: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle"
-                        )
-                        .labelStyle(.titleAndIcon)
+                        // The symbol carries the tone; the words stay in a text
+                        // colour. System green text on the light form measured
+                        // 1.8:1 (design-loop sol-15).
+                        HStack(spacing: 4) {
+                            Image(systemName: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle")
+                                .foregroundStyle(geminiSecretIsStored ? Color.green : Theme.systemSecondaryText)
+                            Text(geminiSecretIsStored ? "Configured" : "Needs a client")
+                                .foregroundStyle(Theme.systemSecondaryText)
+                        }
                         .font(.caption)
-                        .foregroundStyle(geminiSecretIsStored ? .green : .secondary)
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }

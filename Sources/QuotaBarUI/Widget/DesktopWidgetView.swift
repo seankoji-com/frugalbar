@@ -385,7 +385,7 @@ struct DesktopWidgetView: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+            AxisMarks(preset: .aligned, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Theme.outlineVariant.opacity(0.2))
                 AxisValueLabel {

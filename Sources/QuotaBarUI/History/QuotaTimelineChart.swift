@@ -33,7 +33,7 @@ public struct QuotaTimelineChart: View {
     /// not per body evaluation, because the body re-runs on every pointer move.
     /// Inspection and the spoken summary read the full `segments`.
     private let drawnSegments: [HistoryPresentation.TimelineSegment]
-    /// Nearby events merged into one rule (about 32 across the plot, room for a
+    /// Nearby events merged into one rule (about 24 across the plot, room for a
     /// symbol and a two-digit count), so a month of resets does not stack
     /// dozens of symbols along the top edge.
     private let markerClusters: [MarkerCluster]
@@ -119,7 +119,7 @@ public struct QuotaTimelineChart: View {
     /// first event: about `slots` rules across the chart at most. Every event
     /// stays in exactly one group, so the count covers all of them and nothing
     /// is dropped; the tooltip names the first six and says how many more.
-    static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 32) -> [MarkerCluster] {
+    static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 24) -> [MarkerCluster] {
         let sorted = markers.sorted { $0.occurredAt < $1.occurredAt }
         let width = max(span / Double(max(slots, 1)), 0)
         var out: [[AIEvent]] = []
@@ -302,7 +302,7 @@ public struct QuotaTimelineChart: View {
             }
         }
         .chartXAxis {
-            AxisMarks { value in
+            AxisMarks(preset: .aligned) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Theme.outlineVariant.opacity(0.20))
                 AxisTick(stroke: StrokeStyle(lineWidth: 0.5))

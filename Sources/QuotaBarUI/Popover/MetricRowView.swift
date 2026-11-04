@@ -384,19 +384,25 @@ struct MetricRowView: View {
                     if WindowGridPresentation.showsBlockedGlyph(for: bar) {
                         BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                     }
+                    // The figure keeps its full width; the countdown gives way
+                    // first. A blocked glyph, "100%" and "45m" overflowed a
+                    // column, and the shared scale factor truncated the
+                    // figure to "10…" (design-loop sol-16).
                     Text(WindowGridPresentation.percentText(for: bar)
                          ?? WindowGridPresentation.unmeasuredText(for: bar))
                         .font(Theme.Typography.gridPercent)
                         .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+                        .fixedSize()
+                        .layoutPriority(1)
                     Spacer(minLength: 0)
                     if let reset = grid.compactReset(for: column) {
                         Text(reset)
                             .font(Theme.Typography.gridReset)
                             .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                            .minimumScaleFactor(0.7)
                     }
                 }
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
             }
         } else {
             // A window this vendor does not publish: a quiet dash keeps the
