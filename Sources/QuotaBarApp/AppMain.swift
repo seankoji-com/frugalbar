@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var settingsWindow: NSWindow?
+    /// The popover's open inspector, so Escape can close it rather than the
+    /// whole popover (`popoverShouldClose`).
+    private let inspection = PopoverInspection()
 
     /// Single source of truth, shared by the popover and the status item, so
     /// neither has to rebuild the other to see new data.
@@ -161,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(
             rootView: PopoverRootView(
                 store: store,
+                inspection: inspection,
                 onOpenSettings: { [weak self] in self?.openSettings() },
                 availableHeightProvider: { [weak statusItem] in
                     statusItem?.button?.window?.screen?.visibleFrame.height
@@ -173,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // hardcoded contentSize wins and any content past it is cut off.
         hostingController.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hostingController
+        popover.delegate = self
         self.popover = popover
 
         // A clicked banner with no link of its own opens this popover; see
@@ -421,6 +426,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         Task { await store.load() }
+    }
+}
+
+extension AppDelegate: NSPopoverDelegate {
+    /// Escape with an inspector open goes back to the list; only Escape on the
+    /// list closes the popover. A click outside or on the status item still
+    /// closes it as before — only a key press is intercepted.
+    func popoverShouldClose(_ popover: NSPopover) -> Bool {
+        if let event = NSApp.currentEvent, event.type == .keyDown, event.keyCode == 53,
+           inspection.dismiss() {
+            return false
+        }
+        return true
     }
 }
 

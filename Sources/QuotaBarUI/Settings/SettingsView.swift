@@ -292,7 +292,21 @@ public struct SettingsView: View {
         case .data:
             dataPane
         case .about:
-            ScrollView { AboutView().frame(maxWidth: .infinity) }
+            // The dark identity card sits inset under the pane header with the
+            // same rounded, outlined container the grouped forms use, rather
+            // than as a bare black rectangle floating in the light pane.
+            ScrollView {
+                AboutView()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+            }
         }
     }
 

@@ -535,6 +535,16 @@ struct DesktopWidgetView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
                 }
+                // When it comes back, as in the popover's grid: a spent or
+                // blocked tile otherwise answered "how much" but not "until
+                // when" without hovering. Only a published reset is drawn.
+                if let reset = ResetCountdownBadge.compact(window.resetsAt, now: now) {
+                    Text(reset)
+                        .font(Theme.Typography.gridReset)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
             // Fill and caption follow the same selected metric.
             MicroProgressBar(fraction: window.fraction, statusColor: color)

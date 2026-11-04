@@ -45,9 +45,10 @@ public enum Theme {
     /// Secondary text in the system-appearance windows (Settings). The system
     /// `.secondary` label is 50% black, which on a grouped form's #ebebec ground
     /// renders #767676 — 3.8:1, under WCAG's 4.5:1 for text this size — and
-    /// `.tertiary` was fainter still. `primary` at 62% stays adaptive and
-    /// renders about #595959 there (6.0:1), and as light grey on a dark ground.
-    public static let systemSecondaryText = Color.primary.opacity(0.62)
+    /// `.tertiary` was fainter still. `primary` is itself black at 85% in the
+    /// light appearance, so 62% of it measured #707070 (4.2:1); 75% renders
+    /// about #555555 (6.6:1) there, stays adaptive, and is light grey on dark.
+    public static let systemSecondaryText = Color.primary.opacity(0.75)
 
     // MARK: - Spacing & Geometry
     public static let popoverWidth: CGFloat = 384

@@ -243,15 +243,22 @@ public struct HistoryRootView: View {
                             failureCard(loadError)
                         }
 
-                        overviewSection
-
+                        // The selected provider's answer first, the small
+                        // multiples after it. With a dozen providers the grid
+                        // filled the first screen and every visit to a chart
+                        // started with a scroll. The header's provider picker
+                        // and the tiles below both change the selection.
                         if selectedSubject != nil {
                             if !isLoading, let pace {
                                 paceCard(pace)
                             }
 
                             chartCard
+                        }
 
+                        overviewSection
+
+                        if selectedSubject != nil {
                             if !isLoading { attributionCard }
 
                             telemetryCard
