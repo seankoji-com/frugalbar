@@ -399,11 +399,13 @@ struct MetricRowView: View {
                 .minimumScaleFactor(0.85)
             }
         } else {
-            // A window this vendor does not publish: a faint dash keeps the
-            // columns aligned. Not a track, which would read as 0% used.
+            // A window this vendor does not publish: a quiet dash keeps the
+            // columns aligned. Not a track, which would read as 0% used. At
+            // 35% it measured 1.9:1 on the card, too faint to be seen as "not
+            // published" at all; 60% is about 3.2:1 (WCAG 1.4.11's 3:1).
             Text("–")
                 .font(Theme.Typography.token)
-                .foregroundStyle(Theme.outline.opacity(0.35))
+                .foregroundStyle(Theme.outline.opacity(0.6))
                 .frame(maxWidth: .infinity)
         }
     }
