@@ -36,6 +36,8 @@ public struct QuotaTimelineChart: View {
     /// Nearby events merged into one rule, so a month of resets does not stack
     /// dozens of symbols along the top edge.
     private let markerClusters: [MarkerCluster]
+    /// The drawn points are a thinned copy (a long range).
+    private let isThinned: Bool
 
     public init(
         segments: [HistoryPresentation.TimelineSegment],
@@ -50,6 +52,8 @@ public struct QuotaTimelineChart: View {
         self.emptyMessage = emptyMessage
         self.emptyTitle = emptyTitle
         self.drawnSegments = HistoryPresentation.thinnedForDisplay(segments)
+        self.labels = Self.labels(of: segments)
+        self.isThinned = drawnSegments != segments
         let times = segments.flatMap { $0.points.map(\.timestamp) } + markers.map(\.occurredAt)
         let span = (times.max() ?? Date()).timeIntervalSince(times.min() ?? Date())
         self.markerClusters = Self.clusters(markers, span: span)
@@ -110,7 +114,12 @@ public struct QuotaTimelineChart: View {
         return copy
     }
 
-    private var labels: [String] {
+    /// Computed once in `init`. As a computed property it walked every segment
+    /// for every drawn point (it fed each point's dash), which a stack sample
+    /// of All Time put second only to Charts itself on the main thread.
+    private let labels: [String]
+
+    private static func labels(of segments: [HistoryPresentation.TimelineSegment]) -> [String] {
         var out: [String] = []
         for segment in segments where !out.contains(segment.barLabel) { out.append(segment.barLabel) }
         return out
@@ -161,6 +170,7 @@ public struct QuotaTimelineChart: View {
     private var chart: some View {
         Chart {
             ForEach(drawnSegments) { segment in
+                let dash = WindowDashLegend.dash(for: segment.barLabel, in: labels)
                 ForEach(segment.points) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
@@ -169,15 +179,22 @@ public struct QuotaTimelineChart: View {
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(colorForPoint(point))
-                    .lineStyle(StrokeStyle(lineWidth: 2.2, dash: WindowDashLegend.dash(for: segment.barLabel, in: labels)))
+                    .lineStyle(StrokeStyle(lineWidth: 2.2, dash: dash))
 
-                    PointMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Used %", point.fraction * 100)
-                    )
-                    .foregroundStyle(colorForPoint(point))
-                    .symbol(symbol(for: point))
-                    .symbolSize(point.isBlocked ? 28 : 18)
+                    // A thinned (long-range) chart marks only the readings
+                    // that are not healthy: their shapes stay the non-colour
+                    // channel, and a symbol on every healthy point was most of
+                    // the clutter at 30 days and beyond. Short ranges keep a
+                    // symbol on every reading.
+                    if !isThinned || point.isBlocked || point.urgency != .none {
+                        PointMark(
+                            x: .value("Time", point.timestamp),
+                            y: .value("Used %", point.fraction * 100)
+                        )
+                        .foregroundStyle(colorForPoint(point))
+                        .symbol(symbol(for: point))
+                        .symbolSize(point.isBlocked ? 28 : 18)
+                    }
                 }
             }
 
