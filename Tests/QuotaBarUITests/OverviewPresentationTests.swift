@@ -40,6 +40,23 @@ struct OverviewPresentationTests {
         #expect(tiles.map(\.vendorId) == [.claude])
     }
 
+    /// A carried-over reading names itself on its own tile, with the time its
+    /// figures were measured, in sight and in speech. The panel header saying
+    /// "a reading is stale" left the user unable to tell which one.
+    @Test("a stale tile says so and when its figures are from; a fresh one does not")
+    func staleTileIsMarked() {
+        var stale = snapshot(.claude, bars: [wk(0.4)])
+        stale.staleReading = StaleReading(reason: .rateLimited(retryAfter: nil), at: now.addingTimeInterval(600))
+        let tiles = O.tiles(snapshots: [stale, snapshot(.grok, bars: [wk(0.2)])],
+                            filters: WidgetFilters(layout: .overview))
+        #expect(tiles[0].staleFiguresAt == now)
+        #expect(O.staleText(for: tiles[0], now: now)?.hasPrefix("Stale · figures from ") == true)
+        #expect(O.accessibilityLabel(for: tiles[0], metric: .used, now: now).contains("stale"))
+        #expect(tiles[1].staleFiguresAt == nil)
+        #expect(O.staleText(for: tiles[1], now: now) == nil)
+        #expect(!O.accessibilityLabel(for: tiles[1], metric: .used, now: now).contains("stale"))
+    }
+
     /// Failure must never render as health: an unreadable provider keeps its
     /// tile, says why, and carries no window to draw as full.
     @Test("an unreadable provider keeps its tile and says why")

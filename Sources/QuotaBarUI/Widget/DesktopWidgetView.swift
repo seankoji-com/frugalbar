@@ -505,6 +505,20 @@ struct DesktopWidgetView: View {
                     overviewWindow(window, now: now)
                 }
             }
+            // The popover's stale line in short: the triangle is the shape
+            // channel, the words say the figures are old and from when.
+            if let stale = OverviewPresentation.staleText(for: tile, now: now) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary)
+                    Text(stale)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -1271,12 +1271,17 @@ public struct SettingsView: View {
             }
 
             Section {
+                // A form row's value is drawn in the system secondary label
+                // (3.8:1 on this ground) unless styled; these are facts the
+                // user came here to read, so they take the readable style.
                 LabeledContent("Kept for") {
                     Text("\(Int(QuotaHistoryStore.defaultRetentionInterval / 86_400)) days")
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
                 LabeledContent("Location") {
                     Text(QuotaHistoryStore.databaseURL().path(percentEncoded: false))
                         .font(.caption.monospaced())
+                        .foregroundStyle(Theme.systemSecondaryText)
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
