@@ -60,9 +60,24 @@ struct TimelineThinningTests {
         let points = [point(0, 0.2), point(2, 0.95), point(4, 0.96), point(6, 0.5),
                       point(8, 0.5, blocked: true), point(10, 0.5, blocked: true), point(12, 0.97)]
         let seg = segment(points)
-        let marked = QuotaTimelineChart.stateChangePoints(in: [seg])
+        let marked = QuotaTimelineChart.stateChangePoints(in: [seg], minSpacingDivisor: 1_000)
         let expected = [1, 4, 6].map { seg.id + "#" + points[$0].id }
         #expect(marked == Set(expected))
+    }
+
+    @Test("a state that continues into the next segment is not marked again; repeats keep their spacing")
+    @MainActor
+    func symbolsCarryAcrossSegments() {
+        // Two segments of one window, both critical, split by a failed poll.
+        let a = segment([point(0, 0.95), point(2, 0.96)])
+        let b = segment([point(4, 0.97), point(6, 0.98)])
+        let marked = QuotaTimelineChart.stateChangePoints(in: [a, b], minSpacingDivisor: 1_000)
+        #expect(marked == [a.id + "#" + a.points[0].id])
+
+        // Critical, healthy, critical again 2 minutes later over a 1,000-minute
+        // span: the repeat is within span/150 of the first mark and is dropped.
+        let c = segment([point(0, 0.95), point(1, 0.5), point(2, 0.95), point(1_000, 0.2)])
+        #expect(QuotaTimelineChart.stateChangePoints(in: [c]) == [c.id + "#" + c.points[0].id])
     }
 
     @Test("nearby events share one marker and none is dropped")

@@ -67,19 +67,42 @@ public struct QuotaTimelineChart: View {
         self.markerClusters = Self.clusters(markers, span: span)
     }
 
-    /// Ids (segment id + point id) of each segment's points that begin a run of
-    /// one non-healthy state. A healthy point never qualifies.
-    static func stateChangePoints(in segments: [HistoryPresentation.TimelineSegment]) -> Set<String> {
+    /// Ids (segment id + point id) of the drawn points that begin a run of one
+    /// non-healthy state, per window. A healthy point never qualifies.
+    ///
+    /// The state carries across a window's segments in time order: a 5-hour
+    /// window resets five times a day and every failed poll splits the line,
+    /// so starting each segment afresh put a symbol on nearly every segment's
+    /// first reading — the bands round 5 still showed. Marks of the same
+    /// severity also keep `span / minSpacingDivisor` apart; an escalation
+    /// (healthy → warning → critical → blocked) is always marked.
+    static func stateChangePoints(
+        in segments: [HistoryPresentation.TimelineSegment], minSpacingDivisor: Double = 150
+    ) -> Set<String> {
+        func severity(_ p: HistoryPresentation.TimelinePoint) -> Int {
+            if p.isBlocked { return 3 }
+            switch p.urgency {
+            case .critical: return 2
+            case .warning: return 1
+            case .none: return 0
+            }
+        }
+        let all = segments.flatMap { s in s.points.map { (s, $0) } }
+        guard let first = all.map(\.1.timestamp).min(), let last = all.map(\.1.timestamp).max() else { return [] }
+        let minSpacing = last.timeIntervalSince(first) / minSpacingDivisor
         var out: Set<String> = []
-        for segment in segments {
-            var previous: (Bool, Urgency)?
-            for point in segment.points {
-                let state = (point.isBlocked, point.urgency)
-                let unhealthy = point.isBlocked || point.urgency != .none
-                if unhealthy, previous.map({ $0 != state }) ?? true {
-                    out.insert(segment.id + "#" + point.id)
-                }
-                previous = state
+        for label in Set(segments.map(\.barLabel)) {
+            let ordered = all.filter { $0.0.barLabel == label }.sorted { $0.1.timestamp < $1.1.timestamp }
+            var previous: Int?
+            var lastMark: (at: Date, severity: Int)?
+            for (segment, point) in ordered {
+                let level = severity(point)
+                defer { previous = level }
+                guard level > 0, previous != level else { continue }
+                if let mark = lastMark, level <= mark.severity,
+                   point.timestamp.timeIntervalSince(mark.at) < minSpacing { continue }
+                out.insert(segment.id + "#" + point.id)
+                lastMark = (point.timestamp, level)
             }
         }
         return out
