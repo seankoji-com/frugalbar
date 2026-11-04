@@ -33,7 +33,8 @@ public struct QuotaTimelineChart: View {
     /// not per body evaluation, because the body re-runs on every pointer move.
     /// Inspection and the spoken summary read the full `segments`.
     private let drawnSegments: [HistoryPresentation.TimelineSegment]
-    /// Nearby events merged into one rule, so a month of resets does not stack
+    /// Nearby events merged into one rule (about 32 across the plot, room for a
+    /// symbol and a two-digit count), so a month of resets does not stack
     /// dozens of symbols along the top edge.
     private let markerClusters: [MarkerCluster]
     /// The drawn points are a thinned copy (a long range).
@@ -70,7 +71,7 @@ public struct QuotaTimelineChart: View {
     /// first event: about `slots` rules across the chart at most. Every event
     /// stays in exactly one group, so the help text and the count can name all
     /// of them; nothing is dropped.
-    static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 48) -> [MarkerCluster] {
+    static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 32) -> [MarkerCluster] {
         let sorted = markers.sorted { $0.occurredAt < $1.occurredAt }
         let width = max(span / Double(max(slots, 1)), 0)
         var out: [[AIEvent]] = []
@@ -95,11 +96,13 @@ public struct QuotaTimelineChart: View {
         if segments.isEmpty || segments.allSatisfy({ $0.points.isEmpty }) {
             emptyState
         } else {
+            // The legend sits under the plot: above it, the event symbols that
+            // annotate the plot's top edge collided with it.
             VStack(alignment: .leading, spacing: 6) {
+                chart
                 if labels.count > 1 {
                     WindowDashLegend(labels: labels)
                 }
-                chart
             }
         }
     }
