@@ -39,6 +39,12 @@ public struct QuotaTimelineChart: View {
     private let markerClusters: [MarkerCluster]
     /// The drawn points are a thinned copy (a long range).
     private let isThinned: Bool
+    /// On a thinned chart, the drawn points that carry a state symbol: the
+    /// first point of each run of one non-healthy state (blocked, warning,
+    /// critical). Marking every warning and critical point merged them into
+    /// solid bands at 30 days and beyond; a symbol where the state begins
+    /// keeps the shape channel at every change and drops only the repeats.
+    private let symbolPointIDs: Set<String>
 
     public init(
         segments: [HistoryPresentation.TimelineSegment],
@@ -55,9 +61,28 @@ public struct QuotaTimelineChart: View {
         self.drawnSegments = HistoryPresentation.thinnedForDisplay(segments)
         self.labels = Self.labels(of: segments)
         self.isThinned = drawnSegments != segments
+        self.symbolPointIDs = Self.stateChangePoints(in: drawnSegments)
         let times = segments.flatMap { $0.points.map(\.timestamp) } + markers.map(\.occurredAt)
         let span = (times.max() ?? Date()).timeIntervalSince(times.min() ?? Date())
         self.markerClusters = Self.clusters(markers, span: span)
+    }
+
+    /// Ids (segment id + point id) of each segment's points that begin a run of
+    /// one non-healthy state. A healthy point never qualifies.
+    static func stateChangePoints(in segments: [HistoryPresentation.TimelineSegment]) -> Set<String> {
+        var out: Set<String> = []
+        for segment in segments {
+            var previous: (Bool, Urgency)?
+            for point in segment.points {
+                let state = (point.isBlocked, point.urgency)
+                let unhealthy = point.isBlocked || point.urgency != .none
+                if unhealthy, previous.map({ $0 != state }) ?? true {
+                    out.insert(segment.id + "#" + point.id)
+                }
+                previous = state
+            }
+        }
+        return out
     }
 
     /// One or more recorded events drawn as a single rule.
@@ -69,8 +94,8 @@ public struct QuotaTimelineChart: View {
 
     /// Events grouped while each falls within `span / slots` of its group's
     /// first event: about `slots` rules across the chart at most. Every event
-    /// stays in exactly one group, so the help text and the count can name all
-    /// of them; nothing is dropped.
+    /// stays in exactly one group, so the count covers all of them and nothing
+    /// is dropped; the tooltip names the first six and says how many more.
     static func clusters(_ markers: [AIEvent], span: TimeInterval, slots: Int = 32) -> [MarkerCluster] {
         let sorted = markers.sorted { $0.occurredAt < $1.occurredAt }
         let width = max(span / Double(max(slots, 1)), 0)
@@ -187,12 +212,11 @@ public struct QuotaTimelineChart: View {
                     .foregroundStyle(colorForPoint(point))
                     .lineStyle(StrokeStyle(lineWidth: 2.2, dash: dash))
 
-                    // A thinned (long-range) chart marks only the readings
-                    // that are not healthy: their shapes stay the non-colour
-                    // channel, and a symbol on every healthy point was most of
-                    // the clutter at 30 days and beyond. Short ranges keep a
+                    // A thinned (long-range) chart marks only where a
+                    // non-healthy state begins (`symbolPointIDs`); the line's
+                    // colour carries the state between. Short ranges keep a
                     // symbol on every reading.
-                    if !isThinned || point.isBlocked || point.urgency != .none {
+                    if !isThinned || symbolPointIDs.contains(segment.id + "#" + point.id) {
                         PointMark(
                             x: .value("Time", point.timestamp),
                             y: .value("Used %", point.fraction * 100)

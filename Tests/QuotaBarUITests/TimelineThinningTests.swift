@@ -54,6 +54,17 @@ struct TimelineThinningTests {
         #expect(H.thinnedForDisplay([short], buckets: 360) == [short])
     }
 
+    @Test("long ranges mark where a non-healthy state begins, never a healthy point")
+    @MainActor
+    func symbolsAtStateChanges() {
+        let points = [point(0, 0.2), point(2, 0.95), point(4, 0.96), point(6, 0.5),
+                      point(8, 0.5, blocked: true), point(10, 0.5, blocked: true), point(12, 0.97)]
+        let seg = segment(points)
+        let marked = QuotaTimelineChart.stateChangePoints(in: [seg])
+        let expected = [1, 4, 6].map { seg.id + "#" + points[$0].id }
+        #expect(marked == Set(expected))
+    }
+
     @Test("nearby events share one marker and none is dropped")
     @MainActor
     func eventsCluster() {
