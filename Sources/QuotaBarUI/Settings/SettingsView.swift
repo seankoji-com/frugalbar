@@ -265,7 +265,7 @@ public struct SettingsView: View {
                 .accessibilityAddTraits(.isHeader)
             Text(pane.summary)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.systemSecondaryText)
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
@@ -374,7 +374,7 @@ public struct SettingsView: View {
                      row only to override one, or when it says "Not configured".
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -385,7 +385,7 @@ public struct SettingsView: View {
             } footer: {
                 Text("Each workspace has its own key, set in the OpenCode Go section.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section("Google (Gemini, AGY Claude/GPT and Argon)") {
@@ -396,7 +396,7 @@ public struct SettingsView: View {
                 }
                 Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
 
                 // Folded away by default. This is the OAuth *client* identity,
                 // not a credential of the user's — it is the one thing here
@@ -421,7 +421,7 @@ public struct SettingsView: View {
                          OAUTH_CONFIG.
                          """)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 } label: {
                     HStack(spacing: 6) {
                         Text("OAuth client")
@@ -495,12 +495,12 @@ public struct SettingsView: View {
             if let note = slot.note {
                 Text(note)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
             if let status = perKeyStatus[slot.id] {
                 Text(status)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         } label: {
             HStack(spacing: 8) {
@@ -518,7 +518,7 @@ public struct SettingsView: View {
                 Spacer()
                 Text(Self.describe(source))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
             .accessibilityElement(children: .combine)
         }
@@ -584,7 +584,7 @@ public struct SettingsView: View {
                  written to the Keychain and never shown again.
                  """)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.systemSecondaryText)
         }
     }
 
@@ -604,7 +604,7 @@ public struct SettingsView: View {
                     .onSubmit(persistWorkspaces)
 
                 Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .help("Drag to reorder")
                     .accessibilityHidden(true)
 
@@ -613,7 +613,7 @@ public struct SettingsView: View {
                 if let hasKey = workspaceHasKey[instanceID] {
                     Text(hasKey ? "Stored in Keychain" : "No key in Keychain")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
 
                 Button { moveWorkspace(workspace.id, by: -1) } label: {
@@ -658,13 +658,13 @@ public struct SettingsView: View {
                 Label("Original workspace: uses your existing OpenCode key and the CLI login",
                       systemImage: "key")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             if let status = workspaceStatus[instanceID] {
                 Text(status)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } else if let live = liveWorkspaceStatus(workspace) {
                 ConnectionStatusLine(status: live)
             }
@@ -899,7 +899,7 @@ public struct SettingsView: View {
                      always wins where one exists.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                     .padding(.top, 4)
             }
         }
@@ -930,7 +930,7 @@ public struct SettingsView: View {
                  credentials you have not explicitly given the app.
                  """)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.systemSecondaryText)
         } header: {
             Text("Credential discovery")
         }
@@ -958,7 +958,7 @@ public struct SettingsView: View {
                      headroom. Off by default.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Quota-recovery notifications")
             }
@@ -973,7 +973,7 @@ public struct SettingsView: View {
                      itself reports. Off for every provider by default.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Reset alerts")
             }
@@ -984,7 +984,7 @@ public struct SettingsView: View {
                         Toggle(kind.title, isOn: eventNotificationBinding(for: kind))
                         Text(kind.notificationCaption)
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.systemSecondaryText)
                     }
                     .disabled(!eventTracking)
                 }
@@ -992,7 +992,7 @@ public struct SettingsView: View {
                     Label("Event tracking is off in History & Data, so there is nothing to notify about.",
                           systemImage: "info.circle")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             } header: {
                 Text("AI events")
@@ -1007,7 +1007,7 @@ public struct SettingsView: View {
                          Script Editor.
                          """)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             }
         }
@@ -1049,7 +1049,7 @@ public struct SettingsView: View {
                      does not have.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Desktop widget")
             }
@@ -1067,7 +1067,7 @@ public struct SettingsView: View {
                      another.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -1082,7 +1082,7 @@ public struct SettingsView: View {
                      vendor blocks a window, whatever its level.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
 
             Section {
@@ -1100,7 +1100,7 @@ public struct SettingsView: View {
                      outline.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         }
         .formStyle(.grouped)
@@ -1113,7 +1113,7 @@ public struct SettingsView: View {
                     Text(entry.title)
                     Text(entry.detail)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.systemSecondaryText)
                 }
             } icon: {
                 Image(systemName: entry.symbol)
@@ -1251,7 +1251,7 @@ public struct SettingsView: View {
                      forecasts.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("AI events")
             }
@@ -1280,7 +1280,7 @@ public struct SettingsView: View {
                      chart these readings; a hidden provider records nothing.
                      """)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Quota history")
             }

@@ -30,7 +30,7 @@ struct CycleEditorRow: View {
                 Spacer()
                 Text(summary)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
                 Toggle("", isOn: enabledBinding)
                     .labelsHidden()
                     .accessibilityLabel("Track \(vendor.displayName) renewal cycle")
@@ -69,7 +69,7 @@ struct CycleEditorRow: View {
                 Text("Any date the subscription renewed on, or will renew on — "
                    + "every later renewal is counted forward from it.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.systemSecondaryText)
             }
         }
         .padding(.vertical, 2)

@@ -61,6 +61,25 @@ struct BalanceCardStateTests {
             for: snapshot(credits: false, metric: .percentage(usedFraction: 0.4, displayDetails: nil))))
     }
 
+    /// A balance-only provider leads with its balance history: the quota chart
+    /// card could only say "no burndown to draw" for it, above the chart the
+    /// user came for. Any window to chart, or no balance card to fall back on,
+    /// keeps the quota chart.
+    @Test("the quota chart is dropped only for a balance-only snapshot")
+    func quotaChartFollowsTheWindows() {
+        #expect(!MetricDetailModalView.showsQuotaChart(for: snapshot(credits: false)))
+        #expect(!MetricDetailModalView.showsQuotaChart(for: snapshot(credits: true)))
+
+        var withWindow = snapshot(credits: true)
+        withWindow.row1 = DualBarMetrics(primaryFraction: 0.3, label: "WK")
+        #expect(MetricDetailModalView.showsQuotaChart(for: withWindow))
+
+        // No window and no balance: the chart card stays, so the inspector
+        // still says why there is nothing to draw.
+        #expect(MetricDetailModalView.showsQuotaChart(
+            for: snapshot(credits: false, metric: .percentage(usedFraction: 0.4, displayDetails: nil))))
+    }
+
     /// The regression itself: a failed read was folded into "no series", so the
     /// card disappeared and this branch could never be reached.
     @Test("a read that failed says so, and is not an absence of readings")

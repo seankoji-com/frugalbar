@@ -68,6 +68,18 @@ public struct MetricDetailModalView: View {
         !BalanceSeries.all(of: snapshot).isEmpty
     }
 
+    /// Whether the quota chart card (burndown / usage history) is drawn.
+    ///
+    /// A balance-only provider (OpenRouter, DeepSeek) has no consumable window
+    /// and records no usage fractions, so the card could only ever say "no
+    /// burndown to draw" — and it did, at the top of the body, pushing the
+    /// balance history the user opened the inspector for below the fold. The
+    /// card stays whenever there is a window to chart, and whenever there is no
+    /// balance card either, so an inspector never loses its only chart area.
+    static func showsQuotaChart(for snapshot: QuotaSnapshot) -> Bool {
+        !snapshot.quotaBars.isEmpty || !showsBalanceCard(for: snapshot)
+    }
+
     /// The per-series reads one pass records: one entry per series the snapshot
     /// publishes, each carrying its read's own outcome.
     ///
@@ -350,7 +362,9 @@ public struct MetricDetailModalView: View {
             if !presentation.windows.isEmpty {
                 windowsCard
             }
-            chartCard
+            if Self.showsQuotaChart(for: snapshot) {
+                chartCard
+            }
             if Self.showsBalanceCard(for: snapshot) {
                 balanceCard
             }

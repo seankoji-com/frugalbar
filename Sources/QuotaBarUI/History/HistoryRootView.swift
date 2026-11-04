@@ -28,6 +28,12 @@ public struct HistoryRootView: View {
     /// Bumped when a poll records new readings, and by the reload button, so
     /// the page follows the data instead of only the controls.
     @State private var dataSerial = 0
+    /// The "At a glance" grid folded to its header. Its tiles fill more than
+    /// the first screen with a dozen providers, which pushed the selected
+    /// provider's chart below the fold on every visit; folding it is
+    /// remembered. A view preference only — no figure depends on it.
+    @AppStorage("historyOverviewCollapsed", store: CredentialStore.preferences)
+    private var overviewCollapsed = false
     @State private var lastReloadKey: ReloadKey?
     /// How far local-activity ingestion has got, read before the records.
     @State private var activityProgress: TokenUsagePresentation.IngestionProgress = .indexing
@@ -822,17 +828,36 @@ public struct HistoryRootView: View {
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("At a glance")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.onSurface)
-                    .accessibilityAddTraits(.isHeader)
-                Text("· \(timeRange.title.lowercased()), each provider's longest window")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { overviewCollapsed.toggle() }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                            .rotationEffect(.degrees(overviewCollapsed ? 0 : 90))
+                        Text("At a glance")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.onSurface)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel("At a glance")
+                .accessibilityValue(overviewCollapsed ? "Collapsed" : "Expanded")
+                .accessibilityHint(overviewCollapsed ? "Show every provider's tile" : "Fold the tiles to this line")
+                Text(overviewCollapsed
+                     ? "· \(subjects.count) providers, folded"
+                     : "· \(timeRange.title.lowercased()), each provider's longest window")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                 Spacer()
             }
 
-            if subjects.isEmpty {
+            if overviewCollapsed {
+                EmptyView()
+            } else if subjects.isEmpty {
                 overviewNote(
                     symbol: "eye.slash",
                     text: "Every provider is hidden in Preferences → Providers, so there is nothing to chart.")
@@ -858,7 +883,7 @@ public struct HistoryRootView: View {
             }
 
             // Polled but nothing to draw: explained, never called an absence.
-            if overviewLoaded, !overviewFailed {
+            if !overviewCollapsed, overviewLoaded, !overviewFailed {
                 ForEach(overviewUnread) { unread in
                     overviewNote(
                         symbol: unread.symbol,
@@ -866,12 +891,12 @@ public struct HistoryRootView: View {
                 }
             }
 
-            if !overviewEmpty.isEmpty, !(overviewCards.isEmpty && overviewUnread.isEmpty) {
+            if !overviewCollapsed, !overviewEmpty.isEmpty, !(overviewCards.isEmpty && overviewUnread.isEmpty) {
                 overviewNote(
                     symbol: "circle.dashed",
                     text: "No readings in this range: \(overviewEmpty.map(\.name).joined(separator: ", ")).")
             }
-            if !hiddenNames.isEmpty {
+            if !overviewCollapsed, !hiddenNames.isEmpty {
                 overviewNote(
                     symbol: "eye.slash",
                     text: "Hidden in Preferences, so not polled or shown: \(hiddenNames.joined(separator: ", ")).")
