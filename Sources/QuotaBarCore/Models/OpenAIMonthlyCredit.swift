@@ -51,7 +51,16 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
             detail: detail(),
             source: "OpenAI Platform billing · credit grants",
             monthlyPeriodEnd: periodEnd,
-            monthlyPeriodStart: periodStart
+            // `periodStart` is when the (possibly prorated) grant was issued,
+            // not when the subscription month began. The row's even-use marker
+            // belongs to the billing cycle, so leave the start unset and let
+            // the presentation derive a local calendar month ending at the
+            // cycle end (`DualBarMetrics.monthWindowLength(endingAt:calendar:)`).
+            // That fallback is an intentional approximation, not an exact
+            // cycle: the vendor publishes no cycle start, so a span that
+            // crosses a daylight-saving transition can be off by the DST
+            // hour. Tests pin this approximation and the exact-span override.
+            monthlyPeriodStart: nil
         )
     }
 
@@ -132,6 +141,10 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
             guard let effectiveAt, let expiresAt,
                   effectiveAt <= now, expiresAt > now else { return nil }
             let span = expiresAt.timeIntervalSince(effectiveAt)
+            // A cycle-end match is not enough by itself: an annual Business
+            // grant can also expire at that instant. The monthly-span guard
+            // therefore covers both identification branches below, including
+            // the cycle-end match.
             guard span.isFinite, span > 0, span <= OpenAIMonthlyCredit.maximumMonthlyPeriod
             else { return nil }
             if let expectedPeriodEnd {

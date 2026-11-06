@@ -9,6 +9,11 @@ struct MonthlyPromoCreditTests {
     private func date(_ text: String) -> Date { ISO8601DateFormatter().date(from: text)! }
     private var now: Date { date("2026-10-24T00:00:00Z") }
     private var end: Date { date("2026-11-05T00:00:00Z") }
+    private var utc: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
 
     private func entry(balance: Decimal = 0, limit: Decimal? = 100, end: Date? = nil) -> APICreditEntry {
         APICreditEntry(id: "claude.promo-credit", vendorId: .claude, label: "Promo credit",
@@ -191,10 +196,10 @@ struct MonthlyPromoCreditTests {
         #expect(withPromo - without > 30)
     }
 
-    /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo,
-    /// but its period comes from the grant's own effective/expiry instants —
-    /// not a calendar month inferred from the end date.
-    @Test("the OpenAI monthly grant uses its own period and draws in the row")
+    /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo.
+    /// Its grant issue date is not the subscription cycle start, so the row
+    /// derives a calendar month ending at the subscription cycle end.
+    @Test("the OpenAI monthly grant uses the subscription month and draws in the row")
     @MainActor
     func openAIMonthlyCredit() throws {
         let start = date("2026-10-19T00:25:31Z")
@@ -204,9 +209,12 @@ struct MonthlyPromoCreditTests {
             measuredAt: date("2026-11-09T00:25:31Z"))
         let entry = credit.entry
         let presentation = MonthlyPromoCreditPresentation(
-            entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false)
+            entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false,
+            calendar: utc)
         #expect(entry.isMonthlyPromo)
         #expect(entry.extendsSubscription)
+        // The grant's issue date is not the billing cycle's start.
+        #expect(entry.monthlyPeriodStart == nil)
         #expect(presentation.fraction == 0.75)
         #expect(presentation.percentText == "75%")
         #expect(presentation.resetText == "Resets in 10 days")
@@ -248,6 +256,53 @@ struct MonthlyPromoCreditTests {
         let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
             .frame(width: 332)).fittingSize.height
         #expect(withPromo - without > 30)
+    }
+
+    /// The API-credits grant is prorated from its issue date, but the row is a
+    /// month of the subscription. The marker must follow the billing cycle
+    /// (19 Oct–19 Nov), not the 18-day prorated grant (1–19 Nov).
+    @Test("a prorated OpenAI grant keeps the subscription month's pace")
+    func proratedGrantUsesSubscriptionMonth() throws {
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 116, remainingUSD: 116,
+            periodStart: date("2026-11-01T02:15:38Z"),
+            periodEnd: date("2026-11-19T00:25:31Z"),
+            measuredAt: date("2026-11-01T12:00:00Z"))
+        let entry = credit.entry
+        #expect(entry.monthlyPeriodStart == nil)
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: entry, now: date("2026-11-01T12:00:00Z"), isStale: false,
+            calendar: utc)
+        #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0)
+        let marker = try #require(presentation.paceMarker)
+        // 19 Oct 00:25:31 → 1 Nov 12:00 is ~13.48 of 31 days.
+        #expect(marker > 0.40 && marker < 0.50)
+    }
+
+    /// The OpenAI grant publishes no cycle start. The row falls back to the
+    /// local calendar month ending at the cycle end, so across a DST change
+    /// that window is an hour longer than the fixed-offset billing cycle.
+    /// Pin the documented approximation rather than claiming an exact cycle.
+    @Test("an OpenAI grant uses the calendar-month approximation across DST")
+    func openAICalendarMonthApproximationAcrossDST() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let end = date("2026-11-19T00:25:31Z")
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: 100, periodStart: date("2026-10-19T00:25:31Z"),
+            periodEnd: end, measuredAt: date("2026-11-09T00:25:31Z"))
+        let entry = credit.entry
+        // The production entry keeps the grant issue date off the row's start,
+        // so the presentation takes the documented calendar-month fallback.
+        #expect(credit.periodStart == date("2026-10-19T00:25:31Z"))
+        #expect(entry.monthlyPeriodStart == nil)
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: entry, now: date("2026-11-09T00:25:31Z"), isStale: false,
+            calendar: calendar)
+        // 18 Oct 19:25:31 EDT → 19 Nov 00:25:31Z is 31 days plus the DST hour.
+        #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0 + 3_600)
+        let marker = try #require(presentation.paceMarker)
+        #expect(abs(marker - 21.0 / 31) < 0.001)
     }
 
     /// A 30-day grant must not borrow a 31-day calendar month: the exact
