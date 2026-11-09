@@ -146,6 +146,23 @@ struct SubscriptionCreditPlacementTests {
             .contains("Fable weekly 75% used"))
     }
 
+    @Test("a blocked scoped window speaks the blocked state beside its percentage")
+    func blockedScopedWindowSpeech() {
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row2: DualBarMetrics(primaryFraction: 0.2, label: "WK", windowLength: QuotaWindow.week))
+        snapshot.scopedBars = [DualBarMetrics(
+            primaryFraction: 1,
+            label: "Fable",
+            isBlocked: true,
+            resetsAt: now.addingTimeInterval(5 * 86_400),
+            windowLength: QuotaWindow.week)]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.scopedSpeech?.contains("100% used") == true)
+        #expect(p.scopedSpeech?.contains("blocked") == true)
+    }
+
     @Test("other credit pools remain separate and missing credits draw nothing")
     func otherPoolsRemainSeparate() {
         let credit = APICreditEntry(id: "claude.extra-usage", vendorId: .claude,

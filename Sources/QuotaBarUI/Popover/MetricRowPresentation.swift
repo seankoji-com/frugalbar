@@ -361,6 +361,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
             var parts = ["\(bar.label) weekly"]
             if let percent = WindowGridPresentation.percentText(for: bar) {
                 parts.append("\(percent) used")
+                // A blocked window can still carry a percentage; the visual
+                // row draws a BlockedGlyph, so the spoken form must say it too.
+                if bar.isBlocked { parts.append("blocked") }
             } else {
                 parts.append(bar.isBlocked ? "blocked" : "no reading")
             }
