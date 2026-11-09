@@ -34,7 +34,10 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
         let grants_held_reason: String?
     }
 
-    public var line: String { "Monthly API credit: \(MoneyText.format(amountUSD, code: "USD")) per month" }
+    /// The Console organisation's monthly API-credit entitlement. Named "Org"
+    /// because it belongs to the linked organisation, not to the subscription's
+    /// promo/usage-credit pool drawn beside it.
+    public var line: String { "Org monthly credit: \(MoneyText.format(amountUSD, code: "USD")) per month" }
     public func detail() -> String? {
         var parts: [String] = []
         if let nextGrantAt {

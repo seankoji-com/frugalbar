@@ -228,6 +228,88 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         }
     }
 
+    /// One entry of the endpoint's structured `limits[]` array.
+    ///
+    /// Anthropic moved the model-scoped weekly windows out of the flat
+    /// `seven_day_opus` / `seven_day_sonnet` keys (both now `null` for the
+    /// accounts this was diagnosed on) and into this array. A
+    /// `kind == "weekly_scoped"` row names its model in
+    /// `scope.model.display_name` — currently "Fable" — and reports its own
+    /// `percent` (0…100) and `resets_at`.
+    ///
+    /// `session` and `weekly_all` rows duplicate the flat `five_hour` /
+    /// `seven_day` windows, so they are decoded but not surfaced as extra bars.
+    /// A scoped window caps one model, not the plan: it is drawn on its own
+    /// line and never enters the plan-wide quota maths (see
+    /// `QuotaSnapshot.scopedBars`).
+    public struct Limit: Decodable, Sendable, Equatable {
+        public struct Scope: Decodable, Sendable, Equatable {
+            public struct Model: Decodable, Sendable, Equatable {
+                public let displayName: String?
+
+                public init(displayName: String?) {
+                    self.displayName = displayName
+                }
+
+                public init(from decoder: Decoder) throws {
+                    let c = try decoder.container(keyedBy: LenientKey.self)
+                    displayName = c.lenientString("display_name")
+                }
+            }
+
+            public let model: Model?
+
+            public init(model: Model?) {
+                self.model = model
+            }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: LenientKey.self)
+                model = try? c.decodeIfPresent(
+                    Model.self, forKey: LenientKey(stringValue: "model"))
+            }
+        }
+
+        public let kind: String?
+        /// The vendor's own percentage, 0…100. Nil means "not reported", never 0.
+        public let percent: Double?
+        public let resetsAt: String?
+        public let isActive: Bool?
+        public let scope: Scope?
+
+        public init(
+            kind: String?, percent: Double?, resetsAt: String?,
+            isActive: Bool?, scope: Scope?
+        ) {
+            self.kind = kind
+            self.percent = percent
+            self.resetsAt = resetsAt
+            self.isActive = isActive
+            self.scope = scope
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: LenientKey.self)
+            kind = c.lenientString("kind")
+            // Some payloads reuse the flat window's `utilization` key on a
+            // structured row; both are the same percentage figure.
+            percent = c.lenientDouble("percent") ?? c.lenientDouble("utilization")
+            resetsAt = c.lenientString("resets_at")
+            isActive = c.lenientBool("is_active")
+            scope = try? c.decodeIfPresent(
+                Scope.self, forKey: LenientKey(stringValue: "scope"))
+        }
+
+        /// The model this row scopes, trimmed and non-empty, or nil. A
+        /// `weekly_scoped` row without a model name cannot be labelled, so it
+        /// is not drawn rather than given an invented name.
+        public var modelName: String? {
+            guard let name = scope?.model?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { return nil }
+            return name
+        }
+    }
+
     /// Anthropic's promo / cloud-session credit — the `iguana_necktie` block,
     /// another feature codename. Its amounts are **already dollars**
     /// (`*_dollars`), so they are never scaled. `resets_at` is the published
@@ -413,6 +495,11 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
     /// arrive as `null` otherwise.
     public let sevenDayOpus: Window?
     public let sevenDaySonnet: Window?
+    /// Some payloads still publish the Fable weekly window under its own flat
+    /// key; others expose it only through `limits`. Both are read.
+    public let sevenDayFable: Window?
+    /// The endpoint's structured per-limit array. See `Limit`.
+    public let limits: [Limit]
     /// Banked reset grants, when the surface is served them. See `ResetGrant`.
     public let resetGrants: ResetGrants?
     /// The pay-as-you-go credit pool, in whichever of its two shapes this
@@ -428,6 +515,8 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         sevenDay: Window? = nil,
         sevenDayOpus: Window? = nil,
         sevenDaySonnet: Window? = nil,
+        sevenDayFable: Window? = nil,
+        limits: [Limit] = [],
         resetGrants: ResetGrants? = nil,
         spendBlock: SpendBlock? = nil,
         extraUsage: ExtraUsage? = nil,
@@ -437,6 +526,8 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         self.sevenDay = sevenDay
         self.sevenDayOpus = sevenDayOpus
         self.sevenDaySonnet = sevenDaySonnet
+        self.sevenDayFable = sevenDayFable
+        self.limits = limits
         self.resetGrants = resetGrants
         self.spendBlock = spendBlock
         self.extraUsage = extraUsage
@@ -452,6 +543,11 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         sevenDay = try? container.decodeIfPresent(Window.self, forKey: .sevenDay)
         sevenDayOpus = try? container.decodeIfPresent(Window.self, forKey: .sevenDayOpus)
         sevenDaySonnet = try? container.decodeIfPresent(Window.self, forKey: .sevenDaySonnet)
+        sevenDayFable = try? container.decodeIfPresent(Window.self, forKey: .sevenDayFable)
+        // One malformed row must not discard the others, so each array entry
+        // decodes independently.
+        limits = (try? container.decodeIfPresent([LenientLimit].self, forKey: .limits))?
+            .compactMap(\.limit) ?? []
         resetGrants = try? container.decodeIfPresent(ResetGrants.self, forKey: .resetGrants)
         // Each money block is decoded independently and leniently too: a
         // reshaped `spend` must not cost the row its reset grants, and a
@@ -461,11 +557,20 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         promoCredit = try? container.decodeIfPresent(PromoCredit.self, forKey: .promoCredit)
     }
 
+    private struct LenientLimit: Decodable {
+        let limit: Limit?
+        init(from decoder: Decoder) throws {
+            limit = try? Limit(from: decoder)
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case fiveHour = "five_hour"
         case sevenDay = "seven_day"
         case sevenDayOpus = "seven_day_opus"
         case sevenDaySonnet = "seven_day_sonnet"
+        case sevenDayFable = "seven_day_fable"
+        case limits
         case resetGrants = "cedar_ember"
         case spendBlock = "spend"
         case extraUsage = "extra_usage"
@@ -482,6 +587,17 @@ public enum CLIProxyClient {
     /// The same endpoint asked to include banked reset grants. A feature
     /// flag, not a credential, so it may travel in the query string.
     public static let claudeOAuthUsageWithGrantsURL = claudeOAuthUsageURL + "?cedar_ember=1"
+
+    /// The client identity Anthropic's usage endpoint checks before it will
+    /// serve the `cedar_ember` grant block.
+    ///
+    /// The same credential this app reads belongs to the Claude Code CLI, and
+    /// the endpoint answers a request without this user agent — FrugalBar's
+    /// own included — with `eligible: false, ineligible_reason: "surface"`.
+    /// That is why the reset-credit row was blank even though the account held
+    /// three grants. The read is still the free, read-only usage endpoint; the
+    /// string names the client the token belongs to, not a different one.
+    public static let claudeCLIUserAgent = "claude-cli/2.1.318 (external, cli)"
 
     /// How long to hold off the automatic poll after Anthropic throttles the
     /// usage endpoint without saying for how long.
@@ -736,7 +852,7 @@ public enum CLIProxyClient {
     }
 
     public static func fetchClaudeUsage(
-        config: CLIProxyConfig, now: Date = Date()
+        config: CLIProxyConfig, includeGrants: Bool = true, now: Date = Date()
     ) async throws -> (ClaudeOAuthUsageResponse, CLIProxyAuthFile) {
         let authFilesURL = managementURL(path: "auth-files", base: config.url)
         let (authData, authResponse) = try await QuotaHTTP.get(
@@ -761,10 +877,13 @@ public enum CLIProxyClient {
         let payload: [String: Any] = [
             "auth_index": claudeAccount.authIndex,
             "method": "GET",
-            "url": claudeOAuthUsageWithGrantsURL,
+            "url": includeGrants ? claudeOAuthUsageWithGrantsURL : claudeOAuthUsageURL,
             "header": [
                 "Authorization": "Bearer $TOKEN$",
-                "anthropic-beta": "oauth-2025-04-20"
+                "anthropic-beta": "oauth-2025-04-20",
+                // The same surface gate the direct path has to satisfy, and
+                // the proxy forwards this header to Anthropic verbatim.
+                "User-Agent": claudeCLIUserAgent
             ]
         ]
         let requestBody = try JSONSerialization.data(withJSONObject: payload)

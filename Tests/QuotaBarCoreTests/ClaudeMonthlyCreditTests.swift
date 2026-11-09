@@ -13,7 +13,7 @@ struct ClaudeMonthlyCreditTests {
         #expect(credit.amountUSD == Decimal(string: "123.45"))
         #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2027-02-15T14:49:22Z"))
         #expect(credit.measuredAt == now)
-        #expect(credit.line == "Monthly API credit: $123.45 per month")
+        #expect(credit.line == "Org monthly credit: $123.45 per month")
         #expect(credit.detail()?.contains("Next credit") == true)
         #expect(credit.detail()?.contains("Stale") != true)
         let provider = ClaudeQuotaProvider(apiKey: "", monthlyCredit: { _ in credit })

@@ -112,6 +112,19 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let subscriptionCredits: [APICreditEntryPresentation]
     public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let openAIUsageCredit: OpenAIUsageCreditPresentation?
+    /// The linked Console organisation's monthly API-credit entitlement, e.g.
+    /// "Org monthly credit: $100.00 per month", and its next grant date.
+    ///
+    /// It is an entitlement, not a balance and not a quota: it is read by the
+    /// independent billing session and drawn as one line under the row. It is
+    /// not repeated by the promo-credit row, which reports a different pool's
+    /// usage.
+    public let monthlyCreditLine: String?
+    public let monthlyCreditDetail: String?
+    /// The model-scoped windows in words, e.g. "Fable weekly 0% used, resets
+    /// in 5 days". They are drawn on their own line and not in the window grid,
+    /// so without this the figures would be invisible to VoiceOver.
+    public let scopedSpeech: String?
 
     /// The actual row is one accessibility element with children ignored.
     public func combinedAccessibilityLabel(windows: String?, forecast: String?, creditsStale: Bool) -> String {
@@ -119,6 +132,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
         if let windows { parts.append(windows) }
         if let forecast { parts.append(forecast) }
         if let resetCredits { parts.append(resetCredits.spoken) }
+        if let monthlyCreditLine {
+            parts.append(monthlyCreditLine)
+            if let monthlyCreditDetail { parts.append(monthlyCreditDetail) }
+        }
+        if let scopedSpeech { parts.append(scopedSpeech) }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
         if let monthlyPromo { parts.append(monthlyPromo.spoken) }
         if let openAIUsageCredit { parts.append(openAIUsageCredit.spoken) }
@@ -132,6 +150,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
     static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
+        self.monthlyCreditLine = snapshot.monthlyAPICredit?.line
+        self.monthlyCreditDetail = snapshot.monthlyAPICredit?.detail()
+        self.scopedSpeech = Self.scopedSpeech(for: snapshot.scopedBars, now: now)
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
@@ -329,5 +350,24 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// "$179.50" its own row's subtitle printed a few points to the left.
     static func currency(_ value: Decimal, _ code: String) -> String {
         MoneyText.format(value, code: code)
+    }
+
+    /// The model-scoped windows in one spoken clause each. They are drawn
+    /// outside the grid, so the row's label must carry both the percentage and
+    /// the reset time the eye can see.
+    static func scopedSpeech(for bars: [DualBarMetrics], now: Date) -> String? {
+        guard !bars.isEmpty else { return nil }
+        return bars.map { bar in
+            var parts = ["\(bar.label) weekly"]
+            if let percent = WindowGridPresentation.percentText(for: bar) {
+                parts.append("\(percent) used")
+            } else {
+                parts.append(bar.isBlocked ? "blocked" : "no reading")
+            }
+            if let reset = ResetCountdownBadge.compactSpoken(bar.resetsAt, now: now) {
+                parts.append(reset)
+            }
+            return parts.joined(separator: " ")
+        }.joined(separator: ", ")
     }
 }

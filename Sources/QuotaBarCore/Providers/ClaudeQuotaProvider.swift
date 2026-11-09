@@ -11,6 +11,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     private let apiKey: String?
     private let cliProxyConfig: CLIProxyConfig?
     private let proxyBackoff: ClaudeProxyBackoff
+    private let grantSchedule: ClaudeGrantSchedule
     private let monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit?
     /// Resolves the *direct* Claude Code OAuth token — the one this Mac's own
     /// `claude` login holds, as opposed to whatever the proxy holds.
@@ -24,6 +25,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // Nil means the production path: this Mac's Claude Code credential.
         directCredential: (@Sendable () async -> String?)? = nil,
         proxyBackoff: ClaudeProxyBackoff? = nil,
+        grantSchedule: ClaudeGrantSchedule? = nil,
         monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil
     ) {
         self.monthlyCredit = monthlyCredit ?? { now in
@@ -33,6 +35,10 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         self.apiKey = apiKey
         self.cliProxyConfig = cliProxyConfig
         self.proxyBackoff = proxyBackoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
+        // Anthropic throttles the `cedar_ember` variant when it is polled, so
+        // production reads grants hourly; tests get a fresh clock each
+        // provider, as they do for the proxy backoff.
+        self.grantSchedule = grantSchedule ?? (TestHost.isActive ? ClaudeGrantSchedule() : .shared)
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .claude) }
     }
@@ -129,7 +135,23 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     }
 
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
-        let (usage, _) = try await CLIProxyClient.fetchClaudeUsage(config: config, now: now)
+        // The grant block is read hourly rather than on every poll; the plain
+        // usage read in between still carries every quota window.
+        let grantsKey = "proxy|\(config.url.absoluteString)"
+        let includeGrants = await grantSchedule.shouldRequest(key: grantsKey, now: now)
+        let usage: ClaudeOAuthUsageResponse
+        do {
+            (usage, _) = try await CLIProxyClient.fetchClaudeUsage(
+                config: config, includeGrants: includeGrants, now: now)
+        } catch let error as ProviderError {
+            if includeGrants {
+                await grantSchedule.record(key: grantsKey, now: now, served: false)
+            }
+            throw error
+        }
+        if includeGrants {
+            await grantSchedule.record(key: grantsKey, now: now, served: true)
+        }
         let host = config.url.host ?? "proxy"
         return try makeSnapshot(
             usage: usage,
@@ -147,22 +169,65 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
            let until = await proxyBackoff.directRetryAfter(token: token, now: now) {
             return unavailable(.rateLimited(retryAfter: until))
         }
+        // Anthropic serves the banked-reset block (and throttles that variant
+        // when it is polled), so it is asked for hourly; every other poll uses
+        // the plain read, which carries the same windows.
+        let grantsKey = Self.grantKey(for: token)
+        let includeGrants = await grantSchedule.shouldRequest(key: grantsKey, now: now)
+        return try await readUsageDirect(
+            token: token, grantsKey: grantsKey, includeGrants: includeGrants, now: now)
+    }
+
+    /// One read of the usage endpoint. `includeGrants` names the variant that
+    /// was due; a failure on that variant falls back to the plain read, because
+    /// a throttle on the grant surface says nothing about the quota windows the
+    /// account can still be read for.
+    private func readUsageDirect(
+        token: String, grantsKey: String, includeGrants: Bool, now: Date
+    ) async throws -> QuotaSnapshot {
         let (data, response) = try await QuotaHTTP.get(
-            url: CLIProxyClient.claudeOAuthUsageWithGrantsURL,
-            headers: ["Accept": "application/json", "anthropic-beta": "oauth-2025-04-20"],
+            url: includeGrants
+                ? CLIProxyClient.claudeOAuthUsageWithGrantsURL
+                : CLIProxyClient.claudeOAuthUsageURL,
+            headers: [
+                "Accept": "application/json",
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": CLIProxyClient.claudeCLIUserAgent,
+            ],
             auth: .bearer(token)
         )
         // Claude's own policy, not the API-key one: against this endpoint a 403
         // is a throttle rather than a bad token, and a 429 with no usable
         // `Retry-After` still buys a five-minute cooldown. See
         // `CLIProxyClient.claudeUsageFailureReason`.
+        let retryAfterHeader = response.value(forHTTPHeaderField: "Retry-After")
         if let reason = CLIProxyClient.claudeUsageFailureReason(
-            for: response.statusCode,
-            retryAfter: response.value(forHTTPHeaderField: "Retry-After"), now: now) {
+            for: response.statusCode, retryAfter: retryAfterHeader, now: now) {
+            if includeGrants {
+                // Hold the variant back for an hour, then read the plain
+                // endpoint once. A rejected credential would fail there too,
+                // and a throttle that named a wait is the vendor's instruction
+                // for the account, so neither is retried.
+                await grantSchedule.record(key: grantsKey, now: now, served: false)
+                let vendorAskedToWait = QuotaHTTP.retryAfterDate(
+                    secondsHeader: retryAfterHeader, now: now).map { $0 > now } ?? false
+                // Only a throttle on this variant is worth re-asking without
+                // it: a 5xx is the endpoint failing for both reads, and a 401
+                // is the token.
+                var throttle = false
+                if case .rateLimited = reason { throttle = true }
+                if throttle, !vendorAskedToWait {
+                    return try await readUsageDirect(
+                        token: token, grantsKey: grantsKey, includeGrants: false, now: now)
+                }
+            }
             await proxyBackoff.recordDirect(reason, token: token)
             NSLog("frugalbar: Claude OAuth usage request returned %ld (%@)",
                   response.statusCode, String(describing: reason))
             return unavailable(reason)
+        }
+        if includeGrants {
+            await grantSchedule.record(key: grantsKey, now: now, served: true)
         }
         guard let usage = try? JSONDecoder().decode(ClaudeOAuthUsageResponse.self, from: data) else {
             NSLog("frugalbar: Claude OAuth usage body failed to decode (%ld bytes)", data.count)
@@ -199,12 +264,16 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
 
         let row1 = fiveHourReading.map { row($0, label: "5H", window: QuotaWindow.fiveHours, now: now) }
         let row2 = weeklyReading.map { row($0, label: "WK", window: QuotaWindow.week, now: now) }
-        // The Opus/Sonnet weekly windows are decoded but deliberately not
-        // surfaced. A model-scoped cap only blocks that model, yet every bar
-        // in a snapshot is read as plan-wide: exhaustion sorting, advice's
-        // worst bar and `displayBars`' collapse would all treat a spent Opus
-        // window as the whole plan being spent. Showing them needs a
-        // per-model scope on `DualBarMetrics` that those consumers skip.
+        // Model-scoped weekly windows (today the Fable cap) are drawn on their
+        // own line under the row and carried outside `bars`. A scoped cap only
+        // blocks that model, yet every bar in `bars` is read as plan-wide:
+        // exhaustion sorting, advice's worst bar, the menu bar and
+        // `displayBars`' collapse would all treat a spent Fable window as the
+        // whole plan being spent.
+        let scoped = Self.scopedBars(from: usage, now: now)
+        // The legacy Opus/Sonnet keys are decoded but are no longer served —
+        // the scoped windows moved to `limits[]`. They stay out of the
+        // plan-wide bars for the same reason.
 
         let remainingPercent = max(0, Int(((1 - worst) * 100).rounded()))
         let badgeText = "\(remainingPercent)% left"
@@ -232,7 +301,79 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             Self.resetCreditExpiries(from: grants.grants)
         } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
+        snapshot.scopedBars = scoped
         return snapshot
+    }
+
+    /// The model-scoped weekly windows, from `limits[]` and (when an older
+    /// payload still carries it) `seven_day_fable`.
+    ///
+    /// `percent` is the vendor's own 0…100 figure, so it is divided by 100
+    /// directly rather than put through `reading`'s fraction-or-percentage
+    /// heuristic: a 1% scoped window must not read as 100%. A row without a
+    /// model name cannot be labelled and a row without a percentage has no
+    /// reading to draw, so both are skipped — never defaulted to 0 or "Model".
+    /// Duplicate rows for one model collapse to one bar, preferring the row the
+    /// vendor marked active.
+    static func scopedBars(from usage: ClaudeOAuthUsageResponse, now: Date) -> [DualBarMetrics] {
+        struct Candidate {
+            let name: String
+            let fraction: Double
+            let reset: Date?
+            let isActive: Bool
+            let order: Int
+        }
+
+        var candidates: [Candidate] = []
+        for (index, limit) in usage.limits.enumerated() {
+            guard limit.kind == "weekly_scoped",
+                  let name = limit.modelName,
+                  let percent = limit.percent,
+                  percent.isFinite, (0...100).contains(percent)
+            else { continue }
+            candidates.append(Candidate(
+                name: name,
+                fraction: percent / 100,
+                reset: CLIProxyClient.parseResetDate(limit.resetsAt),
+                isActive: limit.isActive == true,
+                order: index))
+        }
+        if let fable = usage.sevenDayFable,
+           !candidates.contains(where: { $0.name.caseInsensitiveCompare("Fable") == .orderedSame }),
+           let reading = reading(fable) {
+            candidates.append(Candidate(
+                name: "Fable", fraction: reading.used, reset: reading.reset,
+                isActive: false, order: usage.limits.count))
+        }
+
+        var chosen: [String: Candidate] = [:]
+        for candidate in candidates {
+            let key = candidate.name.lowercased()
+            if let existing = chosen[key] {
+                // Prefer the active row; within that, the first one the
+                // vendor published, so the order is stable between polls.
+                if candidate.isActive && !existing.isActive { chosen[key] = candidate }
+            } else {
+                chosen[key] = candidate
+            }
+        }
+
+        return chosen.values.sorted { $0.order < $1.order }.map { candidate in
+            let pace = DualBarMetrics.proRataPace(
+                resetsAt: candidate.reset, windowLength: QuotaWindow.week, now: now)
+            let resetText = candidate.reset.map {
+                "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
+            }
+            return DualBarMetrics(
+                primaryFraction: candidate.fraction,
+                expectedPaceFraction: pace,
+                label: candidate.name,
+                usedText: "\(Int((candidate.fraction * 100).rounded()))% used",
+                resetText: resetText,
+                resetsAt: candidate.reset,
+                windowLength: QuotaWindow.week
+            )
+        }
     }
 
     /// Selects up to the display cap, with earliest expiry first and vendor
@@ -365,6 +506,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         return info
     }
 
+    /// A stable, non-secret key for one credential's hourly grant clock. The
+    /// token itself is never stored or logged.
+    static func grantKey(for token: String) -> String {
+        Data(SHA256.hash(data: Data(token.utf8))).base64EncodedString()
+    }
+
     struct Reading { let used: Double; let reset: Date? }
 
     /// The API has reported utilization both as a 0…1 fraction and as a
@@ -395,6 +542,36 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                        usedText: "\(Int((reading.used * 100).rounded()))% used",
                        resetText: resetText,
                        resetsAt: reading.reset, windowLength: window)
+    }
+}
+
+/// How often each credential may ask the usage endpoint for its banked-reset
+/// block.
+///
+/// Anthropic throttles the `?cedar_ember=1` variant when it is polled, and a
+/// 429 on it would otherwise mark the whole quota row rate-limited. The plain
+/// usage read carries every window and is safe on the normal poll cadence, so
+/// grants are asked for at most once an hour and a failed attempt waits an hour
+/// before trying again. In-memory only, keyed by a hash of the credential (or
+/// by the proxy URL); neither the token nor the key is ever persisted or
+/// logged.
+public actor ClaudeGrantSchedule {
+    static let shared = ClaudeGrantSchedule()
+    static let interval: TimeInterval = 3600
+    private var lastRequested: [String: Date] = [:]
+    private var retryNotBefore: [String: Date] = [:]
+
+    public init() {}
+
+    func shouldRequest(key: String, now: Date) -> Bool {
+        if let until = retryNotBefore[key], now < until { return false }
+        guard let last = lastRequested[key] else { return true }
+        return now.timeIntervalSince(last) >= Self.interval
+    }
+
+    func record(key: String, now: Date, served: Bool) {
+        lastRequested[key] = now
+        retryNotBefore[key] = served ? nil : now.addingTimeInterval(Self.interval)
     }
 }
 

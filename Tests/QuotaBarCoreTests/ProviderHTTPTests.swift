@@ -1965,6 +1965,107 @@ struct ProviderHTTPTests {
         #expect(snap.row3 == nil)
     }
 
+    /// The model-scoped windows moved out of the flat `seven_day_opus` /
+    /// `seven_day_sonnet` keys and into `limits[]`. A spent Fable cap must be
+    /// visible, but it caps one model: it must not mark the plan exhausted,
+    /// drive the badge, or hide the weekly bar.
+    @Test("Claude shows the model-scoped Fable window without making it plan-wide")
+    func claudeScopedFableWindow() async throws {
+        let body = #"{"five_hour":null,"seven_day":{"utilization":57,"resets_at":"2026-11-14T23:00:00.252021+00:00"},"limits":[{"kind":"weekly_all","group":"weekly","percent":57,"is_active":true,"resets_at":"2026-11-14T23:00:00.252021+00:00","scope":null,"severity":"normal"},{"kind":"weekly_scoped","group":"weekly","percent":100,"is_active":false,"resets_at":"2026-11-14T23:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"severity":"normal"}]}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+
+        #expect(snap.row1 == nil)
+        #expect(snap.row2?.primaryFraction == 0.57)
+        #expect(snap.scopedBars.count == 1)
+        let fable = try #require(snap.scopedBars.first)
+        #expect(fable.label == "Fable")
+        #expect(fable.primaryFraction == 1.0)
+        #expect(fable.windowLength == QuotaWindow.week)
+        #expect(fable.resetsAt == ISO8601DateFormatter().date(from: "2026-11-14T23:00:00Z"))
+        // Plan-wide figures are untouched by the spent scoped window.
+        #expect(snap.quotaBars.map(\.label) == ["WK"])
+        #expect(snap.isQuotaExhausted == false)
+        #expect(snap.status == .measured(.none))
+        #expect(snap.badgeText == "43% left")
+    }
+
+    /// `percent` is the vendor's own 0…100 figure. Reading it with the flat
+    /// windows' fraction-or-percentage heuristic would turn a 1% Fable window
+    /// into 100% used.
+    @Test("Claude reads a scoped percent as a percentage, not a fraction")
+    func claudeScopedPercentScale() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"limits":[{"kind":"weekly_scoped","percent":1,"scope":{"model":{"display_name":"Fable"}}}]}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.scopedBars.first?.primaryFraction == 0.01)
+        #expect(snap.status == .measured(.none))
+    }
+
+    /// Anthropic serves `cedar_ember` only to its Claude Code client surface.
+    /// Without this user agent the same account answered `eligible: false,
+    /// ineligible_reason: "surface"` and three real Fable resets rendered as
+    /// nothing.
+    @Test("Claude identifies as its Claude Code client so the grant surface is served")
+    func claudeGrantSurfaceUserAgent() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"launch-2610-fable","resets_left":1,"ends_at":"2027-03-09T07:59:00+00:00","usable_now":true}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        let request = try #require(URLProtocolStub.capturedRequests.first)
+        #expect(request.value(forHTTPHeaderField: "User-Agent") == CLIProxyClient.claudeCLIUserAgent)
+        #expect(snap.resetCreditsAvailable == 1)
+        #expect(snap.resetCreditsApplicable == 1)
+    }
+
+    /// The grant variant is throttled when polled, so it is asked for hourly;
+    /// the plain read in between still carries every quota window. The clock is
+    /// injected, not read from `Date()`.
+    @Test("Claude asks for banked grants hourly and reads the plain endpoint in between")
+    func claudeGrantsAreReadHourly() async throws {
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#
+        try await withStubbedHTTP({ _ in canned(body: body) }) {
+            let first = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+            _ = try await first.fetchSnapshot(now: now)
+            let second = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+            _ = try await second.fetchSnapshot(now: now.addingTimeInterval(60))
+            let third = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+            _ = try await third.fetchSnapshot(now: now.addingTimeInterval(3600))
+        }
+
+        let urls = URLProtocolStub.capturedRequests.compactMap { $0.url?.absoluteString }
+        #expect(urls.count == 3)
+        #expect(urls[0].contains("cedar_ember=1"))
+        #expect(!urls[1].contains("cedar_ember=1"))
+        #expect(urls[2].contains("cedar_ember=1"))
+    }
+
+    /// A throttle on the grant variant is not a throttle on the quota windows.
+    /// The plain read still answers, so the row must stay measured rather than
+    /// reading "Rate limited" because the credit block was refused.
+    @Test("a throttled Claude grant variant falls back to the plain usage read")
+    func claudeGrantThrottleFallsBackToPlain() async throws {
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snap = try await withStubbedHTTP({ request in
+            if request.url?.absoluteString.contains("cedar_ember=1") == true {
+                return canned(status: 429, body: "{}", headers: ["Retry-After": "0"])
+            }
+            return canned(body: #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#)
+        }) {
+            let provider = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+            return try await provider.fetchSnapshot(now: now)
+        }
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snap.status.confidence == .measured)
+        #expect(snap.row2?.primaryFraction == 0.20)
+        #expect(snap.resetCreditsAvailable == nil)
+    }
+
     /// When Claude CLI is routed through LiteLLM/CLIProxyAPI, the session consuming
     /// tokens lives in CLIProxyAPI on the LAN server. Probing local Keychain credentials
     /// completely misses the active session. ClaudeQuotaProvider must query CLIProxyAPI's
