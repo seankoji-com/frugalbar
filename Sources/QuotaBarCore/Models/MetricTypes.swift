@@ -513,7 +513,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let status: ProviderStatus
     public let resetsAt: Date?
     public let lastUpdated: Date
-    public let auxiliaryInfo: String?
+    public var auxiliaryInfo: String?
 
     public var row1: DualBarMetrics?
     public var row2: DualBarMetrics?

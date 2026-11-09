@@ -139,8 +139,11 @@ and are served **only** when the request identifies as the Claude Code CLI
 answers `eligible: false, ineligible_reason: "surface"`, which decodes to `nil`,
 never 0. The grant variant is throttled when polled, so it is asked for at most
 hourly (`ClaudeGrantSchedule`) and the plain read in between still carries every
-quota window. A malformed or absent grant block yields no figure; guessing one
-would be a synthesised number.
+quota window — but no `cedar_ember` block, so the last published grant figure is
+cached per credential and re-applied to those plain reads. Without that carry-
+forward the tickets (and the reset-credit detector's stable baseline) vanished
+for the fifty-eight minutes between grant reads. A malformed or absent grant
+block yields no figure; guessing one would be a synthesised number.
 
 **External event sources record the past, never the future.** Status pages,
 community reset trackers and account model lists are read for what already

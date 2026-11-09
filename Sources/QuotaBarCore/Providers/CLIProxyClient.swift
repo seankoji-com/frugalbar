@@ -291,9 +291,11 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: LenientKey.self)
             kind = c.lenientString("kind")
-            // Some payloads reuse the flat window's `utilization` key on a
-            // structured row; both are the same percentage figure.
-            percent = c.lenientDouble("percent") ?? c.lenientDouble("utilization")
+            // `percent` is the structured row's own 0…100 field. The flat
+            // windows' `utilization` is deliberately not accepted here: it has
+            // been observed as both a fraction and a percentage, and a scoped
+            // row carries no marker saying which scale it used.
+            percent = c.lenientDouble("percent")
             resetsAt = c.lenientString("resets_at")
             isActive = c.lenientBool("is_active")
             scope = try? c.decodeIfPresent(

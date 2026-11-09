@@ -2004,6 +2004,20 @@ struct ProviderHTTPTests {
         #expect(snap.status == .measured(.none))
     }
 
+    /// Older payloads carried the same scoped window as a flat window with the
+    /// flat windows' fraction-or-percentage `utilization`.
+    @Test("Claude reads the legacy flat Fable window as a scoped bar")
+    func claudeFlatFableWindow() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"seven_day_fable":{"utilization":42}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.scopedBars.count == 1)
+        #expect(snap.scopedBars.first?.label == "Fable")
+        #expect(snap.scopedBars.first?.primaryFraction == 0.42)
+        #expect(snap.quotaBars.map(\.label) == ["WK", "5H"])
+    }
+
     /// Anthropic serves `cedar_ember` only to its Claude Code client surface.
     /// Without this user agent the same account answered `eligible: false,
     /// ineligible_reason: "surface"` and three real Fable resets rendered as
@@ -2023,18 +2037,27 @@ struct ProviderHTTPTests {
     /// The grant variant is throttled when polled, so it is asked for hourly;
     /// the plain read in between still carries every quota window. The clock is
     /// injected, not read from `Date()`.
-    @Test("Claude asks for banked grants hourly and reads the plain endpoint in between")
+    ///
+    /// The plain read carries no `cedar_ember` block, so the last published
+    /// grant figure must survive it. Without that the gold tickets appeared for
+    /// one poll and vanished for the next fifty-eight minutes.
+    @Test("Claude asks for banked grants hourly and keeps them across the plain reads")
     func claudeGrantsAreReadHourly() async throws {
         let schedule = ClaudeGrantSchedule()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#
-        try await withStubbedHTTP({ _ in canned(body: body) }) {
-            let first = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
-            _ = try await first.fetchSnapshot(now: now)
-            let second = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
-            _ = try await second.fetchSnapshot(now: now.addingTimeInterval(60))
-            let third = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
-            _ = try await third.fetchSnapshot(now: now.addingTimeInterval(3600))
+        let plain = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#
+        let grants = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"launch-2610-fable","resets_left":1,"ends_at":"2027-03-09T07:59:00+00:00","usable_now":true}]}}"#
+        let snaps = try await withStubbedHTTP({ request in
+            request.url?.absoluteString.contains("cedar_ember=1") == true
+                ? canned(body: grants)
+                : canned(body: plain)
+        }) {
+            var results: [QuotaSnapshot] = []
+            for offset in [0.0, 60.0, 3600.0] {
+                let provider = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+                results.append(try await provider.fetchSnapshot(now: now.addingTimeInterval(offset)))
+            }
+            return results
         }
 
         let urls = URLProtocolStub.capturedRequests.compactMap { $0.url?.absoluteString }
@@ -2042,6 +2065,13 @@ struct ProviderHTTPTests {
         #expect(urls[0].contains("cedar_ember=1"))
         #expect(!urls[1].contains("cedar_ember=1"))
         #expect(urls[2].contains("cedar_ember=1"))
+        #expect(snaps[0].resetCreditsAvailable == 1)
+        // The plain poll keeps the last published figure.
+        #expect(snaps[1].resetCreditsAvailable == 1)
+        #expect(snaps[1].resetCreditsApplicable == 1)
+        #expect(snaps[1].resetCreditExpiries.count == 1)
+        #expect(snaps[1].auxiliaryInfo?.contains("1 reset credit banked") == true)
+        #expect(snaps[2].resetCreditsAvailable == 1)
     }
 
     /// A throttle on the grant variant is not a throttle on the quota windows.
@@ -2105,6 +2135,8 @@ struct ProviderHTTPTests {
                 #expect(json["auth_index"] as? String == "claude_idx_123")
                 #expect(json["url"] as? String == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1")
                 #expect(json["method"] as? String == "GET")
+                let headers = json["header"] as? [String: String]
+                #expect(headers?["User-Agent"] == CLIProxyClient.claudeCLIUserAgent)
 
                 return canned(body: #"""
                 {
@@ -2127,6 +2159,57 @@ struct ProviderHTTPTests {
         #expect(snap.row2?.label == "WK")
         #expect(snap.row2?.primaryFraction == 0.23)
         #expect(snap.resetsAt != nil)
+    }
+
+    /// The proxy path gets the same hourly grant schedule and the same
+    /// carry-forward, and its relayed request must identify as the CLI too or
+    /// the proxy token's grants stay unserved.
+    @Test("Claude proxy asks for grants hourly and keeps them across plain reads")
+    func claudeProxyGrantsAreReadHourly() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key")
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let plain = #"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":10},\"seven_day\":{\"utilization\":20}}"}"#
+        let grants = #"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":10},\"seven_day\":{\"utilization\":20},\"cedar_ember\":{\"eligible\":true,\"grants\":[{\"resets_left\":1,\"ends_at\":\"2027-03-09T07:59:00+00:00\",\"usable_now\":true}]}}"}"#
+
+        let snaps = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"claude_idx"}]}"#)
+            }
+            if request.url?.path == "/v0/management/api-call" {
+                let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))
+                    as? [String: Any]) ?? [:]
+                let url = body["url"] as? String ?? ""
+                return canned(body: url.contains("cedar_ember=1") ? grants : plain)
+            }
+            return canned(status: 404, body: "not found")
+        }) {
+            var results: [QuotaSnapshot] = []
+            for offset in [0.0, 60.0, 3600.0] {
+                let provider = ClaudeQuotaProvider(
+                    cliProxyConfig: config, grantSchedule: schedule)
+                results.append(try await provider.fetchSnapshot(now: now.addingTimeInterval(offset)))
+            }
+            return results
+        }
+
+        #expect(URLProtocolStub.requestCount == 6)
+        let relayedURLs = URLProtocolStub.capturedRequests
+            .filter { $0.url?.path == "/v0/management/api-call" }
+            .compactMap { request -> String? in
+                let body = (try? JSONSerialization.jsonObject(with: extractBody(from: request))
+                    as? [String: Any]) ?? [:]
+                return body["url"] as? String
+            }
+        #expect(relayedURLs.count == 3)
+        #expect(relayedURLs[0].contains("cedar_ember=1"))
+        #expect(!relayedURLs[1].contains("cedar_ember=1"))
+        #expect(relayedURLs[2].contains("cedar_ember=1"))
+        #expect(snaps[0].resetCreditsAvailable == 1)
+        #expect(snaps[1].resetCreditsAvailable == 1)
+        #expect(snaps[1].resetCreditExpiries.count == 1)
     }
 
     @Test("Claude CLI Proxy maps 401 credential rejection")

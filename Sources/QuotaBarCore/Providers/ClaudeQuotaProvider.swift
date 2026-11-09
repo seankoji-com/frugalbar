@@ -151,14 +151,20 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         }
         if includeGrants {
             await grantSchedule.record(key: grantsKey, now: now, served: true)
+            await grantSchedule.recordReading(
+                key: grantsKey, reading: Self.grantReading(from: usage))
         }
         let host = config.url.host ?? "proxy"
-        return try makeSnapshot(
+        var snapshot = try makeSnapshot(
             usage: usage,
             planName: await CredentialStore.claudePlanNameAsync(),
             cliSource: "CLI Proxy (\(host))",
             now: now
         )
+        if !includeGrants, let reading = await grantSchedule.cachedReading(key: grantsKey) {
+            snapshot = Self.applying(reading, to: snapshot)
+        }
+        return snapshot
     }
 
     private func fetchSnapshotDirect(token: String, now: Date) async throws -> QuotaSnapshot {
@@ -233,16 +239,24 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             NSLog("frugalbar: Claude OAuth usage body failed to decode (%ld bytes)", data.count)
             return unavailable(.badResponse)
         }
+        if includeGrants {
+            await grantSchedule.recordReading(
+                key: grantsKey, reading: Self.grantReading(from: usage))
+        }
         await proxyBackoff.recordDirect(nil, token: token)
         // The plan is published in the credential blob, not in this payload.
         // Absent, the row shows no subtitle at all — "Claude" under "Claude"
         // was a placeholder that said nothing.
-        return try makeSnapshot(
+        var snapshot = try makeSnapshot(
             usage: usage,
             planName: await CredentialStore.claudePlanNameAsync(),
             cliSource: "Claude OAuth usage endpoint",
             now: now
         )
+        if !includeGrants, let reading = await grantSchedule.cachedReading(key: grantsKey) {
+            snapshot = Self.applying(reading, to: snapshot)
+        }
+        return snapshot
     }
 
     func makeSnapshot(
@@ -376,6 +390,28 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
+    /// The grant figure this response published, in the form the hourly cache
+    /// carries between plain reads.
+    static func grantReading(from usage: ClaudeOAuthUsageResponse) -> ClaudeGrantReading {
+        ClaudeGrantReading(
+            available: usage.resetGrants?.resetsAvailable,
+            applicable: usage.resetGrants?.resetsUsableNow,
+            expiries: usage.resetGrants.map { resetCreditExpiries(from: $0.grants) } ?? [])
+    }
+
+    /// Re-applies the last published grant figure to a plain read, which
+    /// carries every quota window but no `cedar_ember` block. It only changes
+    /// the reset-credit fields; no quota figure is touched.
+    static func applying(_ reading: ClaudeGrantReading, to snapshot: QuotaSnapshot) -> QuotaSnapshot {
+        var updated = snapshot
+        updated.resetCreditsAvailable = reading.available
+        updated.resetCreditsApplicable = reading.applicable
+        updated.resetCreditExpiries = reading.expiries
+        updated.auxiliaryInfo = auxiliaryInfo(
+            banked: reading.available, applicable: reading.applicable)
+        return updated
+    }
+
     /// Selects up to the display cap, with earliest expiry first and vendor
     /// order preserved for grants with the same expiry. Missing dates sort last.
     private static func resetCreditExpiries(from grants: [ClaudeOAuthUsageResponse.ResetGrant]) -> [Date?] {
@@ -497,10 +533,14 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     /// The row caption, with the banked-reset count appended when Anthropic
     /// published one. Mirrors the OpenAI row so the two read the same way.
     static func auxiliaryInfo(grants: ClaudeOAuthUsageResponse.ResetGrants?) -> String {
+        auxiliaryInfo(banked: grants?.resetsAvailable, applicable: grants?.resetsUsableNow)
+    }
+
+    static func auxiliaryInfo(banked: Int?, applicable: Int?) -> String {
         var info = "Live Claude subscription quota"
-        guard let banked = grants?.resetsAvailable, banked > 0 else { return info }
+        guard let banked, banked > 0 else { return info }
         info += " · \(banked) reset credit\(banked == 1 ? "" : "s") banked"
-        if let usable = grants?.resetsUsableNow, usable > 0 {
+        if let usable = applicable, usable > 0 {
             info += " · \(usable) redeemable now"
         }
         return info
@@ -560,6 +600,7 @@ public actor ClaudeGrantSchedule {
     static let interval: TimeInterval = 3600
     private var lastRequested: [String: Date] = [:]
     private var retryNotBefore: [String: Date] = [:]
+    private var readings: [String: ClaudeGrantReading] = [:]
 
     public init() {}
 
@@ -572,6 +613,32 @@ public actor ClaudeGrantSchedule {
     func record(key: String, now: Date, served: Bool) {
         lastRequested[key] = now
         retryNotBefore[key] = served ? nil : now.addingTimeInterval(Self.interval)
+    }
+
+    /// The figure the last successful grant read published, if any. Plain
+    /// reads carry no `cedar_ember` block, so without this the tickets would
+    /// vanish on every poll between the hourly grant reads.
+    func cachedReading(key: String) -> ClaudeGrantReading? {
+        readings[key]
+    }
+
+    func recordReading(key: String, reading: ClaudeGrantReading) {
+        readings[key] = reading
+    }
+}
+
+/// One grant block as the vendor published it: the counts and the expiries
+/// aligned with them. Nil counts mean the response published no figure — never
+/// zero — and are carried as such.
+public struct ClaudeGrantReading: Sendable, Equatable {
+    public let available: Int?
+    public let applicable: Int?
+    public let expiries: [Date?]
+
+    public init(available: Int?, applicable: Int?, expiries: [Date?]) {
+        self.available = available
+        self.applicable = applicable
+        self.expiries = expiries
     }
 }
 
