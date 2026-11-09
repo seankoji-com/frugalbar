@@ -140,8 +140,9 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         let grantsKey = "proxy|\(config.url.absoluteString)"
         let includeGrants = await grantSchedule.shouldRequest(key: grantsKey, now: now)
         let usage: ClaudeOAuthUsageResponse
+        let account: CLIProxyAuthFile
         do {
-            (usage, _) = try await CLIProxyClient.fetchClaudeUsage(
+            (usage, account) = try await CLIProxyClient.fetchClaudeUsage(
                 config: config, includeGrants: includeGrants, now: now)
         } catch let error as ProviderError {
             if includeGrants {
@@ -149,10 +150,14 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             }
             throw error
         }
+        // The hub can switch which Claude account it serves first. The cached
+        // ticket figure belongs to the account that published it, so the
+        // reading is keyed by that account, not just by the hub URL.
+        let readingKey = "\(grantsKey)|\(account.authIndex)"
         if includeGrants {
             await grantSchedule.record(key: grantsKey, now: now, served: true)
             await grantSchedule.recordReading(
-                key: grantsKey, reading: Self.grantReading(from: usage))
+                key: readingKey, reading: Self.grantReading(from: usage))
         }
         let host = config.url.host ?? "proxy"
         var snapshot = try makeSnapshot(
@@ -161,7 +166,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             cliSource: "CLI Proxy (\(host))",
             now: now
         )
-        if !includeGrants, let reading = await grantSchedule.cachedReading(key: grantsKey) {
+        if !includeGrants, let reading = await grantSchedule.cachedReading(key: readingKey) {
             snapshot = Self.applying(reading, to: snapshot)
         }
         return snapshot
@@ -405,10 +410,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     static func applying(_ reading: ClaudeGrantReading, to snapshot: QuotaSnapshot) -> QuotaSnapshot {
         var updated = snapshot
         updated.resetCreditsAvailable = reading.available
-        updated.resetCreditsApplicable = reading.applicable
+        // `usable_now` is the vendor's present-tense verdict, and this plain
+        // poll did not measure it. The banked count and the published expiries
+        // are facts from the last grant read; "redeemable now" is not.
+        updated.resetCreditsApplicable = nil
         updated.resetCreditExpiries = reading.expiries
-        updated.auxiliaryInfo = auxiliaryInfo(
-            banked: reading.available, applicable: reading.applicable)
+        updated.auxiliaryInfo = auxiliaryInfo(banked: reading.available, applicable: nil)
         return updated
     }
 

@@ -2068,10 +2068,74 @@ struct ProviderHTTPTests {
         #expect(snaps[0].resetCreditsAvailable == 1)
         // The plain poll keeps the last published figure.
         #expect(snaps[1].resetCreditsAvailable == 1)
-        #expect(snaps[1].resetCreditsApplicable == 1)
+        // "Redeemable now" is a present-tense vendor verdict the plain poll
+        // did not measure, so it is not carried; the count and expiry are.
+        #expect(snaps[1].resetCreditsApplicable == nil)
         #expect(snaps[1].resetCreditExpiries.count == 1)
         #expect(snaps[1].auxiliaryInfo?.contains("1 reset credit banked") == true)
+        #expect(snaps[1].auxiliaryInfo?.contains("redeemable now") != true)
         #expect(snaps[2].resetCreditsAvailable == 1)
+    }
+
+    /// A successful grant read that publishes no figure clears the carried
+    /// one. Without this an account that becomes ineligible would keep drawing
+    /// tickets from an earlier read forever — a synthesised figure.
+    @Test("a successful empty grant read clears the carried Claude figure")
+    func claudeEmptyGrantReadClearsCache() async throws {
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let key = ClaudeQuotaProvider.grantKey(for: "oauth-token")
+        await schedule.record(key: key, now: now, served: true)
+        await schedule.recordReading(key: key, reading: ClaudeGrantReading(
+            available: 1, applicable: 1, expiries: [now.addingTimeInterval(86_400)]))
+        let plain = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#
+        let empty = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[]}}"#
+
+        let snaps = try await withStubbedHTTP({ request in
+            request.url?.absoluteString.contains("cedar_ember=1") == true
+                ? canned(body: empty)
+                : canned(body: plain)
+        }) {
+            var results: [QuotaSnapshot] = []
+            for offset in [60.0, 3600.0, 3660.0] {
+                let provider = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+                results.append(try await provider.fetchSnapshot(now: now.addingTimeInterval(offset)))
+            }
+            return results
+        }
+        #expect(snaps[0].resetCreditsAvailable == 1)
+        #expect(snaps[1].resetCreditsAvailable == nil)
+        #expect(snaps[2].resetCreditsAvailable == nil)
+        #expect(snaps[2].resetCreditExpiries.isEmpty)
+    }
+
+    /// A failed grant read is not a vendor saying "no grants": the last
+    /// published figure survives until a successful read replaces it.
+    @Test("a failed grant read keeps the carried Claude figure")
+    func claudeFailedGrantReadKeepsCache() async throws {
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let key = ClaudeQuotaProvider.grantKey(for: "oauth-token")
+        await schedule.record(key: key, now: now, served: true)
+        await schedule.recordReading(key: key, reading: ClaudeGrantReading(
+            available: 1, applicable: 1, expiries: [now.addingTimeInterval(86_400)]))
+        let plain = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20}}"#
+
+        let snaps = try await withStubbedHTTP({ request in
+            request.url?.absoluteString.contains("cedar_ember=1") == true
+                ? canned(status: 500, body: "{}")
+                : canned(body: plain)
+        }) {
+            var results: [QuotaSnapshot] = []
+            for offset in [3600.0, 3660.0] {
+                let provider = ClaudeQuotaProvider(apiKey: "oauth-token", grantSchedule: schedule)
+                results.append(try await provider.fetchSnapshot(now: now.addingTimeInterval(offset)))
+            }
+            return results
+        }
+        #expect(snaps[0].status == .unavailable(.badResponse))
+        #expect(snaps[1].status.confidence == .measured)
+        #expect(snaps[1].resetCreditsAvailable == 1)
     }
 
     /// A throttle on the grant variant is not a throttle on the quota windows.
@@ -2210,6 +2274,41 @@ struct ProviderHTTPTests {
         #expect(snaps[0].resetCreditsAvailable == 1)
         #expect(snaps[1].resetCreditsAvailable == 1)
         #expect(snaps[1].resetCreditExpiries.count == 1)
+    }
+
+    /// The hub can switch which Claude account it serves first. A ticket count
+    /// read from account A must not be drawn beside account B's windows.
+    @Test("a proxy account switch does not inherit the previous account's grants")
+    func claudeProxyAccountSwitchDoesNotInheritGrants() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")),
+            managementKey: "mgmt-key")
+        let schedule = ClaudeGrantSchedule()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let plainWrapper = #"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":10},\"seven_day\":{\"utilization\":20}}"}"#
+        let grantsWrapper = #"{"status_code":200,"body":"{\"five_hour\":{\"utilization\":10},\"seven_day\":{\"utilization\":20},\"cedar_ember\":{\"eligible\":true,\"grants\":[{\"resets_left\":1,\"usable_now\":true}]}}"}"#
+
+        let first = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"account-a"}]}"#)
+            }
+            return canned(body: grantsWrapper)
+        }) {
+            try await ClaudeQuotaProvider(cliProxyConfig: config, grantSchedule: schedule)
+                .fetchSnapshot(now: now)
+        }
+        #expect(first.resetCreditsAvailable == 1)
+
+        let second = try await withStubbedHTTP({ request in
+            if request.url?.path == "/v0/management/auth-files" {
+                return canned(body: #"{"files":[{"provider":"claude","auth_index":"account-b"}]}"#)
+            }
+            return canned(body: plainWrapper)
+        }) {
+            try await ClaudeQuotaProvider(cliProxyConfig: config, grantSchedule: schedule)
+                .fetchSnapshot(now: now.addingTimeInterval(60))
+        }
+        #expect(second.resetCreditsAvailable == nil)
     }
 
     @Test("Claude CLI Proxy maps 401 credential rejection")
