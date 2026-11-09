@@ -128,6 +128,13 @@ struct MetricRowView: View {
         let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
             row(grid, presentation: p)
+            // Model-scoped windows are drawn on their own line, with their
+            // own percentage and reset. They deliberately stay out of the
+            // window grid and out of the plan-wide bars (see
+            // `QuotaSnapshot.scopedBars`).
+            ForEach(Array(snapshot.scopedBars.enumerated()), id: \.offset) { _, bar in
+                scopedWindowRow(bar, now: grid.now)
+            }
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
             }
@@ -136,6 +143,21 @@ struct MetricRowView: View {
             }
             if (snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
                 SubscriptionCreditLineView(presentation: p, showsTickets: snapshot.vendorId != .openai)
+            }
+            // The linked Console entitlement is a different fact from the
+            // promo-credit row below (which reports usage of a different
+            // pool), so it keeps its own line rather than being folded into
+            // that row or dropped when no promo credit is published.
+            if let line = p.monthlyCreditLine {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(line, systemImage: "calendar")
+                    if let detail = p.monthlyCreditDetail { Text(detail) }
+                }
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                .accessibilityHidden(true)
             }
             if let credits = p.openAIUsageCredit {
                 OpenAIUsageCreditView(presentation: credits)
@@ -414,6 +436,59 @@ struct MetricRowView: View {
                 .foregroundStyle(Theme.outline.opacity(0.6))
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    /// A model-scoped weekly window — today Anthropic's Fable cap — on its own
+    /// line under the row. It keeps the name/reset/bar/percentage anatomy of a
+    /// window cell but is not a column: its label is the model, and a spent
+    /// scoped window says nothing about the rest of the plan.
+    private func scopedWindowRow(_ bar: DualBarMetrics, now: Date) -> some View {
+        HStack(alignment: .top, spacing: Theme.rowSpacing) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bar.label)
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                Text(bar.resetsAt.map {
+                    "Weekly · \(ResetCountdownBadge.description($0, now: now))"
+                } ?? "Weekly limit")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .truncationMode(.tail)
+            }
+            .frame(width: Theme.nameColumnWidth, alignment: .leading)
+
+            VStack(spacing: 4) {
+                DualBarProgressView(metrics: bar, showsLabel: false)
+                HStack(spacing: 2) {
+                    if WindowGridPresentation.showsBlockedGlyph(for: bar) {
+                        BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
+                    }
+                    Text(WindowGridPresentation.percentText(for: bar)
+                         ?? WindowGridPresentation.unmeasuredText(for: bar))
+                        .font(Theme.Typography.gridPercent)
+                        .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+                        .fixedSize()
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {
+                        Text(reset)
+                            .font(Theme.Typography.gridReset)
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                            .minimumScaleFactor(0.7)
+                    }
+                }
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        .padding(.top, 8)
+        // The enclosing row is one accessibility element and speaks these
+        // figures itself (`MetricRowPresentation.scopedSpeech`).
+        .accessibilityHidden(true)
     }
 
     /// A pool that is not a window — Kiro's bonus or overage credits, Grok's

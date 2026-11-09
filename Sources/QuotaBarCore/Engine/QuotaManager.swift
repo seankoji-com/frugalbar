@@ -704,6 +704,7 @@ public actor QuotaManager {
             // entries ride this snapshot, and losing them here would make
             // them flicker out whenever a hand-entered cycle row is attached.
             rebuilt.apiCredits = updated.apiCredits
+            rebuilt.scopedBars = updated.scopedBars
             rebuilt.monthlyAPICredit = updated.monthlyAPICredit
             rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
             rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
@@ -774,6 +775,7 @@ public actor QuotaManager {
             currencyBasis: updated.currencyBasis
         )
         rebuilt.apiCredits = updated.apiCredits
+        rebuilt.scopedBars = updated.scopedBars
         rebuilt.monthlyAPICredit = updated.monthlyAPICredit
         rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
         rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt

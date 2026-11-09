@@ -98,6 +98,19 @@ answer and is asked alone, so its failure stays this provider's answer.
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
 
+**A model-scoped window is drawn on its own line, never ranked as the plan.**
+Anthropic moved the per-model weekly caps out of `seven_day_opus` /
+`seven_day_sonnet` (both now `null`) and into the usage endpoint's `limits[]`
+array: `kind: "weekly_scoped"`, `percent` 0…100, `resets_at`, and the model's
+name in `scope.model.display_name` (currently "Fable"). `ClaudeQuotaProvider`
+puts those in `QuotaSnapshot.scopedBars`, which is deliberately outside `bars`:
+a scoped cap only blocks one model, while every `bars` consumer reads a window
+as plan-wide (exhaustion sorting, the advice engine's worst bar, the menu bar,
+the widget's average, `displayBars`' collapse). The popover draws them under the
+row with their own percentage and reset. `percent` is a percentage, so it is
+divided by 100 directly — running it through the flat windows'
+fraction-or-percentage heuristic would turn 1% into 100%.
+
 **Urgency and confidence are separate axes.** `Urgency` (quota pressure) drives
 the menu bar icon. `Confidence` (did we get a reading) is a decoration. An
 unreadable provider must never outrank a critical quota — that inversion made
@@ -121,8 +134,16 @@ a drop alone, or from a reading that was lost (`nil` is not 0, and treating it a
 `.measured`. Event ids are built from the facts (`AIEvent.makeID`), never a UUID
 or prose, because `recordEvents` dedups on the id and notifications fire only on
 what it reports as new. Anthropic reset grants are requested (`?cedar_ember=1`)
-but the OAuth surface answers `ineligible_reason: "surface"` with no grants;
-that decodes to `nil`, never 0, and guessing them would be a synthesised figure.
+and are served **only** when the request identifies as the Claude Code CLI
+(`CLIProxyClient.claudeCLIUserAgent`); without that user agent the same account
+answers `eligible: false, ineligible_reason: "surface"`, which decodes to `nil`,
+never 0. The grant variant is throttled when polled, so it is asked for at most
+hourly (`ClaudeGrantSchedule`) and the plain read in between still carries every
+quota window — but no `cedar_ember` block, so the last published grant figure is
+cached per credential and re-applied to those plain reads. Without that carry-
+forward the tickets (and the reset-credit detector's stable baseline) vanished
+for the fifty-eight minutes between grant reads. A malformed or absent grant
+block yields no figure; guessing one would be a synthesised number.
 
 **External event sources record the past, never the future.** Status pages,
 community reset trackers and account model lists are read for what already
@@ -406,6 +427,14 @@ countdown. It is still not quota: no snapshot fraction, urgency, sorting or
 advice reads it. Its reset text and countdown both come from the promo's own
 published period end (`monthlyPeriodEnd`); never substitute the subscription
 renewal or a hardcoded day count.
+
+**The linked Console organisation's monthly credit is its own line.** It is the
+`monthly_credit_usd` / `next_grant_at` entitlement read by the opt-in Claude
+billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
+above and not a balance or quota. It draws under the row as "Org monthly credit:
+$X per month" plus its next grant date. Do not drop it when no promo credit is
+published, and do not fold it into the promo row: they describe different
+pools.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure

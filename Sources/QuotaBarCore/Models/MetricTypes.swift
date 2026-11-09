@@ -513,7 +513,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public let status: ProviderStatus
     public let resetsAt: Date?
     public let lastUpdated: Date
-    public let auxiliaryInfo: String?
+    public var auxiliaryInfo: String?
 
     public var row1: DualBarMetrics?
     public var row2: DualBarMetrics?
@@ -539,6 +539,17 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// urgency bands, exhaustion sorting, the advice engine, the menu-bar icon
     /// or the history recorder — all of which read snapshots.
     public var apiCredits: [APICreditEntry] = []
+    /// Model-scoped windows the vendor published beside the plan-wide ones —
+    /// Anthropic's `limits[]` `weekly_scoped` rows, currently the Fable weekly
+    /// cap.
+    ///
+    /// Deliberately **not** part of `bars`. A scoped window caps one model, but
+    /// every consumer of `bars` reads a window as plan-wide: exhaustion sorting,
+    /// the advice engine's worst bar, the menu-bar icon, the widget's average
+    /// and `displayBars`' collapse would all report a spent Fable bucket as the
+    /// whole plan being spent. The popover draws these on their own line under
+    /// the row and they take no part in any of that maths.
+    public var scopedBars: [DualBarMetrics] = []
     /// Independently observed linked Console entitlement, with its own reading time.
     public var monthlyAPICredit: ClaudeMonthlyCredit? = nil
     /// Independently observed OpenAI API-organization monthly credit. Kept

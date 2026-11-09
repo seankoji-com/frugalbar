@@ -79,17 +79,21 @@ struct SubscriptionCreditPlacementTests {
         #expect(stale.staleNote != nil)
     }
 
-    @Test("the monthly entitlement draws no row of its own and stays out of quota")
+    @Test("the org monthly entitlement draws its own line and stays out of quota")
     func monthlyEntitlementPlacement() throws {
         let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
         var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
             status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now).monthlyCreditLine == nil)
         snapshot.monthlyAPICredit = grant
         let p = MetricRowPresentation(snapshot: snapshot, now: now)
-        // The promo row's own "Usage credits" line already carries the
-        // period, so the entitlement is not repeated above it.
+        // The entitlement belongs to the linked Console organisation and is
+        // not the promo-credit pool, so it keeps its own line even when no
+        // promo credit is published.
+        #expect(p.monthlyCreditLine == "Org monthly credit: $123.45 per month")
+        #expect(p.monthlyCreditDetail?.contains("Next credit") == true)
         #expect(p.monthlyPromo == nil)
         #expect(p.subscriptionCredits.isEmpty)
         #expect(snapshot.apiCredits.isEmpty)
@@ -98,7 +102,7 @@ struct SubscriptionCreditPlacementTests {
         #expect(snapshot.monthlyAPICredit == grant)
     }
 
-    @Test("the row does not repeat the monthly entitlement in its spoken label")
+    @Test("the org monthly entitlement is spoken with its next credit date")
     func monthlyCreditSpokenLabel() throws {
         let grant = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: now))
@@ -109,13 +113,54 @@ struct SubscriptionCreditPlacementTests {
             MetricRowPresentation(snapshot: snapshot, now: now).combinedAccessibilityLabel(
                 windows: nil, forecast: nil, creditsStale: false)
         }
-        #expect(!spoken(snapshot).contains("Monthly API credit"))
+        #expect(!spoken(snapshot).contains("Org monthly credit"))
         snapshot.monthlyAPICredit = grant
         let current = spoken(snapshot)
-        #expect(!current.contains("Monthly API credit"))
-        #expect(!current.contains("Next credit"))
+        #expect(current.contains("Org monthly credit"))
+        #expect(current.contains("$123.45"))
+        #expect(current.contains("Next credit"))
         snapshot.monthlyAPICredit?.refreshFailed = true
-        #expect(!spoken(snapshot).contains("Monthly API credit"))
+        #expect(spoken(snapshot).contains("Stale monthly credit reading"))
+    }
+
+    @Test("a model-scoped window is spoken on its own line and stays out of plan-wide figures")
+    func scopedWindowSpeech() {
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.warning), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row2: DualBarMetrics(primaryFraction: 0.57, label: "WK", windowLength: QuotaWindow.week))
+        snapshot.scopedBars = [DualBarMetrics(
+            primaryFraction: 0.75,
+            expectedPaceFraction: 0.5,
+            label: "Fable",
+            resetsAt: now.addingTimeInterval(5 * 86_400),
+            windowLength: QuotaWindow.week)]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.scopedSpeech?.contains("Fable weekly 75% used") == true)
+        #expect(p.scopedSpeech?.contains("resets in 5 days") == true)
+        // The scoped cap is not a plan-wide bar: it cannot drive exhaustion,
+        // the menu-bar urgency or the advice engine's worst window.
+        #expect(snapshot.quotaBars.map(\.label) == ["WK"])
+        #expect(snapshot.status == .measured(.warning))
+        #expect(p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+            .contains("Fable weekly 75% used"))
+    }
+
+    @Test("a blocked scoped window speaks the blocked state beside its percentage")
+    func blockedScopedWindowSpeech() {
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row2: DualBarMetrics(primaryFraction: 0.2, label: "WK", windowLength: QuotaWindow.week))
+        snapshot.scopedBars = [DualBarMetrics(
+            primaryFraction: 1,
+            label: "Fable",
+            isBlocked: true,
+            resetsAt: now.addingTimeInterval(5 * 86_400),
+            windowLength: QuotaWindow.week)]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.scopedSpeech?.contains("100% used") == true)
+        #expect(p.scopedSpeech?.contains("blocked") == true)
     }
 
     @Test("other credit pools remain separate and missing credits draw nothing")

@@ -586,6 +586,20 @@ extension KeyedDecodingContainer where Key == LenientKey {
         return nil
     }
 
+    /// A finite number from a JSON number or a numeric string. Never a default:
+    /// a value of an unrecognised type is "not reported", not 0.
+    func lenientDouble(_ name: String) -> Double? {
+        let key = LenientKey(stringValue: name)
+        if let value = try? decodeIfPresent(Double.self, forKey: key), value.isFinite {
+            return value
+        }
+        if let text = try? decodeIfPresent(String.self, forKey: key),
+           let value = Double(text.trimmingCharacters(in: .whitespaces)), value.isFinite {
+            return value
+        }
+        return nil
+    }
+
     func lenientBool(_ name: String) -> Bool? {
         let key = LenientKey(stringValue: name)
         if let value = try? decodeIfPresent(Bool.self, forKey: key) { return value }
