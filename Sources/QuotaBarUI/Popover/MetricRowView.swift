@@ -444,21 +444,13 @@ struct MetricRowView: View {
     /// scoped window says nothing about the rest of the plan.
     private func scopedWindowRow(_ bar: DualBarMetrics, now: Date) -> some View {
         HStack(alignment: .top, spacing: Theme.rowSpacing) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(bar.label)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-                    .lineLimit(1)
-                Text(bar.resetsAt.map {
-                    "Weekly · \(ResetCountdownBadge.description($0, now: now))"
-                } ?? "Weekly limit")
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .truncationMode(.tail)
-            }
-            .frame(width: Theme.nameColumnWidth, alignment: .leading)
+            // One line, like the plan-wide row: the compact reset sits on the
+            // right and the spoken label carries "weekly" and the countdown.
+            Text(bar.label)
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .lineLimit(1)
+                .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
             VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
