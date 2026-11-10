@@ -67,6 +67,8 @@ struct ClaudeMonthlyCreditTests {
             #"{"status":"linked","monthly_credit_usd":true}"#,
             #"{"status":"linked","monthly_credit_usd":{}}"#,
             #"{"status":"linked","grants_held_reason":{}}"#,
+            #"{"status":"linked","monthly_credit_usd":200,"next_grant_at":123}"#,
+            #"{"status":"linked","monthly_credit_usd":200,"grant_due":"yes"}"#,
         ] {
             #expect(throws: DecodingError.self) {
                 _ = try ClaudeMonthlyCredit.decode(Data(body.utf8), now: now)
