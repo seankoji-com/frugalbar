@@ -455,6 +455,15 @@ struct MetricRowView: View {
             VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
                 HStack(spacing: 2) {
+                    // A scoped bar spans the grid like the plan row's sole
+                    // meter, so it names its window the same way. Without this
+                    // the 5% sat under all three headings with no period.
+                    Text(WindowColumn.weekly.label)
+                        .font(Theme.Typography.token)
+                        .tracking(Theme.Tracking.token)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .padding(.trailing, 4)
+                        .accessibilityHidden(true)
                     if WindowGridPresentation.showsBlockedGlyph(for: bar) {
                         BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                     }
