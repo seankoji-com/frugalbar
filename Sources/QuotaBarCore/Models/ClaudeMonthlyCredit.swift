@@ -44,29 +44,37 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            status = try? c.decodeIfPresent(String.self, forKey: .status)
-            nextGrantAt = try? c.decodeIfPresent(String.self, forKey: .nextGrantAt)
-            grantDue = try? c.decodeIfPresent(Bool.self, forKey: .grantDue)
-            grantsHeldReason = try? c.decodeIfPresent(String.self, forKey: .grantsHeldReason)
-            monthlyCreditUSD = Self.amount(c, .monthlyCreditUSD)
+            // Sibling fields keep the plain decoder's behaviour: a wrong type
+            // is a failed read, which the session reports as stale, not the
+            // vendor saying "no entitlement".
+            status = try c.decodeIfPresent(String.self, forKey: .status)
+            nextGrantAt = try c.decodeIfPresent(String.self, forKey: .nextGrantAt)
+            grantDue = try c.decodeIfPresent(Bool.self, forKey: .grantDue)
+            grantsHeldReason = try c.decodeIfPresent(String.self, forKey: .grantsHeldReason)
+            monthlyCreditUSD = try Self.amount(c, .monthlyCreditUSD)
         }
 
         /// An exact non-negative dollar figure from a numeric string or a JSON
-        /// number. Anything else — a boolean, a negative, an exponent form, a
-        /// non-finite value — is "not published", never 0.
+        /// number. A string that is not a plain decimal (an empty string, an
+        /// exponent form, `NaN`, a negative) yields no entitlement, matching
+        /// the earlier decoder. A value of any other type is a decode failure,
+        /// not an entitlement the vendor withheld.
         private static func amount(
             _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys
-        ) -> Decimal? {
+        ) throws -> Decimal? {
+            guard c.contains(key), try !c.decodeNil(forKey: key) else { return nil }
             if let text = try? c.decodeIfPresent(String.self, forKey: key) {
                 return decimal(from: text)
             }
-            // A JSON number. A boolean does not decode as `Decimal`, so the
-            // wrong type stays "not published" rather than becoming 1.
             if let amount = try? c.decodeIfPresent(Decimal.self, forKey: key) {
                 guard !amount.isNaN, amount >= 0 else { return nil }
                 return amount
             }
-            return nil
+            throw DecodingError.typeMismatch(
+                Decimal.self,
+                DecodingError.Context(
+                    codingPath: c.codingPath + [key],
+                    debugDescription: "monthly_credit_usd is neither a number nor a numeric string"))
         }
 
         private static func decimal(from text: String) -> Decimal? {

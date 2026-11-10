@@ -43,12 +43,34 @@ struct ClaudeMonthlyCreditTests {
         #expect(fractional.amountUSD == Decimal(string: "123.45"))
 
         for body in [
-            #"{"status":"linked","monthly_credit_usd":true}"#,
             #"{"status":"linked","monthly_credit_usd":-1}"#,
             #"{"status":"linked","monthly_credit_usd":"1e3"}"#,
             #"{"status":"linked","monthly_credit_usd":"200.00.0"}"#,
         ] {
             #expect(try ClaudeMonthlyCredit.decode(Data(body.utf8), now: now) == nil)
+        }
+        let spaced = try #require(try ClaudeMonthlyCredit.decode(
+            Data(#"{"status":"linked","monthly_credit_usd":" 200 "}"#.utf8), now: now))
+        #expect(spaced.amountUSD == 200)
+        let negativeZero = try #require(try ClaudeMonthlyCredit.decode(
+            Data(#"{"status":"linked","monthly_credit_usd":-0.0}"#.utf8), now: now))
+        #expect(negativeZero.amountUSD == 0)
+    }
+
+    /// A present field of the wrong type is a failed read, not the vendor
+    /// saying the entitlement is absent. The session keeps the last reading and
+    /// marks it stale for a failure, but clears the line for nil.
+    @Test("a wrong-typed monthly credit field fails to decode")
+    func malformedTypeFails() {
+        for body in [
+            #"{"status":1,"monthly_credit_usd":200}"#,
+            #"{"status":"linked","monthly_credit_usd":true}"#,
+            #"{"status":"linked","monthly_credit_usd":{}}"#,
+            #"{"status":"linked","grants_held_reason":{}}"#,
+        ] {
+            #expect(throws: DecodingError.self) {
+                _ = try ClaudeMonthlyCredit.decode(Data(body.utf8), now: now)
+            }
         }
     }
 
