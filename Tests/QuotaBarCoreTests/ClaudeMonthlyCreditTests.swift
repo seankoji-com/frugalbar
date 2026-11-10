@@ -26,6 +26,32 @@ struct ClaudeMonthlyCreditTests {
         #expect(BalanceSeries.of(snapshot) == nil)
     }
 
+    /// The billing page's own client reads `monthly_credit_usd` with
+    /// `Number(value)`, so the live payload can carry it as a JSON number.
+    /// Decoding only `String?` silently produced no entitlement and the user
+    /// saw a $200 monthly credit in Claude but no line in FrugalBar.
+    @Test("monthly credit accepts a numeric amount as well as a numeric string")
+    func numericGrant() throws {
+        let data = Data(#"{"status":"linked","monthly_credit_usd":200,"next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8)
+        let credit = try #require(try ClaudeMonthlyCredit.decode(data, now: now))
+        #expect(credit.amountUSD == 200)
+        #expect(credit.line == "Org monthly credit: $200.00 per month")
+        #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2026-11-15T00:00:00Z"))
+
+        let fractional = try #require(try ClaudeMonthlyCredit.decode(
+            Data(#"{"status":"linked","monthly_credit_usd":123.45}"#.utf8), now: now))
+        #expect(fractional.amountUSD == Decimal(string: "123.45"))
+
+        for body in [
+            #"{"status":"linked","monthly_credit_usd":true}"#,
+            #"{"status":"linked","monthly_credit_usd":-1}"#,
+            #"{"status":"linked","monthly_credit_usd":"1e3"}"#,
+            #"{"status":"linked","monthly_credit_usd":"200.00.0"}"#,
+        ] {
+            #expect(try ClaudeMonthlyCredit.decode(Data(body.utf8), now: now) == nil)
+        }
+    }
+
     @Test("absent, unlinked, ended or invalid monthly grants yield no entitlement")
     func absentGrant() throws {
         for body in ["{}", #"{"status":"linked"}"#,

@@ -431,10 +431,12 @@ renewal or a hardcoded day count.
 **The linked Console organisation's monthly credit is its own line.** It is the
 `monthly_credit_usd` / `next_grant_at` entitlement read by the opt-in Claude
 billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
-above and not a balance or quota. It draws under the row as "Org monthly credit:
-$X per month" plus its next grant date. Do not drop it when no promo credit is
-published, and do not fold it into the promo row: they describe different
-pools.
+above and not a balance or quota. The billing client reads that amount with
+`Number(value)`, so the decoder accepts both a JSON number and a numeric string;
+accepting only `String?` silently dropped a live entitlement. It draws under the
+row as "Org monthly credit: $X per month" plus its next grant date. Do not drop
+it when no promo credit is published, and do not fold it into the promo row:
+they describe different pools.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure
