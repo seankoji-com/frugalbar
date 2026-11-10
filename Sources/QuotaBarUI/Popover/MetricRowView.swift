@@ -444,25 +444,26 @@ struct MetricRowView: View {
     /// scoped window says nothing about the rest of the plan.
     private func scopedWindowRow(_ bar: DualBarMetrics, now: Date) -> some View {
         HStack(alignment: .top, spacing: Theme.rowSpacing) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(bar.label)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-                    .lineLimit(1)
-                Text(bar.resetsAt.map {
-                    "Weekly · \(ResetCountdownBadge.description($0, now: now))"
-                } ?? "Weekly limit")
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .truncationMode(.tail)
-            }
-            .frame(width: Theme.nameColumnWidth, alignment: .leading)
+            // One line, like the plan-wide row: the compact reset sits on the
+            // right and the spoken label carries "weekly" and the countdown.
+            Text(bar.label)
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .lineLimit(1)
+                .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
             VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
                 HStack(spacing: 2) {
+                    // A scoped bar spans the grid like the plan row's sole
+                    // meter, so it names its window the same way. Without this
+                    // the 5% sat under all three headings with no period.
+                    Text(WindowColumn.weekly.label)
+                        .font(Theme.Typography.token)
+                        .tracking(Theme.Tracking.token)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .padding(.trailing, 4)
+                        .accessibilityHidden(true)
                     if WindowGridPresentation.showsBlockedGlyph(for: bar) {
                         BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                     }
