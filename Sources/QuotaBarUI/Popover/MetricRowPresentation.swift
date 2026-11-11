@@ -93,11 +93,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
         }
 
         public func expiryCountdown(at index: Int) -> String {
-            CreditExpiryText.countdown(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
+            CreditExpiryText.remaining(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
         }
 
         /// The visible phrase beside a ticket, in the same form the OpenAI row
-        /// uses: "Expires in 20 days". An expired credit keeps its absolute date
+        /// uses: "20d remaining". An expired credit keeps its absolute date
         /// ("Expired 17 Jul 2026"), and a missing expiry is said plainly rather
         /// than borrowed from the reset window.
         public func expiryPhrase(at index: Int, now: Date = Date()) -> String {
@@ -105,10 +105,20 @@ public struct MetricRowPresentation: Equatable, Sendable {
                 return "Expiry not published"
             }
             guard expiry > now else { return expiryText(at: index, now: now) }
-            // The same wording the OpenAI usage-credit row uses, so a ticket
-            // and a credit grant never describe the same kind of expiry in two
-            // different ways.
-            return CreditExpiryText.countdown(expiry, now: now)
+            // Ticket lines use the remaining form on both Claude and OpenAI;
+            // the Usage-credits row keeps "Expires in …".
+            return CreditExpiryText.remaining(expiry, now: now)
+        }
+
+        /// The same expiry for VoiceOver, where the compact "20d" would be
+        /// read as a letter. The visible line stays compact; the spoken form
+        /// keeps the full word.
+        public func expirySpoken(at index: Int) -> String {
+            guard index >= 0, index < expiries.count, let expiry = expiries[index] else {
+                return "Expiry not published"
+            }
+            guard expiry > now else { return expiryText(at: index, now: now) }
+            return CreditExpiryText.remainingSpoken(expiry, now: now)
         }
 
         /// The strip in words, for a screen reader. The glyph run is a shape
@@ -117,7 +127,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
             let name = scope.map { "\($0.displayName) " } ?? ""
             let count = "\(name)\(total) banked reset credit\(total == 1 ? "" : "s")"
             guard expiries.contains(where: { $0 != nil }) else { return count }
-            return ([count] + (0..<tickets).map { "Ticket \($0 + 1): \(expiryCountdown(at: $0))" })
+            return ([count] + (0..<tickets).map { "Ticket \($0 + 1): \(expirySpoken(at: $0))" })
                 .joined(separator: ", ")
         }
     }

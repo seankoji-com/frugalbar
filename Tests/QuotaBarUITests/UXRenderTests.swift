@@ -19,8 +19,9 @@ struct UXRenderTests {
             lastUpdated: now, auxiliaryInfo: nil,
             row1: DualBarMetrics(primaryFraction: 0.24, label: "WK", resetsAt: now.addingTimeInterval(7 * 86_400)),
             planName: "Pro 200")
-        snapshot.resetCreditsAvailable = 1
-        snapshot.resetCreditExpiries = [now.addingTimeInterval(12 * 86_400)]
+        snapshot.resetCreditsAvailable = 2
+        snapshot.resetCreditExpiries = [now.addingTimeInterval(20 * 86_400),
+                                        now.addingTimeInterval(21 * 86_400)]
         snapshot.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
             label: "Usage credits", metric: .credits(remaining: 59_641, unitName: "credits"),
             creditGrant: OpenAICreditGrant(total: 75_000, expiresAt: now.addingTimeInterval(68 * 86_400)))]
@@ -57,11 +58,11 @@ struct UXRenderTests {
         snapshot.resetCreditsAvailable = 4
         snapshot.resetCreditGroups = [
             ResetCreditGroup(scope: .plan, count: 1,
-                             expiries: [now.addingTimeInterval(12 * 86_400)]),
+                             expiries: [now.addingTimeInterval(30 * 86_400)]),
             ResetCreditGroup(scope: .model("Fable"), count: 3,
-                             expiries: [now.addingTimeInterval(20 * 86_400),
-                                        now.addingTimeInterval(21 * 86_400),
-                                        now.addingTimeInterval(27 * 86_400)]),
+                             expiries: [now.addingTimeInterval(119 * 86_400),
+                                        now.addingTimeInterval(119 * 86_400),
+                                        now.addingTimeInterval(119 * 86_400)]),
         ]
         snapshot.monthlyAPICredit = credit
         try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
