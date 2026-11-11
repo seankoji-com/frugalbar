@@ -232,7 +232,7 @@ struct SubscriptionCreditPlacementTests {
         let expiry = try #require(ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z"))
         let credits = try #require(MetricRowPresentation.ResetCredits(total: 2, expiries: [expiry, nil]))
         let before = expiry.addingTimeInterval(-20 * 86_400)
-        #expect(credits.expiryPhrase(at: 0, now: before) == "20 days remaining")
+        #expect(credits.expiryPhrase(at: 0, now: before) == "20d remaining")
         #expect(credits.expiryPhrase(at: 1, now: before) == "Expiry not published")
         #expect(credits.expiryPhrase(at: 0, now: expiry.addingTimeInterval(86_400))
             == "Expired 17 Jul 2026")
