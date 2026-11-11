@@ -405,7 +405,7 @@ A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
 (`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
 `ResetCreditTicketLimit.maxCount` per scope group, with an exact `+n` for the
 remainder. Each ticket is its own line, with the credit's visible expiry to the
-right ("Expires in 20 days"), matching the OpenAI Codex rows; an expiry the
+right ("20 days remaining"), matching the OpenAI Codex rows; an expiry the
 vendor did not publish says "Expiry not published" rather than borrowing the
 reset window's date. Claude splits the grant set by the allowance it resets: the
 plan-wide ticket sits under `Claude Code`, and a model's tickets sit under that
