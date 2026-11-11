@@ -710,6 +710,7 @@ public actor QuotaManager {
             rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
             rebuilt.openAIAccountKey = updated.openAIAccountKey
             rebuilt.resetCreditExpiries = updated.resetCreditExpiries
+            rebuilt.resetCreditGroups = updated.resetCreditGroups
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
             rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
             // A fact about the poll, not a figure that was re-fetched: the
@@ -781,6 +782,7 @@ public actor QuotaManager {
         rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
         rebuilt.openAIAccountKey = updated.openAIAccountKey
         rebuilt.resetCreditExpiries = updated.resetCreditExpiries
+        rebuilt.resetCreditGroups = updated.resetCreditGroups
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
         rebuilt.resetCreditsApplicable = updated.resetCreditsApplicable
         // Same rule as the catalog failure above: this snapshot's figures are

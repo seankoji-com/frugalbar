@@ -574,6 +574,12 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// the list itself being empty means none was published at all. Never
     /// inferred from the reset window or another credit.
     public var resetCreditExpiries: [Date?] = []
+    /// The same banked credits split by the allowance they reset — a plan-wide
+    /// reset or a model's scoped window (currently Fable). Empty when the
+    /// vendor published no per-grant scope, in which case the row keeps the
+    /// single flat strip. The counts sum to `resetCreditsAvailable`; this is a
+    /// display grouping, never a second quota figure.
+    public var resetCreditGroups: [ResetCreditGroup] = []
     /// How many of those banked credits the vendor says can be redeemed
     /// against the current window state (OpenAI's
     /// `rate_limit_reset_credits.applicable_available_count`). It flips with

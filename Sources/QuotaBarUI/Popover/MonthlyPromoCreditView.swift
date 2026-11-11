@@ -108,14 +108,7 @@ struct MonthlyPromoCreditView: View {
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .lineLimit(1)
-                if let resetText = presentation.resetText {
-                    Text(resetText)
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .truncationMode(.tail)
-                }
+                // Title only; the reset countdown lives on the right.
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 

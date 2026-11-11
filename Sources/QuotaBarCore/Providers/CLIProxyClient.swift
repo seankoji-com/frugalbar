@@ -429,6 +429,38 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
             self.endsAt = endsAt
         }
 
+        /// The allowance this grant resets. A grant the vendor names "Fable"
+        /// is scoped to that model's weekly cap; every other grant clears the
+        /// plan-wide windows and is drawn as the general Claude ticket.
+        ///
+        /// Read from the grant's own id/label/clears, never from its position
+        /// in the array: reordering the grants must not move a ticket between
+        /// Claude and Fable.
+        public var creditScope: ResetCreditScope {
+            // What a grant clears decides first. A launch grant can carry a
+            // model's name ("launch-2610-fable") while still clearing the
+            // plan-wide five-hour and weekly windows; filing it under Fable
+            // would put a general ticket under a model-only row. Only a grant
+            // that clears a Fable window is model-scoped.
+            if let clears, !clears.isEmpty {
+                let planWindows = ["five_hour", "seven_day", "seven_day_overage_included"]
+                if clears.contains(where: { planWindows.contains($0) }) {
+                    return .plan
+                }
+                if clears.contains(where: { $0.range(of: "fable", options: .caseInsensitive) != nil }) {
+                    return .model("Fable")
+                }
+                return .plan
+            }
+            // Older grants do not publish `clears`; their own id/label is the
+            // only scope signal they carry.
+            let tokens = [id, label].compactMap { $0 }
+            if tokens.contains(where: { $0.range(of: "fable", options: .caseInsensitive) != nil }) {
+                return .model("Fable")
+            }
+            return .plan
+        }
+
         enum CodingKeys: String, CodingKey {
             case id, label, clears
             case resetsLeft = "resets_left"

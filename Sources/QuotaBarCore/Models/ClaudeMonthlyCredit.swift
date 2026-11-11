@@ -89,10 +89,11 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
         }
     }
 
-    /// The Console organisation's monthly API-credit entitlement. Named "Org"
-    /// because it belongs to the linked organisation, not to the subscription's
-    /// promo/usage-credit pool drawn beside it.
-    public var line: String { "Org monthly credit: \(MoneyText.format(amountUSD, code: "USD")) per month" }
+    /// The Console organisation's monthly API-credit entitlement, in the
+    /// amount-first form the row uses: "$200.00 monthly credit". It belongs to
+    /// the linked organisation, not to the subscription's promo/usage-credit
+    /// pool drawn beside it.
+    public var line: String { "\(MoneyText.format(amountUSD, code: "USD")) monthly credit" }
     public func detail() -> String? {
         var parts: [String] = []
         if let nextGrantAt {

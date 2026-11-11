@@ -193,7 +193,9 @@ struct MonthlyPromoCreditTests {
         let without = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
         snapshot.apiCredits = [entry(end: end)]
         let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
-        #expect(withPromo - without > 30)
+        // The promo row no longer spends a second line on "Resets in …"; the
+        // title and bar still add a visible block beneath the provider row.
+        #expect(withPromo - without > 20)
     }
 
     /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo.

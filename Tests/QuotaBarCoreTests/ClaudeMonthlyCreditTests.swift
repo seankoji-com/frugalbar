@@ -13,7 +13,7 @@ struct ClaudeMonthlyCreditTests {
         #expect(credit.amountUSD == Decimal(string: "123.45"))
         #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2027-02-15T14:49:22Z"))
         #expect(credit.measuredAt == now)
-        #expect(credit.line == "Org monthly credit: $123.45 per month")
+        #expect(credit.line == "$123.45 monthly credit")
         #expect(credit.detail()?.contains("Next credit") == true)
         #expect(credit.detail()?.contains("Stale") != true)
         let provider = ClaudeQuotaProvider(apiKey: "", monthlyCredit: { _ in credit })
@@ -35,7 +35,7 @@ struct ClaudeMonthlyCreditTests {
         let data = Data(#"{"status":"linked","monthly_credit_usd":200,"next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8)
         let credit = try #require(try ClaudeMonthlyCredit.decode(data, now: now))
         #expect(credit.amountUSD == 200)
-        #expect(credit.line == "Org monthly credit: $200.00 per month")
+        #expect(credit.line == "$200.00 monthly credit")
         #expect(credit.nextGrantAt == ISO8601DateFormatter().date(from: "2026-11-15T00:00:00Z"))
 
         let fractional = try #require(try ClaudeMonthlyCredit.decode(

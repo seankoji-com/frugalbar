@@ -35,6 +35,40 @@ struct UXRenderTests {
             .formStyle(.grouped).frame(width: 500, height: 360), name: "chatgpt-account-settings", directory: directory)
     }
 
+    @Test func renderClaudeMonthlyCreditAndSplitTickets() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let nextGrant = now.addingTimeInterval(4 * 86_400)
+        let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
+            now: now))
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Max (20x)", renewalDate: nil),
+            status: .measured(.none), resetsAt: nextGrant, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.85, expectedPaceFraction: 0.43,
+                                 label: "WK", resetsAt: nextGrant,
+                                 windowLength: QuotaWindow.week),
+            planName: "Max (20x)")
+        snapshot.scopedBars = [DualBarMetrics(
+            primaryFraction: 0.42, expectedPaceFraction: 0.47, label: "Fable",
+            resetsAt: nextGrant, windowLength: QuotaWindow.week)]
+        snapshot.resetCreditsAvailable = 4
+        snapshot.resetCreditGroups = [
+            ResetCreditGroup(scope: .plan, count: 1,
+                             expiries: [now.addingTimeInterval(12 * 86_400)]),
+            ResetCreditGroup(scope: .model("Fable"), count: 3,
+                             expiries: [now.addingTimeInterval(20 * 86_400),
+                                        now.addingTimeInterval(21 * 86_400),
+                                        now.addingTimeInterval(27 * 86_400)]),
+        ]
+        snapshot.monthlyAPICredit = credit
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "claude-monthly-credit-split-tickets", directory: directory)
+    }
+
     @Test func renderOpenCodeGoPlus() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         let now = Date()
