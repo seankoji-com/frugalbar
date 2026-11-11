@@ -403,16 +403,20 @@ entire product.
 
 A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
 (`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
-`maxTickets` with an exact `+n` for the remainder. Each ticket is its own line,
-with the credit's visible expiry to the right ("Expires in 20 days"), matching
-the OpenAI Codex rows; an expiry the vendor did not publish says "Expiry not
-published" rather than borrowing the reset window's date. Claude splits the
-grant set by the allowance it resets: the plan-wide ticket sits under
-`Claude Code`, and a model's tickets sit under that model's scoped row (Fable).
-The split comes from the grant's own `id`/`label`/`clears` (`creditScope`) and
-is never inferred from ticket order or a "one general, three Fable" count; a
-grant missing `resets_left` yields no split. A payload with no per-grant scope
-(OpenAI, or an older Claude read) keeps the flat strip.
+`ResetCreditTicketLimit.maxCount` per scope group, with an exact `+n` for the
+remainder. Each ticket is its own line, with the credit's visible expiry to the
+right ("Expires in 20 days"), matching the OpenAI Codex rows; an expiry the
+vendor did not publish says "Expiry not published" rather than borrowing the
+reset window's date. Claude splits the grant set by the allowance it resets: the
+plan-wide ticket sits under `Claude Code`, and a model's tickets sit under that
+model's scoped row (Fable).
+
+`clears` decides the scope first: any plan window (`five_hour`, `seven_day`,
+`seven_day_overage_included`) makes it the plan ticket, even when the grant's id
+or label also names a model. `id`/`label` are consulted only when `clears` is
+absent. The split is never inferred from ticket order or a "one general, three
+Fable" count; a grant missing `resets_left` yields no split. A payload with no
+per-grant scope (OpenAI, or an older Claude read) keeps the flat strip.
 
 The glyph strip carries no accessibility label — the row is one accessibility
 element (`children: .ignore`), so a label on a child is never announced; the
@@ -434,11 +438,13 @@ with the same name/bar/percentage/countdown alignment as a window cell:
 "Usage credits", the bar, the percentage and the day countdown. It is still not
 quota: no snapshot fraction, urgency, sorting or advice reads it. The visible
 "Resets in N days" subtitle is deliberately not drawn anywhere in the popover;
-the compact countdown on the right is the only reset-style figure, while the
-exact reset text stays in the spoken label and the tooltip. Both the countdown
-and that text come from the promo's own published period end
-(`monthlyPeriodEnd`); never substitute the subscription renewal or a hardcoded
-day count.
+the compact countdown on the right is the only reset-style figure.
+`MonthlyPromoCreditPresentation.resetText` remains populated and is read by
+`spoken` (the row's VoiceOver label and tooltip); it is not drawn as a
+subtitle. The inspector's quota-window reset text is a different field and is
+unchanged. Both the countdown and the promo's reset text come from the promo's
+own published period end (`monthlyPeriodEnd`); never substitute the subscription
+renewal or a hardcoded day count.
 
 **The linked Console organisation's monthly credit is its own line.** It is the
 `monthly_credit_usd` / `next_grant_at` entitlement read by the opt-in Claude

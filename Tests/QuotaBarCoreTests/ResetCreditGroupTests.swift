@@ -69,10 +69,9 @@ struct ResetCreditGroupTests {
         let groups = ClaudeQuotaProvider.resetCreditGroups(from: [
             grant(id: "fable", left: 3, endsAt: "2026-11-21T00:00:00Z")
         ])
-        let fable = try? #require(groups.first)
-        #expect(fable?.scope == .model("Fable"))
-        #expect(fable?.count == 3)
-        #expect(fable?.expiries == Array(repeating: ISO8601DateFormatter()
+        #expect(groups.first?.scope == .model("Fable"))
+        #expect(groups.first?.count == 3)
+        #expect(groups.first?.expiries == Array(repeating: ISO8601DateFormatter()
             .date(from: "2026-11-21T00:00:00Z"), count: 3))
     }
 

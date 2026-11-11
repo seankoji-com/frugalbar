@@ -53,17 +53,26 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
             parts.append("\(percentText) of the billing month elapsed")
         }
         if let end = credit.nextGrantAt {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.calendar = calendar
-            formatter.timeZone = calendar.timeZone
-            formatter.dateFormat = "d MMMM yyyy"
-            parts.append("next credit \(formatter.string(from: end))")
+            parts.append("next credit \(Self.dateText(end, calendar: calendar))")
         }
         if credit.refreshFailed {
             parts.append("stale monthly credit reading")
         }
         self.spoken = parts.joined(separator: ", ")
+    }
+
+    /// A value-style formatter, so rebuilding the row on hover does not
+    /// allocate a DateFormatter per visible provider row. The calendar and
+    /// time zone are the same ones that produced the cycle window, and the
+    /// field order stays "15 November 2026" rather than following a locale's
+    /// month-first order.
+    private static func dateText(_ date: Date, calendar: Calendar) -> String {
+        let style = Date.VerbatimFormatStyle(
+            format: "\(day: .defaultDigits) \(month: .wide) \(year: .defaultDigits)",
+            locale: Locale(identifier: "en_US_POSIX"),
+            timeZone: calendar.timeZone,
+            calendar: calendar)
+        return date.formatted(style)
     }
 }
 

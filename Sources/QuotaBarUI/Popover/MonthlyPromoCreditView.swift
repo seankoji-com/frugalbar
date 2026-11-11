@@ -108,10 +108,7 @@ struct MonthlyPromoCreditView: View {
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .lineLimit(1)
-                // The reset phrase is intentionally not drawn: the compact
-                // countdown on the right is the only reset-style figure in the
-                // row. The exact reset text remains in the spoken label and
-                // the tooltip.
+                // Title only; the reset countdown lives on the right.
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 

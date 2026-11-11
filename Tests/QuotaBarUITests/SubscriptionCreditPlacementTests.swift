@@ -209,6 +209,24 @@ struct SubscriptionCreditPlacementTests {
         #expect(p.unmatchedResetCredits(scopedLabels: ["Fable"]).isEmpty)
     }
 
+    @Test("a payload with only a model group draws no plan ticket")
+    func onlyModelGroupDrawsNoPlanStrip() {
+        let expiry = now.addingTimeInterval(20 * 86_400)
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        snapshot.resetCreditsAvailable = 3
+        snapshot.resetCreditGroups = [
+            ResetCreditGroup(scope: .model("Fable"), count: 3,
+                             expiries: [expiry, expiry, expiry]),
+        ]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.planResetCredits == nil)
+        #expect(p.resetCredits == nil)
+        #expect(p.modelResetCredits(for: "Fable")?.total == 3)
+        #expect(p.unmatchedResetCredits(scopedLabels: ["Fable"]).isEmpty)
+    }
+
     @Test("a ticket's visible expiry says how long is left, not the absolute date alone")
     func ticketExpiryPhrase() throws {
         let expiry = try #require(ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z"))
