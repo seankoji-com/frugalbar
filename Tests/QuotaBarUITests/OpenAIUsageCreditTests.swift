@@ -81,9 +81,12 @@ struct OpenAIUsageCreditTests {
         #expect(CreditExpiryText.remaining(now.addingTimeInterval(86_401), now: now) == "2d remaining")
         #expect(CreditExpiryText.remaining(now.addingTimeInterval(.greatestFiniteMagnitude), now: now)
             == "Expiry not published")
+        #expect(CreditExpiryText.remainingSpoken(nil, now: now) == "Expiry not published")
         #expect(CreditExpiryText.remainingSpoken(now, now: now) == "Expired")
         #expect(CreditExpiryText.remainingSpoken(now.addingTimeInterval(1), now: now) == "1 day remaining")
         #expect(CreditExpiryText.remainingSpoken(now.addingTimeInterval(86_401), now: now) == "2 days remaining")
+        #expect(CreditExpiryText.remainingSpoken(now.addingTimeInterval(.greatestFiniteMagnitude), now: now)
+            == "Expiry not published")
         let tickets = try #require(MetricRowPresentation.ResetCredits(total: 7,
             expiries: [now.addingTimeInterval(86_400), nil, now], now: now))
         #expect(tickets.expiryCountdown(at: 0) == "1d remaining")
