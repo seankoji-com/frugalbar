@@ -429,9 +429,9 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
             self.endsAt = endsAt
         }
 
-        /// The allowance this grant resets. A grant the vendor names "Fable"
-        /// is scoped to that model's weekly cap; every other grant clears the
-        /// plan-wide windows and is drawn as the general Claude ticket.
+        /// The allowance this grant resets. A grant whose id names "Fable" is
+        /// scoped to that model's weekly cap; every other grant is drawn as
+        /// the general Claude ticket unless its clears name a model window.
         ///
         /// Read from the grant's own id/clears/label, never from its position
         /// in the array: reordering the grants must not move a ticket between
