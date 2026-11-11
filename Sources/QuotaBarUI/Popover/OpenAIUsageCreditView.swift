@@ -125,7 +125,7 @@ struct ResetTicketsView: View {
                     Text(credits.expiryCountdown(at: index))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .lineLimit(1)
                 }
             }
             if credits.overflow > 0 {

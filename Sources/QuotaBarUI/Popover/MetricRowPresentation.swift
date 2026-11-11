@@ -92,8 +92,15 @@ public struct MetricRowPresentation: Equatable, Sendable {
             return expiry < now ? "Expired \(date)" : "Expires \(date)"
         }
 
+        /// The name-column ticket line. The narrow 112pt column cannot fit
+        /// "Expiry not published" at 10.5pt without shrinking, so an absent
+        /// expiry uses the compact "No expiry"; the full-width group and the
+        /// spoken label still say "Expiry not published".
         public func expiryCountdown(at index: Int) -> String {
-            CreditExpiryText.remaining(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
+            guard index >= 0, index < expiries.count, let expiry = expiries[index] else {
+                return "No expiry"
+            }
+            return CreditExpiryText.remaining(expiry, now: now)
         }
 
         /// The visible phrase beside a ticket, in the same form the OpenAI row
