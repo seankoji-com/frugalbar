@@ -1868,6 +1868,19 @@ struct ProviderHTTPTests {
         #expect(snap.resetCreditGroups[1].expiries.count == 3)
     }
 
+    @Test("the live Claude grant shape splits one general and three Fable tickets")
+    func claudeLiveGrantShapeSplits() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"full-reset-2611","label":"One full limit reset (November 2026)","resets_left":1,"resets_total":1,"clears":["seven_day","seven_day_overage_included"],"usable_now":true,"ends_at":"2026-12-10T22:00:00+00:00"},{"id":"launch-2610-fable","label":"New model launch: one Fable reset for Max, Team Premium and Enterprise Premium","resets_left":1,"resets_total":1,"clears":["seven_day_overage_included"],"usable_now":true,"ends_at":"2027-03-09T07:59:00+00:00"},{"id":"launch-2610-fable-12mo","label":"New model launch: one more Fable reset at 12 months' tenure","resets_left":1,"resets_total":1,"clears":["seven_day_overage_included"],"usable_now":true,"ends_at":"2027-03-09T07:59:00+00:00"},{"id":"launch-2610-fable-6mo","label":"New model launch: one more Fable reset at 6 months' tenure","resets_left":1,"resets_total":1,"clears":["seven_day_overage_included"],"usable_now":true,"ends_at":"2027-03-09T07:59:00+00:00"}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditGroups.count == 2)
+        #expect(snap.resetCreditGroups[0].scope == .plan)
+        #expect(snap.resetCreditGroups[0].count == 1)
+        #expect(snap.resetCreditGroups[1].scope == .model("Fable"))
+        #expect(snap.resetCreditGroups[1].count == 3)
+    }
+
     @Test("Claude bounds expiry expansion for an untrusted grant count")
     func claudeGrantExpiryExpansionIsBounded() async throws {
         let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"resets_left":9223372036854775807,"ends_at":"2026-10-22T16:00:00+00:00"}]}}"#

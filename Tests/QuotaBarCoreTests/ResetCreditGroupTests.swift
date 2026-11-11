@@ -17,20 +17,33 @@ struct ResetCreditGroupTests {
             clears: clears, usableNow: true, endsAt: endsAt)
     }
 
-    @Test("what a grant clears decides its scope, with id/label as fallback")
+    @Test("a grant id names its model first; clears then label are fallbacks")
     func scopeClassification() {
-        #expect(grant(id: "launch-2610-fable", left: 1).creditScope == .model("Fable"))
-        #expect(grant(id: "weekly-fable-reset", left: 1).creditScope == .model("Fable"))
-        #expect(grant(id: "launch-opus", label: "Claude Opus launch", left: 1).creditScope == .plan)
-        #expect(grant(id: "general", left: 1,
-                      clears: ["five_hour", "seven_day"]).creditScope == .plan)
+        // The live payload: one general reset and three Fable launch grants.
+        // The Fable grants also clear `seven_day_overage_included`, a shared
+        // plan window, but their ids name the model explicitly.
+        #expect(grant(id: "full-reset-2611",
+                      label: "One full limit reset (November 2026)", left: 1,
+                      clears: ["seven_day", "seven_day_overage_included"])
+            .creditScope == .plan)
+        #expect(grant(id: "launch-2610-fable",
+                      label: "New model launch: one Fable reset for Max", left: 1,
+                      clears: ["seven_day_overage_included"])
+            .creditScope == .model("Fable"))
+        #expect(grant(id: "launch-2610-fable-12mo",
+                      label: "New model launch: one more Fable reset", left: 1,
+                      clears: ["seven_day_overage_included"])
+            .creditScope == .model("Fable"))
+        // A general id with a label that merely mentions Fable stays general.
+        #expect(grant(id: "full-reset-x",
+                      label: "One full limit reset, including Fable", left: 1,
+                      clears: ["seven_day"]).creditScope == .plan)
         #expect(grant(id: "general", left: 1,
                       clears: ["seven_day_fable"]).creditScope == .model("Fable"))
-        // A launch grant can be named after a model while still clearing the
-        // plan-wide windows. What it clears decides, so this is the general
-        // ticket, not a Fable ticket.
-        #expect(grant(id: "launch-2610-fable", left: 1,
-                      clears: ["five_hour", "seven_day"]).creditScope == .plan)
+        #expect(grant(id: "general", left: 1,
+                      clears: ["five_hour"]).creditScope == .plan)
+        #expect(grant(id: nil, label: "Fable weekly reset", left: 1)
+            .creditScope == .model("Fable"))
     }
 
     @Test("grant order never moves a ticket between General and Fable")

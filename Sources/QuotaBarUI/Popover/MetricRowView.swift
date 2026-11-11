@@ -63,7 +63,7 @@ struct ResetTicketGroupView: View {
             }
         }
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .padding(.top, 4)
+        .padding(.top, 8)
         .accessibilityHidden(true)
     }
 }

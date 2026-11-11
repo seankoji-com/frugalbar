@@ -411,12 +411,16 @@ reset window's date. Claude splits the grant set by the allowance it resets: the
 plan-wide ticket sits under `Claude Code`, and a model's tickets sit under that
 model's scoped row (Fable).
 
-`clears` decides the scope first: any plan window (`five_hour`, `seven_day`,
-`seven_day_overage_included`) makes it the plan ticket, even when the grant's id
-or label also names a model. `id`/`label` are consulted only when `clears` is
-absent. The split is never inferred from ticket order or a "one general, three
-Fable" count; a grant missing `resets_left` yields no split. A payload with no
-per-grant scope (OpenAI, or an older Claude read) keeps the flat strip.
+The grant **id** names the model first: an id containing Fable is
+model-scoped even when it also clears a shared plan window
+(`seven_day_overage_included`). If the id does not name a model, `clears`
+decides: any plan window (`five_hour`, `seven_day`,
+`seven_day_overage_included`) makes it the plan ticket, and a Fable-only clear
+makes it the model ticket. The label is the fallback only when neither the id
+nor `clears` is present. The split is never inferred from ticket order or a
+"one general, three Fable" count; a grant missing `resets_left` yields no
+split. A payload with no per-grant scope (OpenAI, or an older Claude read)
+keeps the flat strip.
 
 The glyph strip carries no accessibility label — the row is one accessibility
 element (`children: .ignore`), so a label on a child is never announced; the
