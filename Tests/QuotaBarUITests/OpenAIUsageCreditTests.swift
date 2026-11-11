@@ -90,9 +90,9 @@ struct OpenAIUsageCreditTests {
         let tickets = try #require(MetricRowPresentation.ResetCredits(total: 7,
             expiries: [now.addingTimeInterval(86_400), nil, now], now: now))
         #expect(tickets.expiryCountdown(at: 0) == "1d remaining")
-        #expect(tickets.expiryCountdown(at: 1) == "Expiry not published")
+        #expect(tickets.expiryCountdown(at: 1) == "No expiry")
         #expect(tickets.expiryCountdown(at: 2) == "Expired")
-        #expect(tickets.expiryCountdown(at: 4) == "Expiry not published")
+        #expect(tickets.expiryCountdown(at: 4) == "No expiry")
         #expect(tickets.overflow == 2)
         let stale = try #require(OpenAIUsageCreditPresentation(entry: entry(expiry: now), now: now, isStale: true))
         #expect(stale.expiryText == "Expired")
