@@ -12,6 +12,20 @@ enum CreditExpiryText {
         let count = Int(days)
         return "Expires in \(count) day\(count == 1 ? "" : "s")"
     }
+
+    /// The ticket-line wording: "20 days remaining" rather than "Expires in
+    /// 20 days". A missing figure is stated plainly and a passed date is
+    /// "Expired"; the absolute date stays in the ticket's tooltip.
+    static func remaining(_ expiry: Date?, now: Date) -> String {
+        guard let expiry else { return "Expiry not published" }
+        let seconds = expiry.timeIntervalSince(now)
+        guard seconds.isFinite else { return "Expiry not published" }
+        guard seconds > 0 else { return "Expired" }
+        let days = (seconds / 86_400).rounded(.up)
+        guard days < Double(Int.max) else { return "Expiry not published" }
+        let count = Int(days)
+        return "\(count) day\(count == 1 ? "" : "s") remaining"
+    }
 }
 
 /// A one-time grant uses the account holder's original allowance and the

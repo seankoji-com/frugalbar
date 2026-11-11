@@ -42,7 +42,7 @@ struct OpenAIUsageCreditTests {
         #expect(snap.status == .measured(.none))
         let spoken = p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
         #expect(spoken.contains("20% used"))
-        #expect(spoken.contains("Expires in 12 days"))
+        #expect(spoken.contains("12 days remaining"))
         #expect(spoken.contains("Expires in 68 days"))
         #expect(!spoken.contains("credits remaining"))
         let group = try #require(PopoverRowGrouping.groups(for: [snap]).first)
@@ -76,7 +76,7 @@ struct OpenAIUsageCreditTests {
         #expect(CreditExpiryText.countdown(now.addingTimeInterval(86_401), now: now) == "Expires in 2 days")
         let tickets = try #require(MetricRowPresentation.ResetCredits(total: 7,
             expiries: [now.addingTimeInterval(86_400), nil, now], now: now))
-        #expect(tickets.expiryCountdown(at: 0) == "Expires in 1 day")
+        #expect(tickets.expiryCountdown(at: 0) == "1 day remaining")
         #expect(tickets.expiryCountdown(at: 1) == "Expiry not published")
         #expect(tickets.expiryCountdown(at: 2) == "Expired")
         #expect(tickets.expiryCountdown(at: 4) == "Expiry not published")

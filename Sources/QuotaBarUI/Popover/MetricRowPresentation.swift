@@ -93,7 +93,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         }
 
         public func expiryCountdown(at index: Int) -> String {
-            CreditExpiryText.countdown(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
+            CreditExpiryText.remaining(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
         }
 
         /// The visible phrase beside a ticket, in the same form the OpenAI row
@@ -105,10 +105,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
                 return "Expiry not published"
             }
             guard expiry > now else { return expiryText(at: index, now: now) }
-            // The same wording the OpenAI usage-credit row uses, so a ticket
-            // and a credit grant never describe the same kind of expiry in two
-            // different ways.
-            return CreditExpiryText.countdown(expiry, now: now)
+            // Ticket lines use the remaining form on both Claude and OpenAI;
+            // the Usage-credits row keeps "Expires in …".
+            return CreditExpiryText.remaining(expiry, now: now)
         }
 
         /// The strip in words, for a screen reader. The glyph run is a shape

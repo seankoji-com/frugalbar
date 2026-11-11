@@ -198,10 +198,10 @@ struct SubscriptionCreditPlacementTests {
         #expect(p.modelResetCredits(for: "Fable")?.total == 3)
         #expect(p.modelResetCredits(for: "fable")?.total == 3)
         #expect(p.planResetCredits?.spoken
-            == "General 1 banked reset credit, Ticket 1: Expires in 20 days")
+            == "General 1 banked reset credit, Ticket 1: 20 days remaining")
         #expect(p.modelResetCredits(for: "Fable")?.spoken
-            == "Fable 3 banked reset credits, Ticket 1: Expires in 20 days, "
-                + "Ticket 2: Expires in 20 days, Ticket 3: Expires in 20 days")
+            == "Fable 3 banked reset credits, Ticket 1: 20 days remaining, "
+                + "Ticket 2: 20 days remaining, Ticket 3: 20 days remaining")
         let label = p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
         #expect(label.contains("General 1 banked reset credit"))
         #expect(label.contains("Fable 3 banked reset credits"))
@@ -232,7 +232,7 @@ struct SubscriptionCreditPlacementTests {
         let expiry = try #require(ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z"))
         let credits = try #require(MetricRowPresentation.ResetCredits(total: 2, expiries: [expiry, nil]))
         let before = expiry.addingTimeInterval(-20 * 86_400)
-        #expect(credits.expiryPhrase(at: 0, now: before) == "Expires in 20 days")
+        #expect(credits.expiryPhrase(at: 0, now: before) == "20 days remaining")
         #expect(credits.expiryPhrase(at: 1, now: before) == "Expiry not published")
         #expect(credits.expiryPhrase(at: 0, now: expiry.addingTimeInterval(86_400))
             == "Expired 17 Jul 2026")
