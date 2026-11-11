@@ -103,7 +103,7 @@ struct ResetCreditGroupTests {
             grant(id: "fable-last", left: 1, endsAt: "2026-12-01T00:00:00Z"),
             grant(id: "fable-first", left: 1, endsAt: "2026-11-21T00:00:00Z"),
         ])
-        let expiries = try? #require(groups.first?.expiries)
+        let expiries = groups.first?.expiries
         #expect(expiries?.count == 3)
         #expect(expiries?[0] == ISO8601DateFormatter().date(from: "2026-11-21T00:00:00Z"))
         #expect(expiries?[1] == ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"))
