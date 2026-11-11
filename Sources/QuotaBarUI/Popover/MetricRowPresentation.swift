@@ -52,6 +52,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// inferred from the reset window or another credit.
         public let expiries: [Date?]
         public let now: Date
+        /// Which allowance these tickets reset. Nil keeps the old flat strip
+        /// (OpenAI's single pool); a plan or model scope is named in the
+        /// spoken label so a screen reader can tell Claude's general ticket
+        /// from Fable's.
+        public let scope: ResetCreditScope?
 
         /// nil when there is nothing to draw. A vendor that published no figure
         /// (`nil`), or published zero, draws nothing: "0 reset credits" is
@@ -59,10 +64,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
         /// each index describes the ticket at that index. Include nil entries
         /// for unknown interior expiries; omitted trailing entries are treated
         /// as unavailable. Entries beyond the rendered ticket count are ignored.
-        public init?(total: Int?, expiries: [Date?] = [], now: Date = Date()) {
+        public init?(total: Int?, expiries: [Date?] = [], now: Date = Date(),
+                     scope: ResetCreditScope? = nil) {
             guard let total, total > 0 else { return nil }
             self.total = total
             self.now = now
+            self.scope = scope
             self.tickets = min(total, ResetCreditTicketLimit.maxCount)
             self.overflow = max(0, total - ResetCreditTicketLimit.maxCount)
             self.expiries = (0..<tickets).map { index in
@@ -89,13 +96,40 @@ public struct MetricRowPresentation: Equatable, Sendable {
             CreditExpiryText.countdown(expiries.indices.contains(index) ? expiries[index] : nil, now: now)
         }
 
+        /// The visible phrase beside a ticket, in the same form the OpenAI row
+        /// uses: "Expires in 20 days". An expired credit keeps its absolute date
+        /// ("Expired 17 Jul 2026"), and a missing expiry is said plainly rather
+        /// than borrowed from the reset window.
+        public func expiryPhrase(at index: Int, now: Date = Date()) -> String {
+            guard index >= 0, index < expiries.count, let expiry = expiries[index] else {
+                return "Expiry not published"
+            }
+            guard expiry > now else { return expiryText(at: index, now: now) }
+            // The same wording the OpenAI usage-credit row uses, so a ticket
+            // and a credit grant never describe the same kind of expiry in two
+            // different ways.
+            return CreditExpiryText.countdown(expiry, now: now)
+        }
+
         /// The strip in words, for a screen reader. The glyph run is a shape
         /// channel, so the count must also be spoken (WCAG 1.4.1).
         public var spoken: String {
-            let count = "\(total) banked reset credit\(total == 1 ? "" : "s")"
+            let name = scope.map { "\($0.displayName) " } ?? ""
+            let count = "\(name)\(total) banked reset credit\(total == 1 ? "" : "s")"
             guard expiries.contains(where: { $0 != nil }) else { return count }
             return ([count] + (0..<tickets).map { "Ticket \($0 + 1): \(expiryCountdown(at: $0))" })
                 .joined(separator: ", ")
+        }
+    }
+
+    /// One scope's tickets, ready for the row to place under its own title.
+    public struct ResetCreditTicketGroup: Equatable, Sendable {
+        public let scope: ResetCreditScope
+        public let credits: ResetCredits
+
+        public init(scope: ResetCreditScope, credits: ResetCredits) {
+            self.scope = scope
+            self.credits = credits
         }
     }
 
@@ -113,29 +147,64 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let openAIUsageCredit: OpenAIUsageCreditPresentation?
     /// The linked Console organisation's monthly API-credit entitlement, e.g.
-    /// "Org monthly credit: $100.00 per month", and its next grant date.
+    /// "$100.00 monthly credit", with its billing-cycle meter. The meter is
+    /// cycle progress, not spend: the linked payload publishes no used figure.
     ///
     /// It is an entitlement, not a balance and not a quota: it is read by the
     /// independent billing session and drawn as one line under the row. It is
     /// not repeated by the promo-credit row, which reports a different pool's
     /// usage.
-    public let monthlyCreditLine: String?
-    public let monthlyCreditDetail: String?
+    public let monthlyCredit: MonthlyCreditBarPresentation?
+    /// Banked reset tickets split by the allowance they reset. Empty when the
+    /// vendor published no per-grant scope, in which case `resetCredits` keeps
+    /// the flat strip OpenAI and the older Claude payloads draw.
+    public let resetCreditGroups: [ResetCreditTicketGroup]
     /// The model-scoped windows in words, e.g. "Fable weekly 0% used, resets
     /// in 5 days". They are drawn on their own line and not in the window grid,
     /// so without this the figures would be invisible to VoiceOver.
     public let scopedSpeech: String?
+
+    /// The plan-wide ticket group, drawn under the Claude Code title.
+    public var planResetCredits: ResetCredits? {
+        resetCreditGroups.first(where: { $0.scope.isPlan })?.credits
+    }
+
+    /// The ticket group scoped to a model window, matched case-insensitively
+    /// against the scoped bar's label ("Fable").
+    public func modelResetCredits(for label: String) -> ResetCredits? {
+        for group in resetCreditGroups {
+            if case .model(let name) = group.scope,
+               name.caseInsensitiveCompare(label) == .orderedSame {
+                return group.credits
+            }
+        }
+        return nil
+    }
+
+    /// Groups that have no row to sit under. They are still drawn at the
+    /// bottom of the card rather than dropped when a vendor publishes a scope
+    /// whose window is absent.
+    public func unmatchedResetCredits(scopedLabels: [String]) -> [ResetCreditTicketGroup] {
+        resetCreditGroups.filter { group in
+            if group.scope.isPlan { return false }
+            if case .model(let name) = group.scope {
+                return !scopedLabels.contains { name.caseInsensitiveCompare($0) == .orderedSame }
+            }
+            return true
+        }
+    }
 
     /// The actual row is one accessibility element with children ignored.
     public func combinedAccessibilityLabel(windows: String?, forecast: String?, creditsStale: Bool) -> String {
         var parts = [windows == nil ? accessibilityLabel : accessibilityLabelOmittingPercentage]
         if let windows { parts.append(windows) }
         if let forecast { parts.append(forecast) }
-        if let resetCredits { parts.append(resetCredits.spoken) }
-        if let monthlyCreditLine {
-            parts.append(monthlyCreditLine)
-            if let monthlyCreditDetail { parts.append(monthlyCreditDetail) }
+        if resetCreditGroups.isEmpty {
+            if let resetCredits { parts.append(resetCredits.spoken) }
+        } else {
+            parts += resetCreditGroups.map(\.credits.spoken)
         }
+        if let monthlyCredit { parts.append(monthlyCredit.spoken) }
         if let scopedSpeech { parts.append(scopedSpeech) }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
         if let monthlyPromo { parts.append(monthlyPromo.spoken) }
@@ -150,15 +219,26 @@ public struct MetricRowPresentation: Equatable, Sendable {
     static let exhaustionThreshold = QuotaSnapshot.exhaustionThreshold
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
-        self.monthlyCreditLine = snapshot.monthlyAPICredit?.line
-        self.monthlyCreditDetail = snapshot.monthlyAPICredit?.detail()
+        self.monthlyCredit = snapshot.monthlyAPICredit.map {
+            MonthlyCreditBarPresentation(credit: $0, now: now)
+        }
         self.scopedSpeech = Self.scopedSpeech(for: snapshot.scopedBars, now: now)
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
         self.urgency = snapshot.status.urgency
-        self.resetCredits = ResetCredits(total: snapshot.resetCreditsAvailable,
-                                         expiries: snapshot.resetCreditExpiries, now: now)
+        let groups = snapshot.resetCreditGroups.compactMap { group -> ResetCreditTicketGroup? in
+            guard let credits = ResetCredits(total: group.count, expiries: group.expiries,
+                                             now: now, scope: group.scope) else { return nil }
+            return ResetCreditTicketGroup(scope: group.scope, credits: credits)
+        }
+        self.resetCreditGroups = groups
+        // A scoped payload uses the split lines; OpenAI and an older Claude
+        // reading with no scopes keep the flat strip.
+        self.resetCredits = groups.isEmpty
+            ? ResetCredits(total: snapshot.resetCreditsAvailable,
+                           expiries: snapshot.resetCreditExpiries, now: now)
+            : nil
         let usageCredit = snapshot.apiCredits.compactMap {
             OpenAIUsageCreditPresentation(entry: $0, now: now, isStale: snapshot.staleReading != nil)
         }.first

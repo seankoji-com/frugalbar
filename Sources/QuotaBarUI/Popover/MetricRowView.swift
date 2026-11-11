@@ -37,6 +37,37 @@ struct SubscriptionCreditLineView: View {
     }
 }
 
+/// One scope's banked reset tickets, stacked one per line with each published
+/// expiry to the right — the OpenAI Codex layout. The enclosing provider row
+/// speaks the count and every expiry, so these glyph runs stay decorative.
+struct ResetTicketGroupView: View {
+    let credits: MetricRowPresentation.ResetCredits
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(0..<credits.tickets, id: \.self) { index in
+                HStack(spacing: 5) {
+                    GoldenTicketView(index: index)
+                        .help(credits.expiryText(at: index, now: credits.now))
+                    Text(credits.expiryPhrase(at: index, now: credits.now))
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.9))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+            if credits.overflow > 0 {
+                Text("+\(credits.overflow) more")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+            }
+        }
+        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        .padding(.top, 4)
+        .accessibilityHidden(true)
+    }
+}
+
 /// A single provider row: vendor mark, name and plan, then one cell per
 /// window column (5H / WK / MO, see `WindowColumn`) so the same window lines
 /// up down the card. Pools that are not a window (bonus credits, overage,
@@ -128,36 +159,48 @@ struct MetricRowView: View {
         let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
             row(grid, presentation: p)
+            // The plan-wide ticket sits under the Claude Code title; a model
+            // ticket sits under the scoped row it resets. Both are drawn as
+            // their own lines, each glyph with its published expiry to the
+            // right.
+            if let planCredits = p.planResetCredits {
+                ResetTicketGroupView(credits: planCredits)
+            }
             // Model-scoped windows are drawn on their own line, with their
             // own percentage and reset. They deliberately stay out of the
             // window grid and out of the plan-wide bars (see
             // `QuotaSnapshot.scopedBars`).
             ForEach(Array(snapshot.scopedBars.enumerated()), id: \.offset) { _, bar in
                 scopedWindowRow(bar, now: grid.now)
+                if let credits = p.modelResetCredits(for: bar.label) {
+                    ResetTicketGroupView(credits: credits)
+                }
             }
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
+            }
+            // A scoped group whose window the vendor did not publish still
+            // keeps its tickets rather than silently dropping them.
+            ForEach(Array(p.unmatchedResetCredits(
+                scopedLabels: snapshot.scopedBars.map(\.label)
+            ).enumerated()), id: \.offset) { _, group in
+                ResetTicketGroupView(credits: group.credits)
             }
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
             if (snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
-                SubscriptionCreditLineView(presentation: p, showsTickets: snapshot.vendorId != .openai)
+                SubscriptionCreditLineView(
+                    presentation: p,
+                    showsTickets: snapshot.vendorId != .openai && p.resetCreditGroups.isEmpty
+                )
             }
             // The linked Console entitlement is a different fact from the
             // promo-credit row below (which reports usage of a different
             // pool), so it keeps its own line rather than being folded into
             // that row or dropped when no promo credit is published.
-            if let line = p.monthlyCreditLine {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(line, systemImage: "calendar")
-                    if let detail = p.monthlyCreditDetail { Text(detail) }
-                }
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                .accessibilityHidden(true)
+            if let credit = p.monthlyCredit {
+                MonthlyCreditBarView(presentation: credit)
             }
             if let credits = p.openAIUsageCredit {
                 OpenAIUsageCreditView(presentation: credits)

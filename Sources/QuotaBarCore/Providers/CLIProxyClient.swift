@@ -429,6 +429,21 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
             self.endsAt = endsAt
         }
 
+        /// The allowance this grant resets. A grant the vendor names "Fable"
+        /// is scoped to that model's weekly cap; every other grant clears the
+        /// plan-wide windows and is drawn as the general Claude ticket.
+        ///
+        /// Read from the grant's own id/label/clears, never from its position
+        /// in the array: reordering the grants must not move a ticket between
+        /// Claude and Fable.
+        public var creditScope: ResetCreditScope {
+            let tokens = [id, label].compactMap { $0 } + (clears ?? [])
+            if tokens.contains(where: { $0.range(of: "fable", options: .caseInsensitive) != nil }) {
+                return .model("Fable")
+            }
+            return .plan
+        }
+
         enum CodingKeys: String, CodingKey {
             case id, label, clears
             case resetsLeft = "resets_left"

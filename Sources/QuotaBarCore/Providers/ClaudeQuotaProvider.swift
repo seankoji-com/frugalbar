@@ -319,6 +319,9 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         snapshot.resetCreditExpiries = usage.resetGrants.map { grants in
             Self.resetCreditExpiries(from: grants.grants)
         } ?? []
+        snapshot.resetCreditGroups = usage.resetGrants.map { grants in
+            Self.resetCreditGroups(from: grants.grants)
+        } ?? []
         snapshot.apiCredits = Self.apiCredits(from: usage)
         snapshot.scopedBars = scoped
         return snapshot
@@ -401,7 +404,8 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         ClaudeGrantReading(
             available: usage.resetGrants?.resetsAvailable,
             applicable: usage.resetGrants?.resetsUsableNow,
-            expiries: usage.resetGrants.map { resetCreditExpiries(from: $0.grants) } ?? [])
+            expiries: usage.resetGrants.map { resetCreditExpiries(from: $0.grants) } ?? [],
+            groups: usage.resetGrants.map { resetCreditGroups(from: $0.grants) } ?? [])
     }
 
     /// Re-applies the last published grant figure to a plain read, which
@@ -415,6 +419,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // are facts from the last grant read; "redeemable now" is not.
         updated.resetCreditsApplicable = nil
         updated.resetCreditExpiries = reading.expiries
+        updated.resetCreditGroups = reading.groups
         updated.auxiliaryInfo = auxiliaryInfo(banked: reading.available, applicable: nil)
         return updated
     }
@@ -446,6 +451,55 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
             expiries.append(contentsOf: Array(repeating: item.expiry, count: count))
         }
         return expiries
+    }
+
+    /// Splits the same grants by the allowance they reset. The plan group is
+    /// first because it belongs to the Claude Code row; a model group follows
+    /// and is drawn under that model's scoped window.
+    ///
+    /// Every grant must publish its count, exactly as the flat total requires:
+    /// one missing `resets_left` makes the split unknowable, and a made-up
+    /// group would put tickets under the wrong allowance.
+    static func resetCreditGroups(
+        from grants: [ClaudeOAuthUsageResponse.ResetGrant]
+    ) -> [ResetCreditGroup] {
+        guard !grants.isEmpty, grants.allSatisfy({ $0.resetsLeft != nil }) else { return [] }
+
+        return Dictionary(grouping: grants, by: \.creditScope)
+            .map { scope, scopeGrants in
+                let total = scopeGrants.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
+                let ordered = scopeGrants.enumerated().map {
+                    (index: $0.offset, grant: $0.element,
+                     expiry: CLIProxyClient.parseResetDate($0.element.endsAt))
+                }.sorted { lhs, rhs in
+                    switch (lhs.expiry, rhs.expiry) {
+                    case let (left?, right?) where left != right:
+                        left < right
+                    case (_?, nil):
+                        true
+                    case (nil, _?):
+                        false
+                    default:
+                        lhs.index < rhs.index
+                    }
+                }
+
+                var expiries: [Date?] = []
+                for item in ordered {
+                    guard let left = item.grant.resetsLeft, left > 0,
+                          expiries.count < ResetCreditTicketLimit.maxCount
+                    else { continue }
+                    let count = min(left, ResetCreditTicketLimit.maxCount - expiries.count)
+                    expiries.append(contentsOf: Array(repeating: item.expiry, count: count))
+                }
+                return ResetCreditGroup(scope: scope, count: total, expiries: expiries)
+            }
+            .filter { $0.count > 0 }
+            .sorted { lhs, rhs in
+                if lhs.scope.isPlan != rhs.scope.isPlan { return lhs.scope.isPlan }
+                return lhs.scope.displayName.localizedCaseInsensitiveCompare(rhs.scope.displayName)
+                    == .orderedAscending
+            }
     }
 
     /// The prepaid API credits this endpoint published alongside the quota, as
@@ -641,11 +695,17 @@ public struct ClaudeGrantReading: Sendable, Equatable {
     public let available: Int?
     public let applicable: Int?
     public let expiries: [Date?]
+    /// The per-scope split the same read published. Empty for an older cached
+    /// reading or a payload with no banked grants, in which case the row draws
+    /// the flat strip rather than inventing a scope.
+    public let groups: [ResetCreditGroup]
 
-    public init(available: Int?, applicable: Int?, expiries: [Date?]) {
+    public init(available: Int?, applicable: Int?, expiries: [Date?],
+                groups: [ResetCreditGroup] = []) {
         self.available = available
         self.applicable = applicable
         self.expiries = expiries
+        self.groups = groups
     }
 }
 

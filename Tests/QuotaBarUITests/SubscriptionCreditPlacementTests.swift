@@ -86,14 +86,14 @@ struct SubscriptionCreditPlacementTests {
         var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
             status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        #expect(MetricRowPresentation(snapshot: snapshot, now: now).monthlyCreditLine == nil)
+        #expect(MetricRowPresentation(snapshot: snapshot, now: now).monthlyCredit == nil)
         snapshot.monthlyAPICredit = grant
         let p = MetricRowPresentation(snapshot: snapshot, now: now)
         // The entitlement belongs to the linked Console organisation and is
         // not the promo-credit pool, so it keeps its own line even when no
         // promo credit is published.
-        #expect(p.monthlyCreditLine == "Org monthly credit: $123.45 per month")
-        #expect(p.monthlyCreditDetail?.contains("Next credit") == true)
+        #expect(p.monthlyCredit?.title == "$123.45 monthly credit")
+        #expect(p.monthlyCredit?.spoken.contains("next credit") == true)
         #expect(p.monthlyPromo == nil)
         #expect(p.subscriptionCredits.isEmpty)
         #expect(snapshot.apiCredits.isEmpty)
@@ -113,14 +113,83 @@ struct SubscriptionCreditPlacementTests {
             MetricRowPresentation(snapshot: snapshot, now: now).combinedAccessibilityLabel(
                 windows: nil, forecast: nil, creditsStale: false)
         }
-        #expect(!spoken(snapshot).contains("Org monthly credit"))
+        #expect(!spoken(snapshot).contains("monthly credit"))
         snapshot.monthlyAPICredit = grant
         let current = spoken(snapshot)
-        #expect(current.contains("Org monthly credit"))
-        #expect(current.contains("$123.45"))
-        #expect(current.contains("Next credit"))
+        #expect(current.contains("$123.45 monthly credit"))
+        #expect(current.contains("next credit"))
         snapshot.monthlyAPICredit?.refreshFailed = true
-        #expect(spoken(snapshot).contains("Stale monthly credit reading"))
+        #expect(spoken(snapshot).contains("stale monthly credit reading"))
+    }
+
+    @Test("the org credit meter measures the billing month, not a spend figure")
+    func monthlyCreditCycleMeter() throws {
+        let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
+            now: now))
+        let start = try #require(ISO8601DateFormatter().date(from: "2026-11-11T00:00:00Z"))
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let meter = MonthlyCreditBarPresentation(credit: credit, now: start, calendar: utc)
+        // The cycle is the calendar month ending 15 Nov: 15 Oct–15 Nov is 31
+        // days, and 11 Nov is 27 of them. This is elapsed time, never API
+        // spend, which the linked payload does not publish.
+        #expect(meter.title == "$200.00 monthly credit")
+        #expect(abs((meter.fraction ?? 0) - 27.0 / 31.0) < 0.001)
+        #expect(meter.percentText == "87%")
+        #expect(meter.countdown == "4d")
+        #expect(meter.spoken.contains("87% of the billing month elapsed"))
+        #expect(meter.spoken.contains("next credit 15 November 2026"))
+        #expect(!meter.spoken.lowercased().contains("used"))
+    }
+
+    @Test("no next grant date means no bar, never a fabricated percentage")
+    func monthlyCreditWithoutGrantDate() throws {
+        let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200"}"#.utf8), now: now))
+        let meter = MonthlyCreditBarPresentation(credit: credit, now: now)
+        #expect(meter.title == "$200.00 monthly credit")
+        #expect(meter.fraction == nil)
+        #expect(meter.percentText == nil)
+        #expect(meter.countdown == nil)
+    }
+
+    @Test("banked tickets split under the plan and the Fable row")
+    func resetTicketGroupsFollowScopes() throws {
+        let expiry = now.addingTimeInterval(20 * 86_400)
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        snapshot.resetCreditsAvailable = 4
+        snapshot.resetCreditGroups = [
+            ResetCreditGroup(scope: .plan, count: 1, expiries: [expiry]),
+            ResetCreditGroup(scope: .model("Fable"), count: 3,
+                             expiries: [expiry, expiry, expiry]),
+        ]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.resetCredits == nil)
+        #expect(p.planResetCredits?.total == 1)
+        #expect(p.modelResetCredits(for: "Fable")?.total == 3)
+        #expect(p.modelResetCredits(for: "fable")?.total == 3)
+        #expect(p.planResetCredits?.spoken
+            == "Plan 1 banked reset credit, Ticket 1: Expires in 20 days")
+        #expect(p.modelResetCredits(for: "Fable")?.spoken
+            == "Fable 3 banked reset credits, Ticket 1: Expires in 20 days, "
+                + "Ticket 2: Expires in 20 days, Ticket 3: Expires in 20 days")
+        let label = p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+        #expect(label.contains("Plan 1 banked reset credit"))
+        #expect(label.contains("Fable 3 banked reset credits"))
+    }
+
+    @Test("a ticket's visible expiry says how long is left, not the absolute date alone")
+    func ticketExpiryPhrase() throws {
+        let expiry = try #require(ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z"))
+        let credits = try #require(MetricRowPresentation.ResetCredits(total: 2, expiries: [expiry, nil]))
+        let before = expiry.addingTimeInterval(-20 * 86_400)
+        #expect(credits.expiryPhrase(at: 0, now: before) == "Expires in 20 days")
+        #expect(credits.expiryPhrase(at: 1, now: before) == "Expiry not published")
+        #expect(credits.expiryPhrase(at: 0, now: expiry.addingTimeInterval(86_400))
+            == "Expired 17 Jul 2026")
     }
 
     @Test("a model-scoped window is spoken on its own line and stays out of plan-wide figures")

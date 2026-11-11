@@ -403,15 +403,24 @@ entire product.
 
 A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
 (`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
-`maxTickets` with an exact `+n` for the remainder, on a line of their own under
-the row. The glyph strip carries no accessibility label — the row is one
-accessibility element (`children: .ignore`), so a label on a child is never
-announced; the count is spoken by `combinedAccessibilityLabel` instead. Each
-glyph carries a `.help` tooltip with that credit's own published expiry; an
-expiry the vendor did not publish says "Expiry not published" rather than
-borrowing the reset window's date. Glints are staggered and disabled under
-Reduce Motion. A vendor that published no figure and a vendor that published
-zero both draw nothing.
+`maxTickets` with an exact `+n` for the remainder. Each ticket is its own line,
+with the credit's visible expiry to the right ("Expires in 20 days"), matching
+the OpenAI Codex rows; an expiry the vendor did not publish says "Expiry not
+published" rather than borrowing the reset window's date. Claude splits the
+grant set by the allowance it resets: the plan-wide ticket sits under
+`Claude Code`, and a model's tickets sit under that model's scoped row (Fable).
+The split comes from the grant's own `id`/`label`/`clears` (`creditScope`) and
+is never inferred from ticket order or a "one general, three Fable" count; a
+grant missing `resets_left` yields no split. A payload with no per-grant scope
+(OpenAI, or an older Claude read) keeps the flat strip.
+
+The glyph strip carries no accessibility label — the row is one accessibility
+element (`children: .ignore`), so a label on a child is never announced; the
+count, scope and every expiry are spoken by `combinedAccessibilityLabel`
+instead. Each glyph carries a `.help` tooltip with that credit's absolute
+published expiry. Glints are staggered and disabled under Reduce Motion. A
+vendor that published no figure and a vendor that published zero both draw
+nothing.
 
 **Credit counts are shown rounded to the nearest whole credit.** `CreditText.format`
 rounds for display; the exact `Decimal` stays on the metric, in the history
@@ -421,12 +430,15 @@ rounding is display-only: no balance, series or quota figure is altered.
 
 **The Claude promo credit is drawn in the window anatomy, not as a second
 kind of row.** It has a published limit, so `MonthlyPromoCreditView` draws it
-with the same name/reset/bar/percentage/countdown alignment as a window cell:
-"Usage credits", its own published reset, the bar, the percentage and the day
-countdown. It is still not quota: no snapshot fraction, urgency, sorting or
-advice reads it. Its reset text and countdown both come from the promo's own
-published period end (`monthlyPeriodEnd`); never substitute the subscription
-renewal or a hardcoded day count.
+with the same name/bar/percentage/countdown alignment as a window cell:
+"Usage credits", the bar, the percentage and the day countdown. It is still not
+quota: no snapshot fraction, urgency, sorting or advice reads it. The visible
+"Resets in N days" subtitle is deliberately not drawn anywhere in the popover;
+the compact countdown on the right is the only reset-style figure, while the
+exact reset text stays in the spoken label and the tooltip. Both the countdown
+and that text come from the promo's own published period end
+(`monthlyPeriodEnd`); never substitute the subscription renewal or a hardcoded
+day count.
 
 **The linked Console organisation's monthly credit is its own line.** It is the
 `monthly_credit_usd` / `next_grant_at` entitlement read by the opt-in Claude
@@ -434,9 +446,19 @@ billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
 above and not a balance or quota. The billing client reads that amount with
 `Number(value)`, so the decoder accepts both a JSON number and a numeric string;
 accepting only `String?` silently dropped a live entitlement. It draws under the
-row as "Org monthly credit: $X per month" plus its next grant date. Do not drop
-it when no promo credit is published, and do not fold it into the promo row:
-they describe different pools.
+row as "$X monthly credit" (through `MoneyText.format`, so a whole USD amount
+keeps its cents) with an `MO` meter.
+
+**That meter is billing-cycle progress, never API spend.** The linked payload
+publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills
+the bar with the elapsed share of the calendar month ending at `next_grant_at`
+and prints "MO 87% elapsed" (plus the compact countdown). It uses the
+informational `Theme.primary`, not a quota state colour, and takes no part in
+`consumptionFraction`, urgency, sorting, advice, history or the menu-bar icon.
+When `next_grant_at` is absent the bar and percentage are omitted; never fill
+the track with an invented 0% or a made-up spend. Do not drop the line when no
+promo credit is published, and do not fold it into the promo row: they describe
+different pools.
 
 **One money rule, and it is `MoneyText.format`.** `.formatted(.currency(code:))`
 and `NumberFormatter` both consult the *process* locale, so the same USD figure
