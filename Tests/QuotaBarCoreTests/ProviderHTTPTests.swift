@@ -1845,7 +1845,27 @@ struct ProviderHTTPTests {
         #expect(snap.resetCreditExpiries[0]
             == ISO8601DateFormatter().date(from: "2026-10-22T16:00:00Z"))
         #expect(snap.resetCreditExpiries[1] == nil)
+        // Both grants clear plan-wide windows, so both belong to Claude's
+        // general ticket line even though one names Opus.
+        #expect(snap.resetCreditGroups.count == 1)
+        #expect(snap.resetCreditGroups.first?.scope == .plan)
+        #expect(snap.resetCreditGroups.first?.count == 2)
         #expect(snap.auxiliaryInfo == "Live Claude subscription quota · 2 reset credits banked · 1 redeemable now")
+    }
+
+    @Test("Claude grants split into the general and Fable ticket groups")
+    func claudeGrantsSplitByScope() async throws {
+        let body = #"{"five_hour":{"utilization":10},"seven_day":{"utilization":20},"cedar_ember":{"eligible":true,"grants":[{"id":"general","resets_left":1,"ends_at":"2026-11-20T00:00:00Z","clears":["five_hour","seven_day"]},{"id":"fable-a","resets_left":1,"ends_at":"2026-11-21T00:00:00Z","clears":["seven_day_fable"]},{"id":"fable-b","resets_left":1,"ends_at":"2026-11-22T00:00:00Z","clears":["seven_day_fable"]},{"id":"fable-c","resets_left":1,"ends_at":"2026-11-23T00:00:00Z","clears":["seven_day_fable"]}]}}"#
+        let snap = try await withStubbedHTTP({ _ in canned(body: body) }) {
+            try await ClaudeQuotaProvider(apiKey: "oauth-token").fetchSnapshot()
+        }
+        #expect(snap.resetCreditsAvailable == 4)
+        #expect(snap.resetCreditGroups.count == 2)
+        #expect(snap.resetCreditGroups[0].scope == .plan)
+        #expect(snap.resetCreditGroups[0].count == 1)
+        #expect(snap.resetCreditGroups[1].scope == .model("Fable"))
+        #expect(snap.resetCreditGroups[1].count == 3)
+        #expect(snap.resetCreditGroups[1].expiries.count == 3)
     }
 
     @Test("Claude bounds expiry expansion for an untrusted grant count")
@@ -2072,6 +2092,8 @@ struct ProviderHTTPTests {
         // did not measure, so it is not carried; the count and expiry are.
         #expect(snaps[1].resetCreditsApplicable == nil)
         #expect(snaps[1].resetCreditExpiries.count == 1)
+        #expect(!snaps[1].resetCreditGroups.isEmpty)
+        #expect(snaps[1].resetCreditGroups == snaps[0].resetCreditGroups)
         #expect(snaps[1].auxiliaryInfo?.contains("1 reset credit banked") == true)
         #expect(snaps[1].auxiliaryInfo?.contains("redeemable now") != true)
         #expect(snaps[2].resetCreditsAvailable == 1)
@@ -3147,15 +3169,19 @@ struct ProviderHTTPTests {
     /// whenever a cycle row is attached.
     @Test("a rebuild for a hand-entered cycle keeps the credit entries")
     func rebuildKeepsCredits() async throws {
-        let snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
+        var snap = try await claudeCredits(#""extra_usage":{"is_enabled":true,"used_credits":2050,"monthly_limit":20000,"currency":"USD"}"#)
         #expect(!snap.apiCredits.isEmpty)
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        snap.resetCreditGroups = [ResetCreditGroup(scope: .plan, count: 1, expiries: [expiry])]
 
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let attached = QuotaManager.attachingCycleRow(
             to: snap, cycle: SubscriptionCycle(anchorDate: now.addingTimeInterval(-86_400 * 4)), now: now)
         #expect(!attached.apiCredits.isEmpty)
+        #expect(attached.resetCreditGroups == snap.resetCreditGroups)
 
         let stripped = QuotaManager.removingStaleCycleRow(from: attached)
         #expect(stripped.apiCredits == snap.apiCredits)
+        #expect(stripped.resetCreditGroups == snap.resetCreditGroups)
     }
 }

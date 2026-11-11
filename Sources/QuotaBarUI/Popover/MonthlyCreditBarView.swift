@@ -31,11 +31,17 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
         if let end = credit.nextGrantAt,
            let length = DualBarMetrics.monthWindowLength(endingAt: end, calendar: calendar) {
             let start = end.addingTimeInterval(-length)
-            let value = now.timeIntervalSince(start) / length
-            if value.isFinite {
-                elapsed = min(max(value, 0), 1)
+            // Only a current cycle has a meaningful progress figure. A stale
+            // next-grant date from a failed read, or a date beyond the next
+            // cycle, must not be pinned to 100% or 0%: that would report a
+            // position in a cycle this reading never measured.
+            if now >= start, now < end {
+                let value = now.timeIntervalSince(start) / length
+                if value.isFinite {
+                    elapsed = min(max(value, 0), 1)
+                }
+                countdown = ResetCountdownBadge.compact(end, now: now)
             }
-            countdown = ResetCountdownBadge.compact(end, now: now)
         }
         self.fraction = elapsed
         self.percentText = elapsed.map { "\(Int(($0 * 100).rounded()))%" }
@@ -48,6 +54,8 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
         if let end = credit.nextGrantAt {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
             formatter.dateFormat = "d MMMM yyyy"
             parts.append("next credit \(formatter.string(from: end))")
         }

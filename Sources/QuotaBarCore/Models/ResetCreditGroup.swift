@@ -17,7 +17,7 @@ public enum ResetCreditScope: Sendable, Equatable, Hashable {
     /// A short name for the scope, used in the ticket line's spoken label.
     public var displayName: String {
         switch self {
-        case .plan: "Plan"
+        case .plan: "General"
         case .model(let name): name
         }
     }

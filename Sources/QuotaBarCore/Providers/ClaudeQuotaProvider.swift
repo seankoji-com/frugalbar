@@ -468,31 +468,8 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         return Dictionary(grouping: grants, by: \.creditScope)
             .map { scope, scopeGrants in
                 let total = scopeGrants.reduce(0) { $0 + ($1.resetsLeft ?? 0) }
-                let ordered = scopeGrants.enumerated().map {
-                    (index: $0.offset, grant: $0.element,
-                     expiry: CLIProxyClient.parseResetDate($0.element.endsAt))
-                }.sorted { lhs, rhs in
-                    switch (lhs.expiry, rhs.expiry) {
-                    case let (left?, right?) where left != right:
-                        left < right
-                    case (_?, nil):
-                        true
-                    case (nil, _?):
-                        false
-                    default:
-                        lhs.index < rhs.index
-                    }
-                }
-
-                var expiries: [Date?] = []
-                for item in ordered {
-                    guard let left = item.grant.resetsLeft, left > 0,
-                          expiries.count < ResetCreditTicketLimit.maxCount
-                    else { continue }
-                    let count = min(left, ResetCreditTicketLimit.maxCount - expiries.count)
-                    expiries.append(contentsOf: Array(repeating: item.expiry, count: count))
-                }
-                return ResetCreditGroup(scope: scope, count: total, expiries: expiries)
+                return ResetCreditGroup(scope: scope, count: total,
+                                        expiries: resetCreditExpiries(from: scopeGrants))
             }
             .filter { $0.count > 0 }
             .sorted { lhs, rhs in

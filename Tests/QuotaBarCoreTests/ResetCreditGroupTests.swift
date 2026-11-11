@@ -26,6 +26,26 @@ struct ResetCreditGroupTests {
                       clears: ["five_hour", "seven_day"]).creditScope == .plan)
         #expect(grant(id: "general", left: 1,
                       clears: ["seven_day_fable"]).creditScope == .model("Fable"))
+        // A launch grant can be named after a model while still clearing the
+        // plan-wide windows. What it clears decides, so this is the general
+        // ticket, not a Fable ticket.
+        #expect(grant(id: "launch-2610-fable", left: 1,
+                      clears: ["five_hour", "seven_day"]).creditScope == .plan)
+    }
+
+    @Test("grant order never moves a ticket between General and Fable")
+    func orderDoesNotMoveScopes() {
+        let groups = ClaudeQuotaProvider.resetCreditGroups(from: [
+            grant(id: "fable-c", left: 1, endsAt: "2026-11-23T00:00:00Z"),
+            grant(id: "general", left: 1, endsAt: "2026-11-20T00:00:00Z"),
+            grant(id: "fable-a", left: 1, endsAt: "2026-11-21T00:00:00Z"),
+            grant(id: "fable-b", left: 1, endsAt: "2026-11-22T00:00:00Z"),
+        ])
+        #expect(groups.count == 2)
+        #expect(groups[0].scope == .plan)
+        #expect(groups[0].count == 1)
+        #expect(groups[1].scope == .model("Fable"))
+        #expect(groups[1].count == 3)
     }
 
     @Test("one general ticket and three Fable tickets split into the two rows")

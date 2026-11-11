@@ -154,6 +154,32 @@ struct SubscriptionCreditPlacementTests {
         #expect(meter.countdown == nil)
     }
 
+    @Test("a passed or not-yet-started grant date draws no progress bar")
+    func monthlyCreditCycleBounds() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
+            now: now))
+        // The date has passed: a stale read must not be pinned to 100%.
+        let after = try #require(ISO8601DateFormatter().date(from: "2026-11-16T00:00:00Z"))
+        let passed = MonthlyCreditBarPresentation(credit: credit, now: after, calendar: utc)
+        #expect(passed.fraction == nil)
+        #expect(passed.percentText == nil)
+        #expect(passed.countdown == nil)
+
+        // The next grant is more than a month away, so the cycle has not
+        // started: no 0% bar either.
+        let farCredit = try #require(try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-12-30T00:00:00Z"}"#.utf8),
+            now: now))
+        let early = try #require(ISO8601DateFormatter().date(from: "2026-11-11T00:00:00Z"))
+        let notStarted = MonthlyCreditBarPresentation(credit: farCredit, now: early, calendar: utc)
+        #expect(notStarted.fraction == nil)
+        #expect(notStarted.percentText == nil)
+        #expect(notStarted.countdown == nil)
+    }
+
     @Test("banked tickets split under the plan and the Fable row")
     func resetTicketGroupsFollowScopes() throws {
         let expiry = now.addingTimeInterval(20 * 86_400)
@@ -172,13 +198,15 @@ struct SubscriptionCreditPlacementTests {
         #expect(p.modelResetCredits(for: "Fable")?.total == 3)
         #expect(p.modelResetCredits(for: "fable")?.total == 3)
         #expect(p.planResetCredits?.spoken
-            == "Plan 1 banked reset credit, Ticket 1: Expires in 20 days")
+            == "General 1 banked reset credit, Ticket 1: Expires in 20 days")
         #expect(p.modelResetCredits(for: "Fable")?.spoken
             == "Fable 3 banked reset credits, Ticket 1: Expires in 20 days, "
                 + "Ticket 2: Expires in 20 days, Ticket 3: Expires in 20 days")
         let label = p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
-        #expect(label.contains("Plan 1 banked reset credit"))
+        #expect(label.contains("General 1 banked reset credit"))
         #expect(label.contains("Fable 3 banked reset credits"))
+        #expect(p.unmatchedResetCredits(scopedLabels: []).map(\.scope) == [.model("Fable")])
+        #expect(p.unmatchedResetCredits(scopedLabels: ["Fable"]).isEmpty)
     }
 
     @Test("a ticket's visible expiry says how long is left, not the absolute date alone")
