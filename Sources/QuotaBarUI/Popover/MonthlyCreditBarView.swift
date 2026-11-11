@@ -7,7 +7,8 @@ import QuotaBarCore
 /// The fill is **billing-cycle progress**, not API spend: the linked payload
 /// publishes the monthly amount and the next grant date, but no used figure.
 /// Filling it with a spend number would invent one, so the bar measures the
-/// calendar month ending at `nextGrantAt` and the foot says "elapsed". It is
+/// calendar month ending at `nextGrantAt` and shows the compact percentage.
+/// The tooltip and VoiceOver label explain that it is elapsed time. It is
 /// deliberately outside quota maths — no urgency, sorting, advice, history or
 /// menu-bar icon reads it — and uses the informational `Theme.primary` rather
 /// than the quota state colours.
