@@ -160,22 +160,14 @@ struct MetricRowView: View {
         let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
             row(grid, presentation: p)
-            // The plan-wide ticket sits under the Claude Code title; a model
-            // ticket sits under the scoped row it resets. Both are drawn as
-            // their own lines, each glyph with its published expiry to the
-            // right.
-            if let planCredits = p.planResetCredits {
-                ResetTicketGroupView(credits: planCredits)
-            }
             // Model-scoped windows are drawn on their own line, with their
             // own percentage and reset. They deliberately stay out of the
             // window grid and out of the plan-wide bars (see
-            // `QuotaSnapshot.scopedBars`).
+            // `QuotaSnapshot.scopedBars`). Their tickets sit in the name
+            // column under the model title, matching the plan row.
             ForEach(Array(snapshot.scopedBars.enumerated()), id: \.offset) { _, bar in
-                scopedWindowRow(bar, now: grid.now)
-                if let credits = p.modelResetCredits(for: bar.label) {
-                    ResetTicketGroupView(credits: credits)
-                }
+                scopedWindowRow(bar, now: grid.now,
+                                credits: p.modelResetCredits(for: bar.label))
             }
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
@@ -358,7 +350,12 @@ struct MetricRowView: View {
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
                 }
-                if snapshot.vendorId == .openai, let credits = p.resetCredits {
+                // Tickets sit inside the name column, directly under the
+                // title, exactly like the OpenAI Codex row. Claude's plan
+                // group goes here; its model group goes under the scoped
+                // title in `scopedWindowRow`.
+                if let credits = snapshot.vendorId == .openai
+                    ? p.resetCredits : p.planResetCredits {
                     ResetTicketsView(credits: credits)
                 }
                 // A money provider has no plan. Its figure is printed once, in
@@ -486,15 +483,24 @@ struct MetricRowView: View {
     /// line under the row. It keeps the name/reset/bar/percentage anatomy of a
     /// window cell but is not a column: its label is the model, and a spent
     /// scoped window says nothing about the rest of the plan.
-    private func scopedWindowRow(_ bar: DualBarMetrics, now: Date) -> some View {
+    private func scopedWindowRow(
+        _ bar: DualBarMetrics, now: Date,
+        credits: MetricRowPresentation.ResetCredits? = nil
+    ) -> some View {
         HStack(alignment: .top, spacing: Theme.rowSpacing) {
-            // One line, like the plan-wide row: the compact reset sits on the
-            // right and the spoken label carries "weekly" and the countdown.
-            Text(bar.label)
-                .font(Theme.Typography.subtitle)
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .lineLimit(1)
-                .frame(width: Theme.nameColumnWidth, alignment: .leading)
+            // The model title, then its tickets directly beneath it. This is
+            // the same name-column anatomy as the OpenAI Codex row, not a
+            // separate full-width block below the bar.
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bar.label)
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                if let credits {
+                    ResetTicketsView(credits: credits)
+                }
+            }
+            .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
             VStack(spacing: 4) {
                 DualBarProgressView(metrics: bar, showsLabel: false)
