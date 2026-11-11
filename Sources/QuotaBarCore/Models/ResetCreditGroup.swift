@@ -2,11 +2,12 @@ import Foundation
 
 /// Which allowance a banked reset credit applies to.
 ///
-/// A grant that clears a Fable window is scoped to that model's weekly cap;
-/// every other grant is a plan-wide reset. What the grant clears decides
-/// first, with the vendor's own `id`/`label` as the fallback when it publishes
-/// no `clears`. The distinction is never inferred from the ticket order or a
-/// count.
+/// The vendor's grant `id` names the model first: an id containing Fable is
+/// model-scoped even when the grant also clears a shared plan window. With no
+/// model id, `clears` decides (a plan window is the general ticket; a
+/// Fable-only clear is the model ticket). The `label` is the fallback when
+/// neither is present. The distinction is never inferred from the ticket order
+/// or a count.
 public enum ResetCreditScope: Sendable, Equatable, Hashable {
     case plan
     case model(String)
