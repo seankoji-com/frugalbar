@@ -38,28 +38,29 @@ struct SubscriptionCreditLineView: View {
 }
 
 /// One scope's banked reset tickets, stacked one per line with each published
-/// expiry to the right — the OpenAI Codex layout. The enclosing provider row
-/// speaks the count and every expiry, so these glyph runs stay decorative.
+/// expiry to the right — the OpenAI Codex layout, including its 10.5pt ticket
+/// text and 2pt line spacing. The enclosing provider row speaks the count and
+/// every expiry, so these glyph runs stay decorative.
 struct ResetTicketGroupView: View {
     let credits: MetricRowPresentation.ResetCredits
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(0..<credits.tickets, id: \.self) { index in
                 HStack(spacing: 5) {
                     GoldenTicketView(index: index)
                         .help(credits.expiryText(at: index, now: credits.now))
                     Text(credits.expiryPhrase(at: index, now: credits.now))
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.9))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
             }
             if credits.overflow > 0 {
                 Text("+\(credits.overflow) more")
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
             }
         }
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
