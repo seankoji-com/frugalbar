@@ -462,7 +462,8 @@ keeps its cents) with an `MO` meter.
 **That meter is billing-cycle progress, never API spend.** The linked payload
 publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills
 the bar with the elapsed share of the calendar month ending at `next_grant_at`
-and prints "MO 87% elapsed" (plus the compact countdown). It uses the
+and prints "MO 87%" (plus the compact countdown); the tooltip and spoken label
+say "87% of the billing month elapsed". It uses the
 informational `Theme.primary`, not a quota state colour, and takes no part in
 `consumptionFraction`, urgency, sorting, advice, history or the menu-bar icon.
 When `next_grant_at` is absent, or the date is outside the current cycle, the

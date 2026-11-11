@@ -116,9 +116,6 @@ struct MonthlyCreditBarView: View {
                         Text(percent)
                             .font(Theme.Typography.gridPercent)
                             .foregroundStyle(Theme.primary)
-                        Text("elapsed")
-                            .font(.system(size: 9.5, weight: .regular))
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
                     }
                     Spacer(minLength: 0)
                     if let countdown = presentation.countdown {
