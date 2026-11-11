@@ -14,7 +14,8 @@ import QuotaBarCore
 public struct MonthlyCreditBarPresentation: Equatable, Sendable {
     public let title: String
     /// Elapsed share of the billing month, 0…1. Nil when the next grant date
-    /// is not published; then no bar and no percentage are drawn.
+    /// is not published, or when that date is outside the current cycle; then
+    /// no bar, percentage or countdown is drawn.
     public let fraction: Double?
     public let percentText: String?
     /// The compact countdown, e.g. "4d".

@@ -455,8 +455,9 @@ the bar with the elapsed share of the calendar month ending at `next_grant_at`
 and prints "MO 87% elapsed" (plus the compact countdown). It uses the
 informational `Theme.primary`, not a quota state colour, and takes no part in
 `consumptionFraction`, urgency, sorting, advice, history or the menu-bar icon.
-When `next_grant_at` is absent the bar and percentage are omitted; never fill
-the track with an invented 0% or a made-up spend. Do not drop the line when no
+When `next_grant_at` is absent, or the date is outside the current cycle, the
+bar, percentage and countdown are omitted; never fill the track with an
+invented 0% or a made-up spend, and never pin a passed date to 100%. Do not drop the line when no
 promo credit is published, and do not fold it into the promo row: they describe
 different pools.
 

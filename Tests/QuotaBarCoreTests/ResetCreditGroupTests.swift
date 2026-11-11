@@ -17,7 +17,7 @@ struct ResetCreditGroupTests {
             clears: clears, usableNow: true, endsAt: endsAt)
     }
 
-    @Test("a grant named Fable is model-scoped; every other grant is plan-wide")
+    @Test("what a grant clears decides its scope, with id/label as fallback")
     func scopeClassification() {
         #expect(grant(id: "launch-2610-fable", left: 1).creditScope == .model("Fable"))
         #expect(grant(id: "weekly-fable-reset", left: 1).creditScope == .model("Fable"))
