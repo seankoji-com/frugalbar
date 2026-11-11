@@ -429,19 +429,24 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
             self.endsAt = endsAt
         }
 
-        /// The allowance this grant resets. A grant the vendor names "Fable"
-        /// is scoped to that model's weekly cap; every other grant clears the
-        /// plan-wide windows and is drawn as the general Claude ticket.
+        /// The allowance this grant resets. A grant whose id names "Fable" is
+        /// scoped to that model's weekly cap; every other grant is drawn as
+        /// the general Claude ticket unless its clears name a model window.
         ///
-        /// Read from the grant's own id/label/clears, never from its position
+        /// Read from the grant's own id/clears/label, never from its position
         /// in the array: reordering the grants must not move a ticket between
         /// Claude and Fable.
         public var creditScope: ResetCreditScope {
-            // What a grant clears decides first. A launch grant can carry a
-            // model's name ("launch-2610-fable") while still clearing the
-            // plan-wide five-hour and weekly windows; filing it under Fable
-            // would put a general ticket under a model-only row. Only a grant
-            // that clears a Fable window is model-scoped.
+            // The grant id is the vendor's program key, so an id naming a
+            // model is that model's reset even when it also clears a shared
+            // plan window. The live Fable grants clear
+            // `seven_day_overage_included` alongside their Fable reset; the
+            // old clears-first rule filed all three under Claude Code.
+            if let id, id.range(of: "fable", options: .caseInsensitive) != nil {
+                return .model("Fable")
+            }
+            // With no model id, what the grant clears decides. A plan window
+            // wins over a label that merely mentions a model.
             if let clears, !clears.isEmpty {
                 let planWindows = ["five_hour", "seven_day", "seven_day_overage_included"]
                 if clears.contains(where: { planWindows.contains($0) }) {
@@ -452,10 +457,9 @@ public struct ClaudeOAuthUsageResponse: Decodable, Sendable, Equatable {
                 }
                 return .plan
             }
-            // Older grants do not publish `clears`; their own id/label is the
-            // only scope signal they carry.
-            let tokens = [id, label].compactMap { $0 }
-            if tokens.contains(where: { $0.range(of: "fable", options: .caseInsensitive) != nil }) {
+            // Older grants publish neither a model id nor `clears`; their
+            // label is the only scope signal left.
+            if let label, label.range(of: "fable", options: .caseInsensitive) != nil {
                 return .model("Fable")
             }
             return .plan

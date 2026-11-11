@@ -133,6 +133,7 @@ struct MonthlyCreditBarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        .padding(.top, 8)
         .help(presentation.spoken)
         // The enclosing provider row speaks this alongside its quota figures.
         .accessibilityHidden(true)
