@@ -38,7 +38,11 @@ public enum AccountModelLister {
     public static func live(_ vendor: VendorIdentifier) async -> [AccountModel]? {
         guard !TestHost.isActive else { return nil }
         switch vendor {
-        case .claude:    return await claude()
+        case .claude:
+            // This list uses the current local login and has no account key in
+            // its persisted watcher. Do not announce it for named accounts.
+            guard ClaudeAccountStore.all().isEmpty else { return nil }
+            return await claude()
         case .openai:    return await codex()
         case .gemini:    return await gemini()
         case .copilot:   return await copilot()

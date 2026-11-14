@@ -30,12 +30,52 @@ public struct ClaudeAccount: Codable, Sendable, Equatable, Identifiable {
     static func instanceID(identity: String) -> String { instancePrefix + digest(identity) }
 }
 
+/// A read-only credential file for a separately signed-in Claude Code profile.
+/// The source id survives renaming or correcting its path. It stores no token.
+public struct ClaudeProfileSource: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public var path: String
+    public var nickname: String?
+    public var isEnabled: Bool
+
+    public init(id: String = UUID().uuidString, path: String, nickname: String? = nil,
+                isEnabled: Bool = true) {
+        self.id = id; self.path = path; self.nickname = nickname; self.isEnabled = isEnabled
+    }
+}
+
 /// Only safe account descriptors and nicknames are stored here. Tokens remain
 /// in their existing credential sources. Tests pass a private preference suite.
 public enum ClaudeAccountStore {
     static let accountsKey = "QuotaBarClaudeAccounts"
     static let nicknamesKey = "QuotaBarClaudeAccountNicknames"
     static let badgesKey = "QuotaBarClaudeAccountBadges"
+    static let profilesKey = "QuotaBarClaudeProfileSources"
+
+    public static func profileSources(in defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeProfileSource] {
+        guard let data = defaults.data(forKey: profilesKey) else { return [] }
+        return (try? JSONDecoder().decode([ClaudeProfileSource].self, from: data)) ?? []
+    }
+
+    public static func setProfileSources(_ sources: [ClaudeProfileSource],
+                                         in defaults: UserDefaults = CredentialStore.preferences) {
+        guard let data = try? JSONEncoder().encode(sources) else { return }
+        defaults.set(data, forKey: profilesKey)
+        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
+    }
+
+    @discardableResult
+    public static func addProfile(path: String, nickname: String?,
+                                  in defaults: UserDefaults = CredentialStore.preferences) -> Bool {
+        guard !path.trimmed.isEmpty else { return false }
+        let normalized = URL(fileURLWithPath: NSString(string: path.trimmed).expandingTildeInPath)
+            .standardizedFileURL.path
+        var sources = profileSources(in: defaults)
+        guard !sources.contains(where: { $0.path == normalized }) else { return false }
+        sources.append(ClaudeProfileSource(path: normalized, nickname: nickname?.trimmed.nilIfEmpty))
+        setProfileSources(sources, in: defaults)
+        return true
+    }
 
     public static func all(in defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeAccount] {
         guard let data = defaults.data(forKey: accountsKey),
@@ -43,7 +83,7 @@ public enum ClaudeAccountStore {
         let names = defaults.dictionary(forKey: nicknamesKey) as? [String: String] ?? [:]
         return accounts.map { account in
             var copy = account
-            copy.nickname = names[account.id]
+            copy.nickname = names[account.id] ?? account.nickname
             return copy
         }
     }
@@ -67,7 +107,7 @@ public enum ClaudeAccountStore {
             let badge = badges[account.id]!
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
                 fallbackName: account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)",
-                planName: account.planName)
+                nickname: account.nickname, planName: account.planName)
         }.sorted { (Int($0.badge) ?? 0) < (Int($1.badge) ?? 0) }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)
@@ -83,4 +123,8 @@ public enum ClaudeAccountStore {
     public static func position(ofInstanceKey key: String) -> Int? {
         all().firstIndex { $0.id == key }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

@@ -120,6 +120,12 @@ extension QuotaHistoryStore {
             var conditions: [String] = [Self.retiredRowsExcluded]
             if vendorString != nil { conditions.append("vendor = ?") }
             if instanceID != nil { conditions.append("(instance_id = ? OR instance_id IS NULL)") }
+            if instanceID?.hasPrefix(ClaudeAccount.instancePrefix) == true {
+                // Old unbound account observations cannot be attributed to a
+                // newly named subscription. Status and community events are
+                // vendor-wide and still belong in every account's timeline.
+                conditions.append("(instance_id IS NOT NULL OR kind IN ('vendor_reset', 'outage_started', 'outage_resolved'))")
+            }
             if let kindStrings {
                 // An empty kind set is a real filter that matches nothing,
                 // not "no filter": a UI with every kind unticked shows nothing.

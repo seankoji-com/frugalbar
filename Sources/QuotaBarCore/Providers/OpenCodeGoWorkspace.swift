@@ -84,7 +84,8 @@ public enum OpenCodeGoWorkspaceStore {
     /// returned value is the shared vendor; the key itself is what keeps two
     /// workspaces apart.
     public static func vendor(forInstanceKey key: String) -> VendorIdentifier? {
-        key.hasPrefix(instancePrefix) ? .opencode : VendorIdentifier(rawValue: key)
+        if key.hasPrefix(ClaudeAccount.instancePrefix) { return .claude }
+        return key.hasPrefix(instancePrefix) ? .opencode : VendorIdentifier(rawValue: key)
     }
 
     /// The name an instance key belongs to, from the workspace list, or `nil`

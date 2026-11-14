@@ -317,12 +317,17 @@ public actor QuotaHistoryStore {
     /// current workspace list — and a removed workspace's history is still
     /// found rather than silently orphaned.
     static func vendorClause(for vendor: VendorIdentifier) -> (sql: String, values: [String]) {
-        guard vendor == .opencode else { return ("vendor = ?", [vendor.rawValue]) }
+        let prefix: String
+        switch vendor {
+        case .opencode: prefix = OpenCodeGoWorkspaceStore.instancePrefix
+        case .claude: prefix = ClaudeAccount.instancePrefix
+        default: return ("vendor = ?", [vendor.rawValue])
+        }
         // The instance prefix (`opencode-go:`) carries no `%` or `_`, so a bare
         // LIKE cannot mis-match; a future prefix containing one needs ESCAPE.
         return (
             "(vendor = ? OR vendor LIKE ?)",
-            [vendor.rawValue, OpenCodeGoWorkspaceStore.instancePrefix + "%"]
+            [vendor.rawValue, prefix + "%"]
         )
     }
 

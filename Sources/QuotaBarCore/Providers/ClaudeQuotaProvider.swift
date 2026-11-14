@@ -6,7 +6,10 @@ import CryptoKit
 /// claude-rate-monitor (MIT).
 public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     public let vendorId: VendorIdentifier = .claude
-    public var displayName: String { vendorId.displayName }
+    public var displayName: String { account?.name ?? vendorId.displayName }
+    public var instanceID: String { account?.id ?? vendorId.rawValue }
+    private let account: ClaudeAccount?
+    private let proxyAccount: CLIProxyAuthFile?
     public let category: MetricCategory = .aiSubscriptions
     private let apiKey: String?
     private let cliProxyConfig: CLIProxyConfig?
@@ -26,11 +29,18 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         directCredential: (@Sendable () async -> String?)? = nil,
         proxyBackoff: ClaudeProxyBackoff? = nil,
         grantSchedule: ClaudeGrantSchedule? = nil,
-        monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil
+        monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil,
+        account: ClaudeAccount? = nil,
+        proxyAccount: CLIProxyAuthFile? = nil
     ) {
-        self.monthlyCredit = monthlyCredit ?? { now in
-            guard !TestHost.isActive else { return nil }
-            return await ClaudeMonthlyCreditSession.shared.read(now: now)
+        self.account = account
+        self.proxyAccount = proxyAccount
+        if account != nil { self.monthlyCredit = { _ in nil } }
+        else {
+            self.monthlyCredit = monthlyCredit ?? { now in
+                guard !TestHost.isActive else { return nil }
+                return await ClaudeMonthlyCreditSession.shared.read(now: now)
+            }
         }
         self.apiKey = apiKey
         self.cliProxyConfig = cliProxyConfig
@@ -63,14 +73,51 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // A refused usage read does not erase the plan the credential states.
         // Without this, a rate-limited Claude header said only "Claude" while
         // the account's "Max (20x)" was sitting in the same Keychain blob.
-        if snapshot.planName == nil {
+        if snapshot.planName == nil, account == nil {
             snapshot.planName = await CredentialStore.claudePlanNameAsync()
         }
-        snapshot.monthlyAPICredit = await credit
+        // The web session's organization has no binding to these OAuth
+        // accounts. Keep it off named rows until that binding is established.
+        let monthly = await credit
+        snapshot.monthlyAPICredit = account == nil ? monthly : nil
+        snapshot.claudeAccount = account
+        if let account {
+            snapshot.planName = account.planName
+            snapshot.apiCredits = snapshot.apiCredits.map { entry in
+                APICreditEntry(id: account.id + "|" + entry.poolID, vendorId: entry.vendorId,
+                    label: entry.label, metric: entry.metric, currencyBasis: entry.currencyBasis,
+                    detail: entry.detail, source: entry.source,
+                    monthlyPeriodEnd: entry.monthlyPeriodEnd, monthlyPeriodStart: entry.monthlyPeriodStart,
+                    creditGrant: entry.creditGrant, poolID: entry.poolID,
+                    accountID: account.id, accountName: account.name)
+            }
+        }
         return snapshot
     }
 
     private func fetchUsageSnapshot(now: Date) async throws -> QuotaSnapshot {
+        if account != nil {
+            // A named row is a specific account, never the proxy's first file
+            // or whatever the current CLI login happens to be.
+            if let config = cliProxyConfig, proxyAccount != nil {
+                if !QuotaFetchContext.isUserInitiated,
+                   let until = await proxyBackoff.retryAfter(config: config,
+                        account: proxyAccount?.authIndex, now: now) {
+                    return unavailable(.rateLimited(retryAfter: until))
+                }
+                do {
+                    let snapshot = try await fetchSnapshotViaProxy(config: config, now: now)
+                    await proxyBackoff.record(nil, config: config, account: proxyAccount?.authIndex)
+                    return snapshot
+                } catch {
+                    let reason = unavailableReason(for: error)
+                    await proxyBackoff.record(reason, config: config, account: proxyAccount?.authIndex)
+                    return unavailable(reason)
+                }
+            }
+            guard let token = apiKey, !token.isEmpty else { return unavailable(.notConfigured) }
+            return try await fetchSnapshotDirect(token: token, now: now)
+        }
         // If an explicit apiKey is injected, use direct token path.
         if let injectedKey = apiKey, !injectedKey.isEmpty {
             return try await fetchSnapshotDirect(token: injectedKey, now: now)
@@ -137,13 +184,20 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
         // The grant block is read hourly rather than on every poll; the plain
         // usage read in between still carries every quota window.
-        let grantsKey = "proxy|\(config.url.absoluteString)"
+        let grantsKey = proxyAccount.map { "proxy|\(config.url.absoluteString)|\(instanceID)|\($0.authIndex)" }
+            ?? "proxy|\(config.url.absoluteString)"
         let includeGrants = await grantSchedule.shouldRequest(key: grantsKey, now: now)
         let usage: ClaudeOAuthUsageResponse
         let account: CLIProxyAuthFile
         do {
-            (usage, account) = try await CLIProxyClient.fetchClaudeUsage(
-                config: config, includeGrants: includeGrants, now: now)
+            if let selected = proxyAccount {
+                account = selected
+                usage = try await CLIProxyClient.fetchClaudeUsage(config: config, account: selected,
+                    includeGrants: includeGrants, now: now)
+            } else {
+                (usage, account) = try await CLIProxyClient.fetchClaudeUsage(
+                    config: config, includeGrants: includeGrants, now: now)
+            }
         } catch let error as ProviderError {
             if includeGrants {
                 await grantSchedule.record(key: grantsKey, now: now, served: false)
@@ -162,7 +216,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         let host = config.url.host ?? "proxy"
         var snapshot = try makeSnapshot(
             usage: usage,
-            planName: await CredentialStore.claudePlanNameAsync(),
+            planName: self.account?.planName,
             cliSource: "CLI Proxy (\(host))",
             now: now
         )
@@ -183,7 +237,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // Anthropic serves the banked-reset block (and throttles that variant
         // when it is polled), so it is asked for hourly; every other poll uses
         // the plain read, which carries the same windows.
-        let grantsKey = Self.grantKey(for: token)
+        let grantsKey = account.map { "direct|\($0.id)|\(Self.grantKey(for: token))" } ?? Self.grantKey(for: token)
         let includeGrants = await grantSchedule.shouldRequest(key: grantsKey, now: now)
         return try await readUsageDirect(
             token: token, grantsKey: grantsKey, includeGrants: includeGrants, now: now)
@@ -252,9 +306,12 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // The plan is published in the credential blob, not in this payload.
         // Absent, the row shows no subtitle at all — "Claude" under "Claude"
         // was a placeholder that said nothing.
+        let publishedPlan: String?
+        if let account { publishedPlan = account.planName }
+        else { publishedPlan = await CredentialStore.claudePlanNameAsync() }
         var snapshot = try makeSnapshot(
             usage: usage,
-            planName: await CredentialStore.claudePlanNameAsync(),
+            planName: publishedPlan,
             cliSource: "Claude OAuth usage endpoint",
             now: now
         )
@@ -299,7 +356,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         let primaryReset = row1?.resetsAt ?? row2?.resetsAt
 
         var snapshot = QuotaSnapshot(
-            id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+            id: instanceID, vendorId: vendorId, displayName: displayName,
             category: category, metric: .subscription(tierName: planName ?? "Claude", renewalDate: nil),
             status: .measured(urgency), resetsAt: primaryReset, lastUpdated: now,
             auxiliaryInfo: Self.auxiliaryInfo(grants: usage.resetGrants),
@@ -691,47 +748,42 @@ public struct ClaudeGrantReading: Sendable, Equatable {
 /// neither configuration nor credentials are written to logs or preferences.
 public actor ClaudeProxyBackoff {
     static let shared = ClaudeProxyBackoff()
-    private var configuration: CLIProxyConfig?
-    private var until: Date?
-    private var directTokenDigest: SHA256.Digest?
-    private var directUntil: Date?
+    private var waits: [String: Date] = [:]
+    private var directWaits: [String: Date] = [:]
 
     public init() {}
 
-    func retryAfter(config: CLIProxyConfig, now: Date) -> Date? {
-        guard configuration?.url == config.url,
-              configuration?.managementKey == config.managementKey,
-              let until, now < until else { return nil }
+    private func key(config: CLIProxyConfig, account: String?) -> String {
+        ClaudeAccount.digest(config.url.absoluteString + "|" + config.managementKey + "|" + (account ?? "legacy"))
+    }
+
+    func retryAfter(config: CLIProxyConfig, account: String? = nil, now: Date) -> Date? {
+        guard let until = waits[key(config: config, account: account)], now < until else { return nil }
         return until
     }
 
     func directRetryAfter(token: String, now: Date) -> Date? {
-        guard directTokenDigest == SHA256.hash(data: Data(token.utf8)), let directUntil, now < directUntil else { return nil }
+        guard let directUntil = directWaits[ClaudeAccount.digest(token)], now < directUntil else { return nil }
         return directUntil
     }
 
     func recordDirect(_ reason: UnavailableReason?, token: String) {
-        let digest = SHA256.hash(data: Data(token.utf8))
-        if directTokenDigest != digest { directUntil = nil }
-        directTokenDigest = digest
+        let digest = ClaudeAccount.digest(token)
         if case .rateLimited(let retryAfter)? = reason {
-            if let retryAfter { directUntil = max(directUntil ?? retryAfter, retryAfter) }
+            if let retryAfter { directWaits[digest] = max(directWaits[digest] ?? retryAfter, retryAfter) }
         } else if reason == nil {
-            directUntil = nil
+            directWaits[digest] = nil
         }
     }
 
-    func record(_ reason: UnavailableReason?, config: CLIProxyConfig) {
-        let sameCredential = configuration?.url == config.url
-            && configuration?.managementKey == config.managementKey
-        if !sameCredential { until = nil }
-        configuration = config
+    func record(_ reason: UnavailableReason?, config: CLIProxyConfig, account: String? = nil) {
+        let key = key(config: config, account: account)
         if case .rateLimited(let retryAfter)? = reason {
-            if let retryAfter { until = max(until ?? retryAfter, retryAfter) }
+            if let retryAfter { waits[key] = max(waits[key] ?? retryAfter, retryAfter) }
         } else if reason == nil {
             // Only a success retracts a throttle. A failed manual probe does
             // not give the automatic poll permission to ignore Retry-After.
-            until = nil
+            waits[key] = nil
         }
     }
 }
