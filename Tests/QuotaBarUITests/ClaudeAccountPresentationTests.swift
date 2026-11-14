@@ -124,4 +124,30 @@ struct ClaudeAccountPresentationTests {
             #expect(series.map { $0.latest?.value } == [0.27, 0.61])
         }
     }
+
+    @Test func provenAliasesKeepOneHistorySubjectAndOneWidgetSeries() {
+        var account = ClaudeAccountFixtures.personal
+        let alias = "claude-account:previous-unknown-source"
+        account.historyAliases = [alias]
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [],
+            workspaces: [], claudeAccounts: [account])
+        #expect(subjects[0].keys == [account.id, alias])
+        #expect(!subjects[0].keys.contains("claude"))
+        let records = [
+            QuotaHistoryStore.ReadingRecord(vendor: alias, barLabel: "WK", measuredAt: now.addingTimeInterval(-120),
+                fraction: 0.2, isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: nil, windowLength: QuotaWindow.week, elapsedOnly: false),
+            QuotaHistoryStore.ReadingRecord(vendor: account.id, barLabel: "WK", measuredAt: now,
+                fraction: 0.3, isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: nil, windowLength: QuotaWindow.week, elapsedOnly: false)
+        ]
+        let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: records)
+        #expect(overview.cards.count == 1 && overview.cards[0].sampleCount == 2)
+        let series = AggregateBurndownPresentation.series(readings: records, snapshots: [],
+            filters: WidgetFilters(metric: .used), now: now,
+            instanceName: { _ in account.name }, instancePosition: { _ in 0 },
+            canonicalInstanceKey: { $0 == alias ? account.id : $0 })
+        #expect(series.count == 1 && series[0].instanceID == account.id)
+        #expect(series[0].latest?.value == 0.3)
+    }
 }

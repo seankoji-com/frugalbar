@@ -41,6 +41,7 @@ private struct ClaudeAccountBinding: Codable, Sendable {
     let source: String
     let accountID: String
     let verified: Bool
+    var identity: String? = nil
 }
 
 /// A route is transient and never encoded. Only its opaque source key and safe
@@ -117,10 +118,18 @@ actor ClaudeAccountDiscovery {
                 let enabled = files.filter {
                     $0.provider.lowercased() == "claude" && $0.disabled != true && !$0.authIndex.isEmpty
                 }.sorted { ($0.id ?? $0.authIndex, $0.authIndex) < ($1.id ?? $1.authIndex, $1.authIndex) }
+                let fileIndices = Dictionary(grouping: enabled, by: { $0.id ?? "" })
+                    .mapValues { Set($0.map(\.authIndex)) }
                 var seen = Set<String>()
                 for file in enabled where seen.insert(file.authIndex).inserted {
                     let hint = Self.safeAccountHint(file.email).map { " · " + $0 } ?? ""
-                    routes.append(ClaudeAccountRoute(source: prefix + ClaudeAccount.digest((file.id ?? "") + "|" + file.authIndex),
+                    // A stable file id survives hub auth-index regeneration.
+                    // Ambiguous/missing ids use the exact credential index and
+                    // cannot falsely merge two unknown accounts.
+                    let sourceID: String
+                    if let id = file.id, !id.isEmpty, fileIndices[id]?.count == 1 { sourceID = "file|" + id }
+                    else { sourceID = "index|" + file.authIndex }
+                    routes.append(ClaudeAccountRoute(source: prefix + ClaudeAccount.digest(sourceID),
                         sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint, token: nil,
                         proxy: config, authFile: file, plan: nil, failure: nil, profile: nil))
                 }
@@ -179,19 +188,45 @@ actor ClaudeAccountDiscovery {
         guard !Task.isCancelled else { return [] }
         var groups: [String: [ClaudeAccountRoute]] = [:]
         var bindings: [ClaudeAccountBinding] = []
+        var identities: [String: String] = [:]
+        for binding in oldBindings {
+            if let identity = binding.identity { identities[identity] = binding.accountID }
+        }
+        // Promote an unknown source without moving its existing readings or
+        // nickname to a new id. If two such sources now prove identical, keep
+        // the oldest badge and retain the other's history as an explicit alias.
+        let verifiedGroups = Dictionary(grouping: discovered.filter { $0.profile != nil }, by: { $0.profile!.instanceID })
+        for (identity, routes) in verifiedGroups where identities[identity] == nil {
+            let candidates = routes.compactMap { route in
+                oldBindings.first { $0.source == route.source && !$0.verified }?.accountID
+            }
+            let previous = oldAccounts.first { candidates.contains($0.id) }
+            identities[identity] = previous?.id ?? identity
+        }
+        var aliases: [String: Set<String>] = [:]
         for route in discovered {
             if case .rateLimited(let until)? = route.failure, let until {
                 profileWaits[route.source] = (until, route.failure!)
             } else if route.profile != nil { profileWaits[route.source] = nil }
             let previous = oldBindings.first { $0.source == route.source }
-            let id = route.profile?.instanceID ?? previous?.accountID
+            let identity = route.profile?.instanceID
+            let id = identity.flatMap { identities[$0] } ?? previous?.accountID
                 ?? ClaudeAccount.instanceID(identity: "source|" + route.source)
             let verified = route.profile != nil || previous?.verified == true
-            bindings.append(ClaudeAccountBinding(source: route.source, accountID: id, verified: verified))
+            bindings.append(ClaudeAccountBinding(source: route.source, accountID: id, verified: verified,
+                identity: identity ?? previous?.identity))
+            if let identity, let previous, previous.accountID != id,
+               !previous.verified || previous.identity == identity {
+                aliases[id, default: []].insert(previous.accountID)
+                if let old = oldAccounts.first(where: { $0.id == previous.accountID }) {
+                    aliases[id, default: []].formUnion(old.historyAliases)
+                }
+            }
             if route.profile == nil, previous?.verified == true {
                 // A previously verified source cannot publish fresh quota under
                 // that name until its current credential identifies itself.
-                unavailableBindings.append((ClaudeAccountBinding(source: route.source, accountID: id, verified: true),
+                unavailableBindings.append((ClaudeAccountBinding(source: route.source, accountID: id, verified: true,
+                    identity: previous?.identity),
                     route.failure ?? .badResponse))
             } else {
                 groups[id, default: []].append(route)
@@ -203,7 +238,9 @@ actor ClaudeAccountDiscovery {
         var descriptors = groups.map { id, routes in
             ClaudeAccount(id: id, badge: "", sourceLabel: routes.map(\.sourceLabel).sorted().joined(separator: " · "),
                 fallbackName: routes.allSatisfy { $0.source.hasPrefix("direct|") } ? "This Mac" : "Account",
-                planName: routes.compactMap(\.plan).first)
+                planName: routes.compactMap(\.plan).first,
+                historyAliases: Set(oldAccounts.first { $0.id == id }?.historyAliases ?? [])
+                    .union(aliases[id] ?? []).sorted())
         }
         for (binding, _) in unavailableBindings where groups[binding.accountID] == nil {
             if let old = oldAccounts.first(where: { $0.id == binding.accountID }),

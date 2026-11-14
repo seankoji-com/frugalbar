@@ -48,11 +48,20 @@ public actor QuotaHistoryStore {
             self.windowLength = windowLength
             self.elapsedOnly = elapsedOnly
         }
+
+        /// Present a proven alias under its stable account id without changing
+        /// the stored observation or any figure it carries.
+        public func namingInstance(_ id: String) -> Self {
+            Self(vendor: id, barLabel: barLabel, measuredAt: measuredAt, fraction: fraction,
+                isBlocked: isBlocked, confidence: confidence, urgency: urgency,
+                resetsAt: resetsAt, windowLength: windowLength, elapsedOnly: elapsedOnly)
+        }
     }
 
     nonisolated public let databaseURL: URL
     let database: HistoryDatabase
     public let retentionInterval: TimeInterval
+    let instanceKeyLookup: @Sendable (String) -> [String]
 
     /// Returns the database URL. Under test runs (`isTestHost == true`), uses an
     /// isolated temporary folder to ensure tests never write to or read from the
@@ -84,23 +93,27 @@ public actor QuotaHistoryStore {
 
     public init(
         databaseURL: URL? = nil,
-        retentionInterval: TimeInterval = defaultRetentionInterval
+        retentionInterval: TimeInterval = defaultRetentionInterval,
+        instanceKeys: @escaping @Sendable (String) -> [String] = { ClaudeAccountStore.historyKeys(forInstanceKey: $0) }
     ) {
         let url = databaseURL ?? Self.databaseURL(isTestHost: TestHost.isActive)
         self.databaseURL = url
         self.database = HistoryDatabase(fileURL: url)
         self.retentionInterval = retentionInterval
+        self.instanceKeyLookup = instanceKeys
     }
 
     public init(
         databaseURL: URL? = nil,
         retentionInterval: TimeInterval = defaultRetentionInterval,
-        isTestHost: Bool
+        isTestHost: Bool,
+        instanceKeys: @escaping @Sendable (String) -> [String] = { ClaudeAccountStore.historyKeys(forInstanceKey: $0) }
     ) {
         let url = databaseURL ?? Self.databaseURL(isTestHost: isTestHost)
         self.databaseURL = url
         self.database = HistoryDatabase(fileURL: url)
         self.retentionInterval = retentionInterval
+        self.instanceKeyLookup = instanceKeys
     }
 
     private var isOpened = false
@@ -331,6 +344,11 @@ public actor QuotaHistoryStore {
         )
     }
 
+    static func instanceClause(keys: [String]) -> (sql: String, values: [String]) {
+        guard !keys.isEmpty else { return ("0", []) }
+        return ("vendor IN (" + Array(repeating: "?", count: keys.count).joined(separator: ",") + ")", keys)
+    }
+
     /// Fetches persisted readings filtered by vendor, label, or time range.
     ///
     /// `vendor` matches every instance that belongs to that vendor — for
@@ -349,7 +367,7 @@ public actor QuotaHistoryStore {
         try await ensureOpen()
 
         let vendorClause: (sql: String, values: [String])? = if let instanceID {
-            ("vendor = ?", [instanceID])
+            Self.instanceClause(keys: instanceKeyLookup(instanceID))
         } else if let vendor {
             Self.vendorClause(for: vendor)
         } else {
@@ -403,7 +421,7 @@ public actor QuotaHistoryStore {
 
             var results: [ReadingRecord] = []
             while try db.step(stmt) {
-                if let record = Self.readingRecord(from: stmt) { results.append(record) }
+                if let record = Self.readingRecord(from: stmt, instanceID: instanceID) { results.append(record) }
             }
             return results
             #else
@@ -416,12 +434,12 @@ public actor QuotaHistoryStore {
     /// Decodes one `reading` row selected as `vendor, bar_label, measured_at,
     /// fraction, is_blocked, confidence, urgency, resets_at, window_length,
     /// elapsed_only`, in that order. nil for a row with no vendor or label.
-    static func readingRecord(from stmt: OpaquePointer?) -> ReadingRecord? {
+    static func readingRecord(from stmt: OpaquePointer?, instanceID: String? = nil) -> ReadingRecord? {
         guard let vendorText = sqlite3_column_text(stmt, 0),
               let labelText = sqlite3_column_text(stmt, 1) else {
             return nil
         }
-        let vendor = String(cString: vendorText)
+        let vendor = instanceID ?? String(cString: vendorText)
         let label = String(cString: labelText)
         let measuredAt = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 2)))
 

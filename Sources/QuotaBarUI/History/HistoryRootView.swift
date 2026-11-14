@@ -1050,7 +1050,7 @@ public struct HistoryRootView: View {
             let allReadings = try await activeStore.fetchReadings(
                 vendor: subject.vendor,
                 since: since
-            ).filter { subject.keys.contains($0.vendor) }
+            ).filter { subject.keys.contains($0.vendor) }.map { $0.namingInstance(subject.id) }
 
             // Only consumption belongs on a "Used %" axis. A window that measures
             // elapsed time would otherwise be drawn — and paced — as quota spent.

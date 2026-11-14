@@ -29,6 +29,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     private var _duplicate = false
     private var _unknown = false
     private var _directOther = false
+    private var _rotateIndices = false
     private var calls: [(String, String)] = []
     var throttleA: Bool { get { lock.withLock { _throttleA } } set { lock.withLock { _throttleA = newValue } } }
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
@@ -37,6 +38,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     var duplicate: Bool { get { lock.withLock { _duplicate } } set { lock.withLock { _duplicate = newValue } } }
     var unknown: Bool { get { lock.withLock { _unknown } } set { lock.withLock { _unknown = newValue } } }
     var directOther: Bool { get { lock.withLock { _directOther } } set { lock.withLock { _directOther = newValue } } }
+    var rotateIndices: Bool { get { lock.withLock { _rotateIndices } } set { lock.withLock { _rotateIndices = newValue } } }
     func count(_ index: String, containing path: String) -> Int {
         lock.withLock { calls.filter { $0.0 == index && $0.1.contains(path) }.count }
     }
@@ -60,6 +62,13 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
                     ["id": "codex", "auth_index": "codex", "provider": "codex"]
                 ]
                 if _duplicate { files.append(["id": "file-a2", "auth_index": "a2", "provider": "claude"]) }
+                if _rotateIndices {
+                    files = files.map { file in
+                        var copy = file
+                        copy["auth_index"] = (file["auth_index"] as? String).map { $0 + "-new" }
+                        return copy
+                    }
+                }
                 if _reverse { files.reverse() }
                 return (200, [:], json(["files": files]))
             }
@@ -76,7 +85,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
             let index = payload["auth_index"] as? String ?? "direct"
             let path = payload["url"] as? String ?? request.url!.absoluteString
             calls.append((index, path))
-            let isA = index != "b"
+            let isA = !index.hasPrefix("b")
             if path.contains("/profile") {
                 if _profileDown || _unknown { return (200, [:], json(["status_code": 404, "body": "{}"])) }
                 let uuid = index == "direct" && _directOther ? Self.accountC : isA ? Self.accountA : Self.accountB
@@ -168,7 +177,7 @@ struct ClaudeAccountTests {
     func verifiedDedupAndUnknownSeparation() async throws {
         let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
         let fixture = ClaudeAccountFixture(); fixture.duplicate = true
-        try await withServer(fixture) {
+        await withServer(fixture) {
             let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config },
                 directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" })
             let providers = await discovery.providers(now: now)
@@ -209,6 +218,58 @@ struct ClaudeAccountTests {
             _ = try await read(providers)
             #expect(fixture.count("a", containing: "usage") == before + 1)
             #expect(fixture.count("b", containing: "cedar_ember") == 1)
+        }
+    }
+
+    @Test("later identity verification preserves the first source's nickname and proven duplicate history")
+    func identityPromotionPreservesHistory() async throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture(); fixture.duplicate = true; fixture.unknown = true
+        try await withServer(fixture) {
+            let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+            let first = await discovery.providers(now: now)
+            let old = try await read(first)
+            let aIDs = Set(old.values.filter { $0.row1?.primaryFraction == 0.21 }.map(\.id))
+            let winner = try #require(first.first { aIDs.contains($0.instanceID) }?.instanceID)
+            let alias = try #require(aIDs.first { $0 != winner })
+            ClaudeAccountStore.setNickname("Personal", for: winner, in: defaults)
+            fixture.unknown = false
+            let promoted = await discovery.providers(now: now.addingTimeInterval(120))
+            #expect(promoted.count == 2)
+            let current = try await read(promoted)
+            let account = try #require(current[winner]?.claudeAccount)
+            #expect(account.name == "Personal")
+            #expect(account.historyKeys == [winner, alias])
+            #expect(account.historyKeys.allSatisfy { $0 != "claude" })
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ClaudePromotion-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let keys = account.historyKeys
+            let store = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("history.sqlite3"), isTestHost: true,
+                instanceKeys: { $0 == winner ? keys : [$0] })
+            try await store.record(Array(old.values), now: now)
+            let history = try await store.fetchReadings(instanceID: winner)
+            #expect(history.count == 4)
+            #expect(history.allSatisfy { $0.vendor == winner })
+            #expect(Set(history.compactMap(\.fraction)) == [0.21, 0.35])
+        }
+    }
+
+    @Test("unknown identities keep stable file ids when a restarted hub regenerates auth indexes")
+    func stableFileIdentityWithoutProfile() async throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture(); fixture.unknown = true
+        try await withServer(fixture) {
+            let first = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+            let original = await first.providers(now: now)
+            fixture.rotateIndices = true
+            let restart = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+            let next = await restart.providers(now: now.addingTimeInterval(120))
+            #expect(next.map(\.instanceID) == original.map(\.instanceID))
+            let readings = try await read(next)
+            #expect(readings.count == 2)
+            #expect(Set(readings.values.compactMap { $0.row1?.primaryFraction }) == [0.21, 0.72])
+            #expect(fixture.count("a-new", containing: "usage") == 1)
+            #expect(fixture.count("b-new", containing: "usage") == 1)
         }
     }
 
@@ -278,7 +339,7 @@ struct ClaudeAccountTests {
         let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
         let fixture = ClaudeAccountFixture()
         let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
-        try await withServer(fixture) {
+        await withServer(fixture) {
             let manager = QuotaManager(cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, minPollInterval: 0),
                 providerFactory: { [] }, claudeProviderFactory: { await discovery.providers(now: now) })
             let initial = await manager.forceRefresh()

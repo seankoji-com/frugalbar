@@ -378,10 +378,12 @@ public enum AggregateBurndownPresentation {
         instancePosition: (String) -> Int? = {
             ClaudeAccountStore.position(ofInstanceKey: $0)
                 ?? OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0)
-        }
+        },
+        canonicalInstanceKey: (String) -> String = ClaudeAccountStore.canonicalInstanceKey
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
-        let inRange = HistoryPresentation.consumptionReadings(readings).filter { record in
+        let resolved = readings.map { $0.namingInstance(canonicalInstanceKey($0.vendor)) }
+        let inRange = HistoryPresentation.consumptionReadings(resolved).filter { record in
             record.measuredAt <= now && (start.map { record.measuredAt >= $0 } ?? true)
         }
 

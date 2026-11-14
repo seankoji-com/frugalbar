@@ -46,7 +46,7 @@ public enum HistoryOverviewPresentation {
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
-                return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name) }
+                return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name, keys: $0.historyKeys) }
                     + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
             }
             guard vendor == .opencode else {

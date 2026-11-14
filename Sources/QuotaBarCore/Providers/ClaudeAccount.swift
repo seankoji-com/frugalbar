@@ -11,16 +11,21 @@ public struct ClaudeAccount: Codable, Sendable, Equatable, Identifiable {
     public let fallbackName: String
     public var nickname: String?
     public var planName: String?
+    /// Previous source ids proven to be this same account. No readings are
+    /// reassigned until both published account and organization match.
+    public var historyAliases: [String] = []
+    public var historyKeys: [String] { [id] + historyAliases }
     public var name: String { nickname?.trimmed.nilIfEmpty ?? fallbackName }
 
     public init(id: String, badge: String, sourceLabel: String, fallbackName: String,
-                nickname: String? = nil, planName: String? = nil) {
+                nickname: String? = nil, planName: String? = nil, historyAliases: [String] = []) {
         self.id = id
         self.badge = badge
         self.sourceLabel = sourceLabel
         self.fallbackName = fallbackName
         self.nickname = nickname
         self.planName = planName
+        self.historyAliases = historyAliases
     }
 
     static func digest(_ value: String) -> String {
@@ -69,7 +74,7 @@ public enum ClaudeAccountStore {
                 ?? (account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)")
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
                 fallbackName: fallback,
-                planName: account.planName)
+                planName: account.planName, historyAliases: account.historyAliases)
         }.sorted { (Int($0.badge) ?? 0) < (Int($1.badge) ?? 0) }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)
@@ -79,11 +84,19 @@ public enum ClaudeAccountStore {
     }
 
     public static func displayName(forInstanceKey key: String) -> String? {
-        all().first { $0.id == key }?.name
+        all().first { $0.historyKeys.contains(key) }?.name
     }
 
     public static func position(ofInstanceKey key: String) -> Int? {
-        all().firstIndex { $0.id == key }
+        all().firstIndex { $0.historyKeys.contains(key) }
+    }
+
+    public static func historyKeys(forInstanceKey key: String) -> [String] {
+        all().first { $0.id == key }?.historyKeys ?? [key]
+    }
+
+    public static func canonicalInstanceKey(_ key: String) -> String {
+        all().first { $0.historyKeys.contains(key) }?.id ?? key
     }
 }
 

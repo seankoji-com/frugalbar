@@ -56,7 +56,8 @@ private struct ClaudeAccountNicknameView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Account \(account.badge) · \(account.fallbackName)")
+            Text(account.fallbackName == "Account \(account.badge)"
+                ? account.fallbackName : "Account \(account.badge) · \(account.fallbackName)")
             Text(account.sourceLabel).font(.caption).foregroundStyle(Theme.systemSecondaryText)
             HStack {
                 TextField("Nickname for account \(account.badge)", text: $nickname,
