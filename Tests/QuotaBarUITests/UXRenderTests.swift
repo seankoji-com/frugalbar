@@ -69,6 +69,16 @@ struct UXRenderTests {
             name: "claude-account-b1-long-nicknames", directory: directory)
     }
 
+    @Test func renderClaudeAccountHighFable() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        var account = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 0.99, fable: 0.95)
+        account.row1 = nil
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [account],
+            onSelect: { _ in }, now: ClaudeAccountFixtures.now)
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "claude-account-high-fable", directory: directory)
+    }
+
     @Test func renderClaudeAccountConfigurationB1() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
