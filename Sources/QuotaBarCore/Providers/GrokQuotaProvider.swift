@@ -59,13 +59,14 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         var proxyFailure: UnavailableReason?
         if let proxyConfig {
             do {
-                let snapshot = try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
-                if snapshot.status.confidence == .measured { return snapshot }
-                proxyFailure = snapshot.status.unavailableReason
+                return try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                proxyFailure = unavailableReason(for: error)
+                let reason = unavailableReason(for: error)
+                // A hub configured for another vendor did not attempt Grok.
+                // Its absent account must not mask the local token's verdict.
+                if reason != .notConfigured { proxyFailure = reason }
             }
         }
         guard let token = await directCredential(), !token.isEmpty else {
@@ -75,7 +76,9 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         // rejection or throttle must not hide a reading from the local one.
         do {
             let snapshot = try await fetchSnapshotDirect(token: token, now: now)
-            if snapshot.status.confidence == .measured || proxyFailure == nil { return snapshot }
+            // A published billing period or OD budget is still an answer when
+            // the headline percentage is absent. Preserve that partial read.
+            if snapshot.row1 != nil || proxyFailure == nil { return snapshot }
             return unavailable(proxyFailure ?? snapshot.status.unavailableReason ?? .badResponse)
         } catch is CancellationError {
             throw CancellationError()
@@ -102,6 +105,9 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         let planOverride: String? = if case .success(let name) = await tierNameOutcome { name } else { nil }
         var snapshot = Self.snapshot(from: billingConfig, tier: response.subscriptionTier,
             planOverride: planOverride, provider: self, now: now)
+        guard snapshot.row1 != nil else {
+            throw ProviderError(snapshot.status.unavailableReason ?? .badResponse)
+        }
         snapshot.cliSource = "CLI Proxy (\(config.url.host ?? "proxy"))"
         return snapshot
     }

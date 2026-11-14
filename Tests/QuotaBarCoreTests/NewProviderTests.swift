@@ -358,7 +358,7 @@ struct GrokQuotaProviderTests {
     private func withProxy(
         billingStatus: Int = 200, billingBody: String = grokLiveBody,
         outerStatus: Int = 200, settingsStatus: Int = 200, hangs: Bool = false,
-        directStatus: Int = 200, rawEnvelope: String? = nil,
+        directStatus: Int = 200, directBody: String = grokLiveBody, rawEnvelope: String? = nil,
         inventory: String = Self.inventory,
         operation: () async throws -> QuotaSnapshot
     ) async throws -> QuotaSnapshot {
@@ -377,7 +377,7 @@ struct GrokQuotaProviderTests {
         }
         NewProviderStub.install(host: StubHost.grok) { request in
             .init(status: directStatus, body: Data((request.url?.path == "/v1/settings"
-                ? #"{"subscription_tier_display":"SuperGrok"}"# : grokLiveBody).utf8),
+                ? #"{"subscription_tier_display":"SuperGrok"}"# : directBody).utf8),
                 headers: ["Retry-After": "45"])
         }
         defer {
@@ -543,6 +543,51 @@ struct GrokQuotaProviderTests {
             #expect(NewProviderStub.requests(host: Self.proxyHost).count == 1)
             #expect(snapshot.status == .unavailable(.notConfigured))
             #expect(snapshot.row1 == nil)
+            return snapshot
+        }
+    }
+
+    @Test("a proxy without xai accounts preserves the local credential's own failure", arguments: [
+        (401, UnavailableReason.credentialRejected),
+        (429, .rateLimited(retryAfter: Self.now.addingTimeInterval(45)))
+    ])
+    func unrelatedProxyKeepsDirectFailure(status: Int, expected: UnavailableReason) async throws {
+        _ = try await withProxy(directStatus: status,
+            inventory: #"{"files":[{"auth_index":"codex-only","provider":"codex"}]}"#) {
+            let snapshot = try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" })
+                .fetchSnapshot(now: Self.now)
+            #expect(NewProviderStub.requests(host: Self.proxyHost).count == 1)
+            #expect(!NewProviderStub.requests(host: StubHost.grok).isEmpty)
+            #expect(snapshot.status == .unavailable(expected))
+            #expect(snapshot.row1 == nil)
+            return snapshot
+        }
+    }
+
+    @Test("a published period and on-demand budget survive an absent headline percentage", arguments: [
+        "proxy", "direct-after-absent-xai", "direct-after-throttle"
+    ])
+    func partialBillingSurvives(route: String) async throws {
+        let partial = grokLiveBody
+            .replacingOccurrences(of: "\"creditUsagePercent\":21.0,", with: "")
+            .replacingOccurrences(of: "\"onDemandCap\":{\"val\":0}", with: "\"onDemandCap\":{\"val\":50}")
+            .replacingOccurrences(of: "\"onDemandUsed\":{\"val\":0}", with: "\"onDemandUsed\":{\"val\":10}")
+        let fromProxy = route == "proxy"
+        let inventory = route == "direct-after-absent-xai" ? #"{"files":[]}"# : Self.inventory
+        _ = try await withProxy(billingStatus: fromProxy ? 200 : 429, billingBody: partial,
+            directBody: partial, inventory: inventory) {
+            let snapshot = try await GrokQuotaProvider(cliProxyConfig: Self.proxy,
+                directCredential: { fromProxy ? nil : "local-token" }).fetchSnapshot(now: Self.now)
+            #expect(!NewProviderStub.requests(host: Self.proxyHost).isEmpty)
+            #expect(NewProviderStub.requests(host: StubHost.grok).isEmpty == fromProxy)
+            #expect(snapshot.status == .unavailable(.unsupported("Grok published no usage figure")))
+            #expect(snapshot.row1?.primaryFraction == nil)
+            #expect(snapshot.row1?.usedText == "Usage not published")
+            #expect(snapshot.resetsAt == GrokQuotaProvider.parseISO8601("2026-09-06T13:06:43.146982+00:00"))
+            #expect(snapshot.row2?.label == "OD")
+            #expect(snapshot.row2?.primaryFraction == 0.2)
+            #expect(snapshot.planName == (fromProxy ? "SuperGrok Lite" : "SuperGrok"))
+            #expect(snapshot.cliSource == (fromProxy ? "CLI Proxy (grok-proxy.example.invalid)" : "grok CLI"))
             return snapshot
         }
     }
