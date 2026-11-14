@@ -152,6 +152,7 @@ actor ClaudeAccountDiscovery {
         // Profile reads are independent. A slow or rejected account cannot
         // prevent another account's identity being resolved.
         let waits = profileWaits
+        let backoff = self.backoff
         let discovered = await withTaskGroup(of: ClaudeAccountRoute.self, returning: [ClaudeAccountRoute].self) { group in
             for route in routes {
                 group.addTask {
@@ -161,6 +162,15 @@ actor ClaudeAccountDiscovery {
                     do {
                         if !userInitiated, let wait = waits[route.source], now < wait.until {
                             throw ProviderError(wait.reason)
+                        }
+                        if !userInitiated {
+                            let until: Date?
+                            if let config = route.proxy, let file = route.authFile {
+                                until = await backoff.retryAfter(config: config, account: file.authIndex, now: now)
+                            } else if let token = route.token {
+                                until = await backoff.directRetryAfter(token: token, now: now)
+                            } else { until = nil }
+                            if let until { throw ProviderError(.rateLimited(retryAfter: until)) }
                         }
                         if let config = route.proxy, let file = route.authFile {
                             profile = try await CLIProxyClient.fetchClaudeProfile(config: config, account: file, now: now)

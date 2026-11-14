@@ -230,6 +230,28 @@ struct ClaudeAccountTests {
         }
     }
 
+    @Test("automatic identity reads respect that account's usage cooldown and manual refresh still probes it")
+    func discoveryRespectsAccountCooldown() async throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        let backoff = ClaudeProxyBackoff()
+        let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil }, backoff: backoff)
+        try await withServer(fixture) {
+            let first = await discovery.providers(now: now)
+            await backoff.record(.rateLimited(retryAfter: now.addingTimeInterval(300)), config: config, account: "a")
+            let automatic = await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                await discovery.providers(now: now.addingTimeInterval(120))
+            }
+            #expect(automatic.map(\.instanceID) == first.map(\.instanceID))
+            #expect(fixture.count("a", containing: "/profile") == 1)
+            #expect(fixture.count("b", containing: "/profile") == 2)
+            let manual = await discovery.providers(now: now.addingTimeInterval(240))
+            #expect(fixture.count("a", containing: "/profile") == 2)
+            let snapshots = try await read(manual)
+            #expect(snapshots.values.allSatisfy { $0.status.confidence == .measured })
+        }
+    }
+
     @Test("later identity verification preserves the first source's nickname and proven duplicate history")
     func identityPromotionPreservesHistory() async throws {
         let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
