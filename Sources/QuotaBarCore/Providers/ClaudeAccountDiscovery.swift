@@ -52,7 +52,6 @@ struct ClaudeAccountRoute: Sendable {
     let proxy: CLIProxyConfig?
     let authFile: CLIProxyAuthFile?
     let plan: String?
-    let nickname: String?
     let failure: UnavailableReason?
     let profile: ClaudeAccountProfile?
 }
@@ -123,7 +122,7 @@ actor ClaudeAccountDiscovery {
                     let hint = Self.safeAccountHint(file.email).map { " · " + $0 } ?? ""
                     routes.append(ClaudeAccountRoute(source: prefix + ClaudeAccount.digest((file.id ?? "") + "|" + file.authIndex),
                         sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint, token: nil,
-                        proxy: config, authFile: file, plan: nil, nickname: nil, failure: nil, profile: nil))
+                        proxy: config, authFile: file, plan: nil, failure: nil, profile: nil))
                 }
             } catch {
                 proxyInventoryFailed = true
@@ -136,7 +135,7 @@ actor ClaudeAccountDiscovery {
         if let token = directToken {
             routes.append(ClaudeAccountRoute(source: "direct|" + ClaudeAccount.digest(token),
                 sourceLabel: "This Mac's Claude Code session", token: token, proxy: nil, authFile: nil,
-                plan: await directPlan(), nickname: nil, failure: nil, profile: nil))
+                plan: await directPlan(), failure: nil, profile: nil))
         }
         // Profile reads are independent. A slow or rejected account cannot
         // prevent another account's identity being resolved.
@@ -169,7 +168,7 @@ actor ClaudeAccountDiscovery {
                     }
                     return ClaudeAccountRoute(source: route.source, sourceLabel: route.sourceLabel,
                         token: route.token, proxy: route.proxy, authFile: route.authFile,
-                        plan: profile?.planName ?? route.plan, nickname: route.nickname,
+                        plan: profile?.planName ?? route.plan,
                         failure: failure, profile: profile)
                 }
             }
@@ -204,7 +203,6 @@ actor ClaudeAccountDiscovery {
         var descriptors = groups.map { id, routes in
             ClaudeAccount(id: id, badge: "", sourceLabel: routes.map(\.sourceLabel).sorted().joined(separator: " · "),
                 fallbackName: routes.allSatisfy { $0.source.hasPrefix("direct|") } ? "This Mac" : "Account",
-                nickname: routes.compactMap(\.nickname).first,
                 planName: routes.compactMap(\.plan).first)
         }
         for (binding, _) in unavailableBindings where groups[binding.accountID] == nil {

@@ -42,7 +42,7 @@ public enum ClaudeAccountStore {
         let names = defaults.dictionary(forKey: nicknamesKey) as? [String: String] ?? [:]
         return accounts.map { account in
             var copy = account
-            copy.nickname = names[account.id] ?? account.nickname
+            copy.nickname = names[account.id]
             return copy
         }
     }
@@ -69,7 +69,7 @@ public enum ClaudeAccountStore {
                 ?? (account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)")
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
                 fallbackName: fallback,
-                nickname: account.nickname, planName: account.planName)
+                planName: account.planName)
         }.sorted { (Int($0.badge) ?? 0) < (Int($1.badge) ?? 0) }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)

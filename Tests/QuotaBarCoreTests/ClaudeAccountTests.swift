@@ -215,12 +215,17 @@ struct ClaudeAccountTests {
         try await withServer(fixture) {
             let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
             let first = await discovery.providers(now: now)
+            let firstID = try #require(first.first?.instanceID)
+            ClaudeAccountStore.setNickname("Work", for: firstID, in: defaults)
             fixture.inventoryDown = true
             let restarted = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
             let failed = await restarted.providers(now: now.addingTimeInterval(120))
             #expect(failed.map(\.instanceID) == first.map(\.instanceID))
             let snapshots = try await read(failed)
             #expect(snapshots.values.allSatisfy { $0.status.confidence == .unavailable && $0.bars.isEmpty })
+            #expect(snapshots[firstID]?.displayName == "Work")
+            ClaudeAccountStore.setNickname("", for: firstID, in: defaults)
+            #expect(ClaudeAccountStore.all(in: defaults).first { $0.id == firstID }?.name != "Work")
         }
     }
 
@@ -236,6 +241,51 @@ struct ClaudeAccountTests {
                 })
             #expect(await manager.forceRefresh().isEmpty)
             #expect(fixture.count("inventory", containing: "auth-files") == 0)
+        }
+    }
+
+    @Test("manager keeps only the failed account stale and a nickname survives its backoff")
+    func managerRetentionAndNickname() async throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+        try await withServer(fixture) {
+            let manager = QuotaManager(cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, minPollInterval: 0),
+                providerFactory: { [] }, claudeProviderFactory: { await discovery.providers(now: now) })
+            let initial = await manager.forceRefresh()
+            let aid = ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)
+            let bid = ClaudeAccountFixture.id(ClaudeAccountFixture.accountB)
+            #expect(initial[aid]?.row1?.primaryFraction == 0.21)
+            fixture.throttleA = true
+            let failed = await manager.forceRefresh()
+            #expect(failed[aid]?.staleReading != nil)
+            #expect(failed[aid]?.row1?.primaryFraction == 0.21)
+            #expect(failed[bid]?.staleReading == nil && failed[bid]?.row1?.primaryFraction == 0.72)
+            ClaudeAccountStore.setNickname("Work", for: aid, in: defaults)
+            let aRequests = fixture.count("a", containing: "usage")
+            let retained = await manager.refresh()
+            #expect(retained[aid]?.displayName == "Work")
+            #expect(retained[aid]?.row1?.primaryFraction == 0.21)
+            #expect(fixture.count("a", containing: "usage") == aRequests)
+            #expect(retained[bid]?.staleReading == nil)
+        }
+    }
+
+    @Test("an identity outage never republishes a previous account's quota as a fresh reading")
+    func identityFailureIsUnavailable() async throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        try await withServer(fixture) {
+            let discovery = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+            let first = await discovery.providers(now: now)
+            _ = try await read(first)
+            fixture.profileDown = true
+            let next = await discovery.providers(now: now.addingTimeInterval(120))
+            let unavailable = try await read(next)
+            #expect(Set(unavailable.keys) == Set(first.map(\.instanceID)))
+            #expect(unavailable.values.allSatisfy { $0.status.confidence == .unavailable && $0.bars.isEmpty })
+            #expect(fixture.count("a", containing: "usage") == 1)
+            #expect(fixture.count("b", containing: "usage") == 1)
         }
     }
 
@@ -269,7 +319,10 @@ struct ClaudeAccountTests {
                 publishedAt: now, snapshots: Array(snapshots.values), events: Array(events.prefix(2)))).get()
             let json = try #require(try JSONSerialization.jsonObject(with: document.data) as? [String: Any])
             let providers = try #require(json["providers"] as? [[String: Any]])
-            #expect(Set(providers.compactMap { $0["instanceId"] as? String }).count == 2)
+            let providerIDs = Set(providers.compactMap { $0["instanceId"] as? String })
+            #expect(providerIDs.count == 2)
+            let exportedEvents = try #require(json["events"] as? [[String: Any]])
+            #expect(Set(exportedEvents.compactMap { $0["instanceId"] as? String }) == providerIDs)
             let encoded = String(data: document.data, encoding: .utf8)!
             #expect(!encoded.contains("fixture-management"))
             #expect(!encoded.contains("proxy.example.test"))
