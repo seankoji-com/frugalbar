@@ -30,6 +30,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     private var _unknown = false
     private var _directOther = false
     private var _rotateIndices = false
+    private var _disableA = false
     private var calls: [(String, String)] = []
     var throttleA: Bool { get { lock.withLock { _throttleA } } set { lock.withLock { _throttleA = newValue } } }
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
@@ -39,6 +40,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     var unknown: Bool { get { lock.withLock { _unknown } } set { lock.withLock { _unknown = newValue } } }
     var directOther: Bool { get { lock.withLock { _directOther } } set { lock.withLock { _directOther = newValue } } }
     var rotateIndices: Bool { get { lock.withLock { _rotateIndices } } set { lock.withLock { _rotateIndices = newValue } } }
+    var disableA: Bool { get { lock.withLock { _disableA } } set { lock.withLock { _disableA = newValue } } }
     func count(_ index: String, containing path: String) -> Int {
         lock.withLock { calls.filter { $0.0 == index && $0.1.contains(path) }.count }
     }
@@ -62,6 +64,13 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
                     ["id": "codex", "auth_index": "codex", "provider": "codex"]
                 ]
                 if _duplicate { files.append(["id": "file-a2", "auth_index": "a2", "provider": "claude"]) }
+                if _disableA {
+                    files = files.map { file in
+                        var copy = file
+                        if (file["auth_index"] as? String)?.hasPrefix("a") == true { copy["disabled"] = true }
+                        return copy
+                    }
+                }
                 if _rotateIndices {
                     files = files.map { file in
                         var copy = file
@@ -251,6 +260,14 @@ struct ClaudeAccountTests {
             #expect(history.count == 4)
             #expect(history.allSatisfy { $0.vendor == winner })
             #expect(Set(history.compactMap(\.fraction)) == [0.21, 0.35])
+            fixture.disableA = true
+            let disabled = await discovery.providers(now: now.addingTimeInterval(240))
+            #expect(disabled.count == 1 && !disabled.contains { $0.instanceID == winner })
+            fixture.disableA = false
+            let restarted = ClaudeAccountDiscovery(defaultsSuiteName: suite, proxyConfig: { config }, directCredential: { nil })
+            let restored = try await read(await restarted.providers(now: now.addingTimeInterval(360)))
+            #expect(restored[winner]?.displayName == "Personal")
+            #expect(restored[winner]?.claudeAccount?.historyKeys == [winner, alias])
         }
     }
 

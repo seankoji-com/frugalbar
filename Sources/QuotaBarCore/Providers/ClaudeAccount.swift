@@ -41,13 +41,16 @@ public enum ClaudeAccountStore {
     static let accountsKey = "QuotaBarClaudeAccounts"
     static let nicknamesKey = "QuotaBarClaudeAccountNicknames"
     static let badgesKey = "QuotaBarClaudeAccountBadges"
+    static let aliasesKey = "QuotaBarClaudeAccountHistoryAliases"
     public static func all(in defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeAccount] {
         guard let data = defaults.data(forKey: accountsKey),
               let accounts = try? JSONDecoder().decode([ClaudeAccount].self, from: data) else { return [] }
         let names = defaults.dictionary(forKey: nicknamesKey) as? [String: String] ?? [:]
+        let aliases = defaults.dictionary(forKey: aliasesKey) as? [String: [String]] ?? [:]
         return accounts.map { account in
             var copy = account
             copy.nickname = names[account.id]
+            copy.historyAliases = aliases[account.id] ?? account.historyAliases
             return copy
         }
     }
@@ -66,20 +69,23 @@ public enum ClaudeAccountStore {
     static func saveDiscovered(_ accounts: [ClaudeAccount], in defaults: UserDefaults) -> [ClaudeAccount] {
         let previous = all(in: defaults)
         var badges = defaults.dictionary(forKey: badgesKey) as? [String: String] ?? [:]
+        var aliases = defaults.dictionary(forKey: aliasesKey) as? [String: [String]] ?? [:]
         var next = (badges.values.compactMap(Int.init).max() ?? 0) + 1
         let result = accounts.sorted { $0.id < $1.id }.map { account in
             if badges[account.id] == nil { badges[account.id] = String(next); next += 1 }
             let badge = badges[account.id]!
+            aliases[account.id] = Set(aliases[account.id] ?? []).union(account.historyAliases).sorted()
             let fallback = previous.first { $0.id == account.id }?.fallbackName
                 ?? (account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)")
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
                 fallbackName: fallback,
-                planName: account.planName, historyAliases: account.historyAliases)
+                planName: account.planName, historyAliases: aliases[account.id] ?? [])
         }.sorted { (Int($0.badge) ?? 0) < (Int($1.badge) ?? 0) }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)
         }
         defaults.set(badges, forKey: badgesKey)
+        defaults.set(aliases, forKey: aliasesKey)
         return all(in: defaults)
     }
 

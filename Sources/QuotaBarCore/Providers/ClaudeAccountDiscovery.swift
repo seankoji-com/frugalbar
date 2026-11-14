@@ -137,7 +137,10 @@ actor ClaudeAccountDiscovery {
                 proxyInventoryFailed = true
                 let reason = unavailableReason(for: error)
                 inventoryFailure = reason
-                unavailableBindings += oldBindings.filter { $0.source.hasPrefix(Self.proxySourcePrefix(config)) }
+                let activeIDs = Set(oldAccounts.map(\.id))
+                unavailableBindings += oldBindings.filter {
+                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
+                }
                     .map { ($0, reason) }
             }
         }
@@ -257,6 +260,11 @@ actor ClaudeAccountDiscovery {
             return remember(result, signature: signature, now: now, userInitiated: userInitiated)
         }
         let accounts = ClaudeAccountStore.saveDiscovered(descriptors, in: defaults)
+        // Retain identity bindings while a hub account is disabled or removed.
+        // They are metadata, not active routes; rediscovery must recover the
+        // same account id and nickname rather than start a new history line.
+        let currentSources = Set(bindings.map(\.source))
+        bindings += oldBindings.filter { !currentSources.contains($0.source) }
         if let data = try? JSONEncoder().encode(bindings) { defaults.set(data, forKey: Self.bindingsKey) }
         let result: [any QuotaProvider] = accounts.map { account in
             ClaudeAccountQuotaProvider(account: account, routes: groups[account.id] ?? [],
