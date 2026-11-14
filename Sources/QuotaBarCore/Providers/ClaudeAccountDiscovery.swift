@@ -199,12 +199,15 @@ actor ClaudeAccountDiscovery {
         // nickname to a new id. If two such sources now prove identical, keep
         // the oldest badge and retain the other's history as an explicit alias.
         let verifiedGroups = Dictionary(grouping: discovered.filter { $0.profile != nil }, by: { $0.profile!.instanceID })
+        let badges = defaults.dictionary(forKey: ClaudeAccountStore.badgesKey) as? [String: String] ?? [:]
         for (identity, routes) in verifiedGroups where identities[identity] == nil {
             let candidates = routes.compactMap { route in
                 oldBindings.first { $0.source == route.source && !$0.verified }?.accountID
             }
-            let previous = oldAccounts.first { candidates.contains($0.id) }
-            identities[identity] = previous?.id ?? identity
+            let previousID = candidates.min {
+                (Int(badges[$0] ?? "") ?? Int.max, $0) < (Int(badges[$1] ?? "") ?? Int.max, $1)
+            }
+            identities[identity] = previousID ?? identity
         }
         var aliases: [String: Set<String>] = [:]
         for route in discovered {

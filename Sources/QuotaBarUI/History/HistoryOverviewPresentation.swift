@@ -156,14 +156,13 @@ public enum HistoryOverviewPresentation {
         readings: [QuotaHistoryStore.ReadingRecord],
         bucketSeconds: Int = 0
     ) -> (cards: [Card], unread: [Unread], empty: [Subject]) {
-        let consumption = HistoryPresentation.consumptionReadings(readings)
         let maxGap = sparklineMaxGap(bucketSeconds: bucketSeconds)
         var cards: [Card] = []
         var unread: [Unread] = []
         var empty: [Subject] = []
         for subject in subjects {
-            let all = readings.filter { subject.keys.contains($0.vendor) }
-            let own = consumption.filter { subject.keys.contains($0.vendor) }
+            let all = readings.filter { subject.keys.contains($0.vendor) }.map { $0.namingInstance(subject.id) }
+            let own = HistoryPresentation.consumptionReadings(all)
             guard let label = longestMeasuredLabel(own) else {
                 if let lastPoll = all.max(by: { $0.measuredAt < $1.measuredAt }) {
                     unread.append(Unread(subject: subject, lastPoll: lastPoll))

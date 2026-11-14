@@ -242,6 +242,9 @@ struct ClaudeAccountTests {
             let winner = try #require(first.first { aIDs.contains($0.instanceID) }?.instanceID)
             let alias = try #require(aIDs.first { $0 != winner })
             ClaudeAccountStore.setNickname("Personal", for: winner, in: defaults)
+            fixture.disableA = true
+            #expect(await discovery.providers(now: now.addingTimeInterval(60)).count == 1)
+            fixture.disableA = false
             fixture.unknown = false
             let promoted = await discovery.providers(now: now.addingTimeInterval(120))
             #expect(promoted.count == 2)
@@ -434,5 +437,71 @@ struct ClaudeAccountTests {
             #expect(!encoded.contains("fixture-management"))
             #expect(!encoded.contains("proxy.example.test"))
         }
+    }
+
+    @Test("forecast includes proven aliases without counting a duplicate poll or another account")
+    func forecastIncludesProvenAliases() throws {
+        let id = "claude-account:forecast"
+        let alias = "claude-account:forecast-alias"
+        var snapshot = QuotaSnapshot(id: id, vendorId: .claude, displayName: "Work",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.4, label: "5H", windowLength: QuotaWindow.fiveHours))
+        snapshot.claudeAccount = ClaudeAccount(id: id, badge: "1", sourceLabel: "Fixture",
+            fallbackName: "Work", historyAliases: [alias])
+        func record(_ key: String, _ secondsAgo: TimeInterval, _ fraction: Double) -> QuotaHistoryStore.ReadingRecord {
+            .init(vendor: key, barLabel: "5H", measuredAt: now.addingTimeInterval(-secondsAgo),
+                fraction: fraction, isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: nil, windowLength: QuotaWindow.fiveHours, elapsedOnly: false)
+        }
+        let readings = [record(alias, 1800, 0.2), record(alias, 900, 0.3), record(id, 0, 0.4),
+                        record(alias, 0, 0.4), record("claude-account:unrelated", 0, 0.99)]
+        let forecast = try #require(BurnRateForecast.binding(for: snapshot, readings: readings, now: now))
+        #expect(forecast.instanceID == id && forecast.sampleCount == 3)
+        #expect(abs(forecast.fractionPerHour - 0.4) < 0.000001)
+    }
+
+    @Test("a merged source nickname is preserved once and can still be cleared")
+    func mergedNicknameCanBeCleared() throws {
+        let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }
+        let first = ClaudeAccount(id: "claude-account:nickname-first", badge: "", sourceLabel: "Fixture", fallbackName: "Account")
+        let second = ClaudeAccount(id: "claude-account:nickname-second", badge: "", sourceLabel: "Fixture", fallbackName: "Account")
+        _ = ClaudeAccountStore.saveDiscovered([first, second], in: defaults)
+        ClaudeAccountStore.setNickname("Work", for: second.id, in: defaults)
+        var merged = first
+        merged.historyAliases = [second.id]
+        let result = ClaudeAccountStore.saveDiscovered([merged], in: defaults)
+        #expect(result.first?.name == "Work")
+        ClaudeAccountStore.setNickname("", for: first.id, in: defaults)
+        let cleared = ClaudeAccountStore.saveDiscovered([merged], in: defaults)
+        #expect(cleared.first?.name != "Work")
+    }
+
+    @Test("credit balance history includes proven aliases and keeps the latest real observation per bucket")
+    func balanceHistoryIncludesProvenAliases() async throws {
+        let id = "claude-account:balance"
+        let alias = "claude-account:balance-alias"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ClaudeBalanceAlias-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("history.sqlite3"), isTestHost: true,
+            instanceKeys: { $0 == id ? [id, alias] : [$0] })
+        func snapshot(_ key: String, _ value: Decimal, currency: String = "USD") -> QuotaSnapshot {
+            var snapshot = QuotaSnapshot(id: key, vendorId: .claude, displayName: "Fixture",
+                category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+                status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+            snapshot.apiCredits = [APICreditEntry(id: key + "|claude.extra-usage", vendorId: .claude,
+                label: "Extra usage", metric: .currency(balance: value, limit: nil, spent: nil, currencyCode: currency),
+                currencyBasis: .prepaidCredit, poolID: "claude.extra-usage", accountID: key)]
+            return snapshot
+        }
+        try await store.record([snapshot(alias, 12.5), snapshot(alias, 77, currency: "AUD")], now: now.addingTimeInterval(-7200))
+        let current = snapshot(id, 10)
+        try await store.record([current], now: now.addingTimeInterval(-3600))
+        try await store.record([snapshot(alias, 9.25), snapshot("claude-account:other", 333)], now: now.addingTimeInterval(-3500))
+        let seriesID = try #require(BalanceSeries.of(current.apiCredits[0])?.id)
+        let result = try await store.fetchBalanceSeries(since: now.addingTimeInterval(-8000), until: now,
+            bucketSeconds: 3600, seriesIds: [seriesID])
+        #expect(result[seriesID]?.map(\.value) == [Decimal(string: "12.5")!, Decimal(string: "9.25")!])
+        #expect(result.count == 1)
     }
 }

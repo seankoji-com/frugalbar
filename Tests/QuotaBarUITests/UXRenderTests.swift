@@ -9,6 +9,26 @@ import WebKit
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    @Test func renderClaudeAliasHistory() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = ClaudeAccountFixtures.now
+        var account = ClaudeAccountFixtures.personal
+        account.historyAliases = ["claude-account:previous-source"]
+        let subject = HistoryOverviewPresentation.Subject(id: account.id, vendor: .claude,
+            name: account.name, keys: account.historyKeys)
+        let readings = account.historyKeys.reversed().enumerated().map { index, key in
+            QuotaHistoryStore.ReadingRecord(vendor: key, barLabel: "WK",
+                measuredAt: now.addingTimeInterval(index == 0 ? -1800 : 0), fraction: index == 0 ? 0.2 : 0.4,
+                isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: now.addingTimeInterval(86400), windowLength: QuotaWindow.week, elapsedOnly: false)
+        }
+        let card = try #require(HistoryOverviewPresentation.overview(subjects: [subject], readings: readings).cards.first)
+        try await save(HistoryOverviewCardView(card: card, isSelected: true, onSelect: {})
+            .padding(12).frame(width: 260).background(Theme.surface),
+            name: "claude-account-alias-overview", directory: directory)
+    }
+
     @Test func renderClaudeAccountRailB1() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

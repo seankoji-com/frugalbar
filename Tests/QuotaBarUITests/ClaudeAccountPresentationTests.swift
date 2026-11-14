@@ -143,6 +143,8 @@ struct ClaudeAccountPresentationTests {
         ]
         let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: records)
         #expect(overview.cards.count == 1 && overview.cards[0].sampleCount == 2)
+        #expect(overview.cards[0].segments.count == 1)
+        #expect(overview.cards[0].segments.first?.points.count == 2)
         let series = AggregateBurndownPresentation.series(readings: records, snapshots: [],
             filters: WidgetFilters(metric: .used), now: now,
             instanceName: { _ in account.name }, instancePosition: { _ in 0 },

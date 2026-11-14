@@ -144,10 +144,26 @@ public struct BurnRateForecast: Sendable, Equatable {
         lookback: TimeInterval = defaultLookback
     ) -> BurnRateForecast? {
         guard snapshot.status.confidence == .measured, snapshot.staleReading == nil else { return nil }
+        let history: [QuotaHistoryStore.ReadingRecord]
+        if let account = snapshot.claudeAccount, !account.historyAliases.isEmpty {
+            struct SampleKey: Hashable { let label: String; let date: Date }
+            let keys = Set(account.historyKeys)
+            let own = readings.filter {
+                keys.contains($0.vendor) && $0.confidence == .measured && !$0.elapsedOnly && $0.fraction != nil
+            }.sorted {
+                if ($0.vendor == snapshot.id) != ($1.vendor == snapshot.id) { return $0.vendor == snapshot.id }
+                return $0.vendor < $1.vendor
+            }
+            // Two source credentials for one verified account can record the
+            // same poll. It is one sample, never extra confidence in a slope.
+            var seen = Set<SampleKey>()
+            history = own.filter { seen.insert(SampleKey(label: $0.barLabel, date: $0.measuredAt)).inserted }
+                .map { $0.namingInstance(snapshot.id) }
+        } else { history = readings }
         let forecasts = snapshot.bars
             .filter { !$0.measuresElapsedTimeOnly }
             .compactMap {
-                compute(instanceID: snapshot.id, barLabel: $0.label, readings: readings,
+                compute(instanceID: snapshot.id, barLabel: $0.label, readings: history,
                         resetsAt: $0.resetsAt, now: now, lookback: lookback)
             }
         let limited = forecasts.compactMap { f -> (BurnRateForecast, Date)? in

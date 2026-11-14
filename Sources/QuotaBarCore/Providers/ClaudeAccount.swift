@@ -70,11 +70,18 @@ public enum ClaudeAccountStore {
         let previous = all(in: defaults)
         var badges = defaults.dictionary(forKey: badgesKey) as? [String: String] ?? [:]
         var aliases = defaults.dictionary(forKey: aliasesKey) as? [String: [String]] ?? [:]
+        var names = defaults.dictionary(forKey: nicknamesKey) as? [String: String] ?? [:]
         var next = (badges.values.compactMap(Int.init).max() ?? 0) + 1
         let result = accounts.sorted { $0.id < $1.id }.map { account in
             if badges[account.id] == nil { badges[account.id] = String(next); next += 1 }
             let badge = badges[account.id]!
             aliases[account.id] = Set(aliases[account.id] ?? []).union(account.historyAliases).sorted()
+            for alias in aliases[account.id] ?? [] {
+                if names[account.id] == nil { names[account.id] = names[alias] }
+                // Once merged, clearing the account nickname must not revive
+                // a former source's name on the next discovery.
+                names[alias] = nil
+            }
             let fallback = previous.first { $0.id == account.id }?.fallbackName
                 ?? (account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)")
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
@@ -86,6 +93,7 @@ public enum ClaudeAccountStore {
         }
         defaults.set(badges, forKey: badgesKey)
         defaults.set(aliases, forKey: aliasesKey)
+        defaults.set(names, forKey: nicknamesKey)
         return all(in: defaults)
     }
 
