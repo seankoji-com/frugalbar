@@ -36,7 +36,8 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
     }
 
     public init(entry: APICreditEntry) {
-        self.title = "\(entry.vendorId.displayName) \(entry.label)"
+        let account = entry.accountName.map { " · \($0)" } ?? ""
+        self.title = "\(entry.vendorId.displayName)\(account) \(entry.label)"
         self.figure = Self.figure(for: entry.metric)
         self.detail = entry.detail
         self.source = entry.source
@@ -49,6 +50,10 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
         var parts = [title, MetricRowPresentation.spoken(for: entry.metric)]
         if let detail = entry.detail { parts.append(detail) }
         self.spoken = parts.joined(separator: ", ")
+    }
+
+    public static func isStale(entry: APICreditEntry, staleInstances: Set<String>) -> Bool {
+        staleInstances.contains(entry.accountID ?? entry.vendorId.rawValue)
     }
 
     /// The figure as the vendor published it.

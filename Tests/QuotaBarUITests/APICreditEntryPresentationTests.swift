@@ -11,6 +11,23 @@ import QuotaBarCore
 @Suite("API credit entry presentation")
 struct APICreditEntryPresentationTests {
 
+    @Test func namedAccountCreditsKeepTheirOwnerAndIndependentStaleness() {
+        func credit(_ account: ClaudeAccount) -> APICreditEntry {
+            APICreditEntry(id: account.id + "|claude.extra-usage", vendorId: .claude,
+                label: "Extra usage", metric: .currency(balance: 12, limit: nil, spent: nil, currencyCode: "USD"),
+                poolID: "claude.extra-usage", accountID: account.id, accountName: account.name)
+        }
+        let personal = credit(ClaudeAccountFixtures.personal)
+        let work = credit(ClaudeAccountFixtures.work)
+        let stale: Set<String> = [work.accountID!]
+        #expect(APICreditEntryPresentation(entry: personal).title == "Claude · Personal Extra usage")
+        #expect(APICreditEntryPresentation(entry: work).spoken.contains("Work"))
+        #expect(!APICreditEntryPresentation.isStale(entry: personal, staleInstances: stale))
+        #expect(APICreditEntryPresentation.isStale(entry: work, staleInstances: stale))
+        #expect(!APICreditEntryPresentation.isStale(entry: personal, staleInstances: ["claude"]))
+        #expect(BalanceSeries.of(personal)?.id != BalanceSeries.of(work)?.id)
+    }
+
     private func entry(_ metric: MetricType, detail: String? = nil) -> APICreditEntry {
         APICreditEntry(
             id: "x", vendorId: .openai, label: "API credits",

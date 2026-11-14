@@ -17,6 +17,7 @@ public actor QuotaManager {
             vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
         },
         displayPreferences: { CredentialStore.providerDisplayPreferences },
+        claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
 
     // --- State ---
@@ -31,6 +32,7 @@ public actor QuotaManager {
     private let cachePolicy: CachePolicy
     private let clock: @Sendable () -> Date
     private let providerFactory: @Sendable () -> [any QuotaProvider]
+    private let claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
@@ -85,6 +87,9 @@ public actor QuotaManager {
         // canonical order and reads no preference store, so a test sees
         // exactly the providers its factory serves.
         displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default },
+        // Only the live manager opts into account discovery. Test factories
+        // retain full control and never read ambient credentials or preferences.
+        claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
         monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
@@ -95,6 +100,7 @@ public actor QuotaManager {
         self.cachePolicy = cachePolicy
         self.clock = clock
         self.providerFactory = providerFactory
+        self.claudeProviderFactory = claudeProviderFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
         self.monthlyCreditConnection = monthlyCreditConnection
@@ -411,7 +417,24 @@ public actor QuotaManager {
         // once instead of being served from under the poll floor.
         let hidden = displayPreferences().hidden
         for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
-        let allProviders: [any QuotaProvider] = providerFactory()
+        var allProviders: [any QuotaProvider] = providerFactory()
+        if !hidden.contains(.claude), let discover = claudeProviderFactory {
+            let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
+                await QuotaFetchContext.$isUserInitiated.withValue(force) { await discover() }
+            }
+            let accounts: [any QuotaProvider]
+            switch discovery {
+            case .success(let found): accounts = found
+            case .failure(let reason):
+                let previous = cache.values.map(\.snapshot).filter { $0.vendorId == .claude }
+                accounts = previous.isEmpty
+                    ? [UnavailableClaudeInstance(id: "claude", name: "Claude", reason: reason)]
+                    : previous.map { UnavailableClaudeInstance(id: $0.id, name: $0.displayName, reason: reason) }
+            }
+            let insertion = allProviders.firstIndex { $0.vendorId == .claude } ?? 0
+            allProviders.removeAll { $0.vendorId == .claude }
+            allProviders.insert(contentsOf: accounts, at: min(insertion, allProviders.count))
+        }
         let providers: [any QuotaProvider] = allProviders.filter { !hidden.contains($0.vendorId) }
         // A workspace that was removed (or disabled) must not linger in the
         // cache. Only the multi-instance vendor is pruned here: a single
@@ -424,9 +447,31 @@ public actor QuotaManager {
             && !liveOpenCodeInstances.contains(key) {
             cache[key] = nil
         }
+        let liveClaude = Set(allProviders.filter { $0.vendorId == .claude }.map(\.instanceID))
+        if claudeProviderFactory != nil {
+            for key in Array(cache.keys) where (key == VendorIdentifier.claude.rawValue
+                || key.hasPrefix(ClaudeAccount.instancePrefix)) && !liveClaude.contains(key) {
+                cache[key] = nil
+            }
+        }
         // Remember the build order so several instances of one vendor keep the
         // order the user arranged them in when the list is sorted.
         instanceOrder = providers.map(\.instanceID)
+        for case let provider as ClaudeAccountQuotaProvider in providers {
+            guard let entry = cache[provider.instanceID] else { continue }
+            var snapshot = entry.snapshot
+            // A nickname is presentation, so editing it takes effect even
+            // while this account's vendor backoff retains its last reading.
+            snapshot.displayName = provider.account.name
+            snapshot.claudeAccount = provider.account
+            snapshot.apiCredits = snapshot.apiCredits.map { entry in
+                var copy = entry
+                if entry.accountID == snapshot.id { copy.accountName = provider.account.name }
+                return copy
+            }
+            cache[provider.instanceID] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
         let startNow = clock()
@@ -520,7 +565,10 @@ public actor QuotaManager {
                             try await provider.fetchSnapshot()
                         }
                     }
-                    let cycle = cycleLookup(provider.vendorId)
+                    // A vendor-wide hand-entered renewal has no account
+                    // binding. It cannot be copied onto every Claude account.
+                    let cycle = provider.vendorId == .claude && provider.instanceID != "claude"
+                        ? nil : cycleLookup(provider.vendorId)
                     switch outcome {
                     case .success(var snapshot):
                         // Measured here rather than guessed in each provider:
@@ -593,7 +641,7 @@ public actor QuotaManager {
                 // Re-attach against `now` so it keeps counting down.
                 var retained = Self.attachingCycleRow(
                     to: Self.removingStaleCycleRow(from: previous.snapshot),
-                    cycle: cycleLookup(provider.vendorId), now: now)
+                    cycle: provider.vendorId == .claude && id != "claude" ? nil : cycleLookup(provider.vendorId), now: now)
                 // Carry the failure along with the figures. Retention keeps
                 // `status` — the last known pressure must still drive the menu
                 // bar icon, and an unreadable provider must never outrank a
@@ -709,6 +757,7 @@ public actor QuotaManager {
             rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
             rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
             rebuilt.openAIAccountKey = updated.openAIAccountKey
+            rebuilt.claudeAccount = updated.claudeAccount
             rebuilt.resetCreditExpiries = updated.resetCreditExpiries
             rebuilt.resetCreditGroups = updated.resetCreditGroups
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
@@ -781,6 +830,7 @@ public actor QuotaManager {
         rebuilt.openAIMonthlyCredit = updated.openAIMonthlyCredit
         rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
         rebuilt.openAIAccountKey = updated.openAIAccountKey
+        rebuilt.claudeAccount = updated.claudeAccount
         rebuilt.resetCreditExpiries = updated.resetCreditExpiries
         rebuilt.resetCreditGroups = updated.resetCreditGroups
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
@@ -817,6 +867,19 @@ public actor QuotaManager {
             auxiliaryInfo: reason.remedy
         )
     }
+}
+
+/// Discovery's own deadline preserves each known row's cache identity so the
+/// normal stale-retention path can keep its last reading without relabelling it.
+private struct UnavailableClaudeInstance: QuotaProvider {
+    let id: String
+    let name: String
+    let reason: UnavailableReason
+    var vendorId: VendorIdentifier { .claude }
+    var category: MetricCategory { .aiSubscriptions }
+    var displayName: String { name }
+    var instanceID: String { id }
+    func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
 }
 
 // MARK: - System health summary

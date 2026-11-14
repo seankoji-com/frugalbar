@@ -323,6 +323,7 @@ public struct SettingsView: View {
     private var keysForm: some View {
         Form {
             credentialDiscoverySection
+            ClaudeAccountSettingsView()
             Section("Muse portal quota") {
                 Text("If the CLI response omits usage, connect Meta and select your subscription team. This app retains its own sign-in and team across restarts until you disconnect. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
                     .font(.caption)

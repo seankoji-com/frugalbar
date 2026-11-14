@@ -90,6 +90,9 @@ struct MetricRowView: View {
 
     var isGrouped: Bool = false
     var suppressPlan: Bool = false
+    var now: Date? = nil
+
+    private var isClaudeAccount: Bool { snapshot.vendorId == .claude && snapshot.claudeAccount != nil }
 
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -150,7 +153,7 @@ struct MetricRowView: View {
         //
         // Built once per render, and it carries the instant: every countdown
         // the row draws or speaks reads `grid.now`, never its own clock.
-        let grid = WindowGridPresentation(snapshot: snapshot)
+        let grid = WindowGridPresentation(snapshot: snapshot, now: now ?? Date())
         // One presentation per render, built from the grid's instant. Every
         // string below that names a time — the stale note's "figures from
         // 14:12", the spoken label — is therefore measured from the same clock
@@ -160,6 +163,9 @@ struct MetricRowView: View {
         let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
             row(grid, presentation: p)
+            if isClaudeAccount, let credits = p.planResetCredits ?? (p.resetCreditGroups.isEmpty ? p.resetCredits : nil) {
+                accountResetTickets(credits)
+            }
             // Model-scoped windows are drawn on their own line, with their
             // own percentage and reset. They deliberately stay out of the
             // window grid and out of the plan-wide bars (see
@@ -182,10 +188,10 @@ struct MetricRowView: View {
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
-            if (snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
+            if (!isClaudeAccount && snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
                 SubscriptionCreditLineView(
                     presentation: p,
-                    showsTickets: snapshot.vendorId != .openai && p.resetCreditGroups.isEmpty
+                    showsTickets: !isClaudeAccount && snapshot.vendorId != .openai && p.resetCreditGroups.isEmpty
                 )
             }
             // The linked Console entitlement is a different fact from the
@@ -202,6 +208,17 @@ struct MetricRowView: View {
             if let promo = p.monthlyPromo {
                 MonthlyPromoCreditView(presentation: promo)
                     .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+            }
+        }
+        .background(alignment: .topLeading) {
+            if isClaudeAccount, p.resetCredits != nil || !snapshot.scopedBars.isEmpty || !p.resetCreditGroups.isEmpty {
+                Rectangle()
+                    .fill(Theme.outlineVariant.opacity(0.55))
+                    .frame(width: 2)
+                    .padding(.top, Theme.rowAvatarSize)
+                    .padding(.bottom, 8)
+                    .padding(.leading, (Theme.rowAvatarSize - 2) / 2)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.vertical, isGrouped ? 4 : 8)
@@ -248,7 +265,8 @@ struct MetricRowView: View {
             forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
         let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
         let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
-        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(namedLabel)" } ?? namedLabel
+        let accountLabel = snapshot.claudeAccount.map { "Account \($0.badge). Claude Code. \(namedLabel)" } ?? namedLabel
+        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(accountLabel)" } ?? accountLabel
     }
 
     /// Only for a provider we are currently reading: a forecast under an
@@ -267,9 +285,9 @@ struct MetricRowView: View {
     var titleView: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
-                .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
+                .font(isGrouped && !isClaudeAccount ? Theme.Typography.subtitle : Theme.Typography.title)
                 .tracking(isGrouped ? 0 : Theme.Tracking.title)
-                .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
+                .foregroundStyle(isGrouped && !isClaudeAccount ? Theme.onSurfaceVariant : Theme.onSurface)
                 .lineLimit(snapshot.instanceIdOrNil == nil && (isGrouped || snapshot.vendorId != .antigravityClaude) ? 1 : 2)
                 .fixedSize(horizontal: false, vertical: true)
                 .minimumScaleFactor(0.85)
@@ -328,13 +346,26 @@ struct MetricRowView: View {
     }
 
     private func row(_ grid: WindowGridPresentation, presentation p: MetricRowPresentation) -> some View {
-        HStack(alignment: .center, spacing: Theme.rowSpacing) {
+        HStack(alignment: isClaudeAccount ? .top : .center, spacing: Theme.rowSpacing) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
                 isExhausted: p.isExhausted,
                 size: Theme.rowAvatarSize
             )
+            .overlay(alignment: .bottomTrailing) {
+                if let account = snapshot.claudeAccount {
+                    Text(account.badge)
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.onSurface)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 13, minHeight: 13)
+                        .background(Theme.surfaceContainerHighest, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.card, lineWidth: 2))
+                        .offset(x: 4, y: 4)
+                        .accessibilityHidden(true)
+                }
+            }
 
             // The name, then the row's second line: the vendor's reset text for
             // an exhausted row, otherwise the plan unless a group header
@@ -354,7 +385,7 @@ struct MetricRowView: View {
                 // title, exactly like the OpenAI Codex row. Claude's plan
                 // group goes here; its model group goes under the scoped
                 // title in `scopedWindowRow`.
-                if let credits = snapshot.vendorId == .openai
+                if !isClaudeAccount, let credits = snapshot.vendorId == .openai
                     ? p.resetCredits : p.planResetCredits {
                     ResetTicketsView(credits: credits)
                 }
@@ -480,9 +511,8 @@ struct MetricRowView: View {
     }
 
     /// A model-scoped weekly window — today Anthropic's Fable cap — on its own
-    /// line under the row. It keeps the name/reset/bar/percentage anatomy of a
-    /// window cell but is not a column: its label is the model, and a spent
-    /// scoped window says nothing about the rest of the plan.
+    /// line under the row. Named accounts align it with WK; legacy rows keep
+    /// their spanning meter. A spent scoped window says nothing about the plan.
     private func scopedWindowRow(
         _ bar: DualBarMetrics, now: Date,
         credits: MetricRowPresentation.ResetCredits? = nil
@@ -502,43 +532,88 @@ struct MetricRowView: View {
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
-            VStack(spacing: 4) {
-                DualBarProgressView(metrics: bar, showsLabel: false)
-                HStack(spacing: 2) {
-                    // A scoped bar spans the grid like the plan row's sole
-                    // meter, so it names its window the same way. Without this
-                    // the 5% sat under all three headings with no period.
+            if isClaudeAccount {
+                HStack(spacing: Theme.gridColumnSpacing) {
+                    ForEach(WindowColumn.allCases) { column in
+                        if column == .weekly {
+                            scopedMeter(bar, now: now, showsToken: false)
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity).frame(height: 1)
+                        }
+                    }
+                }
+            } else {
+                scopedMeter(bar, now: now, showsToken: true)
+            }
+        }
+        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+        .padding(.top, 8)
+        .overlay(alignment: .topLeading) {
+            if isClaudeAccount { railElbow.padding(.top, 15) }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func scopedMeter(_ bar: DualBarMetrics, now: Date, showsToken: Bool) -> some View {
+        VStack(spacing: 4) {
+            DualBarProgressView(metrics: bar, showsLabel: false)
+            HStack(spacing: 2) {
+                if showsToken {
                     Text(WindowColumn.weekly.label)
                         .font(Theme.Typography.token)
                         .tracking(Theme.Tracking.token)
                         .foregroundStyle(Theme.onSurfaceVariant)
                         .padding(.trailing, 4)
                         .accessibilityHidden(true)
-                    if WindowGridPresentation.showsBlockedGlyph(for: bar) {
-                        BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
-                    }
-                    Text(WindowGridPresentation.percentText(for: bar)
-                         ?? WindowGridPresentation.unmeasuredText(for: bar))
-                        .font(Theme.Typography.gridPercent)
-                        .foregroundStyle(DualBarProgressView.stateColor(for: bar))
-                        .fixedSize()
-                        .layoutPriority(1)
-                    Spacer(minLength: 0)
-                    if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {
-                        Text(reset)
-                            .font(Theme.Typography.gridReset)
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
-                            .minimumScaleFactor(0.7)
-                    }
                 }
-                .lineLimit(1)
+                if WindowGridPresentation.showsBlockedGlyph(for: bar) {
+                    BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
+                }
+                Text(WindowGridPresentation.percentText(for: bar)
+                     ?? WindowGridPresentation.unmeasuredText(for: bar))
+                    .font(Theme.Typography.gridPercent)
+                    .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+                    .fixedSize()
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {
+                    Text(reset)
+                        .font(Theme.Typography.gridReset)
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                        .minimumScaleFactor(0.7)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var railElbow: some View {
+        Rectangle().fill(Theme.outlineVariant.opacity(0.55))
+            .frame(width: 10, height: 2)
+            .padding(.leading, Theme.rowAvatarSize / 2)
+            .accessibilityHidden(true)
+    }
+
+    private func accountResetTickets(_ credits: MetricRowPresentation.ResetCredits) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(0..<credits.tickets, id: \.self) { index in
+                HStack(spacing: 5) {
+                    GoldenTicketView(index: index)
+                        .help(credits.expiryText(at: index, now: credits.now))
+                    Text("Reset credit")
+                    Spacer(minLength: 0)
+                    Text(credits.expiryPhrase(at: index, now: credits.now))
+                }
+                .overlay(alignment: .leading) { railElbow.offset(x: -(Theme.rowAvatarSize + Theme.rowSpacing)) }
+            }
+            if credits.overflow > 0 { Text("+\(credits.overflow) more") }
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .padding(.top, 8)
-        // The enclosing row is one accessibility element and speaks these
-        // figures itself (`MetricRowPresentation.scopedSpeech`).
+        .padding(.top, 4)
         .accessibilityHidden(true)
     }
 

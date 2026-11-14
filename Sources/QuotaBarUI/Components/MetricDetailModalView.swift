@@ -269,7 +269,10 @@ public struct MetricDetailModalView: View {
         let m = await eventsLoader(
             vendor, snapshot.id, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
-        readings = r ?? []
+        readings = (r ?? []).map { record in
+            snapshot.claudeAccount?.historyAliases.contains(record.vendor) == true
+                ? record.namingInstance(snapshot.id) : record
+        }
         readingsFailed = r == nil
         balanceSeries = reads
         selectedBalanceID = selectedBalanceID ?? reads.first?.series.id

@@ -79,7 +79,7 @@ struct WorkspaceOrderPropagationTests {
             #expect(tiles.map(\.id).filter { $0 != "claude" } == expected, "widget tiles, \(preferences.ordering)")
 
             let subjects = HistoryOverviewPresentation.subjects(
-                order: preferences.order, hidden: preferences.hidden, workspaces: relaunched)
+                order: preferences.order, hidden: preferences.hidden, workspaces: relaunched, claudeAccounts: [])
             #expect(subjects.filter { $0.vendor == .opencode }.map(\.id) == expected, "History picker")
         }
 

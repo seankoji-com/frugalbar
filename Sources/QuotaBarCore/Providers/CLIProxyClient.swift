@@ -892,6 +892,15 @@ public enum CLIProxyClient {
     public static func fetchClaudeUsage(
         config: CLIProxyConfig, includeGrants: Bool = true, now: Date = Date()
     ) async throws -> (ClaudeOAuthUsageResponse, CLIProxyAuthFile) {
+        let files = try await fetchAuthFiles(config: config, now: now)
+        guard let account = files.first(where: {
+            $0.disabled != true && $0.provider.lowercased() == "claude"
+        }) else { throw ProviderError(.notConfigured) }
+        return (try await fetchClaudeUsage(config: config, account: account,
+            includeGrants: includeGrants, now: now), account)
+    }
+
+    public static func fetchAuthFiles(config: CLIProxyConfig, now: Date = Date()) async throws -> [CLIProxyAuthFile] {
         let authFilesURL = managementURL(path: "auth-files", base: config.url)
         let (authData, authResponse) = try await QuotaHTTP.get(
             url: authFilesURL,
@@ -904,18 +913,29 @@ public enum CLIProxyClient {
             throw ProviderError(reason)
         }
 
-        let files = try decodeAuthFiles(from: authData)
-        guard let claudeAccount = files.first(where: {
-            ($0.disabled != true) && $0.provider.lowercased() == "claude"
-        }) else {
-            throw ProviderError(.notConfigured)
-        }
+        do { return try decodeAuthFiles(from: authData) }
+        catch { throw ProviderError.badResponse }
+    }
 
+    /// A named account never asks whichever credential happens to be first.
+    public static func fetchClaudeUsage(
+        config: CLIProxyConfig, account: CLIProxyAuthFile,
+        includeGrants: Bool = true, now: Date = Date()
+    ) async throws -> ClaudeOAuthUsageResponse {
+        let data = try await callClaude(config: config, account: account,
+            url: includeGrants ? claudeOAuthUsageWithGrantsURL : claudeOAuthUsageURL, now: now)
+        do { return try decodeClaudeUsage(from: data, now: now) }
+        catch let error as ProviderError { throw error }
+        catch { throw ProviderError.badResponse }
+    }
+
+    static func callClaude(config: CLIProxyConfig, account: CLIProxyAuthFile,
+                           url: String, now: Date) async throws -> Data {
         let apiCallURL = managementURL(path: "api-call", base: config.url)
         let payload: [String: Any] = [
-            "auth_index": claudeAccount.authIndex,
+            "auth_index": account.authIndex,
             "method": "GET",
-            "url": includeGrants ? claudeOAuthUsageWithGrantsURL : claudeOAuthUsageURL,
+            "url": url,
             "header": [
                 "Authorization": "Bearer $TOKEN$",
                 "anthropic-beta": "oauth-2025-04-20",
@@ -937,8 +957,19 @@ public enum CLIProxyClient {
             throw ProviderError(reason)
         }
 
-        let usage = try decodeClaudeUsage(from: apiCallData, now: now)
-        return (usage, claudeAccount)
+        return apiCallData
+    }
+
+    static func fetchClaudeProfile(config: CLIProxyConfig, account: CLIProxyAuthFile,
+                                   now: Date) async throws -> ClaudeAccountProfile {
+        let data = try await callClaude(config: config, account: account,
+            url: ClaudeAccountProfile.endpoint, now: now)
+        if let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) {
+            guard (200..<300).contains(wrapper.statusCode), let body = wrapper.body.data(using: .utf8)
+            else { throw ProviderError.badResponse }
+            return try ClaudeAccountProfile.decode(body)
+        }
+        return try ClaudeAccountProfile.decode(data)
     }
 
     public static func decodeCodexUsage(from data: Data, now: Date = Date()) throws -> OpenAIQuotaProvider.Response {

@@ -27,7 +27,7 @@ struct HistoryOverviewPresentationTests {
     func subjectsOrder() {
         let order: [VendorIdentifier] = [.opencode, .claude, .grok, .openai]
         let subjects = HistoryOverviewPresentation.subjects(
-            order: order, hidden: [.grok], workspaces: [beta, off, legacy])
+            order: order, hidden: [.grok], workspaces: [beta, off, legacy], claudeAccounts: [])
 
         #expect(subjects.map(\.id) == [beta.instanceID, legacy.instanceID, "claude", "openai"])
         #expect(subjects.map(\.name) == ["Go Beta", "OpenCode", "Claude", "OpenAI"])
@@ -42,7 +42,7 @@ struct HistoryOverviewPresentationTests {
     @Test("each card is its own longest window, in subject order, with no figure carried over")
     func cardsAreHonest() throws {
         let subjects = HistoryOverviewPresentation.subjects(
-            order: [.claude, .opencode], hidden: [], workspaces: [beta])
+            order: [.claude, .opencode], hidden: [], workspaces: [beta], claudeAccounts: [])
         let readings = [
             record("claude", "5H", at: 0, 0.2, windowLength: 5 * 3600),
             record("claude", "WK", at: 0, 0.4),
@@ -67,7 +67,7 @@ struct HistoryOverviewPresentationTests {
 
     @Test("an elapsed-time billing cycle never becomes a card's consumption figure")
     func cyclesAreNotConsumption() {
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         let overview = HistoryOverviewPresentation.overview(
             subjects: subjects,
             readings: [record("claude", "CYCLE", at: 0, 0.9, windowLength: 30 * 86_400, elapsedOnly: true)])
@@ -125,7 +125,7 @@ struct HistoryOverviewPresentationTests {
             since: base.addingTimeInterval(-3_600), until: base.addingTimeInterval(3_600), bucketSeconds: 720)
         #expect(sampled.contains { $0.barLabel == "DEFAULT" && $0.confidence != .measured })
 
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         let card = try #require(
             HistoryOverviewPresentation.overview(subjects: subjects, readings: sampled, bucketSeconds: 720).cards.first)
         #expect(card.latest.fraction == 0.62)
@@ -145,7 +145,7 @@ struct HistoryOverviewPresentationTests {
 
     @Test("a sampled long-range sparkline is a line, while a genuine outage still breaks it")
     func sampledSparklineIsContinuous() throws {
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: .last30Days, retention: 0)
         // Ten six-hour samples, then four silent days, then three more.
         var readings = (0..<10).map { record("claude", at: Double($0 * bucket), 0.1 + Double($0) * 0.02) }
@@ -259,7 +259,7 @@ struct HistoryOverviewPresentationTests {
         let since = base.addingTimeInterval(-3_600), until = base.addingTimeInterval(3_600)
         let sampled = try await store.fetchSampledReadings(since: since, until: until, bucketSeconds: 720)
 
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude, .grok], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude, .grok], hidden: [], workspaces: [], claudeAccounts: [])
         let overview = HistoryOverviewPresentation.overview(subjects: subjects, readings: sampled, bucketSeconds: 720)
         #expect(overview.cards.isEmpty)
         #expect(overview.unread.map(\.subject.id) == ["claude"])

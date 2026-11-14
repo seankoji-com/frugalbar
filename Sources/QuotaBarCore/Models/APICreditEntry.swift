@@ -24,7 +24,7 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
 
     /// Keep subscription credits with their account without making them quotas.
     public var extendsSubscription: Bool {
-        (vendorId == .openai && id == "openai.api-credits") || isMonthlyPromo
+        (vendorId == .openai && poolID == "openai.api-credits") || isMonthlyPromo
     }
 
     /// A recurring monthly credit drawn in the window anatomy: Claude's promo
@@ -32,13 +32,17 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     /// published allowance, a remaining figure and a period end, so the row
     /// can draw a bar without either becoming a quota.
     public var isMonthlyPromo: Bool {
-        (vendorId == .claude && id == "claude.promo-credit")
-            || (vendorId == .openai && id == "openai.monthly-credit")
+        (vendorId == .claude && poolID == "claude.promo-credit")
+            || (vendorId == .openai && poolID == "openai.monthly-credit")
     }
 
     /// Stable id, built from the facts — the vendor and which of its pools —
     /// never a UUID or prose, so the same entry re-renders as the same row.
     public let id: String
+    /// The vendor's pool type, kept apart from an account-qualified entry id.
+    public let poolID: String
+    public let accountID: String?
+    public var accountName: String?
     public let vendorId: VendorIdentifier
     /// What the entry is called on its own row, e.g. "API credits".
     public let label: String
@@ -78,9 +82,15 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
         source: String? = nil,
         monthlyPeriodEnd: Date? = nil,
         monthlyPeriodStart: Date? = nil,
-        creditGrant: OpenAICreditGrant? = nil
+        creditGrant: OpenAICreditGrant? = nil,
+        poolID: String? = nil,
+        accountID: String? = nil,
+        accountName: String? = nil
     ) {
         self.id = id
+        self.poolID = poolID ?? id
+        self.accountID = accountID
+        self.accountName = accountName
         self.vendorId = vendorId
         self.label = label
         self.metric = metric

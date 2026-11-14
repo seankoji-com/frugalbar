@@ -104,6 +104,18 @@ extension QuotaHistoryStore {
         let size = Int64(max(bucketSeconds, 1))
         let sinceEpoch = Int64(since.timeIntervalSince1970)
         let untilEpoch = Int64(until.timeIntervalSince1970)
+        var requestedIDs: [String: String] = [:]
+        for id in seriesIds ?? [] {
+            var sourceIDs = [id]
+            if id.hasPrefix(ClaudeAccount.instancePrefix), let separator = id.firstIndex(of: "|") {
+                let account = String(id[..<separator])
+                let suffix = String(id[separator...])
+                sourceIDs += instanceKeyLookup(account).map { $0 + suffix }
+            }
+            for source in sourceIDs where requestedIDs[source] == nil || source == id { requestedIDs[source] = id }
+        }
+        let selectedIDs = seriesIds.map { _ in requestedIDs.keys.sorted() }
+        let canonicalIDs = requestedIDs
 
         return try await database.perform { db -> [String: [BalancePoint]] in
             #if canImport(SQLite3)
@@ -112,8 +124,8 @@ extension QuotaHistoryStore {
             FROM balance_reading
             WHERE measured_at <= ? AND measured_at >= ?
             """
-            let narrowed = seriesIds.map { !$0.isEmpty } ?? false
-            if narrowed, let seriesIds {
+            let narrowed = selectedIDs.map { !$0.isEmpty } ?? false
+            if narrowed, let seriesIds = selectedIDs {
                 sql += " AND series_id IN (\(Array(repeating: "?", count: seriesIds.count).joined(separator: ",")))"
             }
             sql += " GROUP BY series_id, measured_at / ? ORDER BY series_id ASC, MAX(measured_at) ASC;"
@@ -123,12 +135,12 @@ extension QuotaHistoryStore {
             try db.bindInt64(stmt, 1, untilEpoch)
             try db.bindInt64(stmt, 2, sinceEpoch)
             var index: Int32 = 3
-            if narrowed, let seriesIds {
+            if narrowed, let seriesIds = selectedIDs {
                 for id in seriesIds { try db.bindText(stmt, index, id); index += 1 }
             }
             try db.bindInt64(stmt, index, size)
 
-            var result: [String: [BalancePoint]] = [:]
+            var buckets: [String: [Int64: BalancePoint]] = [:]
             while true {
                 let status = sqlite3_step(stmt)
                 if status == SQLITE_DONE { break }
@@ -142,9 +154,19 @@ extension QuotaHistoryStore {
                         column: "\(HistorySchema.balanceReadingTable).series_id", value: "NULL")
                 }
                 let point = try Self.balancePoint(measuredAtColumn: 1, valueColumn: 2, stmt: stmt)
-                result[String(cString: idC), default: []].append(point)
+                let source = String(cString: idC)
+                let id = canonicalIDs[source] ?? source
+                let bucket = Int64(point.measuredAt.timeIntervalSince1970) / size
+                // Aliases describe the same balance, never additive money.
+                // Keep the newest actual observation, with the current id
+                // winning a timestamp tie. Units remain in the exact suffix.
+                if let old = buckets[id]?[bucket], point.measuredAt < old.measuredAt
+                    || (point.measuredAt == old.measuredAt && source != id) {
+                    continue
+                }
+                buckets[id, default: [:]][bucket] = point
             }
-            return result
+            return buckets.mapValues { $0.values.sorted { $0.measuredAt < $1.measuredAt } }
             #else
             return [:]
             #endif

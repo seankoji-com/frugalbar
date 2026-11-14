@@ -114,12 +114,22 @@ extension QuotaHistoryStore {
         let vendorString = vendor?.rawValue
         let kindStrings = kinds.map { $0.map(\.rawValue).sorted() }
         let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
+        let instanceKeys = instanceID.map { instanceKeyLookup($0) }
 
         return try await database.perform { db -> [AIEvent] in
             #if canImport(SQLite3)
             var conditions: [String] = [Self.retiredRowsExcluded]
             if vendorString != nil { conditions.append("vendor = ?") }
-            if instanceID != nil { conditions.append("(instance_id = ? OR instance_id IS NULL)") }
+            if let instanceKeys {
+                let slots = Array(repeating: "?", count: instanceKeys.count).joined(separator: ",")
+                conditions.append("(instance_id IN (\(slots)) OR instance_id IS NULL)")
+            }
+            if instanceID?.hasPrefix(ClaudeAccount.instancePrefix) == true {
+                // Old unbound account observations cannot be attributed to a
+                // newly named subscription. Status and community events are
+                // vendor-wide and still belong in every account's timeline.
+                conditions.append("(instance_id IS NOT NULL OR kind IN ('vendor_reset', 'outage_started', 'outage_resolved'))")
+            }
             if let kindStrings {
                 // An empty kind set is a real filter that matches nothing,
                 // not "no filter": a UI with every kind unticked shows nothing.
@@ -151,9 +161,11 @@ extension QuotaHistoryStore {
                 try db.bindText(stmt, bindIdx, vendorString)
                 bindIdx += 1
             }
-            if let instanceID {
-                try db.bindText(stmt, bindIdx, instanceID)
-                bindIdx += 1
+            if let instanceKeys {
+                for key in instanceKeys {
+                    try db.bindText(stmt, bindIdx, key)
+                    bindIdx += 1
+                }
             }
             if let kindStrings {
                 for kind in kindStrings {

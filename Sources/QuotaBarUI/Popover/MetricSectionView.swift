@@ -14,6 +14,8 @@ struct MetricSectionView: View {
     /// injected or no series has history.
     var balanceSeries: [String: [BalancePoint]] = [:]
     var onSelect: ((QuotaSnapshot) -> Void)? = nil
+    /// Offscreen fixtures inject one instant for all row countdowns.
+    var now: Date? = nil
 
     /// The column header shows only when a row actually uses the grid.
     private var showsColumnHeader: Bool {
@@ -60,7 +62,8 @@ struct MetricSectionView: View {
                                 && snap.id == group.snapshots.last?.id,
                             balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
                             isGrouped: group.isGrouped,
-                            suppressPlan: group.suppressPlan
+                            suppressPlan: group.suppressPlan,
+                            now: now
                         )
                     }
                 }
@@ -100,7 +103,7 @@ struct MetricSectionView: View {
         }
     }
 
-    private var hasPace: Bool { Self.showsPaceLegend(for: snapshots) }
+    private var hasPace: Bool { Self.showsPaceLegend(for: snapshots, now: now ?? Date()) }
 
     /// Names the one marker on the bars, in the header's empty leading space.
     @ViewBuilder
