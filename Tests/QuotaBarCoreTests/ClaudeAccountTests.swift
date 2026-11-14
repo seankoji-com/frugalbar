@@ -28,6 +28,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     private var _reverse = false
     private var _duplicate = false
     private var _unknown = false
+    private var _directOther = false
     private var calls: [(String, String)] = []
     var throttleA: Bool { get { lock.withLock { _throttleA } } set { lock.withLock { _throttleA = newValue } } }
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
@@ -35,12 +36,14 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     var reverse: Bool { get { lock.withLock { _reverse } } set { lock.withLock { _reverse = newValue } } }
     var duplicate: Bool { get { lock.withLock { _duplicate } } set { lock.withLock { _duplicate = newValue } } }
     var unknown: Bool { get { lock.withLock { _unknown } } set { lock.withLock { _unknown = newValue } } }
+    var directOther: Bool { get { lock.withLock { _directOther } } set { lock.withLock { _directOther = newValue } } }
     func count(_ index: String, containing path: String) -> Int {
         lock.withLock { calls.filter { $0.0 == index && $0.1.contains(path) }.count }
     }
     static let accountA = "00000000-0000-4000-8000-000000000001"
     static let accountB = "00000000-0000-4000-8000-000000000002"
     static let org = "00000000-0000-4000-8000-000000000003"
+    static let accountC = "00000000-0000-4000-8000-000000000004"
     static func id(_ uuid: String) -> String {
         ClaudeAccount.instanceID(identity: "account|\(uuid)|\(org)")
     }
@@ -76,12 +79,13 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
             let isA = index != "b"
             if path.contains("/profile") {
                 if _profileDown || _unknown { return (200, [:], json(["status_code": 404, "body": "{}"])) }
-                let profile: [String: Any] = ["account": ["uuid": isA ? Self.accountA : Self.accountB],
+                let uuid = index == "direct" && _directOther ? Self.accountC : isA ? Self.accountA : Self.accountB
+                let profile: [String: Any] = ["account": ["uuid": uuid],
                     "organization": ["uuid": Self.org, "rate_limit_tier": isA ? "default_claude_max_5x" : "default_claude_pro"]]
                 if index == "direct" { return (200, [:], json(profile)) }
                 return (200, [:], json(["status_code": 200, "body": String(data: json(profile), encoding: .utf8)!]))
             }
-            if _throttleA && isA {
+            if _throttleA && isA && index != "direct" {
                 return (200, [:], json(["status_code": 429, "header": ["Retry-After": ["300"]], "body": "{}"]))
             }
             var usage: [String: Any] = [
@@ -226,6 +230,31 @@ struct ClaudeAccountTests {
             #expect(snapshots[firstID]?.displayName == "Work")
             ClaudeAccountStore.setNickname("", for: firstID, in: defaults)
             #expect(ClaudeAccountStore.all(in: defaults).first { $0.id == firstID }?.name != "Work")
+        }
+    }
+
+    @Test("direct fallback is used only for the same verified account")
+    func directFallbackNeedsIdentityMatch() async throws {
+        let fixture = ClaudeAccountFixture(); fixture.throttleA = true
+        try await withServer(fixture) {
+            let (sameDefaults, sameSuite) = isolatedDefaults()
+            defer { sameDefaults.removePersistentDomain(forName: sameSuite) }
+            let same = ClaudeAccountDiscovery(defaultsSuiteName: sameSuite, proxyConfig: { config },
+                directCredential: { "fixture-direct" }, directPlan: { nil })
+            let sameRead = try await read(await same.providers(now: now))
+            #expect(sameRead.count == 2)
+            #expect(sameRead[ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)]?.status.confidence == .measured)
+            fixture.directOther = true
+            let (otherDefaults, otherSuite) = isolatedDefaults()
+            defer { otherDefaults.removePersistentDomain(forName: otherSuite) }
+            let other = ClaudeAccountDiscovery(defaultsSuiteName: otherSuite, proxyConfig: { config },
+                directCredential: { "fixture-direct" }, directPlan: { nil })
+            let otherRead = try await read(await other.providers(now: now))
+            #expect(otherRead.count == 3)
+            #expect(otherRead[ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)]?.status.confidence == .unavailable)
+            #expect(otherRead[ClaudeAccountFixture.id(ClaudeAccountFixture.accountB)]?.status.confidence == .measured)
+            #expect(otherRead[ClaudeAccountFixture.id(ClaudeAccountFixture.accountC)]?.status.confidence == .measured)
+            #expect(fixture.count("direct", containing: "usage") == 2)
         }
     }
 

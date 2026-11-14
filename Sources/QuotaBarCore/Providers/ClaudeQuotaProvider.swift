@@ -357,7 +357,7 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
 
         var snapshot = QuotaSnapshot(
             id: instanceID, vendorId: vendorId, displayName: displayName,
-            category: category, metric: .subscription(tierName: planName ?? "Claude", renewalDate: nil),
+            category: category, metric: .subscription(tierName: planName, renewalDate: nil),
             status: .measured(urgency), resetsAt: primaryReset, lastUpdated: now,
             auxiliaryInfo: Self.auxiliaryInfo(grants: usage.resetGrants),
             row1: row1,
