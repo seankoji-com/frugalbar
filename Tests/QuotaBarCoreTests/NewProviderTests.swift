@@ -359,21 +359,23 @@ struct GrokQuotaProviderTests {
         billingStatus: Int = 200, billingBody: String = grokLiveBody,
         outerStatus: Int = 200, settingsStatus: Int = 200, hangs: Bool = false,
         directStatus: Int = 200, directBody: String = grokLiveBody, rawEnvelope: String? = nil,
+        retryAfter: String = "90",
+        inventoryStatus: Int = 200,
         inventory: String = Self.inventory,
         operation: () async throws -> QuotaSnapshot
     ) async throws -> QuotaSnapshot {
         NewProviderStub.install(host: Self.proxyHost) { request in
             if request.url?.path.hasSuffix("auth-files") == true {
-                return .init(status: 200, body: Data(inventory.utf8))
+                return .init(status: inventoryStatus, body: Data(inventory.utf8), headers: ["Retry-After": retryAfter])
             }
             let payload = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             let settings = payload?["url"] as? String == GrokQuotaProvider.settingsURL
             let inner = settings ? #"{"subscription_tier_display":"SuperGrok Lite"}"# : billingBody
             let envelope: [String: Any] = ["status_code": settings ? settingsStatus : billingStatus,
-                "body": inner, "header": ["rEtRy-AfTeR": ["90"]]]
+                "body": inner, "header": ["rEtRy-AfTeR": [retryAfter]]]
             return .init(status: outerStatus, body: rawEnvelope.map { Data($0.utf8) }
                 ?? (try! JSONSerialization.data(withJSONObject: envelope)),
-                headers: ["Retry-After": "90"], hangs: settings && hangs)
+                headers: ["Retry-After": retryAfter], hangs: settings && hangs)
         }
         NewProviderStub.install(host: StubHost.grok) { request in
             .init(status: directStatus, body: Data((request.url?.path == "/v1/settings"
@@ -589,6 +591,133 @@ struct GrokQuotaProviderTests {
             #expect(snapshot.planName == (fromProxy ? "SuperGrok Lite" : "SuperGrok"))
             #expect(snapshot.cliSource == (fromProxy ? "CLI Proxy (grok-proxy.example.invalid)" : "grok CLI"))
             return snapshot
+        }
+    }
+
+    private func proxyBillingCount() -> Int {
+        NewProviderStub.requests(host: Self.proxyHost).filter { request in
+            guard let data = request.httpBody,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return payload["url"] as? String == GrokQuotaProvider.billingURL
+        }.count
+    }
+
+    @Test("successful direct fallback preserves proxy Retry-After across provider recreation and expiry",
+        arguments: [false, true])
+    func automaticProxyHoldAfterDirectSuccess(inventoryThrottled: Bool) async throws {
+        let backoff = GrokProxyBackoff()
+        _ = try await withProxy(billingStatus: 429, retryAfter: "300", inventoryStatus: inventoryThrottled ? 429 : 200) {
+            for offset in [0.0, 30, 120, 300] {
+                let snapshot = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                    try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                        proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(offset))
+                }
+                #expect(snapshot.status.confidence == .measured)
+                #expect(snapshot.cliSource == "grok CLI")
+                #expect(snapshot.row1?.primaryFraction == 0.21)
+                #expect(proxyBillingCount() == (inventoryThrottled ? 0 : (offset == 300 ? 2 : 1)))
+                if inventoryThrottled {
+                    #expect(NewProviderStub.requests(host: Self.proxyHost).count == (offset == 300 ? 2 : 1))
+                }
+            }
+            #expect(NewProviderStub.requests(host: StubHost.grok).count == 8)
+            return GrokQuotaProvider(accessToken: "").unavailable(.notConfigured)
+        }
+    }
+
+    @Test("manual bypass probes the proxy, but a failed probe cannot retract its earlier Retry-After",
+        arguments: [(401, "0"), (429, "10")])
+    func failedManualProbeKeepsProxyHold(status: Int, retryAfter: String) async throws {
+        let backoff = GrokProxyBackoff()
+        _ = try await withProxy(billingStatus: 429, retryAfter: "300") {
+            try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                proxyBackoff: backoff).fetchSnapshot(now: Self.now)
+        }
+        _ = try await withProxy(billingStatus: status, retryAfter: retryAfter) {
+            let manual = try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(60))
+            #expect(manual.status.confidence == .measured)
+            #expect(proxyBillingCount() == 1)
+            let automatic = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { nil },
+                    proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(120))
+            }
+            #expect(proxyBillingCount() == 1)
+            #expect(automatic.status == .unavailable(.rateLimited(retryAfter: Self.now.addingTimeInterval(300))))
+            return automatic
+        }
+    }
+
+    @Test("a successful manual proxy probe retracts its hold")
+    func successfulManualProbeClearsProxyHold() async throws {
+        let backoff = GrokProxyBackoff()
+        _ = try await withProxy(billingStatus: 429, retryAfter: "300") {
+            try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                proxyBackoff: backoff).fetchSnapshot(now: Self.now)
+        }
+        _ = try await withProxy {
+            for offset in [30.0, 60] {
+                let snapshot = try await QuotaFetchContext.$isUserInitiated.withValue(offset == 30) {
+                    try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { nil },
+                        proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(offset))
+                }
+                #expect(snapshot.status.confidence == .measured)
+                #expect(snapshot.cliSource == "CLI Proxy (grok-proxy.example.invalid)")
+            }
+            #expect(proxyBillingCount() == 2)
+            return GrokQuotaProvider(accessToken: "").unavailable(.notConfigured)
+        }
+    }
+
+    @Test("a hold never follows a different proxy URL, credential, account index or file identity",
+        arguments: ["url", "credential", "account-index", "file-id"])
+    func proxyHoldIdentityIsolation(change: String) async throws {
+        let backoff = GrokProxyBackoff()
+        _ = try await withProxy(billingStatus: 429, retryAfter: "300") {
+            try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                proxyBackoff: backoff).fetchSnapshot(now: Self.now)
+        }
+        let config = CLIProxyConfig(
+            url: change == "url" ? URL(string: "https://grok-proxy.example.invalid/another-base")! : Self.proxy.url,
+            managementKey: change == "credential" ? "different-fixture-key" : Self.proxy.managementKey)
+        let inventory = change == "account-index" ? #"{"files":[{"auth_index":"another-xai","provider":"xai"}]}"#
+            : change == "file-id" ? #"{"files":[{"id":"another-file","auth_index":"selected-xai","provider":"xai"}]}"#
+            : Self.inventory
+        _ = try await withProxy(inventory: inventory) {
+            let snapshot = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await GrokQuotaProvider(cliProxyConfig: config, directCredential: { nil },
+                    proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(120))
+            }
+            #expect(proxyBillingCount() == 1)
+            #expect(snapshot.status.confidence == .measured)
+            #expect(snapshot.cliSource == "CLI Proxy (grok-proxy.example.invalid)")
+            return snapshot
+        }
+        _ = try await withProxy {
+            let original = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { nil },
+                    proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(120))
+            }
+            #expect(proxyBillingCount() == 0)
+            #expect(original.status == .unavailable(.rateLimited(retryAfter: Self.now.addingTimeInterval(300))))
+            return original
+        }
+    }
+
+    @Test("Grok invents no hold when Retry-After is absent, zero or invalid", arguments: ["", "0", "not-a-delay"])
+    func noUnpublishedProxyHold(retryAfter: String) async throws {
+        let backoff = GrokProxyBackoff()
+        _ = try await withProxy(billingStatus: 429, retryAfter: retryAfter) {
+            for offset in [0.0, 30] {
+                let snapshot = try await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                    try await GrokQuotaProvider(cliProxyConfig: Self.proxy, directCredential: { "local-token" },
+                        proxyBackoff: backoff).fetchSnapshot(now: Self.now.addingTimeInterval(offset))
+                }
+                #expect(snapshot.status.confidence == .measured)
+            }
+            #expect(proxyBillingCount() == 2)
+            return GrokQuotaProvider(accessToken: "").unavailable(.notConfigured)
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Grok subscription usage, read from the billing backend the Grok CLI uses.
 ///
@@ -25,15 +26,18 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     private let accessToken: String?
     private let cliProxyConfig: CLIProxyConfig?
     private let directCredential: @Sendable () async -> String?
+    private let proxyBackoff: GrokProxyBackoff
 
     public init(
         accessToken: String? = nil,
         cliProxyConfig: CLIProxyConfig? = nil,
-        directCredential: (@Sendable () async -> String?)? = nil
+        directCredential: (@Sendable () async -> String?)? = nil,
+        proxyBackoff: GrokProxyBackoff? = nil
     ) {
         self.accessToken = accessToken
         self.cliProxyConfig = cliProxyConfig
         self.directCredential = directCredential ?? { await CredentialStore.apiKeyAsync(for: .grok) }
+        self.proxyBackoff = proxyBackoff ?? (TestHost.isActive ? GrokProxyBackoff() : .shared)
     }
 
     static let billingURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
@@ -88,11 +92,39 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     }
 
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
-        let files = try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+        if !QuotaFetchContext.isUserInitiated,
+           let until = await proxyBackoff.retryAfter(config: config, now: now) {
+            throw ProviderError(.rateLimited(retryAfter: until))
+        }
+        let files: [CLIProxyAuthFile]
+        do {
+            files = try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+            await proxyBackoff.record(nil, config: config, now: now)
+        } catch {
+            await proxyBackoff.record(unavailableReason(for: error), config: config, now: now)
+            throw error
+        }
         // CLIProxyAPI's XAIAuthenticator.Provider() persists this exact key.
         guard let account = files.first(where: { $0.disabled != true && $0.provider.lowercased() == "xai" })
         else { throw ProviderError.notConfigured }
 
+        if !QuotaFetchContext.isUserInitiated,
+           let until = await proxyBackoff.retryAfter(config: config, account: account, now: now) {
+            throw ProviderError(.rateLimited(retryAfter: until))
+        }
+        do {
+            let snapshot = try await fetchSnapshotViaProxy(config: config, account: account, now: now)
+            await proxyBackoff.record(nil, config: config, account: account, now: now)
+            return snapshot
+        } catch {
+            await proxyBackoff.record(unavailableReason(for: error), config: config, account: account, now: now)
+            throw error
+        }
+    }
+
+    private func fetchSnapshotViaProxy(
+        config: CLIProxyConfig, account: CLIProxyAuthFile, now: Date
+    ) async throws -> QuotaSnapshot {
         async let billing = CLIProxyClient.callGrok(config: config, account: account, settings: false, now: now)
         async let tierNameOutcome = withDeadline(seconds: 2) {
             let data = try await CLIProxyClient.callGrok(config: config, account: account, settings: true, now: now)
@@ -396,6 +428,45 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     /// so an unexpected fractional value cannot fail an otherwise good payload.
     struct Amount: Decodable, Sendable {
         let val: Double?
+    }
+}
+
+/// In-memory proxy state survives provider recreation; tests inject their own.
+public actor GrokProxyBackoff {
+    static let shared = GrokProxyBackoff()
+    private struct Key: Hashable {
+        let url: URL
+        let managementKeyHash: Data
+        let authIndex: String?
+        let fileID: String?
+    }
+    private var waits: [Key: Date] = [:]
+
+    public init() {}
+
+    private func key(config: CLIProxyConfig, account: CLIProxyAuthFile?) -> Key {
+        Key(url: config.url, managementKeyHash: Data(SHA256.hash(data: Data(config.managementKey.utf8))),
+            authIndex: account?.authIndex, fileID: account?.id)
+    }
+
+    func retryAfter(config: CLIProxyConfig, account: CLIProxyAuthFile? = nil, now: Date) -> Date? {
+        let key = key(config: config, account: account)
+        guard let until = waits[key] else { return nil }
+        guard now < until else { waits[key] = nil; return nil }
+        return until
+    }
+
+    func record(_ reason: UnavailableReason?, config: CLIProxyConfig,
+                account: CLIProxyAuthFile? = nil, now: Date) {
+        waits = waits.filter { now < $0.value }
+        let key = key(config: config, account: account)
+        if case .rateLimited(let until)? = reason {
+            if let until, now < until { waits[key] = max(waits[key] ?? until, until) }
+        } else if reason == nil {
+            // A successful manual probe can retract the hold. Another failure
+            // cannot erase or shorten the vendor's earlier instruction.
+            waits[key] = nil
+        }
     }
 }
 
