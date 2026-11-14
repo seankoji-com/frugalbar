@@ -7,10 +7,9 @@ import Foundation
 /// the proxy requires. The grok.com gRPC-web endpoint is not an option: it now
 /// demands a browser-held keypair no menu bar app can produce.
 ///
-/// The token comes from `~/.grok/auth.json`, so this reports only what the
-/// user is already signed in to — and, like every other local credential
-/// FrugalBar reads, only once CLI discovery is switched on in
-/// Preferences → General.
+/// A configured CLI Proxy supplies its enabled xAI account first. Otherwise
+/// the token comes from `~/.grok/auth.json`, once CLI discovery is switched on
+/// in Preferences → General.
 ///
 /// The CLI mints short-lived tokens (roughly six hours) and refreshes them
 /// itself. FrugalBar deliberately does not: writing to `auth.json` behind the
@@ -24,9 +23,17 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
 
     private let accessToken: String?
+    private let cliProxyConfig: CLIProxyConfig?
+    private let directCredential: @Sendable () async -> String?
 
-    public init(accessToken: String? = nil) {
+    public init(
+        accessToken: String? = nil,
+        cliProxyConfig: CLIProxyConfig? = nil,
+        directCredential: (@Sendable () async -> String?)? = nil
+    ) {
         self.accessToken = accessToken
+        self.cliProxyConfig = cliProxyConfig
+        self.directCredential = directCredential ?? { await CredentialStore.apiKeyAsync(for: .grok) }
     }
 
     static let billingURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
@@ -40,10 +47,66 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
     static let clientHeader = (name: "x-xai-token-auth", value: "xai-grok-cli")
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
-        guard let token = await credential(injected: accessToken, for: .grok) else {
-            return unavailable(.notConfigured)
-        }
+        try await fetchSnapshot(now: Date())
+    }
 
+    func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
+        if let accessToken {
+            guard !accessToken.isEmpty else { return unavailable(.notConfigured) }
+            return try await fetchSnapshotDirect(token: accessToken, now: now)
+        }
+        let proxyConfig = cliProxyConfig ?? (TestHost.isActive ? nil : CLIProxyClient.discoverConfig())
+        var proxyFailure: UnavailableReason?
+        if let proxyConfig {
+            do {
+                let snapshot = try await fetchSnapshotViaProxy(config: proxyConfig, now: now)
+                if snapshot.status.confidence == .measured { return snapshot }
+                proxyFailure = snapshot.status.unavailableReason
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                proxyFailure = unavailableReason(for: error)
+            }
+        }
+        guard let token = await directCredential(), !token.isEmpty else {
+            return unavailable(proxyFailure ?? .notConfigured)
+        }
+        // The proxy and this Mac have independent credentials. A proxy's
+        // rejection or throttle must not hide a reading from the local one.
+        do {
+            let snapshot = try await fetchSnapshotDirect(token: token, now: now)
+            if snapshot.status.confidence == .measured || proxyFailure == nil { return snapshot }
+            return unavailable(proxyFailure ?? snapshot.status.unavailableReason ?? .badResponse)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return unavailable(proxyFailure ?? unavailableReason(for: error))
+        }
+    }
+
+    private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {
+        let files = try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+        // CLIProxyAPI's XAIAuthenticator.Provider() persists this exact key.
+        guard let account = files.first(where: { $0.disabled != true && $0.provider.lowercased() == "xai" })
+        else { throw ProviderError.notConfigured }
+
+        async let billing = CLIProxyClient.callGrok(config: config, account: account, settings: false, now: now)
+        async let tierNameOutcome = withDeadline(seconds: 2) {
+            let data = try await CLIProxyClient.callGrok(config: config, account: account, settings: true, now: now)
+            let settings = try JSONDecoder().decode(SettingsResponse.self, from: data)
+            return Self.planDisplayName(settings.subscriptionTierDisplay)
+        }
+        let data = try await billing
+        guard let response = try? JSONDecoder().decode(BillingResponse.self, from: data),
+              let billingConfig = response.config else { throw ProviderError.badResponse }
+        let planOverride: String? = if case .success(let name) = await tierNameOutcome { name } else { nil }
+        var snapshot = Self.snapshot(from: billingConfig, tier: response.subscriptionTier,
+            planOverride: planOverride, provider: self, now: now)
+        snapshot.cliSource = "CLI Proxy (\(config.url.host ?? "proxy"))"
+        return snapshot
+    }
+
+    private func fetchSnapshotDirect(token: String, now: Date) async throws -> QuotaSnapshot {
         // Issued together: the plan name is a second endpoint, and serialising
         // them would add its latency to every refresh for a string that
         // changes about once a year.
@@ -65,7 +128,8 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
         async let tierNameOutcome = withDeadline(seconds: 2) { await Self.fetchPlanName(token: token) }
 
         let (data, http) = try await billing
-        if let reason = QuotaHTTP.failureReason(for: http.statusCode) { return unavailable(reason) }
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode,
+            retryAfter: http.value(forHTTPHeaderField: "Retry-After"), now: now) { return unavailable(reason) }
 
         guard let response = try? JSONDecoder().decode(BillingResponse.self, from: data),
               let config = response.config
@@ -78,7 +142,7 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
             tier: response.subscriptionTier,
             planOverride: planOverride,
             provider: self,
-            now: Date()
+            now: now
         )
     }
 
