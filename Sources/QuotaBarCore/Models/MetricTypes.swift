@@ -507,7 +507,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// rename does not move a reading.
     public let id: String
     public let vendorId: VendorIdentifier
-    public let displayName: String
+    public var displayName: String
     public let category: MetricCategory
     public let metric: MetricType
     public let status: ProviderStatus

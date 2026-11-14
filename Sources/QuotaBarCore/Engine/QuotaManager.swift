@@ -419,7 +419,18 @@ public actor QuotaManager {
         for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
         var allProviders: [any QuotaProvider] = providerFactory()
         if !hidden.contains(.claude), let discover = claudeProviderFactory {
-            let accounts = await QuotaFetchContext.$isUserInitiated.withValue(force) { await discover() }
+            let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
+                await QuotaFetchContext.$isUserInitiated.withValue(force) { await discover() }
+            }
+            let accounts: [any QuotaProvider]
+            switch discovery {
+            case .success(let found): accounts = found
+            case .failure(let reason):
+                let previous = cache.values.map(\.snapshot).filter { $0.vendorId == .claude }
+                accounts = previous.isEmpty
+                    ? [UnavailableClaudeInstance(id: "claude", name: "Claude", reason: reason)]
+                    : previous.map { UnavailableClaudeInstance(id: $0.id, name: $0.displayName, reason: reason) }
+            }
             let insertion = allProviders.firstIndex { $0.vendorId == .claude } ?? 0
             allProviders.removeAll { $0.vendorId == .claude }
             allProviders.insert(contentsOf: accounts, at: min(insertion, allProviders.count))
@@ -446,6 +457,16 @@ public actor QuotaManager {
         // Remember the build order so several instances of one vendor keep the
         // order the user arranged them in when the list is sorted.
         instanceOrder = providers.map(\.instanceID)
+        for case let provider as ClaudeAccountQuotaProvider in providers {
+            guard let entry = cache[provider.instanceID] else { continue }
+            var snapshot = entry.snapshot
+            // A nickname is presentation, so editing it takes effect even
+            // while this account's vendor backoff retains its last reading.
+            snapshot.displayName = provider.account.name
+            snapshot.claudeAccount = provider.account
+            cache[provider.instanceID] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
         let budget = cachePolicy.perProviderTimeout
         let minPollInterval = cachePolicy.minPollInterval
         let startNow = clock()
@@ -841,6 +862,19 @@ public actor QuotaManager {
             auxiliaryInfo: reason.remedy
         )
     }
+}
+
+/// Discovery's own deadline preserves each known row's cache identity so the
+/// normal stale-retention path can keep its last reading without relabelling it.
+private struct UnavailableClaudeInstance: QuotaProvider {
+    let id: String
+    let name: String
+    let reason: UnavailableReason
+    var vendorId: VendorIdentifier { .claude }
+    var category: MetricCategory { .aiSubscriptions }
+    var displayName: String { name }
+    var instanceID: String { id }
+    func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
 }
 
 // MARK: - System health summary

@@ -64,12 +64,15 @@ actor ClaudeAccountDiscovery {
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
     private let directCredential: @Sendable () async -> String?
     private let directPlan: @Sendable () async -> String?
-    private let profileCredential: @Sendable (String) async -> Data?
     private let backoff: ClaudeProxyBackoff
     private let grants: ClaudeGrantSchedule
     private var profileWaits: [String: (until: Date, reason: UnavailableReason)] = [:]
+    private var cachedProviders: [any QuotaProvider] = []
+    private var discoverySignature: String?
+    private var lastDiscoveryAt: Date?
+    private var lastUserDiscoveryAt: Date?
 
-    init(defaults: UserDefaults = CredentialStore.preferences,
+    init(defaultsSuiteName: String? = nil,
                 proxyConfig: @escaping @Sendable () -> CLIProxyConfig? = {
                     TestHost.isActive ? nil : CLIProxyClient.discoverConfig()
                 },
@@ -79,24 +82,10 @@ actor ClaudeAccountDiscovery {
                 directPlan: @escaping @Sendable () async -> String? = {
                     TestHost.isActive ? nil : await CredentialStore.claudePlanNameAsync()
                 },
-                profileCredential: @escaping @Sendable (String) async -> Data? = { path in
-                    // Tests inject bytes explicitly. No ambient file or Keychain
-                    // lookup may make a hermetic test depend on this Mac's login.
-                    guard !TestHost.isActive else { return nil }
-                    return await Task.detached(priority: .utility) {
-                        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-                        defer { try? handle.close() }
-                        // A credential blob is small. Bound malformed/incorrect
-                        // files instead of pulling arbitrary logs into memory.
-                        guard let bytes = try? handle.read(upToCount: 1_048_577), bytes.count <= 1_048_576
-                        else { return nil }
-                        return bytes
-                    }.value
-                },
                 backoff: ClaudeProxyBackoff? = nil, grants: ClaudeGrantSchedule? = nil) {
-        self.defaults = defaults; self.proxyConfig = proxyConfig
+        self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
+        self.proxyConfig = proxyConfig
         self.directCredential = directCredential; self.directPlan = directPlan
-        self.profileCredential = profileCredential
         self.backoff = backoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
         self.grants = grants ?? (TestHost.isActive ? ClaudeGrantSchedule() : .shared)
     }
@@ -108,6 +97,14 @@ actor ClaudeAccountDiscovery {
         } ?? []
         let config = proxyConfig()
         let directToken = await directCredential().flatMap { $0.isEmpty ? nil : $0 }
+        let names = defaults.dictionary(forKey: ClaudeAccountStore.nicknamesKey) as? [String: String] ?? [:]
+        let signature = ClaudeAccount.digest((config?.url.absoluteString ?? "") + "|"
+            + (config?.managementKey ?? "") + "|" + (directToken ?? "") + "|"
+            + names.keys.sorted().map { $0 + "=" + names[$0]! }.joined(separator: "|"))
+        let userInitiated = QuotaFetchContext.isUserInitiated
+        let measuredFrom = userInitiated ? lastUserDiscoveryAt : lastDiscoveryAt
+        if signature == discoverySignature,
+           let measuredFrom, now.timeIntervalSince(measuredFrom) < 30 { return cachedProviders }
         var routes: [ClaudeAccountRoute] = []
         // Discovery failures preserve the identity of known rows; they never
         // fall back to a different account selected by the hub or local CLI.
@@ -123,8 +120,9 @@ actor ClaudeAccountDiscovery {
                 }.sorted { ($0.id ?? $0.authIndex, $0.authIndex) < ($1.id ?? $1.authIndex, $1.authIndex) }
                 var seen = Set<String>()
                 for file in enabled where seen.insert(file.authIndex).inserted {
-                    routes.append(ClaudeAccountRoute(source: prefix + ClaudeAccount.digest(file.id ?? file.authIndex),
-                        sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))", token: nil,
+                    let hint = Self.safeAccountHint(file.email).map { " · " + $0 } ?? ""
+                    routes.append(ClaudeAccountRoute(source: prefix + ClaudeAccount.digest((file.id ?? "") + "|" + file.authIndex),
+                        sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint, token: nil,
                         proxy: config, authFile: file, plan: nil, nickname: nil, failure: nil, profile: nil))
                 }
             } catch {
@@ -140,18 +138,9 @@ actor ClaudeAccountDiscovery {
                 sourceLabel: "This Mac's Claude Code session", token: token, proxy: nil, authFile: nil,
                 plan: await directPlan(), nickname: nil, failure: nil, profile: nil))
         }
-        for source in ClaudeAccountStore.profileSources(in: defaults) where source.isEnabled {
-            let data = await profileCredential(source.path)
-            let token = CredentialStore.claudeOAuthToken(from: data)
-            routes.append(ClaudeAccountRoute(source: "profile|" + source.id,
-                sourceLabel: "Saved profile (\(URL(fileURLWithPath: source.path).deletingLastPathComponent().lastPathComponent))",
-                token: token, proxy: nil, authFile: nil, plan: CredentialStore.claudePlanName(from: data),
-                nickname: source.nickname, failure: token == nil ? .notConfigured : nil, profile: nil))
-        }
         // Profile reads are independent. A slow or rejected account cannot
         // prevent another account's identity being resolved.
         let waits = profileWaits
-        let userInitiated = QuotaFetchContext.isUserInitiated
         let discovered = await withTaskGroup(of: ClaudeAccountRoute.self, returning: [ClaudeAccountRoute].self) { group in
             for route in routes {
                 group.addTask {
@@ -227,20 +216,40 @@ actor ClaudeAccountDiscovery {
             // independent source exists. An inventory outage must not select
             // an arbitrary account from a named row.
             if !proxyInventoryFailed { _ = ClaudeAccountStore.saveDiscovered([], in: defaults) }
-            if let inventoryFailure { return [ClaudeDiscoveryFailureProvider(reason: inventoryFailure)] }
-            return [ClaudeQuotaProvider(apiKey: "", directCredential: { nil })]
+            let result: [any QuotaProvider] = if let inventoryFailure {
+                [ClaudeDiscoveryFailureProvider(reason: inventoryFailure)]
+            } else { [ClaudeQuotaProvider(apiKey: "", directCredential: { nil })] }
+            return remember(result, signature: signature, now: now, userInitiated: userInitiated)
         }
         let accounts = ClaudeAccountStore.saveDiscovered(descriptors, in: defaults)
         if let data = try? JSONEncoder().encode(bindings) { defaults.set(data, forKey: Self.bindingsKey) }
-        return accounts.map { account in
+        let result: [any QuotaProvider] = accounts.map { account in
             ClaudeAccountQuotaProvider(account: account, routes: groups[account.id] ?? [],
                 failure: unavailableBindings.first { $0.0.accountID == account.id }?.1,
                 backoff: backoff, grants: grants)
         }
+        return remember(result, signature: signature, now: now, userInitiated: userInitiated)
+    }
+
+    private func remember(_ providers: [any QuotaProvider], signature: String,
+                          now: Date, userInitiated: Bool) -> [any QuotaProvider] {
+        cachedProviders = providers
+        discoverySignature = signature
+        lastDiscoveryAt = now
+        if userInitiated { lastUserDiscoveryAt = now }
+        return providers
     }
 
     private static func proxySourcePrefix(_ config: CLIProxyConfig) -> String {
         "proxy|" + ClaudeAccount.digest(config.url.absoluteString) + "|"
+    }
+
+    private static func safeAccountHint(_ value: String?) -> String? {
+        guard let value = value?.trimmed, value.count <= 254,
+              value.contains("@"), !value.contains(where: { $0.isWhitespace || $0.isNewline }),
+              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return nil }
+        return value
     }
 }
 

@@ -30,53 +30,12 @@ public struct ClaudeAccount: Codable, Sendable, Equatable, Identifiable {
     static func instanceID(identity: String) -> String { instancePrefix + digest(identity) }
 }
 
-/// A read-only credential file for a separately signed-in Claude Code profile.
-/// The source id survives renaming or correcting its path. It stores no token.
-public struct ClaudeProfileSource: Codable, Sendable, Equatable, Identifiable {
-    public let id: String
-    public var path: String
-    public var nickname: String?
-    public var isEnabled: Bool
-
-    public init(id: String = UUID().uuidString, path: String, nickname: String? = nil,
-                isEnabled: Bool = true) {
-        self.id = id; self.path = path; self.nickname = nickname; self.isEnabled = isEnabled
-    }
-}
-
 /// Only safe account descriptors and nicknames are stored here. Tokens remain
 /// in their existing credential sources. Tests pass a private preference suite.
 public enum ClaudeAccountStore {
     static let accountsKey = "QuotaBarClaudeAccounts"
     static let nicknamesKey = "QuotaBarClaudeAccountNicknames"
     static let badgesKey = "QuotaBarClaudeAccountBadges"
-    static let profilesKey = "QuotaBarClaudeProfileSources"
-
-    public static func profileSources(in defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeProfileSource] {
-        guard let data = defaults.data(forKey: profilesKey) else { return [] }
-        return (try? JSONDecoder().decode([ClaudeProfileSource].self, from: data)) ?? []
-    }
-
-    public static func setProfileSources(_ sources: [ClaudeProfileSource],
-                                         in defaults: UserDefaults = CredentialStore.preferences) {
-        guard let data = try? JSONEncoder().encode(sources) else { return }
-        defaults.set(data, forKey: profilesKey)
-        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
-    }
-
-    @discardableResult
-    public static func addProfile(path: String, nickname: String?,
-                                  in defaults: UserDefaults = CredentialStore.preferences) -> Bool {
-        guard !path.trimmed.isEmpty else { return false }
-        let normalized = URL(fileURLWithPath: NSString(string: path.trimmed).expandingTildeInPath)
-            .standardizedFileURL.path
-        var sources = profileSources(in: defaults)
-        guard !sources.contains(where: { $0.path == normalized }) else { return false }
-        sources.append(ClaudeProfileSource(path: normalized, nickname: nickname?.trimmed.nilIfEmpty))
-        setProfileSources(sources, in: defaults)
-        return true
-    }
-
     public static func all(in defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeAccount] {
         guard let data = defaults.data(forKey: accountsKey),
               let accounts = try? JSONDecoder().decode([ClaudeAccount].self, from: data) else { return [] }
@@ -100,13 +59,16 @@ public enum ClaudeAccountStore {
     /// Discovery order is stable even if the proxy changes its auth-file order.
     /// Badges survive removal and rediscovery, and a nickname never changes id.
     static func saveDiscovered(_ accounts: [ClaudeAccount], in defaults: UserDefaults) -> [ClaudeAccount] {
+        let previous = all(in: defaults)
         var badges = defaults.dictionary(forKey: badgesKey) as? [String: String] ?? [:]
         var next = (badges.values.compactMap(Int.init).max() ?? 0) + 1
         let result = accounts.sorted { $0.id < $1.id }.map { account in
             if badges[account.id] == nil { badges[account.id] = String(next); next += 1 }
             let badge = badges[account.id]!
+            let fallback = previous.first { $0.id == account.id }?.fallbackName
+                ?? (account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)")
             return ClaudeAccount(id: account.id, badge: badge, sourceLabel: account.sourceLabel,
-                fallbackName: account.fallbackName == "This Mac" ? "This Mac" : "Account \(badge)",
+                fallbackName: fallback,
                 nickname: account.nickname, planName: account.planName)
         }.sorted { (Int($0.badge) ?? 0) < (Int($1.badge) ?? 0) }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
