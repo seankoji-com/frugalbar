@@ -511,8 +511,8 @@ struct MetricRowView: View {
     }
 
     /// A model-scoped weekly window — today Anthropic's Fable cap — on its own
-    /// line under the row. Named accounts align it with WK; legacy rows keep
-    /// their spanning meter. A spent scoped window says nothing about the plan.
+    /// line under the row, spanning the meter area with its own WK token.
+    /// A spent scoped window says nothing about the plan.
     private func scopedWindowRow(
         _ bar: DualBarMetrics, now: Date,
         credits: MetricRowPresentation.ResetCredits? = nil
@@ -532,20 +532,7 @@ struct MetricRowView: View {
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 
-            if isClaudeAccount {
-                HStack(spacing: Theme.gridColumnSpacing) {
-                    ForEach(WindowColumn.allCases) { column in
-                        if column == .weekly {
-                            scopedMeter(bar, now: now, showsToken: false)
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Color.clear.frame(maxWidth: .infinity).frame(height: 1)
-                        }
-                    }
-                }
-            } else {
-                scopedMeter(bar, now: now, showsToken: true)
-            }
+            scopedMeter(bar, now: now)
         }
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
         .padding(.top, 8)
@@ -555,18 +542,16 @@ struct MetricRowView: View {
         .accessibilityHidden(true)
     }
 
-    private func scopedMeter(_ bar: DualBarMetrics, now: Date, showsToken: Bool) -> some View {
+    private func scopedMeter(_ bar: DualBarMetrics, now: Date) -> some View {
         VStack(spacing: 4) {
             DualBarProgressView(metrics: bar, showsLabel: false)
             HStack(spacing: 2) {
-                if showsToken {
-                    Text(WindowColumn.weekly.label)
-                        .font(Theme.Typography.token)
-                        .tracking(Theme.Tracking.token)
-                        .foregroundStyle(Theme.onSurfaceVariant)
-                        .padding(.trailing, 4)
-                        .accessibilityHidden(true)
-                }
+                Text(WindowColumn.weekly.label)
+                    .font(Theme.Typography.token)
+                    .tracking(Theme.Tracking.token)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .padding(.trailing, 4)
+                    .accessibilityHidden(true)
                 if WindowGridPresentation.showsBlockedGlyph(for: bar) {
                     BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                 }

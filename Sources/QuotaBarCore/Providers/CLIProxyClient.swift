@@ -986,6 +986,40 @@ public enum CLIProxyClient {
         return try JSONDecoder().decode(OpenAIQuotaProvider.Response.self, from: data)
     }
 
+    /// Relays only the Grok CLI's fixed read endpoints through one selected
+    /// credential. The management key stays on the outer request; the proxy
+    /// substitutes its own account token in the upstream header.
+    static func callGrok(
+        config: CLIProxyConfig, account: CLIProxyAuthFile, settings: Bool, now: Date
+    ) async throws -> Data {
+        let payload: [String: Any] = [
+            "auth_index": account.authIndex,
+            "method": "GET",
+            "url": settings ? GrokQuotaProvider.settingsURL : GrokQuotaProvider.billingURL,
+            "header": [
+                "Authorization": "Bearer $TOKEN$",
+                GrokQuotaProvider.clientHeader.name: GrokQuotaProvider.clientHeader.value,
+                "Accept": "application/json"
+            ]
+        ]
+        let (data, http) = try await QuotaHTTP.post(
+            url: managementURL(path: "api-call", base: config.url),
+            body: JSONSerialization.data(withJSONObject: payload),
+            headers: ["Content-Type": "application/json"], auth: .bearer(config.managementKey))
+        if let reason = QuotaHTTP.failureReason(for: http.statusCode,
+            retryAfter: http.value(forHTTPHeaderField: "Retry-After"), now: now) {
+            throw ProviderError(reason)
+        }
+        guard let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) else {
+            throw ProviderError.badResponse
+        }
+        if let reason = QuotaHTTP.failureReason(for: wrapper.statusCode,
+            retryAfter: wrapper.retryAfterHeader, now: now) {
+            throw ProviderError(reason)
+        }
+        return Data(wrapper.body.utf8)
+    }
+
     public static func fetchCodexUsage(
         config: CLIProxyConfig, now: Date = Date()
     ) async throws -> (OpenAIQuotaProvider.Response, CLIProxyAuthFile) {
