@@ -371,8 +371,14 @@ public enum AggregateBurndownPresentation {
         snapshots: [QuotaSnapshot],
         filters: WidgetFilters,
         now: Date,
-        instanceName: (String) -> String? = OpenCodeGoWorkspaceStore.displayName(forInstanceKey:),
-        instancePosition: (String) -> Int? = { OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0) }
+        instanceName: (String) -> String? = {
+            ClaudeAccountStore.displayName(forInstanceKey: $0)
+                ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: $0)
+        },
+        instancePosition: (String) -> Int? = {
+            ClaudeAccountStore.position(ofInstanceKey: $0)
+                ?? OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0)
+        }
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let inRange = HistoryPresentation.consumptionReadings(readings).filter { record in
@@ -403,7 +409,14 @@ public enum AggregateBurndownPresentation {
             }
         let covered = Set(refs.map(\.vendorId))
         for vendor in filters.vendors.subtracting(covered).sorted(by: { $0.rawValue < $1.rawValue }) {
-            refs.append((vendor.rawValue, vendor, vendor.displayName, nil))
+            let keys = storedKeys(inRange, position: instancePosition).filter {
+                OpenCodeGoWorkspaceStore.vendor(forInstanceKey: $0) == vendor
+            }
+            if keys.isEmpty {
+                refs.append((vendor.rawValue, vendor, vendor.displayName, nil))
+            } else {
+                refs += keys.map { ($0, vendor, instanceName($0) ?? vendor.displayName, nil) }
+            }
         }
 
         return refs.compactMap { ref in

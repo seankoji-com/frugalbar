@@ -264,8 +264,8 @@ public struct HistoryRootView: View {
                         if selectedSubject != nil {
                             if !isLoading {
                                 if isAttributionLoading, attribution == nil,
-                                   let vendor = selectedSubject?.vendor,
-                                   !AttributionEngine.localSourceIdentifiers(for: vendor).isEmpty {
+                                   let subject = selectedSubject,
+                                   !HistoryOverviewPresentation.localActivitySources(for: subject).isEmpty {
                                     attributionLoadingCard
                                 } else {
                                     attributionCard
@@ -439,6 +439,7 @@ public struct HistoryRootView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 let name = selectedSubject?.name
+                    ?? ClaudeAccountStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.vendor(forInstanceKey: pace.vendor)?.displayName
                     ?? pace.vendor
@@ -624,7 +625,7 @@ public struct HistoryRootView: View {
 
     @ViewBuilder
     private var attributionCard: some View {
-        if AttributionEngine.localSourceIdentifiers(for: selectedSubject?.vendor ?? .claude).isEmpty {
+        if selectedSubject.map({ HistoryOverviewPresentation.localActivitySources(for: $0).isEmpty }) ?? true {
             noLocalTelemetryCard
         } else {
             VStack(alignment: .leading, spacing: 12) {
@@ -761,7 +762,8 @@ public struct HistoryRootView: View {
                 Image(systemName: "questionmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant)
-                Text("FrugalBar has no local activity adapter for \(selectedSubject?.vendor.displayName ?? "this provider"), so no project breakdown can be attributed to its allowance.")
+                Text(selectedSubject.map { HistoryOverviewPresentation.activityExplanation(for: $0) }
+                     ?? "Select a provider to see its activity coverage.")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
@@ -1080,7 +1082,7 @@ public struct HistoryRootView: View {
             // Activity is restricted to the sources that can actually speak for
             // the selected vendor. Showing Codex and OpenCode tokens beneath a
             // "Claude" heading asserted an attribution nothing measured.
-            let sources = AttributionEngine.localSourceIdentifiers(for: subject.vendor)
+            let sources = HistoryOverviewPresentation.localActivitySources(for: subject)
             // The status first: records read before it could be from a pass
             // that finished after it, and would then be vouched for wrongly.
             // The sample fixture is written whole before it is read.

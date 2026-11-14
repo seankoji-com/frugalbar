@@ -41,9 +41,14 @@ public enum HistoryOverviewPresentation {
     public static func subjects(
         order: [VendorIdentifier],
         hidden: Set<VendorIdentifier>,
-        workspaces: [OpenCodeGoWorkspace]
+        workspaces: [OpenCodeGoWorkspace],
+        claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all()
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
+            if vendor == .claude, !claudeAccounts.isEmpty {
+                return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name) }
+                    + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
+            }
             guard vendor == .opencode else {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)]
             }
@@ -58,6 +63,20 @@ public enum HistoryOverviewPresentation {
                 )
             }
         }
+    }
+
+    /// Local Claude Code activity does not identify the subscription account.
+    /// It cannot explain either named account's quota history.
+    public static func localActivitySources(for subject: Subject) -> Set<String> {
+        if subject.id.hasPrefix(ClaudeAccount.instancePrefix) { return [] }
+        return AttributionEngine.localSourceIdentifiers(for: subject.vendor)
+    }
+
+    public static func activityExplanation(for subject: Subject) -> String {
+        if subject.id.hasPrefix(ClaudeAccount.instancePrefix) {
+            return "Local Claude Code tokens are not attributed to a Claude account, so no project breakdown can be assigned to this account's allowance."
+        }
+        return "FrugalBar has no local activity adapter for \(subject.vendor.displayName), so no project breakdown can be attributed to its allowance."
     }
 
     /// The names of hidden providers, in the user's order, so the window can

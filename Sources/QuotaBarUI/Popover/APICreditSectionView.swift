@@ -12,10 +12,8 @@ import QuotaBarCore
 struct APICreditSectionView: View {
 
     let entries: [APICreditEntry]
-    /// The vendors whose newest poll failed, so their entries' figures here are
-    /// carried over from an earlier poll. Keyed by vendor rather than held per
-    /// entry, because a failed poll is the vendor's failure: every entry that
-    /// poll retained is equally old.
+    /// Snapshot instance keys whose newest poll failed. A named account's
+    /// failure must not mark another account's balance stale.
     ///
     /// The popover's footer counts stale providers, but this card is *entirely*
     /// figures, and a balance that looks current when no poll produced it is the
@@ -31,7 +29,7 @@ struct APICreditSectionView: View {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 APICreditEntryRowView(
                     entry: entry,
-                    isStale: staleVendors.contains(entry.vendorId.rawValue),
+                    isStale: APICreditEntryPresentation.isStale(entry: entry, staleInstances: staleVendors),
                     balancePoints: BalanceSeries.of(entry).flatMap { balanceSeries[$0.id] } ?? []
                 )
 
@@ -90,7 +88,8 @@ struct APICreditEntryRowView: View {
                         .font(Theme.Typography.title)
                         .tracking(Theme.Tracking.title)
                         .foregroundStyle(Theme.onSurface)
-                        .lineLimit(1)
+                        .lineLimit(entry.accountName == nil ? 1 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
                         .minimumScaleFactor(0.85)
 
                     if let detail = p.detail {

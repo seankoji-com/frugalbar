@@ -23,6 +23,9 @@ struct PopoverRowGrouping {
     }
 
     static func rowTitle(for snapshot: QuotaSnapshot) -> String {
+        if snapshot.vendorId == .claude, snapshot.claudeAccount != nil {
+            return snapshot.displayName
+        }
         return switch snapshot.vendorId {
         case .gemini: "Gemini"
         case .antigravityArgon: "Argon"
@@ -82,7 +85,10 @@ struct PopoverRowGrouping {
             let sharedPlan = plan.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 == true && run.allSatisfy { $0.planName == plan }
             if let service {
-                let headerPlan = sharedPlan ? plan : nil
+                // Named accounts carry their own plan, even when both happen
+                // to publish the same tier. The heading names only the service.
+                let hasClaudeAccounts = run.contains { $0.claudeAccount != nil }
+                let headerPlan = sharedPlan && !hasClaudeAccounts ? plan : nil
                 groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
                                     snapshots: run, headerPlan: headerPlan))
             } else if grouped {
@@ -118,6 +124,10 @@ struct PopoverRowGrouping {
     static func subtitle(
         for snapshot: QuotaSnapshot, suppressPlan: Bool, presentation: MetricRowPresentation
     ) -> String {
+        if snapshot.vendorId == .claude, snapshot.claudeAccount != nil {
+            let plan = snapshot.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return plan.flatMap { $0.isEmpty ? nil : "Claude Code · \($0)" } ?? "Claude Code"
+        }
         if presentation.isExhausted, let reset = presentation.exhaustedResetText, !reset.isEmpty {
             return reset
         }

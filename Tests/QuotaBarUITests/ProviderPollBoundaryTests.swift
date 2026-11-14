@@ -116,7 +116,7 @@ struct ProviderPollBoundaryTests {
         // The History overview's sparkline, from the thinned read.
         let sampled = try await store.fetchSampledReadings(
             since: base.addingTimeInterval(-3_600), until: now, bucketSeconds: 120)
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         let card = try #require(HistoryOverviewPresentation.overview(
             subjects: subjects, readings: sampled, bucketSeconds: 120).cards.first)
         #expect(card.barLabel == "WK")
@@ -308,7 +308,7 @@ struct ProviderPollBoundaryTests {
     private func overviewBreaks(
         record: (QuotaHistoryStore, Date) async throws -> Void
     ) async throws -> [(range: HistoryPresentation.TimeRange, full: [[Date]], sampled: [[Date]])] {
-        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let subjects = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         var results: [(HistoryPresentation.TimeRange, [[Date]], [[Date]])] = []
         for range in HistoryPresentation.TimeRange.allCases {
             let store = makeStore()

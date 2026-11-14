@@ -9,6 +9,67 @@ import WebKit
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    @Test func renderClaudeAccountRailB1() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = ClaudeAccountFixtures.now
+        let both = ClaudeAccountFixtures.both
+        let legacy = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.none), resetsAt: both[0].resetsAt, lastUpdated: now, auxiliaryInfo: nil,
+            row1: both[0].row1, row2: both[0].row2, planName: "Max")
+        let codex = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.12, label: "5H"),
+            row2: DualBarMetrics(primaryFraction: 0.43, label: "WK"), planName: "Pro")
+        let cases: [(String, [QuotaSnapshot])] = [
+            ("both", both),
+            ("unavailable", [both[0], ClaudeAccountFixtures.unavailable]),
+            ("stale", [both[0], ClaudeAccountFixtures.stale]),
+            ("single", [both[0]]),
+            ("legacy", [legacy]),
+            ("mixed-vendors", [codex] + both)
+        ]
+        for (name, snapshots) in cases {
+            try await save(MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
+                onSelect: { _ in }, now: now)
+                .padding(12).frame(width: 384).background(Theme.surface),
+                name: "claude-account-b1-\(name)", directory: directory)
+        }
+        var personal = ClaudeAccountFixtures.personal
+        personal.nickname = "Personal subscription with a very long account nickname"
+        var work = ClaudeAccountFixtures.work
+        work.nickname = "Work subscription with another very long account nickname"
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
+            ClaudeAccountFixtures.snapshot(personal, weekly: 0.61, fable: 0.35),
+            ClaudeAccountFixtures.snapshot(work, weekly: 0.27, fable: 0.12)
+        ], onSelect: { _ in }, now: now)
+            .padding(12).frame(width: 384).background(Theme.surface),
+            name: "claude-account-b1-long-nicknames", directory: directory)
+    }
+
+    @Test func renderClaudeAccountConfigurationB1() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suite = "ClaudeAccountSettingsRender.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let accounts = ClaudeAccountStore.saveDiscovered(
+            [ClaudeAccountFixtures.personal, ClaudeAccountFixtures.work], in: defaults)
+        #expect(accounts.count == 2)
+        try await save(Form {
+            ClaudeAccountSettingsView(accounts: accounts, load: { ClaudeAccountStore.all(in: defaults) },
+                saveNickname: { name, id in ClaudeAccountStore.setNickname(name, for: id, in: defaults) })
+        }.formStyle(.grouped).frame(width: 550, height: 430),
+            name: "claude-account-b1-settings", directory: directory)
+        try await save(Form {
+            ClaudeAccountSettingsView(accounts: [], load: nil,
+                saveNickname: { _, _ in Issue.record("Fixture must not save a nickname") })
+        }.formStyle(.grouped).frame(width: 550, height: 330),
+            name: "claude-account-b1-settings-empty", directory: directory)
+    }
+
     @Test func renderAgreedChatGPTLayout() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -643,7 +704,7 @@ struct UXRenderTests {
 
         // MARK: History
         let subjects = HistoryOverviewPresentation.subjects(
-            order: [.claude, .opencode, .openai, .grok, .kiro], hidden: [.kiro], workspaces: [beta, alpha])
+            order: [.claude, .opencode, .openai, .grok, .kiro], hidden: [.kiro], workspaces: [beta, alpha], claudeAccounts: [])
         try await save(
             HistoryRootView(liveStore: history, sampleStore: history,
                             subjectSource: { (subjects, ["Kiro"]) })
@@ -723,7 +784,7 @@ struct UXRenderTests {
             metric: .subscription(tierName: nil, renewalDate: nil), status: .unavailable(.offline),
             resetsAt: nil, lastUpdated: now.addingTimeInterval(-60), auxiliaryInfo: nil)],
             now: now.addingTimeInterval(-60))
-        let claudeOnly = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [])
+        let claudeOnly = HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: [])
         try await save(
             HistoryRootView(liveStore: failedLatest, sampleStore: failedLatest, subjectSource: { (claudeOnly, []) })
                 .frame(width: 880, height: 900),
@@ -739,13 +800,13 @@ struct UXRenderTests {
         try await save(
             HistoryRootView(liveStore: onlyFailed, sampleStore: onlyFailed,
                             subjectSource: { (HistoryOverviewPresentation.subjects(
-                                order: [.claude, .grok], hidden: [], workspaces: []), []) })
+                                order: [.claude, .grok], hidden: [], workspaces: [], claudeAccounts: []), []) })
                 .frame(width: 880, height: 760),
             name: "history-only-failed", directory: directory)
 
         // A blocked figure on an overview card wears the nosign glyph.
         let blockedCard = try #require(HistoryOverviewPresentation.overview(
-            subjects: HistoryOverviewPresentation.subjects(order: [.opencode], hidden: [], workspaces: [alpha]),
+            subjects: HistoryOverviewPresentation.subjects(order: [.opencode], hidden: [], workspaces: [alpha], claudeAccounts: []),
             readings: blockedWeekly).cards.first)
         try await save(
             HistoryOverviewCardView(card: blockedCard, isSelected: false, onSelect: {})
@@ -849,10 +910,10 @@ struct UXRenderTests {
         let bucketedSampled = try await bucketed.fetchSampledReadings(
             since: now.addingTimeInterval(-86_400), until: now, bucketSeconds: bucket24)
         let bucketedCards = HistoryOverviewPresentation.overview(
-            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: []),
+            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: []),
             readings: bucketedSampled, bucketSeconds: bucket24).cards
         let fullCards = HistoryOverviewPresentation.overview(
-            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: []),
+            subjects: HistoryOverviewPresentation.subjects(order: [.claude], hidden: [], workspaces: [], claudeAccounts: []),
             readings: bucketedFull, bucketSeconds: bucket24).cards
         #expect(fullCards.first?.segments.count == 4)
         #expect(bucketedCards.first?.segments.count == 4)

@@ -230,7 +230,7 @@ public struct PopoverRootView: View {
                     // vendor, not by snapshot, because that is what the failure
                     // belongs to.
                     staleVendors: Set(
-                        store.snapshots.filter { $0.staleReading != nil }.map(\.vendorId.rawValue)
+                        store.snapshots.filter { $0.staleReading != nil }.map(\.id)
                     ),
                     balanceSeries: store.balanceSeries
                 )
