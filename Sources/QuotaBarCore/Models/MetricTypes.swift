@@ -523,6 +523,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public var latencyMs: Int?
     public var keyMasked: String?
     public var cliSource: String?
+    /// Safe account identity for Claude's account row, badge and source label.
+    public var claudeAccount: ClaudeAccount? = nil
     public var currencyBasis: CurrencyBasis?
     /// Prepaid API credit balances the vendor published in the same payload as
     /// the quota this snapshot reports — OpenAI's `credits.balance`, Anthropic's
