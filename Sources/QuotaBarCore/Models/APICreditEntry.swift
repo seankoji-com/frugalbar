@@ -42,7 +42,7 @@ public struct APICreditEntry: Sendable, Equatable, Identifiable {
     /// The vendor's pool type, kept apart from an account-qualified entry id.
     public let poolID: String
     public let accountID: String?
-    public let accountName: String?
+    public var accountName: String?
     public let vendorId: VendorIdentifier
     /// What the entry is called on its own row, e.g. "API credits".
     public let label: String

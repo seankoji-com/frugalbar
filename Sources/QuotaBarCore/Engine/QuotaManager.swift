@@ -464,6 +464,11 @@ public actor QuotaManager {
             // while this account's vendor backoff retains its last reading.
             snapshot.displayName = provider.account.name
             snapshot.claudeAccount = provider.account
+            snapshot.apiCredits = snapshot.apiCredits.map { entry in
+                var copy = entry
+                if entry.accountID == snapshot.id { copy.accountName = provider.account.name }
+                return copy
+            }
             cache[provider.instanceID] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
                 lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
         }

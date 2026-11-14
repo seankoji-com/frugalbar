@@ -375,6 +375,7 @@ struct ClaudeAccountTests {
             let aRequests = fixture.count("a", containing: "usage")
             let retained = await manager.refresh()
             #expect(retained[aid]?.displayName == "Work")
+            #expect(retained[aid]?.apiCredits.first?.accountName == "Work")
             #expect(retained[aid]?.row1?.primaryFraction == 0.21)
             #expect(fixture.count("a", containing: "usage") == aRequests)
             #expect(retained[bid]?.staleReading == nil)
