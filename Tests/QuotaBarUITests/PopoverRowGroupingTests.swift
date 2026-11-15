@@ -7,6 +7,29 @@ import QuotaBarCore
 struct PopoverRowGroupingTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test("removing headings retains service context and the published plan on the first row")
+    func railGroupSubtitles() {
+        let rows = [snapshot("gemini", vendor: .gemini, plan: "Google AI Pro"),
+                    snapshot("argon", vendor: .antigravityArgon, plan: "Google AI Pro")]
+        let group = PopoverRowGrouping.groups(for: rows)[0]
+        #expect(group.rowSubtitle(for: rows[0])
+            == "Antigravity\nGoogle AI Pro")
+        #expect(group.rowSubtitle(for: rows[1]) == "")
+        #expect(group.accessibilityLabel == "Antigravity, Google AI Pro")
+        let codex = snapshot("codex", vendor: .openai, plan: "Pro 200")
+        let codexGroup = PopoverRowGrouping.groups(for: [codex])[0]
+        #expect(codexGroup.rowSubtitle(for: codex)
+            == "ChatGPT · Pro 200")
+        let absent = snapshot("gemini", vendor: .gemini, plan: nil)
+        let absentGroup = PopoverRowGrouping.groups(for: [absent])[0]
+        #expect(absentGroup.rowSubtitle(for: absent)
+            == "Antigravity")
+        let standalone = snapshot("single workspace")
+        let singleGroup = PopoverRowGrouping.groups(for: [standalone])[0]
+        #expect(singleGroup.rowSubtitle(for: standalone) == nil)
+        #expect(singleGroup.accessibilityLabel == nil)
+    }
+
     private func snapshot(
         _ id: String, vendor: VendorIdentifier = .opencode,
         plan: String? = "OpenCode Go", exhausted: Bool = false,

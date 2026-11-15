@@ -23,8 +23,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// percentage is dropped; a plan name or a balance is not in the grid.
     public let accessibilityLabelOmittingPercentage: String
     /// A window the vendor reports as fully spent. Deliberately narrower than
-    /// `.critical` urgency, which also covers "nearly gone" — the struck-through
-    /// logo is reserved for nothing-left-at-all.
+    /// `.critical` urgency, which also covers "nearly gone". The reset overlay
+    /// is reserved for nothing-left-at-all.
     public let isExhausted: Bool
     /// What the vendor published about when the exhausted window reopens, e.g.
     /// "Resets on 1st of month". nil means it published nothing; no date is
@@ -32,6 +32,13 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// unless the group header already states it, in which case a suppressed
     /// row draws no second line.
     public let exhaustedResetText: String?
+    /// The latest published reset among the windows preventing use. A scoped
+    /// model cap, a billing cycle or a healthy window cannot supply this time.
+    public let exhaustedResetCountdown: String?
+    public let exhaustedResetSpoken: String?
+    public var exhaustedResetFallback: String? {
+        isExhausted && exhaustedResetCountdown == nil ? exhaustedResetText : nil
+    }
     /// Banked reset credits the vendor says the account holds (one ticket glyph
     /// each). nil when it published no such figure — which is *not* the same as
     /// publishing zero.
@@ -282,15 +289,26 @@ public struct MetricRowPresentation: Equatable, Sendable {
         let spentBar = snapshot.quotaBars.first { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold }
         // A fully rate-limited account (every window blocked, no percentage
         // published) has no spent bar, but is every bit as unusable as a spent
-        // one — arguably more, since nothing is "left" to measure. It counts as
-        // exhausted so the avatar strikes the logo and the ✗ shows, matching
-        // the energetic weight the vendor actually declared. (The spoken copy
+        // one, since nothing is "left" to measure. It counts as exhausted so
+        // the avatar carries its reset countdown or blocked glyph. (The spoken copy
         // below distinguishes "exhausted" from "blocked".)
         self.isExhausted = spentBar != nil || snapshot.isFullyBlockedWithoutReading
-        // Reset text from a spent bar, or the first blocked bar when the whole
-        // account is cut off.
-        self.exhaustedResetText = spentBar?.resetText
-            ?? snapshot.quotaBars.first(where: { $0.isBlocked })?.resetText
+        // Extra pools can carry an expiry in `resetsAt` (Kiro's BN does).
+        // Only named quota windows establish an account reset countdown.
+        let blockingWindows = snapshot.quotaBars.filter {
+            WindowColumn.column(forLabel: $0.label) != nil
+                && (WindowGridPresentation.isExhausted($0) || $0.isBlocked)
+        }
+        let exhaustedReset = blockingWindows.allSatisfy { $0.resetsAt != nil }
+            ? blockingWindows.compactMap(\.resetsAt).max() : nil
+        self.exhaustedResetCountdown = self.isExhausted
+            ? ResetCountdownBadge.compact(exhaustedReset, now: now) : nil
+        self.exhaustedResetSpoken = self.isExhausted
+            ? ResetCountdownBadge.compactSpoken(exhaustedReset, now: now) : nil
+        let resetWindow = blockingWindows.first(where: { $0.resetsAt == nil })
+            ?? blockingWindows.max { ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast) }
+            ?? spentBar ?? snapshot.quotaBars.first(where: { $0.isBlocked })
+        self.exhaustedResetText = resetWindow?.resetText
 
         // A reading carried over through a failed poll is not this poll's
         // reading, and is marked as such before the branches below can return:

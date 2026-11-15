@@ -112,6 +112,21 @@ public struct WindowGridPresentation: Equatable, Sendable {
         return "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
+    /// Display-only treatment. Keep the actual percentage in spoken summaries
+    /// and quota calculations, including when its redundant label is hidden.
+    public static func isExhausted(_ bar: DualBarMetrics) -> Bool {
+        !bar.measuresElapsedTimeOnly
+            && bar.primaryFraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } == true
+    }
+
+    static func visiblePercentText(for bar: DualBarMetrics) -> String? {
+        isExhausted(bar) ? nil : percentText(for: bar)
+    }
+
+    static func showsExhaustionGlyph(for bar: DualBarMetrics) -> Bool {
+        isExhausted(bar) || showsBlockedGlyph(for: bar)
+    }
+
     /// Whether a figure needs the blocked glyph beside it: the vendor blocked
     /// the window yet reported how much of it was used. Without a percentage
     /// the cell says "Blocked" in words, so the glyph would repeat it.

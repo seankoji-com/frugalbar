@@ -90,6 +90,8 @@ struct MetricRowView: View {
 
     var isGrouped: Bool = false
     var suppressPlan: Bool = false
+    var groupSubtitle: String? = nil
+    var continuesGroup: Bool = false
     var now: Date? = nil
 
     private var isClaudeAccount: Bool { snapshot.vendorId == .claude && snapshot.claudeAccount != nil }
@@ -111,7 +113,9 @@ struct MetricRowView: View {
     /// states it. A suppressed, exhausted workspace without reset text leaves
     /// this slot empty too; it must not repeat the plan.
     private func subtitle(_ p: MetricRowPresentation) -> String {
-        PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
+        if let groupSubtitle { return groupSubtitle }
+        if p.exhaustedResetCountdown != nil { return snapshot.shortPlanName }
+        return PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
     }
 
     /// Words for what a measured money row's chip figure is, or nil. Follows
@@ -127,7 +131,8 @@ struct MetricRowView: View {
     }
 
     private func subtitleColor(_ p: MetricRowPresentation) -> Color {
-        p.isExhausted ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
+        p.isExhausted && subtitle(p) == p.exhaustedResetText
+            ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
     }
 
     @ViewBuilder
@@ -184,6 +189,9 @@ struct MetricRowView: View {
                 scopedLabels: snapshot.scopedBars.map(\.label)
             ).enumerated()), id: \.offset) { _, group in
                 ResetTicketGroupView(credits: group.credits)
+                    .overlay(alignment: .topLeading) {
+                        if isGrouped { railElbow.padding(.top, 15) }
+                    }
             }
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
@@ -193,6 +201,9 @@ struct MetricRowView: View {
                     presentation: p,
                     showsTickets: !isClaudeAccount && snapshot.vendorId != .openai && p.resetCreditGroups.isEmpty
                 )
+                .overlay(alignment: .topLeading) {
+                    if isGrouped { railElbow.padding(.top, 7) }
+                }
             }
             // The linked Console entitlement is a different fact from the
             // promo-credit row below (which reports usage of a different
@@ -200,25 +211,38 @@ struct MetricRowView: View {
             // that row or dropped when no promo credit is published.
             if let credit = p.monthlyCredit {
                 MonthlyCreditBarView(presentation: credit)
+                    .overlay(alignment: .topLeading) {
+                        if isGrouped { railElbow.padding(.top, 15) }
+                    }
             }
             if let credits = p.openAIUsageCredit {
                 OpenAIUsageCreditView(presentation: credits)
                     .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                    .overlay(alignment: .topLeading) {
+                        if isGrouped { railElbow.padding(.top, 15) }
+                    }
             }
             if let promo = p.monthlyPromo {
                 MonthlyPromoCreditView(presentation: promo)
                     .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                    .overlay(alignment: .topLeading) {
+                        if isGrouped { railElbow.padding(.top, 15) }
+                    }
             }
         }
-        .background(alignment: .topLeading) {
-            if isClaudeAccount, p.resetCredits != nil || !snapshot.scopedBars.isEmpty || !p.resetCreditGroups.isEmpty {
-                Rectangle()
-                    .fill(Theme.outlineVariant.opacity(0.55))
-                    .frame(width: 2)
-                    .padding(.top, Theme.rowAvatarSize)
-                    .padding(.bottom, 8)
-                    .padding(.leading, (Theme.rowAvatarSize - 2) / 2)
-                    .accessibilityHidden(true)
+        .backgroundPreferenceValue(RowRailAnchors.self) { anchors in
+            if isGrouped, !continuesGroup, let avatar = anchors.avatar, !anchors.branches.isEmpty {
+                GeometryReader { proxy in
+                    Path { path in
+                        let start = proxy[avatar]
+                        let end = anchors.branches.map { proxy[$0].y }.max() ?? start.y
+                        path.move(to: start)
+                        path.addLine(to: CGPoint(x: start.x, y: end))
+                    }
+                    .stroke(Theme.outlineVariant.opacity(0.55), lineWidth: 2)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
         }
         .padding(.vertical, isGrouped ? 4 : 8)
@@ -261,8 +285,14 @@ struct MetricRowView: View {
     func combinedAccessibilityLabel(
         grid: WindowGridPresentation, presentation: MetricRowPresentation
     ) -> String {
-        let label = presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
+        var label = presentation.combinedAccessibilityLabel(windows: grid.spokenSummary(),
             forecast: forecastText(now: grid.now), creditsStale: snapshot.staleReading != nil)
+        if let plan = snapshot.planName, !plan.isEmpty, !label.contains(plan) {
+            label += ", plan \(plan)"
+        }
+        if let reset = presentation.exhaustedResetSpoken, !label.contains(reset) {
+            label += ", exhausted quota window \(reset)"
+        }
         let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
         let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
         let accountLabel = snapshot.claudeAccount.map { "Account \($0.badge). Claude Code. \(namedLabel)" } ?? namedLabel
@@ -285,9 +315,9 @@ struct MetricRowView: View {
     var titleView: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
-                .font(isGrouped && !isClaudeAccount ? Theme.Typography.subtitle : Theme.Typography.title)
+                .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
                 .tracking(isGrouped ? 0 : Theme.Tracking.title)
-                .foregroundStyle(isGrouped && !isClaudeAccount ? Theme.onSurfaceVariant : Theme.onSurface)
+                .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
                 .lineLimit(snapshot.instanceIdOrNil == nil && (isGrouped || snapshot.vendorId != .antigravityClaude) ? 1 : 2)
                 .fixedSize(horizontal: false, vertical: true)
                 .minimumScaleFactor(0.85)
@@ -346,13 +376,25 @@ struct MetricRowView: View {
     }
 
     private func row(_ grid: WindowGridPresentation, presentation p: MetricRowPresentation) -> some View {
-        HStack(alignment: isClaudeAccount ? .top : .center, spacing: Theme.rowSpacing) {
+        HStack(alignment: isGrouped ? .top : .center, spacing: Theme.rowSpacing) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
                 isExhausted: p.isExhausted,
+                exhaustedReset: p.exhaustedResetCountdown,
+                showsResetOverlay: true,
                 size: Theme.rowAvatarSize
             )
+            .background {
+                RoundedRectangle(cornerRadius: Theme.rowAvatarSize * 0.23)
+                    .fill(Theme.card)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.rowAvatarSize * 0.23)
+                            .fill(Color.white.opacity(isHovered ? 0.06 : 0))
+                    }
+            }
+            .anchorPreference(key: GroupAvatarAnchors.self, value: .bounds) { [snapshot.id: $0] }
+            .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(avatar: $0) }
             .overlay(alignment: .bottomTrailing) {
                 if let account = snapshot.claudeAccount {
                     Text(account.badge)
@@ -377,9 +419,15 @@ struct MetricRowView: View {
                     Text(subtitle(p))
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(subtitleColor(p))
-                        .lineLimit(1)
+                        .lineLimit(groupSubtitle == nil ? 1 : 2)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
+                }
+                if let reset = p.exhaustedResetFallback, reset != subtitle(p) {
+                    Text(reset)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.error)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 // Tickets sit inside the name column, directly under the
                 // title, exactly like the OpenAI Codex row. Claude's plan
@@ -460,7 +508,7 @@ struct MetricRowView: View {
                           showsToken: Bool = false) -> some View {
         if let bar = grid.bars[column] {
             VStack(spacing: 4) {
-                DualBarProgressView(metrics: bar, showsLabel: false)
+                DualBarProgressView(metrics: bar, showsLabel: false, showsExhaustionPattern: true)
                 // The share used on the left, in the bar's colour; the time to
                 // reset on the right, high-contrast. Together they answer "how much,
                 // and until when" without opening the row.
@@ -475,24 +523,27 @@ struct MetricRowView: View {
                     }
                     // Blocked yet measured: a shape, since the vendor's
                     // blocked colour is too close to amber to carry it.
-                    if WindowGridPresentation.showsBlockedGlyph(for: bar) {
+                    if WindowGridPresentation.showsExhaustionGlyph(for: bar) {
                         BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                     }
                     // The figure keeps its full width; the countdown gives way
                     // first. A blocked glyph, "100%" and "45m" overflowed a
                     // column, and the shared scale factor truncated the
                     // figure to "10…" (design-loop sol-16).
-                    Text(WindowGridPresentation.percentText(for: bar)
-                         ?? WindowGridPresentation.unmeasuredText(for: bar))
+                    if !WindowGridPresentation.isExhausted(bar) {
+                        Text(WindowGridPresentation.visiblePercentText(for: bar)
+                             ?? WindowGridPresentation.unmeasuredText(for: bar))
                         .font(Theme.Typography.gridPercent)
                         .foregroundStyle(DualBarProgressView.stateColor(for: bar))
                         .fixedSize()
                         .layoutPriority(1)
+                    }
                     Spacer(minLength: 0)
                     if let reset = grid.compactReset(for: column) {
                         Text(reset)
                             .font(Theme.Typography.gridReset)
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                            .foregroundStyle(WindowGridPresentation.isExhausted(bar)
+                                ? DualBarProgressView.stateColor(for: bar) : Theme.onSurfaceVariant.opacity(0.78))
                             .minimumScaleFactor(0.7)
                     }
                 }
@@ -537,35 +588,39 @@ struct MetricRowView: View {
         .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
         .padding(.top, 8)
         .overlay(alignment: .topLeading) {
-            if isClaudeAccount { railElbow.padding(.top, 15) }
+            if isGrouped { railElbow.padding(.top, 15) }
         }
         .accessibilityHidden(true)
     }
 
-    private func scopedMeter(_ bar: DualBarMetrics, now: Date) -> some View {
+    private func scopedMeter(_ bar: DualBarMetrics, now: Date,
+                             token: String = WindowColumn.weekly.label) -> some View {
         VStack(spacing: 4) {
-            DualBarProgressView(metrics: bar, showsLabel: false)
+            DualBarProgressView(metrics: bar, showsLabel: false, showsExhaustionPattern: true)
             HStack(spacing: 2) {
-                Text(WindowColumn.weekly.label)
+                Text(token)
                     .font(Theme.Typography.token)
                     .tracking(Theme.Tracking.token)
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .padding(.trailing, 4)
                     .accessibilityHidden(true)
-                if WindowGridPresentation.showsBlockedGlyph(for: bar) {
+                if WindowGridPresentation.showsExhaustionGlyph(for: bar) {
                     BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                 }
-                Text(WindowGridPresentation.percentText(for: bar)
-                     ?? WindowGridPresentation.unmeasuredText(for: bar))
+                if !WindowGridPresentation.isExhausted(bar) {
+                    Text(WindowGridPresentation.visiblePercentText(for: bar)
+                         ?? WindowGridPresentation.unmeasuredText(for: bar))
                     .font(Theme.Typography.gridPercent)
                     .foregroundStyle(DualBarProgressView.stateColor(for: bar))
                     .fixedSize()
                     .layoutPriority(1)
+                }
                 Spacer(minLength: 0)
                 if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {
                     Text(reset)
                         .font(Theme.Typography.gridReset)
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                        .foregroundStyle(WindowGridPresentation.isExhausted(bar)
+                            ? DualBarProgressView.stateColor(for: bar) : Theme.onSurfaceVariant.opacity(0.78))
                         .minimumScaleFactor(0.7)
                 }
             }
@@ -577,6 +632,7 @@ struct MetricRowView: View {
     private var railElbow: some View {
         Rectangle().fill(Theme.outlineVariant.opacity(0.55))
             .frame(width: 10, height: 2)
+            .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(branches: [$0]) }
             .padding(.leading, Theme.rowAvatarSize / 2)
             .accessibilityHidden(true)
     }
@@ -607,8 +663,24 @@ struct MetricRowView: View {
     private func extraRow(_ bar: DualBarMetrics) -> some View {
         HStack(spacing: Theme.rowSpacing) {
             Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
-            DualBarProgressView(metrics: bar)
+            DualBarProgressView(metrics: bar, showsExhaustionPattern: true)
         }
+    }
+}
+
+/// A continuation exists only when a real branch exists. Its endpoint follows
+/// the last branch, rather than a guessed inset from the row's total height.
+private struct RowRailAnchors: PreferenceKey {
+    struct Value {
+        var avatar: Anchor<CGPoint>?
+        var branches: [Anchor<CGPoint>] = []
+    }
+    static let defaultValue = Value()
+
+    static func reduce(value: inout Value, nextValue: () -> Value) {
+        let next = nextValue()
+        value.avatar = next.avatar ?? value.avatar
+        value.branches += next.branches
     }
 }
 

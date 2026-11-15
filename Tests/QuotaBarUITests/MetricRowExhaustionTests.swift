@@ -11,6 +11,60 @@ struct MetricRowExhaustionTests {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test("a bonus-credit expiry never becomes a quota reset countdown")
+    func bonusExpiryIsNotReset() {
+        let bonus = DualBarMetrics(primaryFraction: 1, label: "BN", resetText: "Expires in 40 days",
+            resetsAt: now.addingTimeInterval(40 * 86400))
+        let monthly = DualBarMetrics(primaryFraction: 1, label: "MO",
+            resetsAt: now.addingTimeInterval(10 * 86400))
+        let snap = snapshot(bars: [monthly, bonus])
+        #expect(MetricRowPresentation(snapshot: snap, now: now).exhaustedResetCountdown == "10d")
+        let speech = WindowGridPresentation(snapshot: snap, now: now).spokenSummary() ?? ""
+        #expect(!speech.contains("resets in 40 days"))
+        let onlyBonus = snapshot(bars: [DualBarMetrics(primaryFraction: 0.3, label: "MO"), bonus])
+        #expect(MetricRowPresentation(snapshot: onlyBonus, now: now).exhaustedResetCountdown == nil)
+        #expect(MetricRowPresentation(snapshot: onlyBonus, now: now).exhaustedResetFallback == "Expires in 40 days")
+    }
+
+    @Test("one undated blocking window suppresses the account countdown and keeps its published text")
+    func undatedBlockerPreventsCountdown() {
+        let snap = snapshot(bars: [
+            DualBarMetrics(primaryFraction: 1, label: "5H", resetsAt: now.addingTimeInterval(2 * 3600)),
+            DualBarMetrics(primaryFraction: 1, label: "MO", resetText: "Resets on 1st of month"),
+        ])
+        let p = MetricRowPresentation(snapshot: snap, now: now)
+        #expect(p.exhaustedResetCountdown == nil)
+        #expect(p.exhaustedResetSpoken == nil)
+        #expect(p.exhaustedResetFallback == "Resets on 1st of month")
+    }
+
+    @Test("avatar countdown uses the latest blocking reset, never a healthy window or a scoped cap")
+    func pertinentResetCountdown() {
+        var snap = snapshot(bars: [
+            DualBarMetrics(primaryFraction: 1, label: "5H", resetsAt: now.addingTimeInterval(2 * 3600)),
+            DualBarMetrics(primaryFraction: 1, label: "WK", resetsAt: now.addingTimeInterval(6 * 86400)),
+            DualBarMetrics(primaryFraction: 0.5, label: "MO", resetsAt: now.addingTimeInterval(20 * 86400)),
+        ])
+        snap.scopedBars = [DualBarMetrics(primaryFraction: 1, label: "Fable",
+            resetsAt: now.addingTimeInterval(25 * 86400))]
+        #expect(MetricRowPresentation(snapshot: snap, now: now).exhaustedResetCountdown == "6d")
+        #expect(MetricRowPresentation(snapshot: snap, now: now).exhaustedResetSpoken == "resets in 6 days")
+        snap.row2 = DualBarMetrics(primaryFraction: 0.5, label: "WK")
+        #expect(MetricRowPresentation(snapshot: snap, now: now).exhaustedResetCountdown == "2h")
+        snap.row1 = DualBarMetrics(primaryFraction: 1, label: "5H", resetText: "Resets next week")
+        #expect(MetricRowPresentation(snapshot: snap, now: now).exhaustedResetCountdown == nil)
+    }
+
+    @Test("blocked unmeasured windows can publish a reset without implying a percentage")
+    func unmeasuredResetCountdown() {
+        let snap = snapshot(bars: [DualBarMetrics(primaryFraction: nil, label: "WK", isBlocked: true,
+            resetsAt: now.addingTimeInterval(23 * 3600))])
+        let p = MetricRowPresentation(snapshot: snap, now: now)
+        #expect(p.isExhausted)
+        #expect(p.exhaustedResetCountdown == "23h")
+        #expect(snap.row1?.primaryFraction == nil)
+    }
+
     @Test("a subscription without a plan shows and speaks its published status badge")
     func paymentRequiredBadgeIsVisibleAndSpoken() {
         let snapshot = QuotaSnapshot(

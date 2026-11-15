@@ -20,6 +20,7 @@ public struct DualBarProgressView: View {
     /// suppress `metrics.paceMarker`. The Claude promo credit keeps its
     /// even-use marker when fully used; a spent quota window never does.
     let presentedPaceMarker: Double?
+    let showsExhaustionPattern: Bool
 
     /// Where this bar draws its tick: the caller's marker when it supplied
     /// one, otherwise `DualBarMetrics.paceMarker` — the one definition the
@@ -32,10 +33,12 @@ public struct DualBarProgressView: View {
     static let tickHeight: CGFloat = barHeight + 3.5
     static let tickWidth: CGFloat = 2
 
-    public init(metrics: DualBarMetrics, showsLabel: Bool = true, presentedPaceMarker: Double? = nil) {
+    public init(metrics: DualBarMetrics, showsLabel: Bool = true, presentedPaceMarker: Double? = nil,
+                showsExhaustionPattern: Bool = false) {
         self.metrics = metrics
         self.showsLabel = showsLabel
         self.presentedPaceMarker = presentedPaceMarker
+        self.showsExhaustionPattern = showsExhaustionPattern
     }
 
     /// nil when the vendor declared this window blocked/critical but reported
@@ -114,6 +117,14 @@ public struct DualBarProgressView: View {
             Rectangle()
                 .fill(labelColor)
                 .frame(width: max(3, consumed * w), height: Self.barHeight)
+                .overlay {
+                    if showsExhaustionPattern, WindowGridPresentation.isExhausted(metrics) {
+                        ExhaustionStripes()
+                            .fill(Color.black.opacity(0.24))
+                            .clipped()
+                            .accessibilityHidden(true)
+                    }
+                }
                 .animation(.easeOut(duration: 0.35), value: consumed)
         }
         // No reading and not blocked: the track alone. A fill here would be
@@ -152,7 +163,8 @@ public struct DualBarProgressView: View {
             // The window token, in the state colour.
             if showsLabel {
                 HStack(spacing: 2) {
-                    if WindowGridPresentation.showsBlockedGlyph(for: metrics) {
+                    if WindowGridPresentation.showsBlockedGlyph(for: metrics)
+                        || (showsExhaustionPattern && WindowGridPresentation.isExhausted(metrics)) {
                         BlockedGlyph(color: labelColor, size: 8)
                     }
                     Text(metrics.label)
@@ -224,6 +236,24 @@ public struct DualBarProgressView: View {
         case .ahead: return "\(points)% ahead of an even pace"
         case .behind: return "\(-points)% behind an even pace"
         case .even: return "close to an even pace"
+        }
+    }
+}
+
+/// Stationary hatching distinguishes a spent allowance without introducing
+/// another status colour or an animated loading treatment.
+private struct ExhaustionStripes: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            let stripeWidth: CGFloat = 2
+            let spacing: CGFloat = 5
+            for x in stride(from: -rect.height, through: rect.width, by: spacing) {
+                path.move(to: CGPoint(x: x, y: rect.maxY))
+                path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+                path.addLine(to: CGPoint(x: x + rect.height + stripeWidth, y: rect.minY))
+                path.addLine(to: CGPoint(x: x + stripeWidth, y: rect.maxY))
+                path.closeSubpath()
+            }
         }
     }
 }

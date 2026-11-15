@@ -9,6 +9,67 @@ import WebKit
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    @Test func renderReadabilityGroups() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = ClaudeAccountFixtures.now
+        func bar(_ label: String, _ fraction: Double?, _ hours: Double, blocked: Bool = false) -> DualBarMetrics {
+            let length: TimeInterval = label == "5H" ? QuotaWindow.fiveHours
+                : label == "WK" ? QuotaWindow.week : 30 * 86400
+            return DualBarMetrics(primaryFraction: fraction,
+                expectedPaceFraction: DualBarMetrics.proRataPace(resetsAt: now.addingTimeInterval(hours * 3600),
+                    windowLength: length, now: now), label: label,
+                blockedColor: blocked ? "#FFB4AB" : nil, isBlocked: blocked,
+                resetsAt: now.addingTimeInterval(hours * 3600), windowLength: length)
+        }
+        func snapshot(_ id: String, _ vendor: VendorIdentifier, _ plan: String?,
+                      _ first: DualBarMetrics, _ second: DualBarMetrics? = nil) -> QuotaSnapshot {
+            QuotaSnapshot(id: id, vendorId: vendor, displayName: id, category: .aiSubscriptions,
+                metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
+                resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil, row1: first, row2: second, planName: plan)
+        }
+        var primary = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 0.04, fable: 0.03)
+        primary.row1 = nil
+        primary.row2 = bar("WK", 0.04, 7 * 24)
+        var secondary = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.work, weekly: 0.35, fable: 0.21)
+        secondary.row1 = bar("5H", 1, 2)
+        secondary.row2 = bar("WK", 0.35, 5 * 24)
+        var codex = snapshot("openai", .openai, "Pro 200", bar("WK", 0.64, 5 * 24))
+        codex.resetCreditsAvailable = 2
+        codex.resetCreditExpiries = [now.addingTimeInterval(17 * 86400), now.addingTimeInterval(28 * 86400)]
+        let pools = [snapshot("Gemini", .gemini, "Google AI Pro", bar("5H", 0.27, 3), bar("WK", 0.30, 6 * 24)),
+                     snapshot("Claude", .antigravityClaude, "Google AI Pro", bar("5H", 0, 5), bar("WK", 0.51, 5 * 24)),
+                     snapshot("Argon", .antigravityArgon, "Google AI Pro", bar("WK", 0.82, 6 * 24))]
+        let workspaces = [
+            snapshot("Alpha", .opencode, "OpenCode Go", bar("WK", 1, 23, blocked: true), bar("MO", 0.50, 25 * 24)),
+            snapshot("Beta", .opencode, "OpenCode Go", bar("WK", 1, 23, blocked: true), bar("MO", 0.50, 25 * 24)),
+            snapshot("Gamma", .opencode, "OpenCode Go Plus", bar("MO", 1, 7 * 24, blocked: true)),
+            snapshot("Delta", .opencode, "OpenCode Go Plus", bar("WK", 1, 23, blocked: true), bar("MO", 0.98, 10 * 24)),
+            snapshot("Epsilon", .opencode, "OpenCode Go Plus", bar("5H", 0.16, 0.6), bar("WK", 0.20, 24)),
+        ]
+        try await save(MetricSectionView(category: .aiSubscriptions,
+            snapshots: [primary, secondary, codex] + pools + workspaces, onSelect: { _ in }, now: now)
+            .padding(12).frame(width: 384).background(Theme.surface), name: "readability-groups", directory: directory)
+
+        let missingReset = snapshot("No published reset", .opencode, nil,
+            DualBarMetrics(primaryFraction: 1, label: "WK"))
+        let textOnlyReset = snapshot("Text-only reset", .opencode, "OpenCode Go",
+            DualBarMetrics(primaryFraction: 1, label: "WK", resetText: "Resets on 1st of month"))
+        let unmeasured = snapshot("Blocked without a figure", .opencode, nil, bar("WK", nil, 23, blocked: true))
+        var elapsed = bar("CYCLE", 1, 24)
+        elapsed.measuresElapsedTimeOnly = true
+        try await save(MetricSectionView(category: .aiSubscriptions,
+            snapshots: [missingReset, textOnlyReset, unmeasured, snapshot("Billing cycle", .devpass, nil, elapsed)], now: now)
+            .padding(12).frame(width: 384).background(Theme.surface), name: "readability-edge-states", directory: directory)
+        let bonus = DualBarMetrics(primaryFraction: 1, label: "BN", resetText: "Expires in 40 days",
+            resetsAt: now.addingTimeInterval(40 * 86400))
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
+            snapshot("Kiro plan spent", .kiro, "Pro", bar("MO", 1, 10 * 24), bonus),
+            snapshot("Kiro bonus spent", .kiro, "Pro", bar("MO", 0.3, 10 * 24), bonus),
+        ], now: now).padding(12).frame(width: 384).background(Theme.surface),
+            name: "readability-bonus-expiry", directory: directory)
+    }
+
     @Test func renderClaudeAliasHistory() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
