@@ -11,6 +11,24 @@ struct PopoverRowGrouping {
         var headerPlan: String? = nil
 
         var isGrouped: Bool { header != nil }
+        var accessibilityLabel: String? {
+            header.map { ([$0] + [headerPlan].compactMap { $0 }).joined(separator: ", ") }
+        }
+
+        /// Headings have become rails. Keep their published service and plan
+        /// context on the first row, and keep differing plans on their own rows.
+        func rowSubtitle(for snapshot: QuotaSnapshot) -> String? {
+            guard let header else { return nil }
+            if snapshot.vendorId == .claude, snapshot.claudeAccount != nil {
+                return PopoverRowGrouping.claudeAccountSubtitle(for: snapshot)
+            }
+            let plan = snapshot.shortPlanName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard snapshot.id == snapshots.first?.id else { return suppressPlan ? "" : plan }
+            guard !plan.isEmpty, plan != header, PopoverRowGrouping.planBadge(for: snapshot) == nil else {
+                return header
+            }
+            return header == "Antigravity" ? "\(header)\n\(plan)" : "\(header) · \(plan)"
+        }
     }
 
     private static func service(for vendor: VendorIdentifier) -> String? {
@@ -125,12 +143,16 @@ struct PopoverRowGrouping {
         for snapshot: QuotaSnapshot, suppressPlan: Bool, presentation: MetricRowPresentation
     ) -> String {
         if snapshot.vendorId == .claude, snapshot.claudeAccount != nil {
-            let plan = snapshot.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return plan.flatMap { $0.isEmpty ? nil : "Claude Code · \($0)" } ?? "Claude Code"
+            return claudeAccountSubtitle(for: snapshot)
         }
         if presentation.isExhausted, let reset = presentation.exhaustedResetText, !reset.isEmpty {
             return reset
         }
         return suppressPlan ? "" : snapshot.shortPlanName
+    }
+
+    private static func claudeAccountSubtitle(for snapshot: QuotaSnapshot) -> String {
+        let plan = snapshot.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return plan.flatMap { $0.isEmpty ? nil : "Claude Code · \($0)" } ?? "Claude Code"
     }
 }

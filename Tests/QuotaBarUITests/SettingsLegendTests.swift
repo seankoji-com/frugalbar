@@ -107,9 +107,13 @@ struct SettingsLegendTests {
         #expect(spent.isExhausted && cutOff.isExhausted)
         for status in [ProviderStatus.healthy, .warning, .critical] {
             #expect(VendorAvatarView.overlay(status: status, isExhausted: true) == .struckThrough)
+            #expect(VendorAvatarView.overlay(status: status, isExhausted: true, showsResetOverlay: true)
+                == .exhausted(reset: nil))
+            #expect(VendorAvatarView.overlay(status: status, isExhausted: true, exhaustedReset: "23h", showsResetOverlay: true)
+                == .exhausted(reset: "23h"))
         }
-        #expect(entry("Logo struck through")?.symbol == "xmark")
-        #expect(entry("Logo struck through")?.tint == Theme.error)
+        #expect(entry("Exhausted")?.symbol == "nosign")
+        #expect(entry("Exhausted")?.tint == Theme.error)
 
         // A blocked window that still reports a figure is badged by the
         // provider's level (OpenCode Go goes critical), not by a blocked
@@ -119,7 +123,7 @@ struct SettingsLegendTests {
         #expect(!MetricRowPresentation(snapshot: blocked).isExhausted)
         #expect(VendorAvatarView.overlay(status: blocked.status, isExhausted: false)
                 == .badge(symbol: entry("Critically low")?.symbol ?? "", tint: entry("Critically low")?.tint ?? .clear))
-        #expect(!SettingsView.popoverLegend.contains { $0.symbol == BlockedGlyph.symbolName })
+        #expect(entry("Exhausted")?.detail.contains("countdown") == true)
         #expect(MetricDetailPresentation.summary(for: blocked, now: Date(timeIntervalSinceReferenceDate: 0)).state == .blocked)
     }
 

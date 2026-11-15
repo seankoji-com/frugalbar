@@ -86,7 +86,8 @@ struct AntigravityRowLayoutTests {
                     metric: .subscription(tierName: "Fixture plan", renewalDate: nil),
                     status: status, resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
                     row1: status.confidence == .measured ? DualBarMetrics(primaryFraction: 0.8, label: "5H",
-                        resetsAt: now.addingTimeInterval(3600), windowLength: 18000) : nil)
+                        resetsAt: now.addingTimeInterval(3600), windowLength: 18000) : nil,
+                    planName: "Published fixture plan")
                 snapshot.resetCreditsAvailable = 2
                 if isStale { snapshot.staleReading = StaleReading(reason: .offline, at: now) }
                 if vendor == .openai {
@@ -98,6 +99,7 @@ struct AntigravityRowLayoutTests {
                     presentation: MetricRowPresentation(snapshot: snapshot, now: now))
                 #expect(PopoverRowGrouping.rowTitle(for: snapshot) == title)
                 #expect(label.hasPrefix("\(service). "))
+                #expect(label.contains("Published fixture plan"))
                 // Match a complete spoken name, so "Claude" cannot accidentally
                 // pass for the visible "Claude Code" title.
                 #expect(label.contains("\(title). ") || label.contains("\(title), "))

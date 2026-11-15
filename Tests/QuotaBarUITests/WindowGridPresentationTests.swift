@@ -6,6 +6,22 @@ import Foundation
 @Suite("Window grid")
 struct WindowGridPresentationTests {
 
+    @Test("only spent quota percentages disappear visually; blocked partial and elapsed figures remain")
+    func exhaustedDisplayKeepsTheReading() {
+        let spent = bar("WK", 1)
+        #expect(WindowGridPresentation.visiblePercentText(for: spent) == nil)
+        #expect(WindowGridPresentation.showsExhaustionGlyph(for: spent))
+        #expect(WindowGridPresentation(snapshot: snap([spent])).spokenSummary() == "weekly 100% used")
+        #expect(WindowGridPresentation.visiblePercentText(for: bar("WK", 0.99)) == "99%")
+        #expect(WindowGridPresentation.visiblePercentText(for: bar("WK", 0.4, blocked: true)) == "40%")
+        #expect(WindowGridPresentation.showsExhaustionGlyph(for: bar("WK", 0.4, blocked: true)))
+        #expect(!WindowGridPresentation.isExhausted(bar("WK", nil, blocked: true)))
+        var cycle = bar("CYCLE", 1)
+        cycle.measuresElapsedTimeOnly = true
+        #expect(!WindowGridPresentation.isExhausted(cycle))
+        #expect(WindowGridPresentation.visiblePercentText(for: cycle) == "100%")
+    }
+
     private func bar(_ label: String, _ used: Double?, blocked: Bool = false, length: TimeInterval? = nil) -> DualBarMetrics {
         DualBarMetrics(primaryFraction: used, label: label, isBlocked: blocked, windowLength: length)
     }

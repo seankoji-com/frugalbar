@@ -167,27 +167,31 @@ public enum VendorSVGLogo {
 }
 
 
-/// Vendor avatar badge rendering the official brand SVG plus a status dot,
-/// or a red ✗ in place of the logo once a window is fully spent.
+/// Official vendor mark with a status badge, or a reset countdown over the
+/// faded mark when a quota is exhausted.
 public struct VendorAvatarView: View {
 
     let vendorId: VendorIdentifier
     let status: ProviderStatus
-    /// Strikes the brand mark through with a ✗ and fades it back. The vendor
-    /// still has to be identifiable at a glance — the row is read by its logo
-    /// before its name — so the mark stays and the ✗ sits over it.
+    /// Keep the vendor recognisable beneath the exhausted-state overlay.
     let isExhausted: Bool
+    let exhaustedReset: String?
+    let showsResetOverlay: Bool
     let size: CGFloat
 
     public init(
         vendorId: VendorIdentifier,
         status: ProviderStatus,
         isExhausted: Bool = false,
+        exhaustedReset: String? = nil,
+        showsResetOverlay: Bool = false,
         size: CGFloat = 32
     ) {
         self.vendorId = vendorId
         self.status = status
         self.isExhausted = isExhausted
+        self.exhaustedReset = exhaustedReset
+        self.showsResetOverlay = showsResetOverlay
         self.size = size
     }
 
@@ -229,38 +233,68 @@ public struct VendorAvatarView: View {
     enum Overlay: Equatable {
         /// The logo alone.
         case none
-        /// The logo faded, with a ✗ over it.
+        /// Existing inspector and widget treatment.
         case struckThrough
+        /// The logo faded under its published countdown, or a blocked glyph
+        /// when the vendor supplied no reset date.
+        case exhausted(reset: String?)
         /// A `StatusIndicatorDot` in the corner.
         case badge(symbol: String, tint: Color)
 
+        static let exhaustedSymbol = "nosign"
+        static let exhaustedTint = Theme.error
         static let strikeSymbol = "xmark"
         static let strikeTint = Theme.error
     }
 
-    /// The ✗ already says everything the dot would, louder. Beyond that, the
+    /// The exhausted overlay replaces the dot. Beyond that, the
     /// badge only appears for a status that is *wrong* — a healthy avatar gets
     /// no redundant checkmark. Settings' legend reads this, so it cannot
     /// describe a mark the avatar does not draw.
-    nonisolated static func overlay(status: ProviderStatus, isExhausted: Bool) -> Overlay {
-        if isExhausted { return .struckThrough }
+    nonisolated static func overlay(status: ProviderStatus, isExhausted: Bool,
+                                   exhaustedReset: String? = nil, showsResetOverlay: Bool = false) -> Overlay {
+        if isExhausted {
+            return showsResetOverlay ? .exhausted(reset: exhaustedReset) : .struckThrough
+        }
         guard StatusIndicatorDot.shouldShowIndicator(for: status) else { return .none }
         return .badge(symbol: StatusIndicatorDot.symbol(for: status),
                       tint: StatusIndicatorDot.tint(for: status))
     }
 
     public var body: some View {
-        let overlay = Self.overlay(status: status, isExhausted: isExhausted)
+        let overlay = Self.overlay(status: status, isExhausted: isExhausted,
+                                   exhaustedReset: exhaustedReset, showsResetOverlay: showsResetOverlay)
         ZStack(alignment: .topTrailing) {
             ZStack {
-                // Faded rather than hidden: enough to keep the vendor
-                // recognisable, dim enough that the ✗ is what registers first.
-                mark.opacity(overlay == .struckThrough ? 0.40 : 1)
+                // Keep the vendor visible beneath the reset countdown.
+                mark.opacity(isExhausted ? (showsResetOverlay ? 0.28 : 0.40) : 1)
 
                 if overlay == .struckThrough {
                     Image(systemName: Overlay.strikeSymbol)
                         .font(.system(size: size * 0.78, weight: .heavy))
                         .foregroundStyle(Overlay.strikeTint)
+                }
+
+                if case .exhausted(let reset) = overlay {
+                    RoundedRectangle(cornerRadius: size * 0.23)
+                        .fill(Theme.card.opacity(0.72))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: size * 0.23)
+                                .strokeBorder(Overlay.exhaustedTint.opacity(0.35), lineWidth: 0.5)
+                        }
+                    if let reset {
+                        Text(reset)
+                            .font(.system(size: size * 0.39, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(Overlay.exhaustedTint)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                            .padding(.horizontal, 1)
+                    } else {
+                        Image(systemName: Overlay.exhaustedSymbol)
+                            .font(.system(size: size * 0.6, weight: .semibold))
+                            .foregroundStyle(Overlay.exhaustedTint)
+                    }
                 }
             }
             .frame(width: size, height: size)

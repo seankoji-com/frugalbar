@@ -1158,9 +1158,12 @@ public struct SettingsView: View {
     static let popoverLegend: [LegendEntry] = {
         func entry(_ status: ProviderStatus, isExhausted: Bool = false, title: String,
                    _ detail: String) -> LegendEntry {
-            switch VendorAvatarView.overlay(status: status, isExhausted: isExhausted) {
+            switch VendorAvatarView.overlay(status: status, isExhausted: isExhausted, showsResetOverlay: true) {
             case .none:
                 return .init(symbol: noMarkSymbol, title: title, detail: detail, tint: Theme.outline)
+            case .exhausted:
+                return .init(symbol: VendorAvatarView.Overlay.exhaustedSymbol, title: title, detail: detail,
+                             tint: VendorAvatarView.Overlay.exhaustedTint)
             case .struckThrough:
                 return .init(symbol: VendorAvatarView.Overlay.strikeSymbol, title: title, detail: detail,
                              tint: VendorAvatarView.Overlay.strikeTint)
@@ -1174,8 +1177,8 @@ public struct SettingsView: View {
             entry(.warning, title: "Running low", "Past the provider's own warning level."),
             entry(.critical, title: "Critically low",
                   "Past the provider's own critical level. Some providers also go critical when the vendor blocks a window; its bar says which."),
-            entry(.healthy, isExhausted: true, title: "Logo struck through",
-                  "A window is used up, or the vendor blocked every window without a figure. It replaces any other mark."),
+            entry(.healthy, isExhausted: true, title: "Exhausted",
+                  "A window is used up, or the vendor blocked every window without a figure. Its reset countdown overlays the faded logo; this sign appears when no reset date was published."),
             entry(.unavailable(.notConfigured), title: "Could not be read",
                   "No figure is shown; the row names the reason instead."),
         ]
@@ -1225,10 +1228,10 @@ public struct SettingsView: View {
                   detail: "Used meaningfully more than an even spread would have by now.",
                   tint: swatch(LegendSample.aheadOfPace)),
             .init(symbol: fillSymbol, title: "Spent",
-                  detail: "A full bar: nothing left in the window until it resets.",
+                  detail: "A full bar: nothing left in the window until it resets. In the popover, diagonal stripes and the blocked-or-spent sign replace the redundant percentage label.",
                   tint: swatch(LegendSample.spent)),
             .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
-                  detail: "In the vendor's own colour when it gives one, whatever the percentage says, with this sign beside its figure, or a dashed outline in place of a fill when there is no figure.",
+                  detail: "In the vendor's own colour when it gives one, whatever the percentage says, with this sign beside its figure, or a dashed outline in place of a fill when there is no figure. The popover also uses this sign for a spent window.",
                   tint: swatch(LegendSample.blocked)),
             .init(symbol: "minus", title: "Not published",
                   detail: "A faint dash, never an empty bar, which would read as nothing used.",

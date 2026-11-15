@@ -27,28 +27,10 @@ struct MetricSectionView: View {
             if showsColumnHeader {
                 columnHeader
             }
+            let groupNow = now ?? Date()
             let groups = PopoverRowGrouping.groups(for: snapshots, ordering: ordering)
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                 VStack(spacing: 0) {
-                    if let header = group.header {
-                        HStack(spacing: 8) {
-                            Text(header)
-                                .font(Theme.Typography.title)
-                                .tracking(Theme.Tracking.title)
-                                .foregroundStyle(Theme.onSurface)
-                            if let plan = group.headerPlan {
-                                Text(plan)
-                                    .font(Theme.Typography.title.weight(.regular))
-                                    .foregroundStyle(Theme.onSurfaceVariant)
-                                    .lineLimit(1)
-                            }
-                        }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                            .padding(.top, 8)
-                            .padding(.bottom, 2)
-                            .accessibilityAddTraits(.isHeader)
-                    }
                     ForEach(group.snapshots) { snap in
                         MetricRowView(
                             snapshot: snap,
@@ -63,15 +45,32 @@ struct MetricSectionView: View {
                             balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
                             isGrouped: group.isGrouped,
                             suppressPlan: group.suppressPlan,
-                            now: now
+                            groupSubtitle: group.rowSubtitle(for: snap),
+                            continuesGroup: snap.id != group.snapshots.last?.id,
+                            now: groupNow
                         )
                     }
                 }
-                // Header and rows read as one element in VoiceOver; the
-                // header trait on its own left the text floating among
-                // unrelated rows. Ungrouped rows keep the structure they
-                // had, so a single-instance vendor is untouched.
-                .modifier(GroupAccessibilityContainer(isGrouped: group.isGrouped))
+                .backgroundPreferenceValue(GroupAvatarAnchors.self) { anchors in
+                    if group.isGrouped, group.snapshots.count > 1,
+                       let first = group.snapshots.first.flatMap({ anchors[$0.id] }),
+                       let last = group.snapshots.last.flatMap({ anchors[$0.id] }) {
+                        GeometryReader { proxy in
+                            Path { path in
+                                let start = proxy[first]
+                                let end = proxy[last]
+                                path.move(to: CGPoint(x: start.midX, y: start.midY))
+                                path.addLine(to: CGPoint(x: start.midX, y: end.midY))
+                            }
+                            .stroke(Theme.outlineVariant.opacity(0.55), lineWidth: 2)
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
+                }
+                // Keep the service group traversable in VoiceOver even
+                // though its visible heading has been replaced by a rail.
+                .modifier(GroupAccessibilityContainer(label: group.accessibilityLabel))
                 // The hairline sits between groups, outside the container, so
                 // it never becomes part of a group's spoken element.
                 if index < groups.count - 1 {
@@ -143,14 +142,25 @@ struct MetricSectionView: View {
     }
 }
 
-/// Ties a grouped run's header to the rows beneath it for VoiceOver, and leaves
-/// an ungrouped row exactly as it was.
+/// Actual avatar bounds keep the spine attached when ticket stacks, wrapping
+/// subtitles or accessibility text sizes change a row's height.
+struct GroupAvatarAnchors: PreferenceKey {
+    static let defaultValue: [String: Anchor<CGRect>] = [:]
+
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Keeps a service's rows together in VoiceOver, leaving standalone rows alone.
 private struct GroupAccessibilityContainer: ViewModifier {
-    let isGrouped: Bool
+    let label: String?
 
     func body(content: Content) -> some View {
-        if isGrouped {
+        if let label {
             content.accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(.isHeader)
         } else {
             content
         }
