@@ -11,7 +11,7 @@ The canonical fixtures and their format are in
 ## The only Mac model change
 
 `DualBarMetrics` gained `quantityUsed`, `quantityRemaining`, `quantityLimit` (`Decimal`) and
-`quantityUnit`. Five providers fill them from the figures their `usedText` already printed, and
+`quantityUnit`. The providers below fill them from the figures their `usedText` already printed, and
 nothing on the Mac reads them:
 
 | Provider | Rows | Fields |
@@ -27,16 +27,16 @@ the export.
 ## Historical retired vendors
 
 Older documents can still contain Kiro's `monthly`, `bonus` and `overage` windows and DevPass's
-`plan` and `spend` windows. DevPass's uncapped currency primary can carry the `lifetimeSpend`
+`monthly` and `spend` windows. DevPass's uncapped currency primary can carry the `lifetimeSpend`
 basis. Readers should retain support for these encodings; the historical expected documents in
 the fixture directory remain unchanged.
 
 When DevPass did not publish usage, its `spend` window and currency primary exported
 `unavailable: {reason: noReading}` rather than a synthetic zero. Kiro's missing overage usage
 similarly made the `overage` window unavailable; above the plan limit it also made the plan-only
-`monthly` figure unknown. A `bonus` total was unavailable when any active pool omitted usage or
-limit. The retained fixtures cover these cases and distinguish a published zero from a missing
-figure.
+`monthly` figure and the percentage primary unavailable. A `bonus` total was unavailable when any
+active pool omitted usage or limit. The retained fixtures cover these cases and distinguish a
+published zero from a missing figure.
 
 ## Adapter decisions
 
