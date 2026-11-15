@@ -290,9 +290,13 @@ struct DualBarNeverCoercedTests {
 @Suite("VendorIdentifier")
 struct VendorIdentifierTests {
 
-    @Test("17 known vendors")
+    @Test("14 known vendors")
     func allCases() {
-        #expect(VendorIdentifier.allCases.count == 17)
+        #expect(VendorIdentifier.allCases.count == 14)
+        // Persisted identifiers for retired providers must no longer resolve.
+        for raw in ["clinepass", "devpass", "kiro"] {
+            #expect(VendorIdentifier(rawValue: raw) == nil)
+        }
     }
 
     @Test("all display names are non-empty")
