@@ -175,11 +175,9 @@ public enum AttributionEngine {
     /// vendor moves in or out of.
     public static let unmonitoredVendorIdentifiers: Set<VendorIdentifier> = [
         .grok,
-        .kiro,
         .gemini,
         .antigravityClaude,
         .antigravityArgon,
-        .clinepass,
         .muse
     ]
 

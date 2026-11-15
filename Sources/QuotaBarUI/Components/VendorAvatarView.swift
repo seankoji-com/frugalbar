@@ -109,20 +109,6 @@ public enum VendorSVGLogo {
               <path fill="#ffffff" d="M10.9503 23.0313C7.07343 19.3235 7.74185 13.5853 11.0498 10.2763C13.4959 7.82722 17.5036 6.82767 21.0021 8.2971L24.7595 6.55998C24.0826 6.07017 23.215 5.54334 22.2195 5.17313C17.7198 3.31926 12.3326 4.24192 8.67479 7.90126C5.15635 11.4239 4.0499 16.8403 5.94992 21.4622C7.36924 24.9165 5.04257 27.3598 2.69884 29.826C1.86829 30.7002 1.0349 31.5745 0.36364 32.5L10.9474 23.0341"/>
             </svg>
             """
-        case .kiro:
-            return """
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="24" height="24" rx="4.5" fill="#9046ff"/>
-              <path fill="#ffffff" d="M13.4 3.5L6.6 12.9h4.1l-1.1 7.6 6.8-9.4h-4.1l1.1-7.6z"/>
-            </svg>
-            """
-        case .devpass:
-            return """
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="24" height="24" rx="4.5" fill="#0f3d3a"/>
-              <path fill="#00b8a9" d="M4 8.5A1.5 1.5 0 015.5 7h13A1.5 1.5 0 0120 8.5v2a1.75 1.75 0 000 3.5v2A1.5 1.5 0 0118.5 17h-13A1.5 1.5 0 014 15.5v-2a1.75 1.75 0 000-3.5v-2zm5.6 1.1v4.8h1.5v-1.6h.9a1.6 1.6 0 100-3.2H9.6zm1.5 1.2h.7a.4.4 0 010 .8h-.7v-.8z"/>
-            </svg>
-            """
         case .commandcode:
             // Command Code's "Burple" background (#2E1B9C) with a terminal
             // prompt glyph rather than a lifted wordmark. Drawn from fills
@@ -133,15 +119,6 @@ public enum VendorSVGLogo {
               <rect width="24" height="24" rx="4.5" fill="#2E1B9C"/>
               <path fill="#FFFFFF" d="M9.4 7.6a1.1 1.1 0 011.56 1.55L8.31 11.8l2.65 2.65a1.1 1.1 0 01-1.56 1.55l-3.42-3.42a1.1 1.1 0 010-1.56L9.4 7.6z"/>
               <rect x="12.4" y="14.2" width="5.2" height="2" rx="1" fill="#FFFFFF"/>
-            </svg>
-            """
-        case .clinepass:
-            // A brand-indigo badge with a white ticket — the pass, not a
-            // lifted Cline wordmark. Fill-based, like every other badge here.
-            return """
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="24" height="24" rx="4.5" fill="#5B5BD6"/>
-              <path fill="#FFFFFF" fill-rule="evenodd" d="M5 8.5A1.5 1.5 0 016.5 7h11A1.5 1.5 0 0119 8.5v2a1.5 1.5 0 000 3v2a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 015 15.5v-2a1.5 1.5 0 000-3v-2zm8.2 1h1.2v1.2h-1.2V9.5zm0 2.2h1.2v1.2h-1.2v-1.2zm0 2.2h1.2v1.2h-1.2v-1.2z"/>
             </svg>
             """
         case .muse:

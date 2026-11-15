@@ -102,18 +102,18 @@ struct SnapshotOrderingTests {
     @Test("the longest window decides a vendor's place, not its shortest")
     func longestWindowWins() async {
         // Claude's five-hour bucket resets in an hour, but its week has three
-        // days left. Kiro has only a month, and that month ends tomorrow.
-        // Kiro is the deadline that actually constrains today.
+        // days left. Muse has only a month, and that month ends tomorrow.
+        // Muse is the deadline that actually constrains today.
         let claude = snapshot(.claude, now: now, rows: [
             bar("5H", used: 0.2, window: QuotaWindow.fiveHours, resetsIn: 1, now: now),
             bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 72, now: now),
         ])
-        let kiro = snapshot(.kiro, now: now, rows: [
+        let muse = snapshot(.muse, now: now, rows: [
             bar("MO", used: 0.2, window: 30 * 86_400, resetsIn: 24, now: now),
         ])
 
-        let sorted = await orderedVendors(from: [claude, kiro])
-        #expect(sorted == [.kiro, .claude])
+        let sorted = await orderedVendors(from: [claude, muse])
+        #expect(sorted == [.muse, .claude])
     }
 
     @Test("an exhausted vendor sorts last however soon it refills")
@@ -171,7 +171,7 @@ struct SnapshotOrderingTests {
     func cycleOrdersButDoesNotExhaust() async {
         // A cycle 29/30 of the way through is the nearest deadline, so it
         // should sort first — but it must not brand the vendor spent.
-        let devpass = snapshot(.devpass, now: now, rows: [
+        let commandcode = snapshot(.commandcode, now: now, rows: [
             bar("WK", used: 0.0, window: QuotaWindow.week, resetsIn: 100, now: now),
             bar("MO", used: 0.97, window: 30 * 86_400, resetsIn: 20, now: now, elapsedOnly: true),
         ])
@@ -179,18 +179,18 @@ struct SnapshotOrderingTests {
             bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 144, now: now),
         ])
 
-        #expect(devpass.isQuotaExhausted == false)
-        #expect(QuotaManager.sortBand(devpass) == 0)
-        #expect(await orderedVendors(from: [grok, devpass]) == [.devpass, .grok])
+        #expect(commandcode.isQuotaExhausted == false)
+        #expect(QuotaManager.sortBand(commandcode) == 0)
+        #expect(await orderedVendors(from: [grok, commandcode]) == [.commandcode, .grok])
     }
 
     @Test("vendors sharing a reset time keep a stable, canonical order")
     func tiesAreStable() async {
         let rows = [bar("WK", used: 0.2, window: QuotaWindow.week, resetsIn: 50, now: now)]
-        let kiro = snapshot(.kiro, now: now, rows: rows)
+        let muse = snapshot(.muse, now: now, rows: rows)
         let claude = snapshot(.claude, now: now, rows: rows)
         // Canonical order puts Claude first, and the tie must not shuffle.
-        #expect(await orderedVendors(from: [kiro, claude]) == [.claude, .kiro])
+        #expect(await orderedVendors(from: [muse, claude]) == [.claude, .muse])
     }
 
     @Test("a vendor's own bars run longest period first")
@@ -207,9 +207,9 @@ struct SnapshotOrderingTests {
 
     @Test("a window with no period sorts last and keeps its relative order")
     func undatedBarsSortLast() {
-        // Kiro's bonus pool and overage allowance have no window length; only
+        // Muse's bonus pool and overage allowance have no window length; only
         // the monthly credit allowance does.
-        let snap = snapshot(.kiro, now: now, rows: [
+        let snap = snapshot(.muse, now: now, rows: [
             bar("BN", used: 0.5, window: nil, resetsIn: nil, now: now),
             bar("MO", used: 0.3, window: 30 * 86_400, resetsIn: 200, now: now),
             bar("OV", used: 0.0, window: nil, resetsIn: nil, now: now),

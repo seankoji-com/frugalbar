@@ -71,9 +71,9 @@ struct OverviewPresentationTests {
 
     @Test("store order is preserved and the vendor filter applies")
     func orderAndFilter() {
-        let snaps = [snapshot(.kiro, bars: [wk(0.1)]), snapshot(.claude, bars: [wk(0.1)]), snapshot(.grok, bars: [wk(0.1)])]
-        #expect(O.tiles(snapshots: snaps, filters: WidgetFilters()).map(\.vendorId) == [.kiro, .claude, .grok])
-        #expect(O.tiles(snapshots: snaps, filters: WidgetFilters(vendors: [.grok, .kiro])).map(\.vendorId) == [.kiro, .grok])
+        let snaps = [snapshot(.muse, bars: [wk(0.1)]), snapshot(.claude, bars: [wk(0.1)]), snapshot(.grok, bars: [wk(0.1)])]
+        #expect(O.tiles(snapshots: snaps, filters: WidgetFilters()).map(\.vendorId) == [.muse, .claude, .grok])
+        #expect(O.tiles(snapshots: snaps, filters: WidgetFilters(vendors: [.grok, .muse])).map(\.vendorId) == [.muse, .grok])
     }
 
     @Test("the metric converts used to remaining, and nil stays nil")
@@ -91,7 +91,7 @@ struct OverviewPresentationTests {
     func cycleFlagged() {
         var cycle = DualBarMetrics(primaryFraction: 0.9, label: "CYCLE", windowLength: 30 * 86_400)
         cycle.measuresElapsedTimeOnly = true
-        let tile = O.tiles(snapshots: [snapshot(.devpass, bars: [wk(0.1), cycle])], filters: WidgetFilters(metric: .used))[0]
+        let tile = O.tiles(snapshots: [snapshot(.commandcode, bars: [wk(0.1), cycle])], filters: WidgetFilters(metric: .used))[0]
         #expect(tile.windows.first { $0.label == "CYCLE" }?.measuresElapsedTimeOnly == true)
         let spoken = O.accessibilityLabel(for: tile, metric: .used, now: now)
         #expect(spoken.contains("CYCLE cycle 90 percent elapsed"))
@@ -130,7 +130,7 @@ struct OverviewPresentationTests {
         var cycle = DualBarMetrics(primaryFraction: 0.9, label: "CYCLE", windowLength: 30 * 86_400)
         cycle.measuresElapsedTimeOnly = true
         for metric in [WidgetFilters.Metric.used, .remaining] {
-            let tile = O.tiles(snapshots: [snapshot(.devpass, bars: [cycle])], filters: WidgetFilters(metric: metric))[0]
+            let tile = O.tiles(snapshots: [snapshot(.commandcode, bars: [cycle])], filters: WidgetFilters(metric: metric))[0]
             #expect(tile.windows[0].fraction == 0.9)
             #expect(O.accessibilityLabel(for: tile, metric: metric, now: now).contains("90 percent elapsed"))
             #expect(!O.accessibilityLabel(for: tile, metric: metric, now: now).contains("left"))

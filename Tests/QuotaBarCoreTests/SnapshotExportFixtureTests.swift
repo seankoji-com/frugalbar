@@ -41,18 +41,13 @@ struct SnapshotExportFixtureTests {
             "fixture:every-field-at-limit", "fixture:long-feed-guid-event-id",
             // One per export-adapter table line.
             "table:claude", "table:openai", "table:gemini", "table:opencode", "table:copilot",
-            "table:openrouter", "table:deepseek", "table:grok", "table:kiro", "table:devpass-percentage",
-            "table:devpass-currency", "table:commandcode", "table:clinepass", "table:muse",
+            "table:openrouter", "table:deepseek", "table:grok", "table:commandcode", "table:muse",
             "table:github_rest", "table:github_graphql", "table:billing-cycle",
             // And every branch the table and its notes name.
             "branch:grok-daily", "branch:grok-unknown-length", "branch:grok-on-demand",
-            "branch:devpass-capped", "branch:devpass-uncapped", "branch:commandcode-capped",
+            "branch:commandcode-capped",
             "branch:commandcode-total", "branch:commandcode-remaining-positive",
             "branch:commandcode-remaining-zero", "branch:missing-basis", "branch:unmapped-row",
-            "branch:devpass-capped-missing-usage", "branch:devpass-uncapped-missing-usage",
-            "branch:kiro-overage-missing-usage", "branch:kiro-bonus-missing-usage",
-            "branch:kiro-bonus-partial-usage", "branch:kiro-bonus-mismatched-pools",
-            "branch:kiro-plan-split-unknown", "branch:kiro-plan-split-reported",
             // Regressions: a failed first read that QuotaManager gave a billing cycle.
             "regression:never-measured-with-cycle",
         ]
@@ -152,18 +147,6 @@ struct SnapshotExportFixtureTests {
         #expect(quantity(try window("grok-daily", "on_demand")) == ["used": "5", "limit": "20", "unit": "USD"])
         #expect(quantity(try window("grok-unknown-length", "on_demand")) == ["used": "10.5", "limit": "21", "unit": "USD"])
         #expect(quantity(try window("grok-daily", "plan")) == nil)
-        // Kiro: all three rows, used and limit in credits.
-        #expect(quantity(try window("kiro", "monthly")) == ["used": "18.43", "limit": "50", "unit": "credits"])
-        #expect(quantity(try window("kiro", "bonus")) == ["used": "295.94", "limit": "500", "unit": "credits"])
-        #expect(quantity(try window("kiro", "overage")) == ["used": "0", "limit": "10000", "unit": "credits"])
-        // DevPass: credits on the percentage branch, USD on both spend branches.
-        #expect(quantity(try window("devpass-percentage", "monthly")) == ["used": "20", "limit": "80", "unit": "credits"])
-        #expect(quantity(try window("devpass-capped-spend", "spend")) == ["used": "10", "limit": "25", "unit": "USD"])
-        #expect(try provider("devpass-capped-spend")["tightestWindowId"] as? String == "spend")
-        #expect(quantity(try window("devpass-uncapped", "spend")) == ["used": "3.5", "unit": "USD"])
-        let uncapped = try #require(try provider("devpass-uncapped")["primary"] as? [String: Any])
-        #expect(uncapped["basis"] as? String == "lifetimeSpend")
-        #expect(try SnapshotFixtures.input("devpass-uncapped").snapshots[0].currencyBasis == nil)
         // Command Code: capped windows, a total, and the remaining-only branch.
         #expect(quantity(try window("commandcode-capped", "5h")) == ["used": "1.25", "limit": "5", "unit": "credits"])
         #expect(quantity(try window("commandcode-capped", "weekly")) == ["used": "5", "limit": "20", "unit": "credits"])
@@ -175,83 +158,14 @@ struct SnapshotExportFixtureTests {
         #expect(try provider("gemini")["tightestWindowId"] as? String == "w2")
     }
 
-    @Test("missing DevPass usage, missing Kiro overage and a cycle-only placeholder export no reading, not a zero or a plan")
+    @Test("a cycle-only placeholder exports no reading, not a zero or a plan")
     func fixturesWithoutAReadingExportNoReading() throws {
-        for name in ["devpass-capped-missing-usage", "devpass-uncapped-missing-usage"] {
-            let spend = try window(name, "spend")
-            #expect(spend["usedFraction"] is NSNull, "\(name)")
-            #expect(spend["quantity"] == nil, "\(name)")
-            #expect(spend["unavailable"] as? [String: String] == ["reason": "noReading"], "\(name)")
-            #expect(spend["eligibleForTightest"] as? Bool == false, "\(name)")
-            let exported = try provider(name)
-            #expect(exported["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"], "\(name)")
-            #expect(exported["tightestWindowId"] is NSNull, "\(name)")
-        }
-        // The key itself was read: the capped key is measured and keeps its time.
-        #expect(try provider("devpass-capped-missing-usage")["measuredAt"] as? String == "2026-10-14T23:58:00.000Z")
-
-        // Missing Kiro overage: that window has no reading; the plan and its primary still do.
-        let overage = try window("kiro-overage-missing-usage", "overage")
-        #expect(overage["usedFraction"] is NSNull)
-        #expect(overage["quantity"] == nil)
-        #expect(overage["unavailable"] as? [String: String] == ["reason": "noReading"])
-        #expect(overage["eligibleForTightest"] as? Bool == false)
-        #expect(quantity(try window("kiro-overage-missing-usage", "monthly")) == ["used": "18.43", "limit": "50", "unit": "credits"])
-        #expect((try provider("kiro-overage-missing-usage")["primary"] as? [String: Any])?["type"] as? String == "percentage")
-        #expect(quantity(try window("kiro", "overage")) == ["used": "0", "limit": "10000", "unit": "credits"])
-
         let cycleOnly = try provider("never-measured-with-cycle")
         #expect(cycleOnly["measuredAt"] is NSNull)
         #expect(cycleOnly["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
         #expect((cycleOnly["status"] as? [String: String])?["reason"] == "offline")
         #expect(try window("never-measured-with-cycle", "cycle")["kind"] as? String == "billingCycle")
         #expect(cycleOnly["tightestWindowId"] is NSNull)
-    }
-
-    @Test("incomplete Kiro bonus pools and an unknown Kiro plan split export no reading, as the Kiro builder fills them")
-    func kiroIncompleteFiguresExportNoReading() throws {
-        let noReading = ["reason": "noReading"]
-        let bonusNames = ["kiro-bonus-missing-usage", "kiro-bonus-partial-usage", "kiro-bonus-mismatched-pools"]
-        for name in bonusNames {
-            let bonus = try window(name, "bonus")
-            #expect(bonus["usedFraction"] is NSNull, "\(name)")
-            #expect(bonus["quantity"] == nil, "\(name)")
-            #expect(bonus["unavailable"] as? [String: String] == noReading, "\(name)")
-            #expect(bonus["eligibleForTightest"] as? Bool == false, "\(name)")
-            #expect(quantity(try window(name, "monthly")) == ["used": "40", "limit": "50", "unit": "credits"], "\(name)")
-            #expect((try provider(name)["primary"] as? [String: Any])?["type"] as? String == "percentage", "\(name)")
-            #expect(try provider(name)["tightestWindowId"] as? String == "monthly", "\(name)")
-        }
-
-        // Above the plan limit with no overage figure: neither the plan nor the overage is known.
-        for id in ["monthly", "overage"] {
-            let unknown = try window("kiro-plan-split-unknown", id)
-            #expect(unknown["usedFraction"] is NSNull, "\(id)")
-            #expect(unknown["quantity"] == nil, "\(id)")
-            #expect(unknown["unavailable"] as? [String: String] == noReading, "\(id)")
-            #expect(unknown["eligibleForTightest"] as? Bool == false, "\(id)")
-        }
-        #expect(try provider("kiro-plan-split-unknown")["primary"] as? [String: String]
-                == ["type": "unavailable", "reason": "noReading"])
-        #expect(try provider("kiro-plan-split-unknown")["tightestWindowId"] is NSNull)
-        // The control's reported overage splits the same total.
-        #expect(quantity(try window("kiro-plan-split-reported", "monthly")) == ["used": "50", "limit": "50", "unit": "credits"])
-        #expect(quantity(try window("kiro-plan-split-reported", "overage")) == ["used": "50", "limit": "1000", "unit": "credits"])
-        #expect(try provider("kiro-plan-split-reported")["tightestWindowId"] as? String == "monthly")
-
-        // Each fixture row carries the quantities the Kiro builder fills for that response.
-        let built = try ProviderBranchSnapshots.kiroBonuses() + [
-            try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 100),
-            try ProviderBranchSnapshots.kiroEnabledOverage(reported: "50.0", total: 100),
-        ]
-        for (name, snapshot) in zip(bonusNames + ["kiro-plan-split-unknown", "kiro-plan-split-reported"], built) {
-            let fixture = try SnapshotFixtures.input(name).snapshots[0]
-            for (fixtureRow, builtRow) in [(fixture.row1, snapshot.row1), (fixture.row2, snapshot.row2), (fixture.row3, snapshot.row3)] {
-                #expect(fixtureRow?.quantityUsed == builtRow?.quantityUsed, "\(name)")
-                #expect(fixtureRow?.quantityLimit == builtRow?.quantityLimit, "\(name)")
-                #expect(fixtureRow?.quantityUnit == builtRow?.quantityUnit, "\(name)")
-            }
-        }
     }
 
     @Test("fixtures assert each window's exact windowSeconds")
@@ -264,12 +178,10 @@ struct SnapshotExportFixtureTests {
             // 18000.4 s and 604799.5 s round to the nearest whole second.
             ("openai", 0, "w1", 18000), ("openai", 0, "w2", 604800), ("openai", 0, "w3", nil),
             ("billing-cycle", 0, "cycle", nil), ("billing-cycle", 1, "cycle", nil), ("billing-cycle", 1, "5h", 18000),
-            ("kiro", 0, "monthly", 2_592_000), ("kiro", 0, "bonus", nil), ("kiro", 0, "overage", nil),
-            ("devpass-percentage", 0, "monthly", 2_678_400), ("devpass-capped-spend", 0, "spend", nil),
             ("commandcode-capped", 0, "5h", 18000), ("commandcode-total", 0, "credits", nil),
             ("github-consolidated", 0, "rest", nil), ("github-graphql-standalone", 0, "graphql", nil),
             ("gemini", 0, "w1", 18000), ("gemini", 0, "w3", nil), ("copilot", 0, "premium", nil),
-            ("clinepass", 0, "5h", 18000), ("muse", 0, "weekly", 604800),
+            ("muse", 0, "weekly", 604800),
         ]
         for (name, index, id, seconds) in cases {
             let value = try window(name, provider: index, id)["windowSeconds"]

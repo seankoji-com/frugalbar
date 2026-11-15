@@ -100,8 +100,8 @@ struct QuotaResetDetectorTests {
         let old = now.addingTimeInterval(-30)
         let new = now.addingTimeInterval(30 * 86_400)
         let events = QuotaResetDetector.detect(
-            previous: ["devpass": snapshot(.devpass, bars: [bar("MO", resetsAt: old, elapsedOnly: true)])],
-            current: ["devpass": snapshot(.devpass, bars: [bar("MO", resetsAt: new, elapsedOnly: true)])],
+            previous: ["commandcode": snapshot(.commandcode, bars: [bar("MO", resetsAt: old, elapsedOnly: true)])],
+            current: ["commandcode": snapshot(.commandcode, bars: [bar("MO", resetsAt: new, elapsedOnly: true)])],
             now: now)
         #expect(events.isEmpty)
     }

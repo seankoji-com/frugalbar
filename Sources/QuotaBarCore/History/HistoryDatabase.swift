@@ -42,7 +42,7 @@ public enum HistoryDatabaseError: Error, LocalizedError, Sendable {
 
 /// Thread-confined minimal SQLite wrapper running on a dedicated serial queue.
 ///
-/// Follows the pattern proven in `Providers/KiroQuotaProvider.swift`:
+/// Uses SQLite on a dedicated queue:
 /// `#if canImport(SQLite3)`, `sqlite3_open_v2`, `sqlite3_busy_timeout`,
 /// prepare/bind/step/finalize, `transientDestructor`, and a dedicated
 /// `DispatchQueue` so that blocking disk work never parks on the Swift

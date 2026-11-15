@@ -103,17 +103,10 @@ public struct SettingsView: View {
               placeholder: "Grok CLI access token",
               note: "Discovered from ~/.grok/auth.json when CLI discovery is on. "
                   + "Run `grok` to refresh an expired login."),
-        .init(id: .devpass, label: "DevPass",
-              placeholder: "llmgtwy_…",
-              note: "LLM Gateway API key. Monthly plan-credit allowance."),
         .init(id: .commandcode, label: "Command Code",
               placeholder: "user_…",
               note: "Discovered from ~/.commandcode/auth.json when CLI discovery is on. "
                   + "Run `cmd login` to sign in."),
-        .init(id: .clinepass, label: "ClinePass",
-              placeholder: "Cline API key or account token",
-              note: "Discovered from ~/.cline/data/settings/providers.json when CLI discovery is on. "
-                  + "Run `cline auth` (or sign in in the Cline extension) to create it."),
         .init(id: .muse, label: "Muse",
               placeholder: "Muse OAuth access token",
               note: "Discovered from the Muse CLI login in the macOS Keychain when CLI discovery is on. "
@@ -929,7 +922,7 @@ public struct SettingsView: View {
     /// renewal date is just as useful for a vendor it cannot read at all.
     private static let cycleVendors: [VendorIdentifier] = [
         .claude, .openai, .gemini, .copilot, .opencode, .openrouter,
-        .deepseek, .grok, .kiro, .muse,
+        .deepseek, .grok, .muse,
     ]
 
     private var credentialDiscoverySection: some View {
@@ -941,8 +934,7 @@ public struct SettingsView: View {
                  ~/.local/share/opencode/auth.json, ~/.codex/auth.json, \
                  ~/.claude/.credentials.json, \
                  ~/.config/github-copilot/hosts.json, \
-                 ~/.commandcode/auth.json, or \
-                 ~/.cline/data/settings/providers.json; read the \
+                 ~/.commandcode/auth.json; read the \
                  OPENROUTER_API_KEY environment variable; or read the \
                  Claude Code or Muse Code login Keychain item — if the \
                  Keychain has no entry for a provider. Off by default: this reads \
@@ -1464,12 +1456,7 @@ public struct SettingsView: View {
         case .opencode:    provider = OpenCodeGoProvider(apiKey: key)
         case .copilot:     provider = GitHubCopilotProvider(token: key)
         case .grok:        provider = GrokQuotaProvider(accessToken: key)
-        // Kiro has no key slot — its token and profile ARN are read together
-        // from the CLI state database — but the switch must stay exhaustive.
-        case .kiro:        provider = KiroQuotaProvider()
-        case .devpass:     provider = DevPassQuotaProvider(apiKey: key)
         case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
-        case .clinepass:   provider = ClinePassQuotaProvider(apiKey: key)
         case .muse:        provider = MuseQuotaProvider(apiKey: key)
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }

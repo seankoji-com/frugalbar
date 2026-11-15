@@ -247,7 +247,7 @@ struct AttributionEngineTests {
         // No adapter speaks for these, so an activity breakdown must not be
         // presented as an explanation for their allowance.
         #expect(AttributionEngine.localSourceIdentifiers(for: .grok).isEmpty)
-        #expect(AttributionEngine.localSourceIdentifiers(for: .kiro).isEmpty)
+        #expect(AttributionEngine.localSourceIdentifiers(for: .muse).isEmpty)
         #expect(AttributionEngine.localSourceIdentifiers(for: .gemini).isEmpty)
     }
 }

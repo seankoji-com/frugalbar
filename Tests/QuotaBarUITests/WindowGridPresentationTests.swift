@@ -12,7 +12,7 @@ struct WindowGridPresentationTests {
 
     private func snap(_ rows: [DualBarMetrics]) -> QuotaSnapshot {
         QuotaSnapshot(
-            id: "x", vendorId: .kiro, displayName: "Kiro", category: .aiSubscriptions,
+            id: "x", vendorId: .muse, displayName: "Muse", category: .aiSubscriptions,
             metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.none),
             resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil,
             row1: rows.count > 0 ? rows[0] : nil, row2: rows.count > 1 ? rows[1] : nil,

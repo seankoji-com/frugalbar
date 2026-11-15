@@ -297,12 +297,6 @@ public enum SnapshotExporter {
         let hasReading = snapshot.status.confidence == .measured
             || rows.contains { $0.1.map { !$0.measuresElapsedTimeOnly } ?? false }
             || !snapshot.apiCredits.isEmpty
-        // A DevPass spend or Kiro plan figure the vendor did not report: the
-        // primary was built from that default, so it has no value either.
-        let usageUnreported = windows.contains {
-            $0.usageUnreported && SnapshotExportTable.primaryIsBuiltFrom(snapshot.vendorId, windowID: $0.id)
-        }
-
         let credits = snapshot.apiCredits.prefix(maxAPICreditsPerProvider)
         let instance = Identity(snapshot.id, identity: identity)
         let creditIdentities = credits.map { Identity($0.id, identity: identity) }
@@ -328,7 +322,7 @@ public enum SnapshotExporter {
             ])))
         }
         fields += [
-            ("primary", hasReading && !usageUnreported
+            ("primary", hasReading
                 ? metric(snapshot.metric, basis: primaryBasis(snapshot))
                 : unavailableMetric("noReading")),
             ("windows", .array(windows.map(\.json))),
@@ -349,15 +343,9 @@ public enum SnapshotExporter {
         return Fragment(.object(fields), identities: [instance] + creditIdentities)
     }
 
-    /// The exported `currency.basis`: the snapshot's own; DevPass's uncapped
-    /// spend as `lifetimeSpend`; otherwise none, which exports as
-    /// `unavailable {missingBasis}`. The snapshot itself is left as it was.
+    /// A missing currency basis exports as `unavailable {missingBasis}`.
     static func primaryBasis(_ snapshot: QuotaSnapshot) -> CurrencyBasis? {
-        if let basis = snapshot.currencyBasis { return basis }
-        if snapshot.vendorId == .devpass, case .currency(_, nil, _, _) = snapshot.metric {
-            return .lifetimeSpend
-        }
-        return nil
+        snapshot.currencyBasis
     }
 
     static func status(_ status: ProviderStatus) -> ExportJSON {
@@ -463,7 +451,6 @@ public enum SnapshotExporter {
         let blocked: Bool
         let resetsAt: Date?
         let eligible: Bool
-        let usageUnreported: Bool
         let json: ExportJSON
     }
 
@@ -498,7 +485,7 @@ public enum SnapshotExporter {
             }
             fields.append(("eligibleForTightest", .bool(false)))
             return Window(id: id, position: index, usedFraction: nil, blocked: false,
-                          resetsAt: nil, eligible: false, usageUnreported: false, json: .object(fields))
+                          resetsAt: nil, eligible: false, json: .object(fields))
         }
 
         var outOfRange = false
@@ -519,13 +506,7 @@ public enum SnapshotExporter {
                 quantity.append(("unit", .string(ExportText.truncate(unit, limit: .unit))))
             }
         }
-        // A window whose figure is the vendor's usage or limit, with that
-        // figure unreported: the provider drew it from a default, and a
-        // default is not a reading.
-        let usageUnreported =
-            (SnapshotExportTable.figureIsReportedUsage(snapshot.vendorId, windowID: id) && row.quantityUsed == nil)
-            || (SnapshotExportTable.limitIsReported(snapshot.vendorId, windowID: id) && row.quantityLimit == nil)
-        let unavailable = usageUnreported ? "noReading" : outOfRange ? "outOfRange" : nil
+        let unavailable = outOfRange ? "outOfRange" : nil
         if unavailable != nil {
             usedFraction = nil
             quantity = []
@@ -565,7 +546,7 @@ public enum SnapshotExporter {
             ("eligibleForTightest", .bool(eligible)),
         ]
         return Window(id: id, position: index, usedFraction: usedFraction, blocked: row.isBlocked,
-                      resetsAt: resetsAt, eligible: eligible, usageUnreported: usageUnreported, json: .object(fields))
+                      resetsAt: resetsAt, eligible: eligible, json: .object(fields))
     }
 
     /// D§2.2.G: blocked first, then the largest used fraction, then the

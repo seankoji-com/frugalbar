@@ -20,10 +20,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
     case openrouter
     case deepseek
     case grok
-    case kiro
-    case devpass
     case commandcode
-    case clinepass
     case muse
     case githubRest   = "github_rest"
     case githubGraphql = "github_graphql"
@@ -40,10 +37,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .openrouter:    "OpenRouter"
         case .deepseek:      "DeepSeek"
         case .grok:          "Grok"
-        case .kiro:          "Kiro"
-        case .devpass:       "DevPass"
         case .commandcode:   "Command Code"
-        case .clinepass:     "ClinePass"
         case .muse:          "Muse"
         case .githubRest:    "GitHub REST"
         case .githubGraphql: "GitHub GraphQL"
@@ -63,14 +57,9 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         // DeepSeek's brand blue; the badge background is the same colour.
         case .deepseek:      "#4d6bfe"
         case .grok:          "#1a9fff"
-        case .kiro:          "#9046ff"
-        case .devpass:       "#00b8a9"
         // Command Code's brand "Burple" foreground; its badge background is
         // #2E1B9C, used for the avatar rather than this accent.
         case .commandcode:   "#546bf3"
-        // Indigo chosen to read as Cline's brand blue; not taken from a
-        // published brand sheet.
-        case .clinepass:     "#5b5bd6"
         // Meta's own blue, the family Muse Code belongs to; not taken from a
         // published Muse brand sheet.
         case .muse:          "#0866ff"
@@ -91,10 +80,7 @@ public enum VendorIdentifier: String, Sendable, CaseIterable, Codable {
         case .openrouter:    "arrow.triangle.branch"
         case .deepseek:      "brain.head.profile"
         case .grok:          "xmark"
-        case .kiro:          "bolt"
-        case .devpass:       "ticket"
         case .commandcode:   "command"
-        case .clinepass:     "ticket.fill"
         case .muse:          "wand.and.stars"
         case .githubRest:    "network"
         case .githubGraphql: "point.3.connected.trianglepath.dotted"
@@ -280,8 +266,8 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// "how far through the period are we" — but 90% elapsed is not 10% of
     /// quota left, and every place that ranks headroom, picks a vendor to
     /// recommend, or decides a row is exhausted must skip it. Reading a cycle
-    /// as consumption made the popover advise "DevPass has 97% remaining" from
-    /// a plan whose credits were entirely untouched.
+    /// as consumption can claim credits remain from a plan whose credits were
+    /// entirely untouched.
     public var measuresElapsedTimeOnly: Bool = false
     public var usedText: String?
     public var resetText: String?
@@ -699,9 +685,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// Two kinds of bar are deliberately left alone:
     /// - Windows with no length at all. A bonus-credit pool or an overage
     ///   allowance has no period to be a *shorter period* against, and it can
-    ///   outlive the plan window beside it — Kiro's bonus credits expire after
-    ///   the monthly reset, not with it — so hiding one would hide real
-    ///   headroom.
+    ///   outlive the plan window beside it, so hiding one would hide real headroom.
     /// - Elapsed-time-only cycle rows, which measure the billing cycle rather
     ///   than consumption and are shown for their own reason.
     ///
@@ -820,10 +804,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         case .openrouter:    return "OpenRouter"
         case .deepseek:      return "DeepSeek"
         case .grok:          return "Grok"
-        case .kiro:          return "Kiro"
-        case .devpass:       return "DevPass"
         case .commandcode:   return "Command Code"
-        case .clinepass:     return "ClinePass"
         case .muse:          return "Muse"
         case .githubRest, .githubGraphql: return "GitHub"
         }

@@ -19,8 +19,6 @@ nothing on the Mac reads them:
 | GitHub REST (consolidated) | REST, GraphQL | remaining and limit, `req/hr` and `pts/hr` |
 | GitHub GraphQL (standalone) | the one row | remaining and limit, `pts/hr` |
 | Grok | on-demand | used and cap, `USD` |
-| Kiro | monthly, bonus, overage | used and limit, `credits`. Overage `used` is the vendor's own `currentOveragesWithPrecision`, nil when it sent none; monthly `used` is nil when that figure is missing and the total is above the plan limit; bonus `used` and `limit` are each nil unless every active pool sent that figure. The Mac's text still prints its defaults |
-| DevPass | plan / spend | used and limit in `credits`; used (and limit when capped) in `USD`. `used` is the vendor's own `usage`, nil when it sent none; the Mac's text still prints its default `$0.00` |
 | Command Code | 5h, weekly, credits | used and limit in `credits`; remaining only on the remaining-only credits row |
 
 Basis and reset handling live in the adapter: no provider sets `currencyBasis` or a row reset for
@@ -28,8 +26,7 @@ the export.
 
 ## Adapter decisions
 
-- **Window identity** comes from `SnapshotExportTable`: vendor, row position, and for DevPass the
-  metric. Labels are copied (cut to 64 escaped bytes) and never read for anything else. A
+- **Window identity** comes from `SnapshotExportTable`: vendor and row position. Labels are copied (cut to 64 escaped bytes) and never read for anything else. A
   non-nil row with no entry fails the export: `SnapshotExportState` withholds that publish, keeps
   the last good document, and Settings shows "Sync export error: unmapped row (vendor, rowN)".
 - **Billing cycles** (`measuresElapsedTimeOnly`) export as window `cycle` with only `cycleStart`
@@ -41,26 +38,6 @@ the export.
   `unavailableSnapshot` placeholder too, so a failed first read with a cycle still has no
   reading (`never-measured-with-cycle`). The placeholder's tier ("Not configured", "Offline") is
   never exported as a plan; the cycle window itself is exported.
-- **Missing DevPass usage.** When the key response carries no `usage`, the provider still draws
-  its default 0, but `quantityUsed` stays nil. The `spend` window then exports
-  `usedFraction: null`, no `quantity`, `unavailable: {reason: noReading}`, and is not eligible;
-  the `currency` primary, built from that default, exports `unavailable {reason: noReading}`. A
-  `usage` of `"0"` the vendor did send exports as `used: "0"`.
-- **Missing Kiro overage.** The same rule holds for Kiro's `overage` window when overage is
-  enabled and the response carries no `currentOveragesWithPrecision`: the window exports
-  `unavailable: {reason: noReading}` with no fraction or quantity and is not eligible. The live
-  body sends `0.0` when there is no overage, so an absent figure is not read as zero. The plan
-  is a reading of its own while the total is within the plan limit, so `monthly` and the
-  `percentage` primary are unchanged (`kiro-overage-missing-usage`).
-- **Unknown Kiro plan split.** Above the plan limit, the plan-only share is the total less the
-  overage. With no overage figure the provider subtracts its default 0, so `monthly` exports
-  `unavailable: {reason: noReading}` too, and so does the `percentage` primary built from it
-  (`kiro-plan-split-unknown`; control with the overage reported: `kiro-plan-split-reported`).
-- **Incomplete Kiro bonus pools.** The `bonus` window sums every active pool. When any pool lacks
-  its `currentUsage` or its `usageLimit`, that sum is unknown, not short by one pool, so the window
-  exports `unavailable: {reason: noReading}` and is not eligible. This covers a pool with no usage
-  (`kiro-bonus-missing-usage`), a partial usage sum (`kiro-bonus-partial-usage`) and sums over
-  different pools (`kiro-bonus-mismatched-pools`). A reported `currentUsage` of 0 is a reading.
 - **Out of range.** A `primary` or API-credit value outside its domain becomes
   `unavailable {reason: outOfRange}`. A window whose fraction or quantity is outside its domain
   exports `usedFraction: null`, no `quantity`, and `unavailable: {reason: outOfRange}`; it stays

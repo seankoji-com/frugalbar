@@ -488,7 +488,7 @@ struct UXRenderTests {
             .init(source: "codex", start: TokenUsagePresentation.window(range: .last24Hours, now: now).since.addingTimeInterval(7200),
                   tokens: 1234, records: 1)
         ], uncountedRecords: ["claude_code": 3]), filters: WidgetFilters(layout: .tokens), hidden: [],
-            configured: [.claude, .openai, .gemini, .grok, .kiro], ingestion: .incomplete, now: now)
+            configured: [.claude, .openai, .gemini, .grok, .muse], ingestion: .incomplete, now: now)
         try await save(TokenUsageChartView(chart: tokenChart, range: .last24Hours).padding(14)
             .frame(width: 320, height: 240).background(Theme.surface), name: "token-caveats", directory: directory)
     }
@@ -734,10 +734,10 @@ struct UXRenderTests {
 
         // MARK: History
         let subjects = HistoryOverviewPresentation.subjects(
-            order: [.claude, .opencode, .openai, .grok, .kiro], hidden: [.kiro], workspaces: [beta, alpha], claudeAccounts: [])
+            order: [.claude, .opencode, .openai, .grok, .muse], hidden: [.muse], workspaces: [beta, alpha], claudeAccounts: [])
         try await save(
             HistoryRootView(liveStore: history, sampleStore: history,
-                            subjectSource: { (subjects, ["Kiro"]) })
+                            subjectSource: { (subjects, ["Muse"]) })
                 .frame(width: 880, height: 1_180),
             name: "history-overview", directory: directory)
         let segments = HistoryPresentation.segments(from: HistoryPresentation.consumptionReadings(
@@ -782,7 +782,7 @@ struct UXRenderTests {
         let emptyHistory = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-empty-\(UUID().uuidString).sqlite"))
         try await save(
             HistoryRootView(liveStore: emptyHistory, sampleStore: emptyHistory,
-                            subjectSource: { (Array(subjects.prefix(2)), ["Grok", "Kiro"]) })
+                            subjectSource: { (Array(subjects.prefix(2)), ["Grok", "Muse"]) })
                 .frame(width: 880, height: 760),
             name: "history-empty-reasons", directory: directory)
 
@@ -993,7 +993,7 @@ struct UXRenderTests {
         }
         #expect(CredentialStore.preferences !== UserDefaults.standard)
         OpenCodeGoWorkspaceStore.set([beta, alpha])
-        CredentialStore.hiddenProviders = [.kiro]
+        CredentialStore.hiddenProviders = [.muse]
         for pane in [SettingsView.Pane.providers, .workspaces, .notifications, .display, .data] {
             try await save(
                 SettingsView(store: store, initialPane: pane, readsCredentials: false),

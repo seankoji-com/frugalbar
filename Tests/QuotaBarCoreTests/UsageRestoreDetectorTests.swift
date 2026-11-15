@@ -142,8 +142,8 @@ struct UsageRestoreDetectorTests {
     func elapsedOnlyIgnored() {
         let reset = now.addingTimeInterval(86_400)
         #expect(detect(
-            snapshot(.devpass, bars: [bar("MO", fraction: 0.9, resetsAt: reset, elapsedOnly: true)]),
-            snapshot(.devpass, bars: [bar("MO", fraction: 0.1, resetsAt: reset, elapsedOnly: true)])).isEmpty)
+            snapshot(.commandcode, bars: [bar("MO", fraction: 0.9, resetsAt: reset, elapsedOnly: true)]),
+            snapshot(.commandcode, bars: [bar("MO", fraction: 0.1, resetsAt: reset, elapsedOnly: true)])).isEmpty)
     }
 
     @Test("no previous reading fires nothing")

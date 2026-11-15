@@ -288,9 +288,9 @@ struct AggregateBurndownPresentationTests {
     func availableWindowLabels() {
         var cycle = DualBarMetrics(primaryFraction: 0.9, label: "CYC", windowLength: 365 * 86_400)
         cycle.measuresElapsedTimeOnly = true
-        let devpass = snapshot(.devpass, bars: [cycle])
-        #expect(P.availableWindowLabels(snapshots: [claudeSnapshot, devpass]) == ["WK", "5H"])
-        #expect(P.availableVendors(snapshots: [claudeSnapshot, devpass]) == [.claude])
+        let commandcode = snapshot(.commandcode, bars: [cycle])
+        #expect(P.availableWindowLabels(snapshots: [claudeSnapshot, commandcode]) == ["WK", "5H"])
+        #expect(P.availableVendors(snapshots: [claudeSnapshot, commandcode]) == [.claude])
     }
 
     // MARK: - Text

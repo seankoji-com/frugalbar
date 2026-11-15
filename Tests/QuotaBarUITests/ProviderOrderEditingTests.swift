@@ -21,13 +21,13 @@ struct ProviderOrderEditingTests {
 
     @Test("a vendor not in the list changes nothing")
     func unknown() {
-        #expect(ProviderOrderEditing.move(.kiro, by: 1, in: order) == order)
+        #expect(ProviderOrderEditing.move(.muse, by: 1, in: order) == order)
     }
 
     @Test("showing and hiding toggle membership")
     func visibility() {
         #expect(ProviderOrderEditing.setShown(false, .grok, hidden: []) == [.grok])
-        #expect(ProviderOrderEditing.setShown(true, .grok, hidden: [.grok, .kiro]) == [.kiro])
+        #expect(ProviderOrderEditing.setShown(true, .grok, hidden: [.grok, .muse]) == [.muse])
         #expect(ProviderOrderEditing.setShown(true, .grok, hidden: []) == [])
     }
 }

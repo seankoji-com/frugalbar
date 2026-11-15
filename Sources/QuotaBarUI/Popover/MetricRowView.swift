@@ -602,8 +602,7 @@ struct MetricRowView: View {
         .accessibilityHidden(true)
     }
 
-    /// A pool that is not a window — Kiro's bonus or overage credits, Grok's
-    /// on-demand budget — on its own line under the grid, with its own token.
+    /// A pool such as Grok's on-demand budget, on its own line under the grid.
     private func extraRow(_ bar: DualBarMetrics) -> some View {
         HStack(spacing: Theme.rowSpacing) {
             Color.clear.frame(width: Theme.gridLeadingInset, height: 1)

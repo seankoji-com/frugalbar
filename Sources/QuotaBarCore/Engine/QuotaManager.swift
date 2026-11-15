@@ -7,15 +7,7 @@ import Foundation
 public actor QuotaManager {
 
     public static let shared = QuotaManager(
-        cycleLookup: { vendor in
-            // DevPass is a fixed monthly-budget product and reports its own
-            // allowance, so the hand-entered renewal cycle — a feature for
-            // vendors that publish no billing period — no longer applies to it.
-            // Guarding here (rather than in the store) means a cycle recorded
-            // before this change is never resurrected as a CYCLE bar, and there
-            // is no UI left to clear it from.
-            vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
-        },
+        cycleLookup: { vendor in SubscriptionCycleStore.cycle(for: vendor) },
         displayPreferences: { CredentialStore.providerDisplayPreferences },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
@@ -132,10 +124,7 @@ public actor QuotaManager {
             OpenRouterProvider(),
             DeepSeekProvider(),
             GrokQuotaProvider(),
-            KiroQuotaProvider(),
-            DevPassQuotaProvider(),
             CommandCodeQuotaProvider(),
-            ClinePassQuotaProvider(),
             MuseQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
@@ -191,8 +180,8 @@ public actor QuotaManager {
     /// published no window at all. Not the primary sort — see below.
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .antigravityClaude, .antigravityArgon, .copilot, .opencode,
-        .openrouter, .deepseek, .grok, .kiro, .devpass,
-        .commandcode, .clinepass, .muse,
+        .openrouter, .deepseek, .grok,
+        .commandcode, .muse,
         .githubRest, .githubGraphql,
     ]
 
@@ -709,7 +698,7 @@ public actor QuotaManager {
             // Three vendor rows, but one of them has neither a reset nor a
             // window length — nothing to plan around, and the case a
             // renewal date is most useful for is exactly a vendor with rows
-            // like that (e.g. Kiro's bonus/overage bars). Recording a cycle
+            // like that. Recording a cycle
             // used to silently no-op here: the Settings editor still showed
             // it as tracked, but it never rendered anywhere.
             switch slot {

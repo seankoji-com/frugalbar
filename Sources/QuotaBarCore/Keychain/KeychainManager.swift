@@ -796,19 +796,6 @@ public enum CredentialStore {
             // rather than being renewed behind the CLI's back.
             return GrokQuotaProvider.discoverCLIToken()
 
-        case .kiro:
-            // Deliberately nothing. Kiro's credential is a bearer token paired
-            // with a CodeWhisperer profile ARN, and one without the other is
-            // useless — so the provider reads both together straight from the
-            // CLI's state database rather than routing half of it through here.
-            return nil
-
-        case .devpass:
-            // Deliberately nothing. DevPass ships no CLI: the key is a gateway
-            // API key the user creates on the dashboard and pastes into
-            // Settings, so there is no local file to discover it from.
-            return nil
-
         case .commandcode:
             // The Command Code CLI writes a flat {"apiKey":"user_..."} to
             // ~/.commandcode/auth.json on `cmd login`. It is long-lived — there
@@ -827,12 +814,6 @@ public enum CredentialStore {
                   let key = (json["apiKey"] as? String)?.trimmed, !key.isEmpty
             else { return nil }
             return key
-
-        case .clinepass:
-            // Env vars, then the Cline CLI/SDK's providers.json, then the
-            // legacy secrets.json — see `discoverCLICredential` for the exact
-            // keys and their provenance.
-            return ClinePassQuotaProvider.discoverCLICredential()
 
         case .muse:
             // The Muse Code CLI's OAuth session token, from the blob the CLI
@@ -955,10 +936,7 @@ extension CredentialStore {
         case .openrouter:    "OpenCode auth.json"
         case .deepseek:      "OpenCode auth.json"
         case .grok:          "grok CLI auth.json"
-        case .kiro:          "kiro-cli state database"
-        case .devpass:       "DevPass dashboard key"
         case .commandcode:   "~/.commandcode/auth.json"
-        case .clinepass:     "~/.cline/data/settings/providers.json"
         case .muse:          "Muse CLI login Keychain"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"

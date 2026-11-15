@@ -104,16 +104,16 @@ struct MetricRowPresentationTests {
         #expect(!p.accessibilityLabel.lowercased().contains("percent"))
     }
 
-    @Test("DevPass monthly plan row presentation has measured fraction and correct accessibility text")
+    @Test("Command Code monthly plan row presentation has measured fraction and correct accessibility text")
     func devPassPlanRowPresentation() {
         let snap = QuotaSnapshot(
-            id: "devpass", vendorId: .devpass, displayName: "DevPass",
+            id: "commandcode", vendorId: .commandcode, displayName: "Command Code",
             category: .aiSubscriptions,
             metric: .percentage(usedFraction: 0.25, displayDetails: nil),
             status: .measured(.none),
-            resetsAt: nil, lastUpdated: now, auxiliaryInfo: "DevPass monthly plan credits",
+            resetsAt: nil, lastUpdated: now, auxiliaryInfo: "Command Code monthly plan credits",
             row1: DualBarMetrics(primaryFraction: 0.25, label: "MO", usedText: "$20.00/80.00 credits used"),
-            badgeText: "$60.00 left", planName: "DevPass Lite"
+            badgeText: "$60.00 left", planName: "Command Code Lite"
         )
         let p = MetricRowPresentation(snapshot: snap, now: now)
 
@@ -122,7 +122,7 @@ struct MetricRowPresentationTests {
         #expect(p.valueLabel == "25%")
         #expect(snap.bars.count == 1)
         #expect(snap.bars.first?.label == "MO")
-        #expect(p.accessibilityLabel.contains("DevPass"))
+        #expect(p.accessibilityLabel.contains("Command Code"))
         #expect(p.accessibilityLabel.contains("25 percent used"))
     }
 

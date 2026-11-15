@@ -22,7 +22,7 @@ public enum AccountModelLister {
 
     /// The vendors with an account-scoped model list FrugalBar can read.
     public static let supportedVendors: [VendorIdentifier] = [
-        .claude, .openai, .gemini, .copilot, .opencode, .kiro, .grok, .devpass, .clinepass,
+        .claude, .openai, .gemini, .copilot, .opencode, .grok,
     ]
 
     /// The product the user picks the model in, for "now available in …".
@@ -47,10 +47,7 @@ public enum AccountModelLister {
         case .gemini:    return await gemini()
         case .copilot:   return await copilot()
         case .opencode:  return await openCodeGo()
-        case .kiro:      return await kiro()
         case .grok:      return await grok()
-        case .devpass:   return await devPass()
-        case .clinepass: return await clinePass()
         default:         return nil
         }
     }
@@ -298,44 +295,6 @@ public enum AccountModelLister {
         return parseIdList(data)
     }
 
-    // MARK: - Kiro
-
-    /// `ListAvailableModels` on the same AWS JSON endpoint and identity as the
-    /// quota call. `origin` is required: without it the call is a 400.
-    static let kiroTarget = "AmazonCodeWhispererService.ListAvailableModels"
-
-    private struct KiroModels: Decodable {
-        struct Model: Decodable {
-            let modelId: String?
-            let modelName: String?
-        }
-        let models: [Model]
-    }
-
-    static func parseKiroModels(_ data: Data) -> [AccountModel]? {
-        guard let list = try? JSONDecoder().decode(KiroModels.self, from: data) else { return nil }
-        return list.models.compactMap { model in
-            guard let id = model.modelId, !id.isEmpty else { return nil }
-            return AccountModel(id: id, name: model.modelName)
-        }
-    }
-
-    private static func kiro() async -> [AccountModel]? {
-        // Reading the CLI's database is credential discovery, behind the opt-in.
-        guard CredentialStore.isCLIDiscoveryEnabled,
-              case .found(let identity) = await KiroQuotaProvider.readIdentityAsync(
-                databaseURL: KiroQuotaProvider.stateDatabaseURL()),
-              let body = try? JSONSerialization.data(
-                withJSONObject: ["profileArn": identity.profileARN, "origin": "KIRO_CLI"]),
-              let data = await post(KiroQuotaProvider.endpoint, body: body, headers: [
-                "Content-Type": KiroQuotaProvider.contentType,
-                "X-Amz-Target": kiroTarget,
-                "Authorization": "Bearer \(identity.accessToken)",
-              ])
-        else { return nil }
-        return parseKiroModels(data)
-    }
-
     // MARK: - Grok
 
     static let grokModelsURL = "https://cli-chat-proxy.grok.com/v1/models"
@@ -350,76 +309,5 @@ public enum AccountModelLister {
         return parseIdList(data)
     }
 
-    // MARK: - DevPass
 
-    /// LLM Gateway's model list is scoped to the key: 145 ids with a DevPass
-    /// key against 297 public.
-    static let devPassModelsURL = "https://api.llmgateway.io/v1/models"
-
-    private static func devPass() async -> [AccountModel]? {
-        guard let key = await key(.devpass),
-              let data = await get(devPassModelsURL, auth: .bearer(key))
-        else { return nil }
-        return parseIdList(data)
-    }
-
-    // MARK: - ClinePass
-
-    /// Cline serves the ClinePass model list as a plan catalogue, the same for
-    /// every caller, so it counts only when the account's own plan says
-    /// ClinePass is enabled.
-    static let clinePlanURL = "https://api.cline.bot/api/v1/users/me/plan"
-    static let clineModelsURL = "https://api.cline.bot/api/v1/ai/cline/recommended-models"
-
-    private struct ClinePlan: Decodable {
-        struct Inner: Decodable {
-            struct Plan: Decodable {
-                struct Entitlements: Decodable {
-                    struct Pass: Decodable { let enabled: Bool? }
-                    let cline_pass: Pass?
-                }
-                let entitlements: Entitlements?
-            }
-            let plan: Plan?
-        }
-        let data: Inner?
-    }
-
-    static func clinePassEnabled(_ data: Data) -> Bool {
-        (try? JSONDecoder().decode(ClinePlan.self, from: data))?.data?.plan?.entitlements?.cline_pass?.enabled == true
-    }
-
-    private struct ClineModels: Decodable {
-        struct Model: Decodable { let id: String? }
-        struct Lists: Decodable { let clinePass: [Model]? }
-        let clinePass: [Model]?
-        let data: Lists?
-    }
-
-    static func parseClinePassModels(_ data: Data) -> [AccountModel]? {
-        guard let lists = try? JSONDecoder().decode(ClineModels.self, from: data),
-              let models = lists.data?.clinePass ?? lists.clinePass
-        else { return nil }
-        return models.compactMap { model in
-            guard let id = model.id, !id.isEmpty else { return nil }
-            return AccountModel(id: id, name: nil)
-        }
-    }
-
-    private static func clinePass() async -> [AccountModel]? {
-        guard let key = await key(.clinepass) else { return nil }
-        // The same credential handling as the quota call: a pasted account
-        // token may lack the `workos:` prefix the API wants.
-        let prefix = ClinePassQuotaProvider.workosPrefix
-        var credential = key
-        var plan = await get(clinePlanURL, auth: .bearer(credential))
-        if plan == nil, !key.lowercased().hasPrefix(prefix) {
-            credential = prefix + key
-            plan = await get(clinePlanURL, auth: .bearer(credential))
-        }
-        guard let plan, clinePassEnabled(plan),
-              let data = await get(clineModelsURL, auth: .bearer(credential))
-        else { return nil }
-        return parseClinePassModels(data)
-    }
 }

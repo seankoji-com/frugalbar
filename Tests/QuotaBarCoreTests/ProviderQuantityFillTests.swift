@@ -53,64 +53,9 @@ struct ProviderQuantityFillTests {
             return source.contains("quantity")
         }
         #expect(Set(filling) == [
-            "GitHubProviders.swift", "GrokQuotaProvider.swift", "KiroQuotaProvider.swift",
-            "DevPassQuotaProvider.swift", "CommandCodeQuotaProvider.swift",
+            "GitHubProviders.swift", "GrokQuotaProvider.swift",
+            "CommandCodeQuotaProvider.swift",
         ])
-    }
-
-    @Test("Kiro fills used and limit in credits on every row, from the figures behind its text")
-    func kiroFillsEveryRow() throws {
-        let snapshot = try #require(try ProviderBranchSnapshots.kiro().first)
-        let (plan, bonus, overage) = (try #require(snapshot.row1), try #require(snapshot.row2), try #require(snapshot.row3))
-        // Plan usage is the total less overage: 60.5 − 10.5 = 50.
-        #expect(plan.quantityUsed == 50 && plan.quantityLimit == 50 && plan.quantityUnit == "credits")
-        #expect(plan.usedText == "50/50 credits used")
-        #expect(bonus.quantityUsed == 25 && bonus.quantityLimit == 100 && bonus.quantityUnit == "credits")
-        #expect(overage.quantityUsed == 10.5 && overage.quantityLimit == 1000 && overage.quantityUnit == "credits")
-        for row in [plan, bonus, overage] { #expect(row.quantityRemaining == nil) }
-        // An overage figure the vendor did not send stays nil in the quantity, beside the cap it did send.
-        let unreported = try #require(try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil).row3)
-        #expect(unreported.quantityUsed == nil && unreported.quantityLimit == 1000 && unreported.quantityUnit == "credits")
-    }
-
-    @Test("Kiro leaves a bonus sum nil when any active pool did not send that figure, and the Mac's own output is unchanged")
-    func kiroBonusSumsNeedEveryPool() throws {
-        let rows = try ProviderBranchSnapshots.kiroBonuses().map { try #require($0.row2) }
-        // One pool, no usage: the limit is known, the usage is not.
-        #expect(rows[0].quantityUsed == nil && rows[0].quantityLimit == 100 && rows[0].quantityUnit == "credits")
-        // Two pools, one without usage: the usage sum is unknown, the limits are both known.
-        #expect(rows[1].quantityUsed == nil && rows[1].quantityLimit == 300)
-        // Two pools, one without a limit: the limit sum is unknown, the usages are both known.
-        #expect(rows[2].quantityUsed == 125 && rows[2].quantityLimit == nil)
-        // The Mac draws what it drew before from the same sums.
-        #expect(rows.map(\.usedText) == [
-            "0/100 bonus credits used", "25/300 bonus credits used", "125/100 bonus credits used",
-        ])
-        #expect(rows.map(\.primaryFraction) == [0, 25.0 / 300, 1])
-        // A pool that reports both, including a zero usage, still fills both.
-        let complete = try #require(try ProviderBranchSnapshots.kiroBonuses([
-            #"[{"currentUsage":0,"usageLimit":100,"status":"ACTIVE"},{"currentUsage":5,"usageLimit":5,"status":"EXPIRED"}]"#,
-        ])[0].row2)
-        #expect(complete.quantityUsed == 0 && complete.quantityLimit == 100)
-    }
-
-    @Test("Kiro leaves plan usage nil above the plan limit when the overage is unreported, and the Mac's own output is unchanged")
-    func kiroPlanUsageNeedsTheOverageAboveTheLimit() throws {
-        let missing = try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 100)
-        let reported = try ProviderBranchSnapshots.kiroEnabledOverage(reported: "50.0", total: 100)
-        // The Mac still subtracts its default 0: its text and fraction are what they were.
-        #expect(missing.row1?.usedText == "100/50 credits used")
-        #expect(missing.row1?.primaryFraction == 1)
-        #expect(missing.row1?.quantityUsed == nil && missing.row1?.quantityLimit == 50)
-        // A reported overage splits the total: 100 − 50 = 50 on the plan.
-        #expect(reported.row1?.quantityUsed == 50 && reported.row1?.quantityLimit == 50)
-        // Within the plan limit the total cannot include overage, so the plan figure stands.
-        #expect(try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil).row1?.quantityUsed == 40)
-        #expect(try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 50).row1?.quantityUsed == 50)
-        var unchanged = missing
-        unchanged.row1?.quantityUsed = 100
-        unchanged.row3?.quantityUsed = 0
-        #expect(unchanged == (try ProviderBranchSnapshots.kiroEnabledOverage(reported: "0.0", total: 100)))
     }
 
     @Test("Grok fills the on-demand row's used and cap in USD, and nothing on the plan row")
@@ -127,24 +72,6 @@ struct ProviderQuantityFillTests {
         // The daily plan is 86400 s; a plan with no published start has no length.
         #expect(snapshots[0].row1?.windowLength == 86400)
         #expect(snapshots[1].row1?.windowLength == nil)
-    }
-
-    @Test("DevPass fills credits on its plan, USD on its spend rows, and never sets a basis")
-    func devPassFillsEachBranch() throws {
-        let (plan, capped, uncapped) = try { () throws -> (QuotaSnapshot, QuotaSnapshot, QuotaSnapshot) in
-            let all = try ProviderBranchSnapshots.devPass()
-            return (all[0], all[1], all[2])
-        }()
-        #expect(plan.row1?.quantityUsed == 20 && plan.row1?.quantityLimit == 80 && plan.row1?.quantityUnit == "credits")
-        #expect(capped.row1?.quantityUsed == 10 && capped.row1?.quantityLimit == 25 && capped.row1?.quantityUnit == "USD")
-        #expect(uncapped.row1?.quantityUsed == 3.5 && uncapped.row1?.quantityLimit == nil && uncapped.row1?.quantityUnit == "USD")
-        // Basis handling is the exporter's: the uncapped snapshot keeps a nil basis.
-        #expect(uncapped.currencyBasis == nil)
-        #expect(capped.currencyBasis == .keySpendCap)
-        // Usage the vendor did not send stays nil in the quantity, beside the limit it did send.
-        let unreported = Array(try ProviderBranchSnapshots.devPass().suffix(2))
-        #expect(unreported[0].row1?.quantityUsed == nil && unreported[0].row1?.quantityLimit == 25)
-        #expect(unreported[1].row1?.quantityUsed == nil && unreported[1].row1?.quantityUnit == "USD")
     }
 
     @Test("Command Code fills capped windows and the total, and only remaining on the remaining-only row")
@@ -185,59 +112,7 @@ enum ProviderBranchSnapshots {
     static let now = Date(timeIntervalSince1970: 1_792_022_400)
 
     static func all() throws -> [QuotaSnapshot] {
-        try kiro() + [kiroEnabledOverage(reported: nil), kiroEnabledOverage(reported: nil, total: 100)]
-            + kiroBonuses() + grok() + devPass() + commandCode()
-    }
-
-    static func kiro(overage: Bool = true) throws -> [QuotaSnapshot] {
-        let body = """
-        {"nextDateReset":1793404800,"overageConfiguration":{"overageStatus":"\(overage ? "ENABLED" : "DISABLED")"},
-         "subscriptionInfo":{"subscriptionTitle":"KIRO PRO"},
-         "usageBreakdownList":[{"resourceType":"CREDIT","currentUsageWithPrecision":60.5,
-           "usageLimitWithPrecision":50,"currentOveragesWithPrecision":10.5,"overageCapWithPrecision":1000,
-           "overageRate":0.04,"overageCharges":0.42,"currency":"USD","nextDateReset":1793404800,
-           "bonuses":[{"currentUsage":25,"usageLimit":100,"expiresAt":1795000000,"status":"ACTIVE"}]}]}
-        """
-        let response = try JSONDecoder().decode(KiroQuotaProvider.UsageLimitsResponse.self, from: Data(body.utf8))
-        return [KiroQuotaProvider.snapshot(from: response, provider: KiroQuotaProvider(), now: now)]
-    }
-
-    /// Overage switched on with a cap, a 50-credit plan, `total` used, and
-    /// `currentOveragesWithPrecision` as given, or absent when nil: the live
-    /// body sends `0.0` when there is no overage, so absence is not a zero.
-    static func kiroEnabledOverage(reported currentOverages: String?, total: Int = 40) throws -> QuotaSnapshot {
-        let overages = currentOverages.map { #""currentOveragesWithPrecision":\#($0),"# } ?? ""
-        let body = """
-        {"nextDateReset":1793404800,"overageConfiguration":{"overageStatus":"ENABLED"},
-         "subscriptionInfo":{"subscriptionTitle":"KIRO PRO"},
-         "usageBreakdownList":[{"resourceType":"CREDIT","currentUsageWithPrecision":\(total),
-           "usageLimitWithPrecision":50,\(overages)"overageCapWithPrecision":1000,
-           "overageRate":0.04,"currency":"USD","nextDateReset":1793404800}]}
-        """
-        let response = try JSONDecoder().decode(KiroQuotaProvider.UsageLimitsResponse.self, from: Data(body.utf8))
-        return KiroQuotaProvider.snapshot(from: response, provider: KiroQuotaProvider(), now: now)
-    }
-
-    /// Kiro bodies whose active bonus pools are each a JSON object from
-    /// `pools`, beside a fully reported 40/50 plan. The defaults are the three
-    /// incomplete shapes: one pool with no usage; one pool of two with no
-    /// usage; one pool of two with no limit.
-    static func kiroBonuses(_ pools: [String] = [
-        #"[{"usageLimit":100,"status":"ACTIVE"}]"#,
-        #"[{"currentUsage":25,"usageLimit":100,"status":"ACTIVE"},{"usageLimit":200,"status":"ACTIVE"}]"#,
-        #"[{"currentUsage":25,"usageLimit":100,"status":"ACTIVE"},{"currentUsage":100,"status":"ACTIVE"}]"#,
-    ]) throws -> [QuotaSnapshot] {
-        try pools.map { bonuses in
-            let body = """
-            {"nextDateReset":1793404800,"overageConfiguration":{"overageStatus":"DISABLED"},
-             "subscriptionInfo":{"subscriptionTitle":"KIRO PRO"},
-             "usageBreakdownList":[{"resourceType":"CREDIT","currentUsageWithPrecision":40,
-               "usageLimitWithPrecision":50,"currentOveragesWithPrecision":0.0,"currency":"USD",
-               "nextDateReset":1793404800,"bonuses":\(bonuses)}]}
-            """
-            let response = try JSONDecoder().decode(KiroQuotaProvider.UsageLimitsResponse.self, from: Data(body.utf8))
-            return KiroQuotaProvider.snapshot(from: response, provider: KiroQuotaProvider(), now: now)
-        }
+        try grok() + commandCode()
     }
 
     static func grok() throws -> [QuotaSnapshot] {
@@ -255,21 +130,6 @@ enum ProviderBranchSnapshots {
             {"config":{"billingPeriodEnd":"2026-10-20T00:00:00+00:00","onDemandCap":{"val":21},"onDemandUsed":{"val":10.5}}}
             """),
         ]
-    }
-
-    static func devPass() throws -> [QuotaSnapshot] {
-        let bodies = [
-            #"{"label":"key","usage":"0","limit":null,"devPlan":"lite","devPlanCreditsUsed":"20.00","devPlanCreditsLimit":"80.00","devPlanCreditsRemaining":"60.00"}"#,
-            #"{"label":"key","usage":"10","limit":"25","devPlan":"none"}"#,
-            #"{"label":"key","usage":"3.5","limit":null,"devPlan":"none"}"#,
-            // The vendor sent no usage: capped, then uncapped.
-            #"{"label":"key","limit":"25","devPlan":"none"}"#,
-            #"{"label":"key","limit":null,"devPlan":"none"}"#,
-        ]
-        return try bodies.map {
-            let key = try JSONDecoder().decode(DevPassQuotaProvider.KeyData.self, from: Data($0.utf8))
-            return DevPassQuotaProvider.snapshot(from: key, provider: DevPassQuotaProvider(), now: now)
-        }
     }
 
     static func commandCode() throws -> [QuotaSnapshot] {

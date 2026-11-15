@@ -34,8 +34,7 @@ public enum WindowColumn: Int, CaseIterable, Sendable, Identifiable {
     }
 
     /// The column a provider's window token belongs in, or nil for a pool
-    /// that is not a window (Kiro's bonus "BN" and overage "OV" credits,
-    /// Grok's on-demand "OD" budget, DevPass key spend "SP", a daily "1D"
+    /// that is not a standard window (Grok's on-demand "OD" budget, a daily "1D"
     /// window, an elapsed-time "CYCLE", GitHub's "REST"/"GraphQL").
     public static func column(forLabel label: String) -> WindowColumn? {
         allCases.first { $0.label == label.uppercased() }

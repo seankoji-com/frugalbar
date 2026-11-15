@@ -146,14 +146,14 @@ struct ProviderVisibilityTests {
         // the arrangement the user gave.
         let providers = [
             Provider(vendorId: .claude, counter: counter, used: 1.0),
-            Provider(vendorId: .kiro, counter: counter),
+            Provider(vendorId: .muse, counter: counter),
             Provider(vendorId: .grok, counter: counter),
         ]
         let box = PreferenceBox(ProviderDisplayPreferences(
-            ordering: .custom, order: [.claude, .grok, .kiro]))
+            ordering: .custom, order: [.claude, .grok, .muse]))
         let m = manager(providers, box: box)
         _ = await m.forceRefresh()
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .kiro, .claude])
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.grok, .muse, .claude])
     }
 
     // MARK: Tie-breaks follow the user's list
@@ -165,14 +165,14 @@ struct ProviderVisibilityTests {
         let counter = Counter()
         let providers = [
             Provider(vendorId: .claude, counter: counter, fixedReset: Self.sharedReset),
-            Provider(vendorId: .kiro, counter: counter, fixedReset: Self.sharedReset),
+            Provider(vendorId: .muse, counter: counter, fixedReset: Self.sharedReset),
         ]
-        let box = PreferenceBox(ProviderDisplayPreferences(order: [.kiro, .claude]))
+        let box = PreferenceBox(ProviderDisplayPreferences(order: [.muse, .claude]))
         let m = manager(providers, box: box)
         _ = await m.forceRefresh()
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.kiro, .claude])
-        box.value.order = [.claude, .kiro]
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .kiro])
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.muse, .claude])
+        box.value.order = [.claude, .muse]
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .muse])
     }
 
     @Test("vendors with no window keep the user's list order")
@@ -180,14 +180,14 @@ struct ProviderVisibilityTests {
         let counter = Counter()
         let providers = [
             Provider(vendorId: .claude, counter: counter, hasWindow: false),
-            Provider(vendorId: .kiro, counter: counter, hasWindow: false),
+            Provider(vendorId: .muse, counter: counter, hasWindow: false),
         ]
-        let box = PreferenceBox(ProviderDisplayPreferences(order: [.kiro, .claude]))
+        let box = PreferenceBox(ProviderDisplayPreferences(order: [.muse, .claude]))
         let m = manager(providers, box: box)
         _ = await m.forceRefresh()
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.kiro, .claude])
-        box.value.order = [.claude, .kiro]
-        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .kiro])
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.muse, .claude])
+        box.value.order = [.claude, .muse]
+        #expect(await m.sortedSnapshots().map(\.vendorId) == [.claude, .muse])
     }
 
     /// The fresh-cache fast path returns the cache itself, so it must not

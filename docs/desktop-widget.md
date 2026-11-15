@@ -40,7 +40,7 @@ The local activity history: tokens that Claude Code, Codex and OpenCode recorded
 
 | Case | What happens |
 |---|---|
-| A provider with no token source (Gemini, Grok, Kiro, ClinePass, Copilot, OpenRouter, DevPass, Command Code) | No layer, never a flat zero. It is named under the chart: "No token counts for Gemini, Grok." |
+| A provider with no token source (Gemini, Grok, Copilot, OpenRouter, Command Code) | No layer, never a flat zero. It is named under the chart: "No token counts for Gemini, Grok." |
 | A record whose tool reported no token figure | Not summed, and not counted as zero. The chart says how many were left out |
 | A provider with no tokens in the range | No layer and no legend entry |
 | A time bucket where a tool recorded nothing | Zero observed tokens, which is true |

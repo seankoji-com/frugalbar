@@ -5,8 +5,8 @@ import Foundation
 /// affected components and timestamps).
 ///
 /// Only Anthropic, OpenAI and GitHub publish one FrugalBar can read. OpenRouter
-/// and xAI answer the API with 403, and Google, Kiro, OpenCode, Cline,
-/// Command Code and LLM Gateway have no machine-readable status history.
+/// and xAI answer the API with 403, and Google, OpenCode and Command Code
+/// have no machine-readable status history.
 public struct StatusPage: Sendable, Equatable {
     /// Which of a page's incidents concern the product FrugalBar tracks.
     public enum Relevance: Sendable, Equatable {

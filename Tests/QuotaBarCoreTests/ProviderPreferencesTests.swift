@@ -29,9 +29,9 @@ struct ProviderPreferencesTests {
     /// appearing for anyone who had ever rearranged the list.
     @Test("vendors the stored list does not name are appended in canonical order")
     func missingVendorsAreAppended() {
-        let resolved = ProviderDisplayPreferences.resolveOrder(stored: ["kiro", "claude"])
-        #expect(resolved.prefix(2) == [.kiro, .claude])
-        let rest = ProviderDisplayPreferences.defaultOrder.filter { $0 != .kiro && $0 != .claude }
+        let resolved = ProviderDisplayPreferences.resolveOrder(stored: ["muse", "claude"])
+        #expect(resolved.prefix(2) == [.muse, .claude])
+        let rest = ProviderDisplayPreferences.defaultOrder.filter { $0 != .muse && $0 != .claude }
         #expect(Array(resolved.dropFirst(2)) == rest)
         #expect(Set(resolved) == Set(VendorIdentifier.allCases))
     }
@@ -53,7 +53,7 @@ struct ProviderPreferencesTests {
 
     @Test("hidden decoding drops unknown vendors")
     func hiddenDecoding() {
-        #expect(ProviderDisplayPreferences.resolveHidden(stored: ["kiro", "bogus"]) == [.kiro])
+        #expect(ProviderDisplayPreferences.resolveHidden(stored: ["muse", "bogus"]) == [.muse])
         #expect(ProviderDisplayPreferences.resolveHidden(stored: nil).isEmpty)
     }
 
@@ -66,8 +66,8 @@ struct ProviderPreferencesTests {
 
     @Test("visibleOrder keeps the order and drops hidden vendors; rank follows the list")
     func visibleOrderAndRank() {
-        let prefs = ProviderDisplayPreferences(order: [.kiro, .claude, .grok], hidden: [.claude])
-        #expect(prefs.visibleOrder == [.kiro, .grok])
+        let prefs = ProviderDisplayPreferences(order: [.muse, .claude, .grok], hidden: [.claude])
+        #expect(prefs.visibleOrder == [.muse, .grok])
         #expect(prefs.rank(of: .grok) == 2)
         #expect(prefs.rank(of: .openai) == 3)
     }
@@ -92,18 +92,18 @@ struct ProviderPreferencesTests {
         #expect(CredentialStore.providerOrdering == .automatic)
 
         CredentialStore.providerOrder = [.openai, .claude]
-        CredentialStore.hiddenProviders = [.githubGraphql, .devpass]
+        CredentialStore.hiddenProviders = [.githubGraphql, .commandcode]
         CredentialStore.providerOrdering = .custom
 
         #expect(CredentialStore.providerOrder.prefix(2) == [.openai, .claude])
         #expect(CredentialStore.providerOrder.count == VendorIdentifier.allCases.count)
-        #expect(CredentialStore.hiddenProviders == [.githubGraphql, .devpass])
+        #expect(CredentialStore.hiddenProviders == [.githubGraphql, .commandcode])
         #expect(CredentialStore.providerOrdering == .custom)
 
         let combined = CredentialStore.providerDisplayPreferences
         #expect(combined.ordering == .custom)
         #expect(combined.order.prefix(2) == [.openai, .claude])
-        #expect(combined.hidden == [.githubGraphql, .devpass])
+        #expect(combined.hidden == [.githubGraphql, .commandcode])
 
         CredentialStore.resetProviderOrder()
         #expect(CredentialStore.providerOrder == ProviderDisplayPreferences.defaultOrder)

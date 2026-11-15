@@ -131,7 +131,7 @@ struct SubscriptionCycleTests {
 /// serialized against each other. They used to also race against
 /// `QuotaManagerExtendedTests`' `forceRefresh()` calls, which read that same
 /// store through `QuotaManager.attachingCycleRow`; a cycle written here for
-/// `.devpass` could leak into an unrelated sort-order assertion running
+/// `.commandcode` could leak into an unrelated sort-order assertion running
 /// concurrently. `attachingCycleRow` now takes its cycle as a plain
 /// parameter instead of reading the store itself, so `AttachTests` below no
 /// longer touches `UserDefaults` at all, and this is the only suite that
@@ -156,9 +156,9 @@ struct SubscriptionCyclePersistenceTests {
             let cycle = SubscriptionCycle(
                 anchorDate: date(2026, 5, 9), cadence: .annual,
                 cost: Decimal(string: "179")!, currencyCode: "GBP")
-            SubscriptionCycleStore.set(cycle, for: .devpass)
+            SubscriptionCycleStore.set(cycle, for: .commandcode)
 
-            let loaded = SubscriptionCycleStore.cycle(for: .devpass)
+            let loaded = SubscriptionCycleStore.cycle(for: .commandcode)
             #expect(loaded?.cadence == .annual)
             #expect(loaded?.cost == Decimal(string: "179"))
             #expect(loaded?.currencyCode == "GBP")
@@ -170,11 +170,11 @@ struct SubscriptionCyclePersistenceTests {
             clear()
             defer { clear() }
 
-            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: date(2026, 1, 1)), for: .devpass)
+            SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: date(2026, 1, 1)), for: .commandcode)
             SubscriptionCycleStore.set(SubscriptionCycle(anchorDate: date(2026, 2, 2)), for: .grok)
-            SubscriptionCycleStore.set(nil, for: .devpass)
+            SubscriptionCycleStore.set(nil, for: .commandcode)
 
-            #expect(SubscriptionCycleStore.cycle(for: .devpass) == nil)
+            #expect(SubscriptionCycleStore.cycle(for: .commandcode) == nil)
             #expect(SubscriptionCycleStore.cycle(for: .grok)?.anchorDate == date(2026, 2, 2))
         }
 
@@ -182,7 +182,7 @@ struct SubscriptionCyclePersistenceTests {
         func unconfigured() {
             clear()
             defer { clear() }
-            #expect(SubscriptionCycleStore.cycle(for: .kiro) == nil)
+            #expect(SubscriptionCycleStore.cycle(for: .muse) == nil)
         }
     }
 }
@@ -194,7 +194,7 @@ struct SubscriptionCyclePersistenceTests {
 struct AttachTests {
 
     private func snapshot(
-        vendor: VendorIdentifier = .devpass,
+        vendor: VendorIdentifier = .commandcode,
         row1: DualBarMetrics? = nil,
         row2: DualBarMetrics? = nil,
         row3: DualBarMetrics? = nil,
@@ -312,7 +312,7 @@ struct AttachTests {
     @Test("an unreadable provider still gets its countdown — the case it matters most for")
     func unavailableSnapshotKeepsCycle() {
         let placeholder = QuotaManager.unavailableSnapshot(
-            for: DevPassQuotaProvider(), reason: .notConfigured)
+            for: CommandCodeQuotaProvider(), reason: .notConfigured)
         let result = QuotaManager.attachingCycleRow(
             to: placeholder, cycle: SubscriptionCycle(anchorDate: Date()))
         #expect(result.status == .unavailable(.notConfigured))

@@ -70,20 +70,7 @@ struct AccountModelListerTests {
         #expect(ids(AccountModelLister.parseGeminiModels(Data(body.utf8))) == ["claude-sonnet-5-5", "gemini-3.8-pro"])
     }
 
-    @Test("Kiro: every listed model id, with its name")
-    func kiro() {
-        let body = #"""
-        {"defaultModel":{"modelId":"auto"},"models":[
-          {"modelId":"auto","modelName":"Auto","rateMultiplier":1.0},
-          {"modelId":"claude-sonnet-4.5","modelName":"Claude Sonnet 4.5"}
-        ]}
-        """#
-        let models = AccountModelLister.parseKiroModels(Data(body.utf8))
-        #expect(ids(models) == ["auto", "claude-sonnet-4.5"])
-        #expect(models?.last?.name == "Claude Sonnet 4.5")
-    }
-
-    @Test("OpenAI-style lists (OpenCode Go, Grok, DevPass) drop deactivated models")
+    @Test("OpenAI-style lists (OpenCode Go and Grok) drop deactivated models")
     func idList() {
         let body = #"""
         {"object":"list","data":[
@@ -97,21 +84,6 @@ struct AccountModelListerTests {
         #expect(ids(models) == ["grok-4.7", "gpt-6.1-sol"])
         #expect(models?.last?.name == "GPT-6.1 Sol")
         #expect(AccountModelLister.parseIdList(Data(#"{"error":"unauthorized"}"#.utf8)) == nil)
-    }
-
-    @Test("ClinePass: the pass list counts only when the plan enables it")
-    func clinePass() {
-        let plan = #"{"data":{"plan":{"name":"Cline Pass","entitlements":{"cline_pass":{"enabled":true}}}}}"#
-        let noPass = #"{"data":{"plan":{"name":"Free","entitlements":{"cline_pass":{"enabled":false}}}}}"#
-        #expect(AccountModelLister.clinePassEnabled(Data(plan.utf8)))
-        #expect(!AccountModelLister.clinePassEnabled(Data(noPass.utf8)))
-        #expect(!AccountModelLister.clinePassEnabled(Data("{}".utf8)))
-
-        let wrapped = #"{"data":{"clinePass":[{"id":"cline-pass/kimi-k3"},{"id":"cline-pass/glm-5.3"}],"free":[{"id":"x"}]}}"#
-        let bare = #"{"clinePass":[{"id":"cline-pass/kimi-k3"}],"recommended":[]}"#
-        #expect(ids(AccountModelLister.parseClinePassModels(Data(wrapped.utf8))) == ["cline-pass/kimi-k3", "cline-pass/glm-5.3"])
-        #expect(ids(AccountModelLister.parseClinePassModels(Data(bare.utf8))) == ["cline-pass/kimi-k3"])
-        #expect(AccountModelLister.parseClinePassModels(Data(#"{"free":[]}"#.utf8)) == nil)
     }
 
     @Test("the live lister never reaches the network under a test host")

@@ -158,22 +158,17 @@ struct SnapshotExporterTests {
         #expect(state.lastError == nil)
     }
 
-    @Test("a nil basis outside the DevPass rule exports unavailable {missingBasis}")
-    func nilBasisOutsideDevPassExportsMissingBasis() throws {
+    @Test("a nil basis exports unavailable {missingBasis}")
+    func nilBasisExportsMissingBasis() throws {
         let money = MetricType.currency(balance: 12.5, limit: nil, spent: nil, currencyCode: "USD")
         let document = try exported([
             snapshot(.openrouter, metric: money),
             snapshot(.deepseek, metric: money, currencyBasis: .accountCredit),
-            snapshot(.devpass, metric: money),
-            snapshot(.devpass, id: "devpass:capped", metric: .currency(balance: 5, limit: 10, spent: 5, currencyCode: "USD")),
         ])
         let primaries = try providers(document).map { try #require($0["primary"] as? [String: Any]) }
         #expect(primaries[0]["type"] as? String == "unavailable")
         #expect(primaries[0]["reason"] as? String == "missingBasis")
         #expect(primaries[1]["basis"] as? String == "accountCredit")
-        // DevPass's uncapped branch is the one fallback; a capped DevPass with no basis is not.
-        #expect(primaries[2]["basis"] as? String == "lifetimeSpend")
-        #expect(primaries[3]["reason"] as? String == "missingBasis")
     }
 
     @Test("every shipped provider branch has a table entry")
@@ -185,8 +180,7 @@ struct SnapshotExporterTests {
             ("GeminiQuotaProvider.swift", [.gemini]), ("OpenCodeGoProvider.swift", [.opencode]),
             ("GitHubCopilotProvider.swift", [.copilot]), ("OpenRouterProvider.swift", [.openrouter]),
             ("DeepSeekProvider.swift", [.deepseek]), ("GrokQuotaProvider.swift", [.grok]),
-            ("KiroQuotaProvider.swift", [.kiro]), ("CommandCodeQuotaProvider.swift", [.commandcode]),
-            ("ClinePassQuotaProvider.swift", [.clinepass]), ("MuseQuotaProvider.swift", [.muse]),
+            ("CommandCodeQuotaProvider.swift", [.commandcode]), ("MuseQuotaProvider.swift", [.muse]),
         ]
         for (file, vendors) in files {
             let source = try String(contentsOf: sourceDirectory.appendingPathComponent("Providers/\(file)"), encoding: .utf8)
@@ -199,12 +193,6 @@ struct SnapshotExporterTests {
                             "\(file) fills \(position.rawValue) for \(vendor), which has no table entry")
                 }
             }
-        }
-        // DevPass and GitHub branch on structure the source scan cannot see:
-        // DevPass on its metric, GitHub on consolidated vs standalone.
-        for metric in [MetricType.percentage(usedFraction: 0, displayDetails: nil),
-                       .currency(balance: 0, limit: nil, spent: nil, currencyCode: "USD")] {
-            #expect(SnapshotExportTable.windowIDs(for: .devpass, metric: metric)[.row1] != nil)
         }
         let any = MetricType.count(remaining: 1, limit: 2, unitName: "req/hr")
         #expect(SnapshotExportTable.windowIDs(for: .githubRest, metric: any)[.row1] == "rest")
@@ -258,16 +246,16 @@ struct SnapshotExporterTests {
 
     @Test("an event's instance reference is checked against every identity, and may repeat")
     func eventReferencesTakePartInCollisionChecks() throws {
-        let kiro = snapshot(.kiro, rows: [bar(0.2, label: "MO")])
+        let muse = snapshot(.muse, rows: [bar(0.2, label: "MO")])
         func reference(_ id: String, to instance: String) -> AIEvent {
-            AIEvent(id: id, kind: .usageRestored, vendorId: .kiro, instanceId: instance, title: "t", detail: nil,
+            AIEvent(id: id, kind: .usageRestored, vendorId: .muse, instanceId: instance, title: "t", detail: nil,
                     occurredAt: now, observedAt: now, source: .quotaPoll)
         }
         let digest = SnapshotExportIdentity.digest
         // A different source forced onto the provider's digest is refused,
         // though the provider and event ids themselves stay distinct.
-        let ontoProvider: (String) -> String = { $0 == "different-source" ? digest("kiro") : digest($0) }
-        #expect(SnapshotExporter.export(input([kiro], events: [reference("e1", to: "different-source")]),
+        let ontoProvider: (String) -> String = { $0 == "different-source" ? digest("muse") : digest($0) }
+        #expect(SnapshotExporter.export(input([muse], events: [reference("e1", to: "different-source")]),
                                         identity: ontoProvider) == .failure(.identityCollision))
         // Two different references to absent providers, forced onto one digest.
         let shared: (String) -> String = { $0.hasPrefix("absent-") ? "0123456789abcdef0123456789abcdef" : digest($0) }
@@ -275,15 +263,15 @@ struct SnapshotExporterTests {
                                         identity: shared) == .failure(.identityCollision))
         // A reference forced onto another event's id.
         let ontoEvent: (String) -> String = { $0 == "absent-a" ? digest("e2") : digest($0) }
-        #expect(SnapshotExporter.export(input([], events: [reference("e1", to: "absent-a"), reference("e2", to: "kiro")]),
+        #expect(SnapshotExporter.export(input([], events: [reference("e1", to: "absent-a"), reference("e2", to: "muse")]),
                                         identity: ontoEvent) == .failure(.identityCollision))
 
         // Repeated references to one source publish, the provider's own and an absent one alike.
-        let repeated = [reference("e1", to: "kiro"), reference("e2", to: "kiro"),
+        let repeated = [reference("e1", to: "muse"), reference("e2", to: "muse"),
                         reference("e3", to: "absent-a"), reference("e4", to: "absent-a")]
         for identity in [ontoProvider, shared, digest] {
             let document = try #require(try JSONSerialization.jsonObject(
-                with: try SnapshotExporter.export(input([kiro], events: repeated), identity: identity).get().data) as? [String: Any])
+                with: try SnapshotExporter.export(input([muse], events: repeated), identity: identity).get().data) as? [String: Any])
             let references = try #require(document["events"] as? [[String: Any]]).compactMap { $0["instanceId"] as? String }
             #expect(references.count == 4)
             #expect(Set(references).count == 2)
@@ -321,138 +309,6 @@ struct SnapshotExporterTests {
         measured.row2 = bar(0.4, label: "OD")
         let read = try providers(try exported([measured]))[0]
         #expect(read["measuredAt"] as? String == ExportText.timestamp(stored.lastUpdated))
-    }
-
-    @Test("DevPass usage the vendor did not send exports as no reading, not 0 used; the Mac's own output is unchanged")
-    func devPassMissingUsageExportsNoReading() throws {
-        func build(_ body: String) throws -> QuotaSnapshot {
-            let key = try JSONDecoder().decode(DevPassQuotaProvider.KeyData.self, from: Data(body.utf8))
-            return DevPassQuotaProvider.snapshot(from: key, provider: DevPassQuotaProvider(), now: now)
-        }
-        for limit in ["null", "\"25\""] {
-            let missing = try build(#"{"label":"key","limit":\#(limit),"devPlan":"none"}"#)
-            let zero = try build(#"{"label":"key","usage":"0","limit":\#(limit),"devPlan":"none"}"#)
-            // The Mac draws exactly what it drew before; only the passive quantity keeps the absence.
-            #expect(missing.row1?.quantityUsed == nil)
-            #expect(zero.row1?.quantityUsed == 0)
-            var unchanged = missing
-            unchanged.row1?.quantityUsed = 0
-            #expect(unchanged == zero)
-
-            let absent = try providers(try exported([missing]))[0]
-            let spend = try windows(absent)[0]
-            #expect(spend["windowId"] as? String == "spend")
-            #expect(spend["usedFraction"] is NSNull)
-            #expect(spend["quantity"] == nil)
-            #expect(spend["unavailable"] as? [String: String] == ["reason": "noReading"])
-            #expect(spend["eligibleForTightest"] as? Bool == false)
-            #expect(absent["tightestWindowId"] is NSNull)
-            #expect(absent["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
-
-            // A zero the vendor did send is a reading, and exports as one.
-            let reported = try providers(try exported([zero]))[0]
-            #expect((try windows(reported)[0]["quantity"] as? [String: String])?["used"] == "0")
-            #expect((reported["primary"] as? [String: Any])?["type"] as? String == "currency")
-        }
-    }
-
-    @Test("Kiro overage the vendor did not send exports as no reading, not 0 used; the plan and the Mac's own output are unchanged")
-    func kiroMissingOverageExportsNoReading() throws {
-        let missing = try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil)
-        let zero = try ProviderBranchSnapshots.kiroEnabledOverage(reported: "0.0")
-        // The Mac draws exactly what it drew before; only the passive quantity keeps the absence.
-        #expect(missing.row3?.quantityUsed == nil)
-        #expect(zero.row3?.quantityUsed == 0)
-        #expect(missing.row3?.usedText == "0/1000 overage credits @ $0.04/credit")
-        var unchanged = missing
-        unchanged.row3?.quantityUsed = 0
-        #expect(unchanged == zero)
-
-        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
-            try #require(try windows(provider).first { $0["windowId"] as? String == id })
-        }
-        let absent = try providers(try exported([missing]))[0]
-        let overage = try window(absent, "overage")
-        #expect(overage["usedFraction"] is NSNull)
-        #expect(overage["quantity"] == nil)
-        #expect(overage["unavailable"] as? [String: String] == ["reason": "noReading"])
-        #expect(overage["eligibleForTightest"] as? Bool == false)
-        // The plan is a reading of its own: its window and the percentage primary stay.
-        let monthly = try window(absent, "monthly")
-        #expect(monthly["quantity"] as? [String: String] == ["used": "40", "limit": "50", "unit": "credits"])
-        #expect(monthly["unavailable"] == nil)
-        #expect((absent["primary"] as? [String: Any])?["type"] as? String == "percentage")
-        #expect(absent["tightestWindowId"] as? String == "monthly")
-
-        // A zero the vendor did send is a reading, and exports as one.
-        let reported = try window(try providers(try exported([zero]))[0], "overage")
-        #expect(reported["quantity"] as? [String: String] == ["used": "0", "limit": "1000", "unit": "credits"])
-        #expect(reported["unavailable"] == nil)
-        #expect(reported["eligibleForTightest"] as? Bool == true)
-    }
-
-    @Test("a Kiro bonus pool missing its usage or limit exports the bonus as no reading, not a partial sum")
-    func kiroIncompleteBonusExportsNoReading() throws {
-        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
-            try #require(try windows(provider).first { $0["windowId"] as? String == id })
-        }
-        // Absent usage (0/100 on the Mac), partial usage (25/300) and mismatched pools (125/100).
-        for (index, snapshot) in try ProviderBranchSnapshots.kiroBonuses().enumerated() {
-            let provider = try providers(try exported([snapshot]))[0]
-            let bonus = try window(provider, "bonus")
-            #expect(bonus["usedFraction"] is NSNull, "\(index)")
-            #expect(bonus["quantity"] == nil, "\(index)")
-            #expect(bonus["unavailable"] as? [String: String] == ["reason": "noReading"], "\(index)")
-            #expect(bonus["eligibleForTightest"] as? Bool == false, "\(index)")
-            // The plan is a reading of its own: its window, the primary and tightest stay on it.
-            #expect(try window(provider, "monthly")["quantity"] as? [String: String]
-                    == ["used": "40", "limit": "50", "unit": "credits"], "\(index)")
-            #expect((provider["primary"] as? [String: Any])?["type"] as? String == "percentage", "\(index)")
-            #expect(provider["tightestWindowId"] as? String == "monthly", "\(index)")
-        }
-
-        // Every active pool reporting both figures, a zero usage included, is a reading.
-        let complete = try ProviderBranchSnapshots.kiroBonuses([
-            #"[{"currentUsage":0,"usageLimit":100,"status":"ACTIVE"},{"currentUsage":30,"usageLimit":200,"status":"ACTIVE"}]"#,
-        ])[0]
-        let bonus = try window(try providers(try exported([complete]))[0], "bonus")
-        #expect(bonus["quantity"] as? [String: String] == ["used": "30", "limit": "300", "unit": "credits"])
-        #expect(bonus["usedFraction"] as? Double == 0.1)
-        #expect(bonus["unavailable"] == nil)
-        #expect(bonus["eligibleForTightest"] as? Bool == true)
-    }
-
-    @Test("Kiro plan usage above the limit with the overage unreported exports as no reading, not the total")
-    func kiroUnknownPlanSplitExportsNoReading() throws {
-        func window(_ provider: [String: Any], _ id: String) throws -> [String: Any] {
-            try #require(try windows(provider).first { $0["windowId"] as? String == id })
-        }
-        let missing = try ProviderBranchSnapshots.kiroEnabledOverage(reported: nil, total: 100)
-        let absent = try providers(try exported([missing]))[0]
-        for id in ["monthly", "overage"] {
-            let unknown = try window(absent, id)
-            #expect(unknown["usedFraction"] is NSNull, "\(id)")
-            #expect(unknown["quantity"] == nil, "\(id)")
-            #expect(unknown["unavailable"] as? [String: String] == ["reason": "noReading"], "\(id)")
-            #expect(unknown["eligibleForTightest"] as? Bool == false, "\(id)")
-        }
-        // The percentage primary is the plan fraction, built from the same default.
-        #expect(absent["primary"] as? [String: String] == ["type": "unavailable", "reason": "noReading"])
-        #expect(absent["tightestWindowId"] is NSNull)
-        #expect(absent["measuredAt"] as? String == ExportText.timestamp(missing.lastUpdated))
-
-        // A reported overage splits the same total: 50 on the plan, 50 over it.
-        let reported = try providers(try exported([
-            try ProviderBranchSnapshots.kiroEnabledOverage(reported: "50.0", total: 100),
-        ]))[0]
-        #expect(try window(reported, "monthly")["quantity"] as? [String: String]
-                == ["used": "50", "limit": "50", "unit": "credits"])
-        #expect(try window(reported, "monthly")["usedFraction"] as? Double == 1)
-        #expect(try window(reported, "overage")["quantity"] as? [String: String]
-                == ["used": "50", "limit": "1000", "unit": "credits"])
-        let primary = try #require(reported["primary"] as? [String: Any])
-        #expect(primary["type"] as? String == "percentage" && primary["usedFraction"] as? Double == 1)
-        #expect(reported["tightestWindowId"] as? String == "monthly")
     }
 
     @Test("measuredAt is null for unavailableSnapshot placeholders, and set for a real or retained read")
