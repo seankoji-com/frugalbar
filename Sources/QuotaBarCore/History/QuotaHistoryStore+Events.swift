@@ -112,13 +112,17 @@ extension QuotaHistoryStore {
         try await ensureOpen()
 
         let vendorString = vendor?.rawValue
+        let knownVendors = VendorIdentifier.allCases.map(\.rawValue)
         let kindStrings = kinds.map { $0.map(\.rawValue).sorted() }
         let sinceEpoch = since.map { Int64($0.timeIntervalSince1970) }
         let instanceKeys = instanceID.map { instanceKeyLookup($0) }
 
         return try await database.perform { db -> [AIEvent] in
             #if canImport(SQLite3)
-            var conditions: [String] = [Self.retiredRowsExcluded]
+            // Unknown vendor rows remain on disk but must not consume the
+            // limit before the decoder skips them.
+            let vendorSlots = Array(repeating: "?", count: knownVendors.count).joined(separator: ",")
+            var conditions: [String] = [Self.retiredRowsExcluded, "vendor IN (\(vendorSlots))"]
             if vendorString != nil { conditions.append("vendor = ?") }
             if let instanceKeys {
                 let slots = Array(repeating: "?", count: instanceKeys.count).joined(separator: ",")
@@ -157,6 +161,10 @@ extension QuotaHistoryStore {
             defer { db.finalize(stmt) }
 
             var bindIdx: Int32 = 1
+            for knownVendor in knownVendors {
+                try db.bindText(stmt, bindIdx, knownVendor)
+                bindIdx += 1
+            }
             if let vendorString {
                 try db.bindText(stmt, bindIdx, vendorString)
                 bindIdx += 1

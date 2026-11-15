@@ -24,6 +24,20 @@ nothing on the Mac reads them:
 Basis and reset handling live in the adapter: no provider sets `currencyBasis` or a row reset for
 the export.
 
+## Historical retired vendors
+
+Older documents can still contain Kiro's `monthly`, `bonus` and `overage` windows and DevPass's
+`plan` and `spend` windows. DevPass's uncapped currency primary can carry the `lifetimeSpend`
+basis. Readers should retain support for these encodings; the historical expected documents in
+the fixture directory remain unchanged.
+
+When DevPass did not publish usage, its `spend` window and currency primary exported
+`unavailable: {reason: noReading}` rather than a synthetic zero. Kiro's missing overage usage
+similarly made the `overage` window unavailable; above the plan limit it also made the plan-only
+`monthly` figure unknown. A `bonus` total was unavailable when any active pool omitted usage or
+limit. The retained fixtures cover these cases and distinguish a published zero from a missing
+figure.
+
 ## Adapter decisions
 
 - **Window identity** comes from `SnapshotExportTable`: vendor and row position. Labels are copied (cut to 64 escaped bytes) and never read for anything else. A

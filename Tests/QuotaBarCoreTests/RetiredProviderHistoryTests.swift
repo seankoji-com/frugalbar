@@ -26,9 +26,10 @@ struct RetiredProviderHistoryTests {
                   ('claude', 'WK', 1700000000, 0.4, 0, 'measured', 'none', NULL, NULL, 0);
                 INSERT INTO event (id, kind, vendor, title, occurred_at, observed_at, source) VALUES
                   ('current-newest', 'usage_reset', 'claude', 'Reset', 1700000004, 1700000004, 'quota-poll'),
-                  ('old-cline', 'usage_reset', 'clinepass', 'Reset', 1700000003, 1700000003, 'quota-poll'),
+                  ('old-cline', 'usage_reset', 'clinepass', 'Reset', 1700000005, 1700000005, 'quota-poll'),
                   ('old-devpass', 'usage_reset', 'devpass', 'Reset', 1700000002, 1700000002, 'quota-poll'),
                   ('old-kiro', 'usage_reset', 'kiro', 'Reset', 1700000001, 1700000001, 'quota-poll'),
+                  ('future-kind', 'future_kind', 'claude', 'Future', 1700000003, 1700000003, 'quota-poll'),
                   ('current', 'usage_reset', 'claude', 'Reset', 1700000000, 1700000000, 'quota-poll');
                 """)
         }
@@ -40,10 +41,12 @@ struct RetiredProviderHistoryTests {
             since: nil, until: Date(timeIntervalSince1970: 1_700_001_000), bucketSeconds: 3600)
         #expect(sampled.first { $0.vendor == "claude" }?.fraction == 0.4)
         #expect(Set(sampled.map(\.vendor)) == ["clinepass", "devpass", "kiro", "claude"])
-        // The newest and oldest known events surround all retired vendors in
-        // the query order, so stopping at an unknown row loses the older one.
+        // The retired vendor is newest; an unknown kind lies between the
+        // known events and must not stop the decoder from reading the older one.
         let events = try await reopened.fetchEvents()
         #expect(events.map(\.id) == ["current-newest", "current"])
+        let mostRecent = try await reopened.fetchEvents(limit: 1)
+        #expect(mostRecent.map(\.id) == ["current-newest"])
         #if canImport(SQLite3)
         // Skipping unknown events on read must not delete their stored rows.
         let counts = try await reopened.database.perform { db in
