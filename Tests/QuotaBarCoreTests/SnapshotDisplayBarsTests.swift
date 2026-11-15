@@ -106,7 +106,7 @@ struct SnapshotDisplayBarsTests {
 
     @Test("a period-less window survives a spent longer period")
     func periodLessWindowSurvives() {
-        // Kiro's bonus credits have no window length and outlive the monthly
+        // A bonus pool can have no window length and outlive the monthly
         // reset — hiding them because the month is spent would hide headroom
         // that is still usable.
         let snap = snapshot([

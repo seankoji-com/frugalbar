@@ -14,6 +14,11 @@ but itself) is what both sides check.
 exercises, or a `regression:` it pins; `fixturesCoverEveryTableLineAndBranch` checks that the set
 is complete.
 
+The expected documents whose names start with `clinepass`, `devpass` or `kiro` are historical
+wire fixtures for downstream parsers. Their inputs were retired with those providers, so the
+current exporter does not regenerate them. Keep these documents and their manifest entries:
+older installations may already have published them.
+
 `macClockOffsetMs` is an integer in the input and a decimal string (or null) in the expected
 documents: it is signed, and the schema's integers are 0…2^53 − 1.
 

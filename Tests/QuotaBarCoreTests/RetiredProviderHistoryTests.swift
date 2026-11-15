@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 @testable import QuotaBarCore
+#if canImport(SQLite3)
+import SQLite3
+#endif
 
 /// Older databases retain rows for providers that this build no longer offers.
 @Suite("Retired provider history")
@@ -38,6 +41,19 @@ struct RetiredProviderHistoryTests {
         #expect(Set(sampled.map(\.vendor)) == ["clinepass", "devpass", "kiro", "claude"])
         let events = try await reopened.fetchEvents()
         #expect(events.map(\.id) == ["current"])
+        #if canImport(SQLite3)
+        // Skipping unknown events on read must not delete their stored rows.
+        let counts = try await reopened.database.perform { db in
+            let statement = try db.prepare(sql: """
+                SELECT (SELECT COUNT(*) FROM reading WHERE vendor IN ('clinepass', 'devpass', 'kiro')),
+                       (SELECT COUNT(*) FROM event WHERE vendor IN ('clinepass', 'devpass', 'kiro'));
+                """)
+            defer { db.finalize(statement) }
+            guard try db.step(statement) else { throw HistoryDatabaseError.databaseNotOpen }
+            return [sqlite3_column_int64(statement, 0), sqlite3_column_int64(statement, 1)]
+        }
+        #expect(counts == [3, 3])
+        #endif
         #expect(HistorySchema.version == 1)
     }
 }

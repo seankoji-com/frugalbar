@@ -56,9 +56,9 @@
       }
     },
     {
-      "id": "kiro",
-      "vendorId": "kiro",
-      "displayName": "Kiro",
+      "id": "openai",
+      "vendorId": "openai",
+      "displayName": "OpenAI",
       "category": "AI Subscriptions",
       "metric": {
         "type": "count",
@@ -72,7 +72,7 @@
       },
       "resetsAt": null,
       "lastUpdated": "2026-10-14T23:58:00.000Z",
-      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "auxiliaryInfo": "AUXINFO-MARKER openai",
       "cliSource": "CLI Proxy (proxy-host.lan.internal)",
       "keyMasked": "KEYMASK-MARKER-4f2a",
       "latencyMs": 4321,

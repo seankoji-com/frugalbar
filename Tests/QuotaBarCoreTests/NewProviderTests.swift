@@ -1517,8 +1517,7 @@ struct MuseQuotaProviderTests {
         """)
         #expect(snap.status.confidence == .measured)
         // The 5H block carried no figure, so nothing is drawn for it; the WK
-        // row keeps its own position in the grid (matching CommandCode and
-        // ClinePass, which leave the same gap).
+        // row keeps its own position in the grid, matching Command Code.
         #expect(snap.row1 == nil)
         #expect(snap.row2?.label == "WK")
     }

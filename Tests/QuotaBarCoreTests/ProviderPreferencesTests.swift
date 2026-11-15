@@ -57,6 +57,17 @@ struct ProviderPreferencesTests {
         #expect(ProviderDisplayPreferences.resolveHidden(stored: nil).isEmpty)
     }
 
+    /// Preferences saved before the providers were retired must still load.
+    @Test("retired provider preferences retain the order and visibility of current providers")
+    func retiredProviderPreferences() {
+        let stored = ["kiro", "muse", "devpass", "claude", "clinepass"]
+        let order = ProviderDisplayPreferences.resolveOrder(stored: stored)
+        #expect(Array(order.prefix(2)) == [.muse, .claude])
+        #expect(Set(order) == Set(VendorIdentifier.allCases))
+        #expect(order.count == VendorIdentifier.allCases.count)
+        #expect(ProviderDisplayPreferences.resolveHidden(stored: stored) == [.muse, .claude])
+    }
+
     @Test("ordering decodes tolerantly")
     func orderingDecoding() {
         #expect(ProviderOrdering(stored: nil) == .automatic)

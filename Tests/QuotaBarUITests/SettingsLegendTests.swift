@@ -7,7 +7,7 @@ import QuotaBarCore
 
 /// Settings' "Reading the popover" legend once defined Healthy, Running low and
 /// Critically low as below 70%, past 70% and past 90% of a window. OpenCode Go,
-/// Copilot, Kiro and others warn at 80% and 95%, and OpenRouter and DeepSeek
+/// Copilot and others warn at 80% and 95%, and OpenRouter and DeepSeek
 /// warn on an absolute credit balance with no window at all, so the legend
 /// contradicted the providers it explained. It also described provider status
 /// and window colours as one scale, when a bar's colour follows pace instead.

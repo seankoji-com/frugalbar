@@ -1,5 +1,5 @@
 {
-  "description": "A .currency metric with no basis outside the DevPass rule exports unavailable {missingBasis}; so does a capped DevPass spend with no basis.",
+  "description": "Currency metrics with no basis export unavailable {missingBasis}, including a capped amount.",
   "covers": [
     "branch:missing-basis"
   ],
@@ -41,9 +41,9 @@
       "badgeText": "BADGE-MARKER"
     },
     {
-      "id": "devpass",
-      "vendorId": "devpass",
-      "displayName": "DevPass",
+      "id": "grok",
+      "vendorId": "grok",
+      "displayName": "Grok",
       "category": "AI Subscriptions",
       "metric": {
         "type": "currency",
@@ -58,7 +58,7 @@
       },
       "resetsAt": null,
       "lastUpdated": "2026-10-14T23:58:00.000Z",
-      "auxiliaryInfo": "AUXINFO-MARKER devpass",
+      "auxiliaryInfo": "AUXINFO-MARKER grok",
       "cliSource": "CLI Proxy (proxy-host.lan.internal)",
       "keyMasked": "KEYMASK-MARKER-4f2a",
       "latencyMs": 4321,

@@ -19,8 +19,8 @@
     {
       "repeat": 60,
       "snapshot": {
-        "id": "kiro:instance-{n}",
-        "vendorId": "kiro",
+        "id": "openai:instance-{n}",
+        "vendorId": "openai",
         "displayName": "Provider {n} ΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩΩ",
         "category": "AI Subscriptions",
         "metric": {
@@ -37,7 +37,7 @@
         },
         "resetsAt": null,
         "lastUpdated": "2026-10-14T23:58:00.000Z",
-        "auxiliaryInfo": "AUXINFO-MARKER kiro",
+        "auxiliaryInfo": "AUXINFO-MARKER openai",
         "cliSource": "CLI Proxy (proxy-host.lan.internal)",
         "keyMasked": "KEYMASK-MARKER-4f2a",
         "latencyMs": 4321,
@@ -83,8 +83,8 @@
         },
         "apiCredits": [
           {
-            "id": "kiro:instance-{n}.credit-0",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-0",
+            "vendorId": "openai",
             "label": "Credit 0 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -97,8 +97,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-1",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-1",
+            "vendorId": "openai",
             "label": "Credit 1 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -111,8 +111,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-2",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-2",
+            "vendorId": "openai",
             "label": "Credit 2 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -125,8 +125,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-3",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-3",
+            "vendorId": "openai",
             "label": "Credit 3 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -139,8 +139,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-4",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-4",
+            "vendorId": "openai",
             "label": "Credit 4 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -153,8 +153,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-5",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-5",
+            "vendorId": "openai",
             "label": "Credit 5 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -167,8 +167,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-6",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-6",
+            "vendorId": "openai",
             "label": "Credit 6 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -181,8 +181,8 @@
             "detail": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           {
-            "id": "kiro:instance-{n}.credit-7",
-            "vendorId": "kiro",
+            "id": "openai:instance-{n}.credit-7",
+            "vendorId": "openai",
             "label": "Credit 7 LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
             "metric": {
               "type": "currency",
@@ -212,7 +212,7 @@
         "observedAt": "2026-10-14T23:55:00.000Z",
         "source": "status:claude",
         "url": "https://status.claude.com/incidents/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu{n}",
-        "instanceId": "kiro:instance-{n}"
+        "instanceId": "openai:instance-{n}"
       }
     }
   ]

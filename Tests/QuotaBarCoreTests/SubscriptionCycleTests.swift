@@ -246,8 +246,8 @@ struct AttachTests {
 
     @Test("a vendor row with neither a reset nor a window is replaced, not three real windows")
     func uninformativeFilledSlotIsReplaced() {
-        // Kiro's shape: MO has a real reset, but BN/OV can both come back
-        // with no window to plan around. A cycle recorded for a vendor like
+        // MO has a real reset, but BN/OV have no window to plan around.
+        // A cycle recorded for a vendor like
         // this used to be dropped silently — the Settings editor still
         // showed it as tracked, but it never rendered anywhere.
         let now = Date()
@@ -281,7 +281,7 @@ struct AttachTests {
 
     @Test("a cycle bar is drawn but never counted as consumable headroom")
     func cycleIsNotHeadroom() {
-        // The bug this pins: DevPass with every credit unspent but three
+        // The bug this pins: a plan with every credit unspent but three
         // weeks into its month advertised "97% remaining", then "10%
         // remaining" — a countdown read as a fuel gauge. `bars` still
         // carries it (the popover draws it); `quotaBars` must not.

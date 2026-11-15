@@ -17,8 +17,8 @@
   },
   "snapshots": [
     {
-      "id": "kiro",
-      "vendorId": "kiro",
+      "id": "openai",
+      "vendorId": "openai",
       "displayName": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
       "category": "AI Subscriptions",
       "metric": {
@@ -34,7 +34,7 @@
       },
       "resetsAt": null,
       "lastUpdated": "2026-10-14T23:58:00.000Z",
-      "auxiliaryInfo": "AUXINFO-MARKER kiro",
+      "auxiliaryInfo": "AUXINFO-MARKER openai",
       "cliSource": "CLI Proxy (proxy-host.lan.internal)",
       "keyMasked": "KEYMASK-MARKER-4f2a",
       "latencyMs": 4321,
@@ -75,8 +75,8 @@
       "planName": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
       "apiCredits": [
         {
-          "id": "kiro.credit-0",
-          "vendorId": "kiro",
+          "id": "openai.credit-0",
+          "vendorId": "openai",
           "label": "Credit 0",
           "metric": {
             "type": "credits",
@@ -86,8 +86,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-1",
-          "vendorId": "kiro",
+          "id": "openai.credit-1",
+          "vendorId": "openai",
           "label": "Credit 1",
           "metric": {
             "type": "credits",
@@ -97,8 +97,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-2",
-          "vendorId": "kiro",
+          "id": "openai.credit-2",
+          "vendorId": "openai",
           "label": "Credit 2",
           "metric": {
             "type": "credits",
@@ -108,8 +108,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-3",
-          "vendorId": "kiro",
+          "id": "openai.credit-3",
+          "vendorId": "openai",
           "label": "Credit 3",
           "metric": {
             "type": "credits",
@@ -119,8 +119,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-4",
-          "vendorId": "kiro",
+          "id": "openai.credit-4",
+          "vendorId": "openai",
           "label": "Credit 4",
           "metric": {
             "type": "credits",
@@ -130,8 +130,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-5",
-          "vendorId": "kiro",
+          "id": "openai.credit-5",
+          "vendorId": "openai",
           "label": "Credit 5",
           "metric": {
             "type": "credits",
@@ -141,8 +141,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-6",
-          "vendorId": "kiro",
+          "id": "openai.credit-6",
+          "vendorId": "openai",
           "label": "Credit 6",
           "metric": {
             "type": "credits",
@@ -152,8 +152,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-7",
-          "vendorId": "kiro",
+          "id": "openai.credit-7",
+          "vendorId": "openai",
           "label": "Credit 7",
           "metric": {
             "type": "credits",
@@ -163,8 +163,8 @@
           "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         },
         {
-          "id": "kiro.credit-8",
-          "vendorId": "kiro",
+          "id": "openai.credit-8",
+          "vendorId": "openai",
           "label": "Credit 8",
           "metric": {
             "type": "credits",
