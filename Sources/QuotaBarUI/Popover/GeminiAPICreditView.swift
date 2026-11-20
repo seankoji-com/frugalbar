@@ -74,14 +74,15 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
         let fraction = min(max(elapsed, 0), 1)
         let percent = Int((fraction * 100).rounded())
 
-        let seconds = end.timeIntervalSince(now)
-        let days = max(0, seconds / 86_400).rounded(.up)
+        // Calendar days, not 24-hour periods: a fall-back month is 30 days
+        // plus an hour, and dividing its seconds by 86,400 rounded up said 31d.
+        let dayCount = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: end).day
         let countdown: String?
         let dayPhrase: String?
-        if days.isFinite, days < Double(Int.max) {
-            let count = Int(days)
-            countdown = "\(count)d"
-            dayPhrase = "\(count) day\(count == 1 ? "" : "s") left in the month"
+        if let dayCount, dayCount >= 0 {
+            countdown = "\(dayCount)d"
+            dayPhrase = "\(dayCount) day\(dayCount == 1 ? "" : "s") left in the month"
         } else {
             countdown = nil
             dayPhrase = nil

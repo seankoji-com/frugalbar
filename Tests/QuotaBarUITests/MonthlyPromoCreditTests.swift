@@ -208,6 +208,21 @@ struct MonthlyPromoCreditTests {
     /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo.
     /// Its grant issue date is not the subscription cycle start, so the row
     /// derives a calendar month ending at the subscription cycle end.
+    @Test("an unused OpenAI grant speaks one amount")
+    func unusedOpenAIGrantSpeech() throws {
+        let start = date("2026-10-19T00:25:31Z")
+        let end = date("2026-11-19T00:25:31Z")
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: 200, periodStart: start, periodEnd: end,
+            measuredAt: date("2026-11-09T00:25:31Z"))
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: credit.entry, now: date("2026-11-09T00:25:31Z"),
+            isStale: false, calendar: utc)
+        #expect(presentation.spoken.contains("$200.00 remaining"))
+        #expect(!presentation.spoken.contains("$200.00 of $200.00"))
+        #expect(presentation.spoken.components(separatedBy: "$200.00").count == 2)
+    }
+
     @Test("the OpenAI monthly grant uses the subscription month and draws in the row")
     @MainActor
     func openAIMonthlyCredit() throws {

@@ -84,8 +84,12 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
         var parts = [title, percentText.map { "\($0) used" } ?? "no reading"]
         if entry.vendorId == .openai,
            case .currency(let balance, let limit?, _, let code) = entry.metric {
-            parts.append("\(MoneyText.format(balance, code: code)) of "
-                + "\(MoneyText.format(limit, code: code)) remaining")
+            if balance == limit {
+                parts.append("\(MoneyText.format(balance, code: code)) remaining")
+            } else {
+                parts.append("\(MoneyText.format(balance, code: code)) of "
+                    + "\(MoneyText.format(limit, code: code)) remaining")
+            }
         }
         // The amount is a drawn figure now, so the row must speak it. OpenAI's
         // remaining sentence already names the limit; Claude's promo does not.

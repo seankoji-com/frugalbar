@@ -123,6 +123,19 @@ struct GeminiAPICreditPlacementTests {
             currencyCode: "AUD") == .none)
     }
 
+    @Test("the budget countdown counts calendar days across a fall-back month")
+    func budgetCountdownAcrossFallBack() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        // 1 Nov 2026 00:00 PDT; the month ends 1 Dec 00:00 PST, 30 days later
+        // plus one hour. Dividing seconds rounded that up to 31d.
+        let start = try #require(ISO8601DateFormatter().date(from: "2026-11-01T07:00:00Z"))
+        let p = try #require(GeminiAPICreditPresentation(
+            credit: try credit(), now: start, calendar: calendar))
+        #expect(p.budget.countdown == "30d")
+        #expect(p.budget.percentText == "0%")
+    }
+
     @Test("the budget meter follows the calendar month, including February")
     func budgetCalendarBoundaries() throws {
         var utc = Calendar(identifier: .gregorian)
