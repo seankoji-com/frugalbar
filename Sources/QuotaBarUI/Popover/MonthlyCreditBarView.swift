@@ -14,6 +14,8 @@ import QuotaBarCore
 /// than the quota state colours.
 public struct MonthlyCreditBarPresentation: Equatable, Sendable {
     public let title: String
+    /// The entitlement's own monthly amount in USD, e.g. "$200.00".
+    public let amountText: String
     /// Elapsed share of the billing month, 0…1. Nil when the next grant date
     /// is not published, or when that date is outside the current cycle; then
     /// no bar, percentage or countdown is drawn.
@@ -25,7 +27,9 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
     public let spoken: String
 
     public init(credit: ClaudeMonthlyCredit, now: Date, calendar: Calendar = .current) {
-        self.title = credit.line
+        self.title = "Monthly credit"
+        let amount = MoneyText.format(credit.amountUSD, code: "USD")
+        self.amountText = amount
         self.isStale = credit.refreshFailed
 
         var elapsed: Double?
@@ -49,7 +53,7 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
         self.percentText = elapsed.map { "\(Int(($0 * 100).rounded()))%" }
         self.countdown = countdown
 
-        var parts = [title]
+        var parts = ["\(amount) monthly credit"]
         if let percentText = self.percentText {
             parts.append("\(percentText) of the billing month elapsed")
         }
@@ -86,6 +90,11 @@ struct MonthlyCreditBarView: View {
                 Text(presentation.title)
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(presentation.amountText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 if presentation.isStale {
@@ -139,9 +148,10 @@ struct MonthlyCreditBarView: View {
 }
 
 /// A track and one informational fill. No pace tick and no state colour: the
-/// fill is time through the billing month, not a quota reading, so there is no
-/// "ahead of pace" verdict to draw.
-private struct MonthlyCycleBar: View {
+/// fill is time through a month, not a quota reading, so there is no "ahead of
+/// pace" verdict to draw. Shared by the linked Console credit meter and the
+/// configured Gemini API budget meter.
+struct MonthlyCycleBar: View {
     let fraction: Double
 
     var body: some View {

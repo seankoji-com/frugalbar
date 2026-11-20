@@ -12,6 +12,9 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
     /// API-organization grant, so the OpenAI row is not mistaken for the
     /// separate ChatGPT usage-credit count.
     let title: String
+    /// The credit's total in the account's own money, e.g. "$200.00". Nil when
+    /// the vendor published no positive limit; the row then draws no amount.
+    let amountText: String?
     let fraction: Double?
     let paceMarker: Double?
     /// "12d" — the reset countdown under the bar.
@@ -26,6 +29,11 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
 
     init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
         title = entry.vendorId == .openai ? "Monthly credit" : "Usage credits"
+        if case .currency(_, let limit?, _, let code) = entry.metric, limit > 0 {
+            amountText = MoneyText.format(limit, code: code)
+        } else {
+            amountText = nil
+        }
         if case .currency(let balance, let limit?, _, _) = entry.metric,
            limit > 0, balance >= 0 {
             let used = NSDecimalNumber(decimal: (limit - balance) / limit).doubleValue
@@ -76,10 +84,21 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
         var parts = [title, percentText.map { "\($0) used" } ?? "no reading"]
         if entry.vendorId == .openai,
            case .currency(let balance, let limit?, _, let code) = entry.metric {
-            parts.append("\(MoneyText.format(balance, code: code)) of "
-                + "\(MoneyText.format(limit, code: code)) remaining")
+            if balance == limit {
+                parts.append("\(MoneyText.format(balance, code: code)) remaining")
+            } else {
+                parts.append("\(MoneyText.format(balance, code: code)) of "
+                    + "\(MoneyText.format(limit, code: code)) remaining")
+            }
         }
-        if entry.vendorId == .openai, let detail = entry.detail { parts.append(detail) }
+        // The amount is a drawn figure now, so the row must speak it. OpenAI's
+        // remaining sentence already names the limit; Claude's promo does not.
+        if let amountText, !parts.contains(where: { $0.contains(amountText) }) {
+            parts.append("\(amountText) total")
+        }
+        // OpenAI's detail is the grant amount, which the amount line now draws
+        // and the remaining sentence already speaks. Do not repeat it; the
+        // stale marker comes from `isStale` below.
         if let resetText { parts.append(resetText.lowercased()) }
         if let paceMarker { parts.append("even-use marker at \(Int((paceMarker * 100).rounded())) percent of the month") }
         if isStale { parts.append("stale, the last poll failed") }
@@ -108,7 +127,14 @@ struct MonthlyPromoCreditView: View {
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
                     .lineLimit(1)
-                // Title only; the reset countdown lives on the right.
+                if let amountText = presentation.amountText {
+                    Text(amountText)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                // The reset countdown lives on the right.
             }
             .frame(width: Theme.nameColumnWidth, alignment: .leading)
 

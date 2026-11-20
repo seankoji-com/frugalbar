@@ -34,6 +34,8 @@ struct MonthlyPromoCreditTests {
         #expect(promo.extendsSubscription)
         #expect(snapshot.apiCredits.filter { !$0.extendsSubscription }.isEmpty)
         #expect(row.subscriptionCredits.isEmpty)
+        #expect(p.title == "Usage credits")
+        #expect(p.amountText == "$100.00")
         #expect(p.percentText == "100%")
         #expect(p.resetText == "Resets in 12 days")
         #expect(p.fraction == 1)
@@ -43,8 +45,10 @@ struct MonthlyPromoCreditTests {
         #expect(snapshot.consumptionFraction == 0.2)
         #expect(snapshot.displayBars.count == 1)
         #expect(snapshot.status == .measured(.none))
-        #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
-            .contains("Usage credits, 100% used, resets in 12 days"))
+        let label = row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+        #expect(label.contains("Usage credits, 100% used"))
+        #expect(label.contains("$100.00 total"))
+        #expect(label.contains("resets in 12 days"))
         snapshot.staleReading = StaleReading(reason: .offline, at: now)
         let stale = try #require(MetricRowPresentation(snapshot: snapshot, now: now).monthlyPromo)
         #expect(stale.fraction == p.fraction)
@@ -55,14 +59,17 @@ struct MonthlyPromoCreditTests {
     func missingPublishedFacts() {
         let uncapped = MonthlyPromoCreditPresentation(entry: entry(limit: nil, end: end), now: now, isStale: false)
         #expect(uncapped.fraction == nil)
+        #expect(uncapped.amountText == nil)
         #expect(uncapped.paceMarker == nil)
         #expect(uncapped.dayCountdown == "12d")
         let noDate = MonthlyPromoCreditPresentation(entry: entry(), now: now, isStale: false)
         #expect(noDate.fraction == 1)
+        #expect(noDate.amountText == "$100.00")
         #expect(noDate.paceMarker == nil)
         #expect(noDate.dayCountdown == nil)
         let noLimit = MonthlyPromoCreditPresentation(entry: entry(limit: 0, end: end), now: now, isStale: false)
         #expect(noLimit.fraction == nil)
+        #expect(noLimit.amountText == nil)
         #expect(noLimit.paceMarker == nil)
         for promo in [entry(limit: nil, end: end), entry(), entry(limit: 0, end: end)] {
             var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
@@ -201,6 +208,21 @@ struct MonthlyPromoCreditTests {
     /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo.
     /// Its grant issue date is not the subscription cycle start, so the row
     /// derives a calendar month ending at the subscription cycle end.
+    @Test("an unused OpenAI grant speaks one amount")
+    func unusedOpenAIGrantSpeech() throws {
+        let start = date("2026-10-19T00:25:31Z")
+        let end = date("2026-11-19T00:25:31Z")
+        let credit = OpenAIMonthlyCredit(
+            grantUSD: 200, remainingUSD: 200, periodStart: start, periodEnd: end,
+            measuredAt: date("2026-11-09T00:25:31Z"))
+        let presentation = MonthlyPromoCreditPresentation(
+            entry: credit.entry, now: date("2026-11-09T00:25:31Z"),
+            isStale: false, calendar: utc)
+        #expect(presentation.spoken.contains("$200.00 remaining"))
+        #expect(!presentation.spoken.contains("$200.00 of $200.00"))
+        #expect(presentation.spoken.components(separatedBy: "$200.00").count == 2)
+    }
+
     @Test("the OpenAI monthly grant uses the subscription month and draws in the row")
     @MainActor
     func openAIMonthlyCredit() throws {
@@ -217,6 +239,8 @@ struct MonthlyPromoCreditTests {
         #expect(entry.extendsSubscription)
         // The grant's issue date is not the billing cycle's start.
         #expect(entry.monthlyPeriodStart == nil)
+        #expect(presentation.title == "Monthly credit")
+        #expect(presentation.amountText == "$200.00")
         #expect(presentation.fraction == 0.75)
         #expect(presentation.percentText == "75%")
         #expect(presentation.resetText == "Resets in 10 days")
@@ -224,6 +248,9 @@ struct MonthlyPromoCreditTests {
         #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0)
         #expect(abs(try #require(presentation.paceMarker) - 21.0 / 31) < 0.00001)
         #expect(presentation.spoken.contains("$50.00 of $200.00 remaining"))
+        // The grant total appears once: the new amount line and the remaining
+        // sentence already name it, so the vendor detail must not repeat it.
+        #expect(presentation.spoken.components(separatedBy: "$200.00").count == 2)
 
         var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
             category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
@@ -241,6 +268,8 @@ struct MonthlyPromoCreditTests {
         #expect(snapshot.status == .measured(.none))
         #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
             .contains("Monthly credit, 75% used"))
+        let label = row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+        #expect(label.components(separatedBy: "$200.00").count == 2)
         // The billing read is independent: a quota outage does not make this
         // grant stale. Only the session's own failed refresh does.
         var quotaStale = snapshot

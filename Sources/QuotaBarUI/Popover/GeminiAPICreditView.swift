@@ -3,58 +3,99 @@ import QuotaBarCore
 
 /// Pure presentation for the configured Gemini API credit.
 ///
-/// Every figure is the one the user saved; nothing here is derived from a poll,
-/// divided into a cap or dressed as a percentage. The title says "Gemini API"
-/// rather than the Antigravity row's "Gemini" so it cannot read as part of the
-/// subscription quota beside it, and the note always says the figures were
-/// configured.
+/// The monthly spend cap is the only configured figure the popover draws. It
+/// becomes the account's API budget line, in the same anatomy as Codex's
+/// separate monthly credit: name column, one bar, percentage and countdown
+/// beneath. The prepaid balance and monthly grant stay in Settings because
+/// Google publishes them only in AI Studio; they are not drawn in the popover.
+/// The fill is elapsed calendar time, never spend: Google publishes no spend
+/// figure for a Gemini API key, and dividing the prepaid balance into the cap
+/// would mix a prepaid pool with a spend limit.
 public struct GeminiAPICreditPresentation: Equatable, Sendable {
 
-    /// One labelled money figure. The label is the one thing a bare amount
-    /// cannot say for itself: a balance, a recurring grant and a spend cap are
-    /// different money, and printing one under another's name is the
-    /// wrong-label defect.
-    public struct Figure: Equatable, Sendable, Identifiable {
-        public let label: String
-        public let figure: String
-        public var id: String { label }
+    /// The configured monthly spend cap, presented as the account's API
+    /// budget, with a meter for progress through the calendar month.
+    ///
+    /// `fraction` is time, not money: it is the elapsed share of the calendar
+    /// month containing `now`. Google publishes no spend figure for an API key,
+    /// so no percentage of the budget is claimed. The meter uses the
+    /// informational colour, never a quota state colour, and takes no part in
+    /// quota maths.
+    public struct Budget: Equatable, Sendable {
+        public static let title = "API budget"
+        /// The configured cap in the billing account's own money.
+        public let amountText: String
+        /// Elapsed share of the calendar month, 0…1.
+        public let fraction: Double
+        /// "65%" — the same elapsed share.
+        public let percentText: String
+        /// "11d" left in the month, or nil when the calendar cannot state it.
+        public let countdown: String?
+        /// The whole line in words, for the row's one accessibility element
+        /// and its tooltip. It says the fill is time and not spend.
+        public let spoken: String
     }
 
-    public static let title = "Gemini API credit"
-
-    public let figures: [Figure]
-    /// "Configured 20 Nov 2026" — the date the user saved the figures, because
-    /// a typed balance ages without a poll saying so.
-    public let configuredNote: String
+    public let budget: Budget
     /// The whole line in words, for the row's one accessibility element and
-    /// its tooltip. It names the figures as configured and explicitly says
-    /// they are not a vendor reading.
+    /// its tooltip. It names the saved date, because a configured figure ages
+    /// without a poll, and says it is not a vendor reading.
     public let spoken: String
 
-    public init(credit: GeminiAPICredit, calendar: Calendar = .current) {
-        var figures: [Figure] = []
-        if let balance = credit.prepaidBalance {
-            figures.append(Figure(label: "Prepaid balance",
-                figure: MoneyText.format(balance, code: credit.currencyCode)))
-        }
-        if let monthly = credit.monthlyCredit {
-            figures.append(Figure(label: "Monthly credit",
-                figure: MoneyText.format(monthly, code: credit.currencyCode)))
-        }
-        if let cap = credit.monthlySpendCap {
-            figures.append(Figure(label: "Monthly spend cap",
-                figure: MoneyText.format(cap, code: credit.currencyCode)))
-        }
-        self.figures = figures
-        self.configuredNote = "Configured \(Self.dateText(credit.configuredAt, month: .abbreviated, calendar: calendar))"
-
-        var parts = [
-            Self.title,
+    /// Nil when no spend cap was saved, or when the calendar month cannot be
+    /// resolved: there is then no line to draw, and the row must not speak one.
+    public init?(credit: GeminiAPICredit, now: Date = Date(), calendar: Calendar = .current) {
+        guard let budget = credit.monthlySpendCap.flatMap({
+            Self.budget(cap: $0, currencyCode: credit.currencyCode,
+                        now: now, calendar: calendar)
+        }) else { return nil }
+        self.budget = budget
+        self.spoken = [
+            budget.spoken,
             "configured \(Self.dateText(credit.configuredAt, month: .wide, calendar: calendar))",
             "not a vendor reading",
-        ]
-        parts += figures.map { "\($0.label) \($0.figure)" }
-        self.spoken = parts.joined(separator: ", ")
+        ].joined(separator: ", ")
+    }
+
+    /// The cap as a calendar-month meter. Returns nil when the month's bounds
+    /// cannot be resolved.
+    private static func budget(
+        cap: Decimal, currencyCode: String, now: Date, calendar: Calendar
+    ) -> Budget? {
+        guard cap > 0, now.timeIntervalSince1970.isFinite else { return nil }
+        let components = calendar.dateComponents([.year, .month], from: now)
+        guard let start = calendar.date(from: components),
+              let end = calendar.date(byAdding: .month, value: 1, to: start),
+              end > start else { return nil }
+        let length = end.timeIntervalSince(start)
+        guard length > 0 else { return nil }
+        let elapsed = now.timeIntervalSince(start) / length
+        guard elapsed.isFinite else { return nil }
+        let fraction = min(max(elapsed, 0), 1)
+        let percent = Int((fraction * 100).rounded())
+
+        // Calendar days, not 24-hour periods: a fall-back month is 30 days
+        // plus an hour, and dividing its seconds by 86,400 rounded up said 31d.
+        let dayCount = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: end).day
+        let countdown: String?
+        let dayPhrase: String?
+        if let dayCount, dayCount >= 0 {
+            countdown = "\(dayCount)d"
+            dayPhrase = "\(dayCount) day\(dayCount == 1 ? "" : "s") left in the month"
+        } else {
+            countdown = nil
+            dayPhrase = nil
+        }
+
+        let amount = MoneyText.format(cap, code: currencyCode)
+        var parts = ["API budget \(amount)",
+                     "\(percent)% of the calendar month elapsed"]
+        if let dayPhrase { parts.append(dayPhrase) }
+        parts.append("not spend, the fill is elapsed calendar time")
+        return Budget(amountText: amount, fraction: fraction,
+                      percentText: "\(percent)%", countdown: countdown,
+                      spoken: parts.joined(separator: ", "))
     }
 
     /// A value-style formatter, so rebuilding the row on hover does not allocate
@@ -73,43 +114,71 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
     }
 }
 
-/// The configured Gemini API credit, drawn under the Gemini row.
+/// The configured spend cap as its own monthly line under the Gemini row.
 ///
-/// No bar, no marker, no countdown and no state colour: those belong to a
-/// measured quota window, and this is neither. The enclosing provider row owns
-/// the accessibility element, so this view is decorative and the row's combined
-/// label speaks every figure.
+/// Same anatomy as Codex's separate monthly credit: name and amount in the
+/// name column, one bar, percentage and countdown beneath. The prepaid balance
+/// and monthly grant are not drawn here. The enclosing provider row owns the
+/// accessibility element, so this view is decorative and the row's combined
+/// label speaks the line.
 struct GeminiAPICreditView: View {
     let presentation: GeminiAPICreditPresentation
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                Text(GeminiAPICreditPresentation.title)
+        GeminiAPIBudgetView(budget: presentation.budget)
+            .help(presentation.spoken)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The configured cap as a monthly progress line.
+///
+/// The name and amount sit in the name column, the meter spans the grid, and
+/// the percentage and countdown sit beneath it. The "MO" token and the spoken
+/// label say the figure is month progress; without them a percentage under a
+/// budget title would read as budget spent.
+struct GeminiAPIBudgetView: View {
+    let budget: GeminiAPICreditPresentation.Budget
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.rowSpacing) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(GeminiAPICreditPresentation.Budget.title)
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant)
-                Text(presentation.configuredNote)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                    .lineLimit(1)
+                Text(budget.amountText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            ForEach(presentation.figures) { figure in
-                HStack(spacing: 8) {
-                    Text(figure.label)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
+            .frame(width: Theme.nameColumnWidth, alignment: .leading)
+
+            VStack(spacing: 4) {
+                MonthlyCycleBar(fraction: budget.fraction)
+                HStack(spacing: 2) {
+                    Text("MO")
+                        .font(Theme.Typography.token)
+                        .tracking(Theme.Tracking.token)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .padding(.trailing, 4)
+                    Text(budget.percentText)
+                        .font(Theme.Typography.gridPercent)
+                        .foregroundStyle(Theme.primary)
                     Spacer(minLength: 0)
-                    Text(figure.figure)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(Theme.onSurface)
+                    if let countdown = budget.countdown {
+                        Text(countdown)
+                            .font(Theme.Typography.gridReset)
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.78))
+                    }
                 }
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .minimumScaleFactor(0.8)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.top, 6)
-        .help(presentation.spoken)
+        .padding(.top, 8)
         .accessibilityHidden(true)
     }
 }

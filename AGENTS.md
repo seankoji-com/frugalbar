@@ -250,11 +250,18 @@ by every project and key on it. The Gemini API
 (`generativelanguage.googleapis.com`) has no billing operation and
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
-It is drawn under the Gemini row inside the Antigravity block and always says
-*configured* and the date it was saved; it draws no bar and no percentage, and
-its spend cap is a limit only, never a denominator for a balance whose usage was
-never measured. The balance may be negative: Google documents a billing lag that
-overdraws it, and `MoneyText` prints the sign outside the symbol. It is
+It is drawn under the Gemini row inside the Antigravity block as the **API
+budget** line, in the anatomy of Codex's separate monthly credit: name column,
+one bar, and a percentage and countdown beneath. The prepaid balance and
+monthly grant stay in Settings and are not drawn. The line always says
+*configured* and the date it was saved in its tooltip. Its fill is **elapsed
+calendar time**, never spend: no documented API returns an API key's spend, and
+dividing the prepaid balance into the cap would mix a prepaid pool with a spend
+limit. The line shows "MO 63%", and its tooltip and spoken label say "63% of
+the calendar month elapsed". It uses the informational colour, draws no quota
+pace marker, and takes no part in quota maths. The balance may be negative:
+Google documents a billing lag that overdraws it, and `MoneyText` prints the
+sign outside the symbol. It is
 deliberately **not** an `APICreditEntry`: that rides a
 snapshot's measured fetch and `BalanceSeries` charts every entry, so carrying it
 there would record a typed number as balance history. Amount fields accept one
@@ -467,7 +474,8 @@ rounding is display-only: no balance, series or quota figure is altered.
 **The Claude promo credit is drawn in the window anatomy, not as a second
 kind of row.** It has a published limit, so `MonthlyPromoCreditView` draws it
 with the same name/bar/percentage/countdown alignment as a window cell:
-"Usage credits", the bar, the percentage and the day countdown. It is still not
+"Usage credits", the amount beneath the title when a positive limit is
+published, the bar, the percentage and the day countdown. It is still not
 quota: no snapshot fraction, urgency, sorting or advice reads it. The visible
 "Resets in N days" subtitle is deliberately not drawn anywhere in the popover;
 the compact countdown on the right is the only reset-style figure.
@@ -484,8 +492,8 @@ billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
 above and not a balance or quota. The billing client reads that amount with
 `Number(value)`, so the decoder accepts both a JSON number and a numeric string;
 accepting only `String?` silently dropped a live entitlement. It draws under the
-row as "$X monthly credit" (through `MoneyText.format`, so a whole USD amount
-keeps its cents) with an `MO` meter.
+row as a **Monthly credit** line with the amount beneath the title (through
+`MoneyText.format`, so a whole USD amount keeps its cents) and an `MO` meter.
 
 **That meter is billing-cycle progress, never API spend.** The linked payload
 publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills
