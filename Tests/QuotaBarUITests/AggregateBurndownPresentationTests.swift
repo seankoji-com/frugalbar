@@ -382,6 +382,14 @@ struct AggregateBurndownPresentationTests {
         let spoken = P.headroomAccessibilityLabel(open, now: now)
         #expect(spoken == "OpenCode WK window, 60 percent remaining")
         #expect(!spoken.contains("blocked"))
+
+        let balance = headroom(DualBarMetrics(
+            primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits"))
+        #expect(balance.remainingFraction == nil)
+        #expect(balance.unmeasuredText == "$12.50")
+        #expect(P.headroomAccessibilityLabel(balance, now: now)
+            == "OpenCode MO window, $12.50 remaining, no percentage")
     }
 
     // MARK: - Two instances of one vendor

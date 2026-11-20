@@ -108,6 +108,18 @@ struct OverviewPresentationTests {
         #expect(text.contains("5-hour blocked"))
     }
 
+    @Test("a published balance with no percentage is spoken, and the bar stays empty")
+    func balanceSpoken() {
+        let balance = DualBarMetrics(
+            primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+        let tile = O.tiles(snapshots: [snapshot(.commandcode, bars: [balance])], filters: WidgetFilters())[0]
+        #expect(tile.windows[0].fraction == nil)
+        #expect(tile.windows[0].unmeasuredText == "$12.50")
+        #expect(O.accessibilityLabel(for: tile, metric: .remaining, now: now)
+            .contains("monthly $12.50 remaining, no percentage"))
+    }
+
     @Test("layout decodes tolerantly, round-trips, and shows in the title")
     func layoutCoding() throws {
         // Tokens is the default layout; anything unreadable or unset gets it.

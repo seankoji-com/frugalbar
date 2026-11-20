@@ -1388,6 +1388,8 @@ struct CommandCodeQuotaProviderTests {
 
         #expect(credits.primaryFraction == nil)
         #expect(credits.usedText?.contains("12.50") == true)
+        #expect(credits.balanceCaption == "$12.50")
+        #expect(credits.quantityUnit == "credits")
         // A text-only row must not count as spent.
         #expect(credits.primaryFractionForWorstBarRanking == -1)
     }
@@ -1398,6 +1400,7 @@ struct CommandCodeQuotaProviderTests {
         #expect(CommandCodeQuotaProvider.planAllowance("individual-provider") == nil)
         let credits = try #require(try snapshot(Self.body(planId: "individual-provider")).row3)
         #expect(credits.primaryFraction == nil)
+        #expect(credits.balanceCaption == "$60.00")
     }
 
     @Test("purchased and free credits widen the denominator")

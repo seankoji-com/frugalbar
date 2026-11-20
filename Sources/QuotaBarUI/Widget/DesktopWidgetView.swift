@@ -545,7 +545,7 @@ struct DesktopWidgetView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 } else {
-                    Text(window.isBlocked ? "blocked" : "—")
+                    Text(window.unmeasuredText)
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
                 }
@@ -608,7 +608,7 @@ struct DesktopWidgetView: View {
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
             } else {
-                Text(item.isBlocked ? "blocked" : "—")
+                Text(item.unmeasuredText)
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
             }

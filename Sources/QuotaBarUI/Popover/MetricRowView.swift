@@ -541,12 +541,7 @@ struct MetricRowView: View {
                     // column, and the shared scale factor truncated the
                     // figure to "10…" (design-loop sol-16).
                     if !WindowGridPresentation.isExhausted(bar) {
-                        Text(WindowGridPresentation.visiblePercentText(for: bar)
-                             ?? WindowGridPresentation.unmeasuredText(for: bar))
-                        .font(Theme.Typography.gridPercent)
-                        .foregroundStyle(DualBarProgressView.stateColor(for: bar))
-                        .fixedSize()
-                        .layoutPriority(1)
+                        cellFigure(bar)
                     }
                     Spacer(minLength: 0)
                     if let reset = grid.compactReset(for: column) {
@@ -603,6 +598,22 @@ struct MetricRowView: View {
         .accessibilityHidden(true)
     }
 
+    /// A percentage, "Blocked" or a dash keeps its full width, as before.
+    /// A balance is longer than the column, so it may scale instead of
+    /// truncating to "$1…".
+    private func cellFigure(_ bar: DualBarMetrics) -> some View {
+        let figure = WindowGridPresentation.visiblePercentText(for: bar)
+            ?? WindowGridPresentation.unmeasuredText(for: bar)
+        let balance = figure.count > 4
+        return Text(figure)
+            .font(Theme.Typography.gridPercent)
+            .foregroundStyle(DualBarProgressView.stateColor(for: bar))
+            .lineLimit(1)
+            .minimumScaleFactor(balance ? 0.6 : 1)
+            .fixedSize(horizontal: !balance, vertical: true)
+            .layoutPriority(1)
+    }
+
     private func scopedMeter(_ bar: DualBarMetrics, now: Date,
                              token: String = WindowColumn.weekly.label) -> some View {
         VStack(spacing: 4) {
@@ -618,12 +629,7 @@ struct MetricRowView: View {
                     BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
                 }
                 if !WindowGridPresentation.isExhausted(bar) {
-                    Text(WindowGridPresentation.visiblePercentText(for: bar)
-                         ?? WindowGridPresentation.unmeasuredText(for: bar))
-                    .font(Theme.Typography.gridPercent)
-                    .foregroundStyle(DualBarProgressView.stateColor(for: bar))
-                    .fixedSize()
-                    .layoutPriority(1)
+                    cellFigure(bar)
                 }
                 Spacer(minLength: 0)
                 if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {

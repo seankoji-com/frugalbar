@@ -25,6 +25,14 @@ public enum OverviewPresentation {
         /// Blocked by the vendor yet reporting a figure: colour alone would
         /// carry that, so a glyph sits beside the percentage.
         public var showsBlockedGlyph: Bool { isBlocked && fraction != nil }
+
+        /// The words under a window that has no percentage: a published
+        /// balance, "blocked", or a dash. The widget keeps the lowercase
+        /// "blocked" it already used.
+        public var unmeasuredText: String {
+            if isBlocked { return "blocked" }
+            return metrics.balanceCaption ?? "—"
+        }
     }
 
     public struct Tile: Identifiable, Sendable, Equatable {
@@ -134,8 +142,12 @@ public enum OverviewPresentation {
                 // Blocked by the vendor yet reporting a figure: the bar wears
                 // the blocked colour, so say it too.
                 if window.isBlocked { text += ", blocked" }
+            } else if window.isBlocked {
+                text += " blocked"
+            } else if let balance = window.metrics.balanceCaption {
+                text += " \(balance) remaining, no percentage"
             } else {
-                text += window.isBlocked ? " blocked" : " no reading"
+                text += " no reading"
             }
             if window.resetsAt != nil {
                 text += ", \(ResetCountdownBadge.description(window.resetsAt, now: now).lowercased())"

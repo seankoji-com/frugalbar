@@ -304,6 +304,28 @@ public struct DualBarMetrics: Sendable, Equatable {
     public var quantityLimit: Decimal?
     public var quantityUnit: String?
 
+    /// A balance the vendor published for a bar that has no percentage.
+    ///
+    /// The popover prints this in the cell instead of a dash. A bar with a
+    /// fraction keeps its percentage. A bar the vendor blocked keeps "Blocked".
+    /// USD uses `MoneyText`. Command Code's remaining-only export keeps
+    /// `quantityUnit` as "credits", and those credits are already priced in
+    /// dollars, so the cell uses the same USD formatter as `usedText`. Any
+    /// other unit stays in the tooltip.
+    public var balanceCaption: String? {
+        guard primaryFraction == nil, !isBlocked, let quantityRemaining else { return nil }
+        switch quantityUnit {
+        case "USD":
+            return MoneyText.format(quantityRemaining, code: "USD")
+        case "credits":
+            // Command Code prices credits in dollars and already formats
+            // `usedText` through `MoneyText`. The export unit stays "credits".
+            return MoneyText.format(quantityRemaining, code: "USD")
+        default:
+            return nil
+        }
+    }
+
     public init(
         primaryFraction: Double?,
         expectedPaceFraction: Double? = nil,
