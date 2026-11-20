@@ -108,7 +108,8 @@ struct WindowGridPresentationTests {
         #expect(WindowGridPresentation.unmeasuredText(for: bar("5H", nil)) == "—")
         let balance = DualBarMetrics(
             primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
-            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits",
+            balanceText: "$12.50")
         #expect(WindowGridPresentation.unmeasuredText(for: balance) == "$12.50")
         let blockedBalance = DualBarMetrics(
             primaryFraction: nil, label: "MO", isBlocked: true,

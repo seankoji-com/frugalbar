@@ -472,7 +472,7 @@ struct MetricRowView: View {
                 gridCell(sole, grid: grid, showsToken: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if grid.usesGrid {
-                HStack(alignment: .center, spacing: Theme.gridColumnSpacing) {
+                HStack(alignment: .top, spacing: Theme.gridColumnSpacing) {
                     ForEach(WindowColumn.allCases) { column in
                         gridCell(column, grid: grid)
                             .frame(maxWidth: .infinity)

@@ -98,7 +98,8 @@ struct MetricDetailPresentationTests {
     func balanceWithoutPercentage() {
         let balance = DualBarMetrics(
             primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
-            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits",
+            balanceText: "$12.50")
         let p = MetricDetailPresentation(
             snapshot: snapshot(status: .measured(.critical), bars: [balance]), now: now)
         #expect(p.windows.first?.percentText == nil)

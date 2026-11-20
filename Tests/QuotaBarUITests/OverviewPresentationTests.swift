@@ -112,7 +112,8 @@ struct OverviewPresentationTests {
     func balanceSpoken() {
         let balance = DualBarMetrics(
             primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
-            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits",
+            balanceText: "$12.50")
         let tile = O.tiles(snapshots: [snapshot(.commandcode, bars: [balance])], filters: WidgetFilters())[0]
         #expect(tile.windows[0].fraction == nil)
         #expect(tile.windows[0].unmeasuredText == "$12.50")

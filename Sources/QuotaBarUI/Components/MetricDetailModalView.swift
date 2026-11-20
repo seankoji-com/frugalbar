@@ -523,8 +523,10 @@ public struct MetricDetailModalView: View {
                                 .font(Theme.Typography.gridPercent)
                                 .foregroundStyle(line.percentText == nil
                                                  ? Theme.outline : DualBarProgressView.stateColor(for: line.metrics))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
                         }
-                        .frame(width: 62, alignment: .trailing)
+                        .frame(minWidth: 62, alignment: .trailing)
                     }
                     if !line.detail.isEmpty {
                         Text(line.detail)
