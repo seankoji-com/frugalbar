@@ -281,7 +281,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     static func windowLine(_ bar: DualBarMetrics, isCurrent: Bool = true, now: Date) -> WindowLine {
         let percent = bar.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
         let percentText = percent.map { "\($0)%" }
-        let noFigure: String? = percent != nil ? nil : (bar.isBlocked ? "Blocked" : "No figure")
+        let noFigure: String? = percent != nil ? nil : (bar.isBlocked ? "Blocked" : (bar.balanceCaption ?? "No figure"))
 
         var parts: [String] = []
         if bar.measuresElapsedTimeOnly {
@@ -309,6 +309,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         var spoken = [bar.measuresElapsedTimeOnly ? "\(name) cycle" : "\(name) window"]
         if let percent {
             spoken.append(bar.measuresElapsedTimeOnly ? "\(percent) percent elapsed" : "\(percent) percent used")
+        } else if bar.isBlocked {
+            spoken.append("blocked")
+        } else if let balance = bar.balanceCaption {
+            spoken.append("\(balance) remaining, no percentage")
         } else if let noFigure {
             spoken.append(noFigure.lowercased())
         }

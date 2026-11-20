@@ -545,9 +545,11 @@ struct DesktopWidgetView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 } else {
-                    Text(window.isBlocked ? "blocked" : "—")
-                        .font(.system(size: 10))
+                    Text(window.unmeasuredText)
+                        .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 // When it comes back, as in the popover's grid: a spent or
                 // blocked tile otherwise answered "how much" but not "until
@@ -608,9 +610,11 @@ struct DesktopWidgetView: View {
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
             } else {
-                Text(item.isBlocked ? "blocked" : "—")
-                    .font(.system(size: 10.5))
+                Text(item.unmeasuredText)
+                    .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.7))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             if item.resetsAt != nil {
                 Text(ResetCountdownBadge.format(item.resetsAt, now: now))

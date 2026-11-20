@@ -214,11 +214,19 @@ public enum AggregateBurndownPresentation {
         public let urgency: Urgency
         public let isBlocked: Bool
         public let status: ProviderStatus
+        /// A balance published for a window that has no percentage.
+        public let balanceCaption: String?
 
         /// Blocked by the vendor yet reporting a figure: the bar is drawn in
         /// the error colour either way, so a glyph beside the percentage is
         /// what tells a blocked window from a merely low one.
         public var showsBlockedGlyph: Bool { isBlocked && remainingFraction != nil }
+
+        /// The words beside a window that has no percentage.
+        public var unmeasuredText: String {
+            if isBlocked { return "blocked" }
+            return balanceCaption ?? "—"
+        }
 
         public init(
             instanceID: String,
@@ -229,7 +237,8 @@ public enum AggregateBurndownPresentation {
             resetsAt: Date?,
             urgency: Urgency,
             isBlocked: Bool,
-            status: ProviderStatus
+            status: ProviderStatus,
+            balanceCaption: String? = nil
         ) {
             self.instanceID = instanceID
             self.vendorId = vendorId
@@ -240,6 +249,7 @@ public enum AggregateBurndownPresentation {
             self.urgency = urgency
             self.isBlocked = isBlocked
             self.status = status
+            self.balanceCaption = balanceCaption
         }
 
         /// Convenience for a single-instance vendor.
@@ -629,7 +639,8 @@ public enum AggregateBurndownPresentation {
                 resetsAt: bar.resetsAt,
                 urgency: snapshot.status.urgency,
                 isBlocked: bar.isBlocked,
-                status: snapshot.status
+                status: snapshot.status,
+                balanceCaption: measured ? bar.balanceCaption : nil
             )
         }
     }
@@ -645,8 +656,12 @@ public enum AggregateBurndownPresentation {
         if let fraction = item.remainingFraction {
             label += ", \(Int((fraction * 100).rounded())) percent remaining"
             if item.isBlocked { label += ", blocked" }
+        } else if item.isBlocked {
+            label += ", blocked"
+        } else if let balance = item.balanceCaption {
+            label += ", \(balance) remaining, no percentage"
         } else {
-            label += item.isBlocked ? ", blocked" : ", no reading"
+            label += ", no reading"
         }
         if item.resetsAt != nil {
             label += ". \(ResetCountdownBadge.description(item.resetsAt, now: now))"

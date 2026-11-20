@@ -101,15 +101,33 @@ struct WindowGridPresentationTests {
         #expect(grid.soleColumn == nil)
     }
 
-    @Test("an unmeasured cell says blocked or shows a dash, never 0%")
+    @Test("an unmeasured cell says blocked, a published balance, or a dash, never 0%")
     func unmeasuredText() {
         #expect(WindowGridPresentation.percentText(for: bar("5H", nil, blocked: true)) == nil)
         #expect(WindowGridPresentation.unmeasuredText(for: bar("5H", nil, blocked: true)) == "Blocked")
         #expect(WindowGridPresentation.unmeasuredText(for: bar("5H", nil)) == "—")
+        let balance = DualBarMetrics(
+            primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits",
+            balanceText: "$12.50")
+        #expect(WindowGridPresentation.unmeasuredText(for: balance) == "$12.50")
+        let blockedBalance = DualBarMetrics(
+            primaryFraction: nil, label: "MO", isBlocked: true,
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+        #expect(WindowGridPresentation.unmeasuredText(for: blockedBalance) == "Blocked")
+        let otherUnit = DualBarMetrics(
+            primaryFraction: nil, label: "MO",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "pts/hr")
+        #expect(otherUnit.balanceCaption == nil)
+        #expect(WindowGridPresentation.unmeasuredText(for: otherUnit) == "—")
+        let creditCount = DualBarMetrics(
+            primaryFraction: nil, label: "MO",
+            quantityRemaining: Decimal(500), quantityUnit: "credits")
+        #expect(creditCount.balanceCaption == nil)
         #expect(WindowGridPresentation.percentText(for: bar("5H", 0.425)) == "43%")
         #expect(WindowGridPresentation.percentText(for: bar("5H", 0)) == "0%")
-        let grid = WindowGridPresentation(snapshot: snap([bar("5H", nil, blocked: true), bar("WK", nil)]))
-        #expect(grid.spokenSummary() == "5-hour blocked, weekly no reading")
+        let grid = WindowGridPresentation(snapshot: snap([bar("5H", nil, blocked: true), bar("WK", nil), balance]))
+        #expect(grid.spokenSummary() == "5-hour blocked, weekly no reading, monthly $12.50 remaining, no percentage")
     }
 
     /// One spend window and nothing else is the same sparse case the bars'

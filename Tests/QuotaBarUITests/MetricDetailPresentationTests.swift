@@ -94,6 +94,20 @@ struct MetricDetailPresentationTests {
         #expect(p.windows.first?.noFigureText == "Blocked")
     }
 
+    @Test("a balance with no percentage is the figure, and invents no share")
+    func balanceWithoutPercentage() {
+        let balance = DualBarMetrics(
+            primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits",
+            balanceText: "$12.50")
+        let p = MetricDetailPresentation(
+            snapshot: snapshot(status: .measured(.critical), bars: [balance]), now: now)
+        #expect(p.windows.first?.percentText == nil)
+        #expect(p.windows.first?.noFigureText == "$12.50")
+        #expect(p.windows.first?.accessibilityLabel.contains("$12.50 remaining, no percentage") == true)
+        #expect(p.summary.percentUsed == nil)
+    }
+
     @Test("a blocked window that still reports a percentage leads as blocked, not as low")
     func blockedWithReading() {
         let blocked = weekly(used: 0.97, elapsed: 0.5, isBlocked: true)

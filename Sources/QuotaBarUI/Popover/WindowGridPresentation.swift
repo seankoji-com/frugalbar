@@ -135,8 +135,12 @@ public struct WindowGridPresentation: Equatable, Sendable {
     }
 
     /// The words for a bar with no fraction.
+    ///
+    /// A published balance prints in the cell. A blocked window says so. A
+    /// window with neither stays a dash, which means "not published".
     public static func unmeasuredText(for bar: DualBarMetrics) -> String {
-        bar.isBlocked ? "Blocked" : "—"
+        if bar.isBlocked { return "Blocked" }
+        return bar.balanceCaption ?? "—"
     }
 
     /// Everything the grid draws, in words, for the row label: "5-hour 42%
@@ -156,8 +160,12 @@ public struct WindowGridPresentation: Equatable, Sendable {
                 // it was used (OpenCode Go does). The bar then wears the
                 // vendor's blocked colour, which is colour alone: say it.
                 if bar.isBlocked { text += ", blocked" }
+            } else if bar.isBlocked {
+                text = "\(name) blocked"
+            } else if let balance = bar.balanceCaption {
+                text = "\(name) \(balance) remaining, no percentage"
             } else {
-                text = "\(name) \(bar.isBlocked ? "blocked" : "no reading")"
+                text = "\(name) no reading"
             }
             guard isColumn else { return text }
             // The amber fill, in words. `isMeaningfullyAheadOfPace` already

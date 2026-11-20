@@ -1388,6 +1388,9 @@ struct CommandCodeQuotaProviderTests {
 
         #expect(credits.primaryFraction == nil)
         #expect(credits.usedText?.contains("12.50") == true)
+        #expect(credits.balanceCaption == "$12.50")
+        #expect(credits.balanceText == "$12.50")
+        #expect(credits.quantityUnit == "credits")
         // A text-only row must not count as spent.
         #expect(credits.primaryFractionForWorstBarRanking == -1)
     }
@@ -1398,6 +1401,7 @@ struct CommandCodeQuotaProviderTests {
         #expect(CommandCodeQuotaProvider.planAllowance("individual-provider") == nil)
         let credits = try #require(try snapshot(Self.body(planId: "individual-provider")).row3)
         #expect(credits.primaryFraction == nil)
+        #expect(credits.balanceCaption == "$60.00")
     }
 
     @Test("purchased and free credits widen the denominator")
@@ -1521,6 +1525,16 @@ struct CommandCodeQuotaProviderTests {
         #expect(snap.row2 == nil)
         #expect(snap.row3?.primaryFraction == nil)
         #expect(snap.row3?.usedText?.contains("3.00") == true)
+        #expect(snap.row3?.balanceCaption == "$3.00")
+        #expect(snap.row3?.quantityUnit == "credits")
+    }
+
+    @Test("a spent remaining-only balance prints $0.00, not a dash or a negative")
+    func creditsOnlyAtZero() throws {
+        let snap = try snapshot(#"{"credits":{"monthlyCredits":0,"purchasedCredits":0,"freeCredits":0}}"#)
+        #expect(snap.row3?.usedText == "No credits left")
+        #expect(snap.row3?.balanceCaption == "$0.00")
+        #expect(snap.row3?.primaryFraction == nil)
     }
 
     @Test("a payload publishing no figure at all is not rendered as healthy")

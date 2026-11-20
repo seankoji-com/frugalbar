@@ -38,7 +38,7 @@ struct ProviderQuantityFillTests {
         #expect(labels == [
             "primaryFraction", "expectedPaceFraction", "secondaryFraction", "label", "blockedColor", "isBlocked",
             "measuresElapsedTimeOnly", "usedText", "resetText", "resetsAt", "windowLength",
-            "quantityUsed", "quantityRemaining", "quantityLimit", "quantityUnit",
+            "quantityUsed", "quantityRemaining", "quantityLimit", "quantityUnit", "balanceText",
         ])
     }
 

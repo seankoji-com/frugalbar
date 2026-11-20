@@ -304,6 +304,21 @@ public struct DualBarMetrics: Sendable, Equatable {
     public var quantityLimit: Decimal?
     public var quantityUnit: String?
 
+    /// A balance the vendor published for a bar that has no percentage.
+    ///
+    /// The popover prints this in the cell instead of a dash. A bar with a
+    /// fraction keeps its percentage. A bar the vendor blocked keeps "Blocked".
+    /// Only a USD figure is money. A credit count is not converted: Command
+    /// Code sets `balanceText` on the one row whose credits are already priced
+    /// in dollars, and the export unit stays "credits".
+    public var balanceText: String?
+    public var balanceCaption: String? {
+        guard primaryFraction == nil, !isBlocked else { return nil }
+        if let balanceText { return balanceText }
+        guard let quantityRemaining, quantityUnit == "USD" else { return nil }
+        return MoneyText.format(quantityRemaining, code: "USD")
+    }
+
     public init(
         primaryFraction: Double?,
         expectedPaceFraction: Double? = nil,
@@ -319,7 +334,8 @@ public struct DualBarMetrics: Sendable, Equatable {
         quantityUsed: Decimal? = nil,
         quantityRemaining: Decimal? = nil,
         quantityLimit: Decimal? = nil,
-        quantityUnit: String? = nil
+        quantityUnit: String? = nil,
+        balanceText: String? = nil
     ) {
         self.primaryFraction = primaryFraction
         self.expectedPaceFraction = expectedPaceFraction
@@ -336,6 +352,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.quantityRemaining = quantityRemaining
         self.quantityLimit = quantityLimit
         self.quantityUnit = quantityUnit
+        self.balanceText = balanceText
     }
 
     /// Difference between actual consumption and pro-rata expected target, or
