@@ -494,8 +494,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
                 // A blocked window can still carry a percentage; the visual
                 // row draws a BlockedGlyph, so the spoken form must say it too.
                 if bar.isBlocked { parts.append("blocked") }
+            } else if bar.isBlocked {
+                parts.append("blocked")
+            } else if let balance = bar.balanceCaption {
+                parts.append("\(balance) remaining, no percentage")
             } else {
-                parts.append(bar.isBlocked ? "blocked" : "no reading")
+                parts.append("no reading")
             }
             if let reset = ResetCountdownBadge.compactSpoken(bar.resetsAt, now: now) {
                 parts.append(reset)

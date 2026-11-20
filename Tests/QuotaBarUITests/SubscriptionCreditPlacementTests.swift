@@ -281,6 +281,17 @@ struct SubscriptionCreditPlacementTests {
         #expect(p.scopedSpeech?.contains("blocked") == true)
     }
 
+    @Test("a scoped bar with a published balance speaks that balance")
+    func scopedBalanceSpeech() {
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        snapshot.scopedBars = [DualBarMetrics(
+            primaryFraction: nil, label: "Fable", balanceText: "$12.50")]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.scopedSpeech == "Fable weekly $12.50 remaining, no percentage")
+    }
+
     @Test("other credit pools remain separate and missing credits draw nothing")
     func otherPoolsRemainSeparate() {
         let credit = APICreditEntry(id: "claude.extra-usage", vendorId: .claude,

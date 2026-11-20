@@ -599,12 +599,12 @@ struct MetricRowView: View {
     }
 
     /// A percentage, "Blocked" or a dash keeps its full width, as before.
-    /// A balance is longer than the column, so it may scale instead of
-    /// truncating to "$1…".
+    /// A published balance is longer than the column, so it may scale
+    /// instead of truncating to "$1…".
     private func cellFigure(_ bar: DualBarMetrics) -> some View {
         let figure = WindowGridPresentation.visiblePercentText(for: bar)
             ?? WindowGridPresentation.unmeasuredText(for: bar)
-        let balance = figure.count > 4
+        let balance = bar.balanceCaption != nil
         return Text(figure)
             .font(Theme.Typography.gridPercent)
             .foregroundStyle(DualBarProgressView.stateColor(for: bar))

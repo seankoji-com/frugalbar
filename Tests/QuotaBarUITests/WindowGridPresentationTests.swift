@@ -114,6 +114,15 @@ struct WindowGridPresentationTests {
             primaryFraction: nil, label: "MO", isBlocked: true,
             quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
         #expect(WindowGridPresentation.unmeasuredText(for: blockedBalance) == "Blocked")
+        let otherUnit = DualBarMetrics(
+            primaryFraction: nil, label: "MO",
+            quantityRemaining: Decimal(string: "12.5"), quantityUnit: "pts/hr")
+        #expect(otherUnit.balanceCaption == nil)
+        #expect(WindowGridPresentation.unmeasuredText(for: otherUnit) == "—")
+        let creditCount = DualBarMetrics(
+            primaryFraction: nil, label: "MO",
+            quantityRemaining: Decimal(500), quantityUnit: "credits")
+        #expect(creditCount.balanceCaption == nil)
         #expect(WindowGridPresentation.percentText(for: bar("5H", 0.425)) == "43%")
         #expect(WindowGridPresentation.percentText(for: bar("5H", 0)) == "0%")
         let grid = WindowGridPresentation(snapshot: snap([bar("5H", nil, blocked: true), bar("WK", nil), balance]))

@@ -197,12 +197,14 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         guard let credits, let remaining = credits.remainingCredits else { return nil }
 
         guard let allowance = planAllowance(credits.planId), allowance > 0 else {
+            let caption = remaining > 0 ? money(remaining) : money(0)
             return DualBarMetrics(
                 primaryFraction: nil,
                 label: "MO",
-                usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left",
+                usedText: remaining > 0 ? "\(caption) credits left" : "No credits left",
                 quantityRemaining: Decimal(remaining),
-                quantityUnit: "credits"
+                quantityUnit: "credits",
+                balanceText: caption
             )
         }
 

@@ -308,22 +308,15 @@ public struct DualBarMetrics: Sendable, Equatable {
     ///
     /// The popover prints this in the cell instead of a dash. A bar with a
     /// fraction keeps its percentage. A bar the vendor blocked keeps "Blocked".
-    /// USD uses `MoneyText`. Command Code's remaining-only export keeps
-    /// `quantityUnit` as "credits", and those credits are already priced in
-    /// dollars, so the cell uses the same USD formatter as `usedText`. Any
-    /// other unit stays in the tooltip.
+    /// Only a USD figure is money. A credit count is not converted: Command
+    /// Code sets `balanceText` on the one row whose credits are already priced
+    /// in dollars, and the export unit stays "credits".
+    public var balanceText: String?
     public var balanceCaption: String? {
-        guard primaryFraction == nil, !isBlocked, let quantityRemaining else { return nil }
-        switch quantityUnit {
-        case "USD":
-            return MoneyText.format(quantityRemaining, code: "USD")
-        case "credits":
-            // Command Code prices credits in dollars and already formats
-            // `usedText` through `MoneyText`. The export unit stays "credits".
-            return MoneyText.format(quantityRemaining, code: "USD")
-        default:
-            return nil
-        }
+        guard primaryFraction == nil, !isBlocked else { return nil }
+        if let balanceText { return balanceText }
+        guard let quantityRemaining, quantityUnit == "USD" else { return nil }
+        return MoneyText.format(quantityRemaining, code: "USD")
     }
 
     public init(
@@ -341,7 +334,8 @@ public struct DualBarMetrics: Sendable, Equatable {
         quantityUsed: Decimal? = nil,
         quantityRemaining: Decimal? = nil,
         quantityLimit: Decimal? = nil,
-        quantityUnit: String? = nil
+        quantityUnit: String? = nil,
+        balanceText: String? = nil
     ) {
         self.primaryFraction = primaryFraction
         self.expectedPaceFraction = expectedPaceFraction
@@ -358,6 +352,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.quantityRemaining = quantityRemaining
         self.quantityLimit = quantityLimit
         self.quantityUnit = quantityUnit
+        self.balanceText = balanceText
     }
 
     /// Difference between actual consumption and pro-rata expected target, or
