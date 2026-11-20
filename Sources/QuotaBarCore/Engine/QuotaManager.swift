@@ -17,6 +17,7 @@ public actor QuotaManager {
             vendor == .devpass ? nil : SubscriptionCycleStore.cycle(for: vendor)
         },
         displayPreferences: { CredentialStore.providerDisplayPreferences },
+        geminiCreditLookup: { GeminiAPICreditStore.load() },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
 
@@ -35,6 +36,11 @@ public actor QuotaManager {
     private let claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
+    /// The configured Gemini API credit, read on every snapshot read rather
+    /// than stored in the cache: it is user-typed data, so a preference change
+    /// takes effect without a poll, and a cached reading can never present an
+    /// old figure as the current one.
+    private let geminiCreditLookup: @Sendable () -> GeminiAPICredit?
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
     private let monthlyCreditConnection: @Sendable () async -> String?
     private var monthlyCreditInvalidation = 0
@@ -87,6 +93,10 @@ public actor QuotaManager {
         // canonical order and reads no preference store, so a test sees
         // exactly the providers its factory serves.
         displayPreferences: @escaping @Sendable () -> ProviderDisplayPreferences = { .default },
+        // Also like `cycleLookup`: no test should observe (or race against)
+        // the process-wide preference store unless it injects one. `.shared`
+        // opts into the live store above.
+        geminiCreditLookup: @escaping @Sendable () -> GeminiAPICredit? = { nil },
         // Only the live manager opts into account discovery. Test factories
         // retain full control and never read ambient credentials or preferences.
         claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
@@ -103,6 +113,7 @@ public actor QuotaManager {
         self.claudeProviderFactory = claudeProviderFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
+        self.geminiCreditLookup = geminiCreditLookup
         self.monthlyCreditConnection = monthlyCreditConnection
     }
 
@@ -183,7 +194,26 @@ public actor QuotaManager {
     /// fresh-cache fast path cannot return a provider the user just hid.
     private func visibleCache() -> [String: QuotaSnapshot] {
         let hidden = displayPreferences().hidden
-        return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }.mapValues(\.snapshot)
+        let credit = geminiCreditLookup()
+        return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }
+            .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit) }
+    }
+
+    /// Adds the user-configured Gemini API credit to the Gemini row.
+    ///
+    /// Done on read, not at fetch time or in the cached snapshot: the figure is
+    /// typed by the user and measured by no poll, so it must follow the stored
+    /// value immediately — including while a vendor is inside the poll floor —
+    /// and it must never be recorded or retained as if a fetch had produced it.
+    /// Only the Gemini row hosts it: the AI Studio key is a Gemini API surface,
+    /// not Argon's or the shared Claude/GPT pool's allowance.
+    static func attachingGeminiCredit(
+        to snapshot: QuotaSnapshot, credit: GeminiAPICredit?
+    ) -> QuotaSnapshot {
+        guard let credit, snapshot.vendorId == .gemini else { return snapshot }
+        var updated = snapshot
+        updated.geminiAPICredit = credit
+        return updated
     }
 
     /// Returns all snapshots sorted by the canonical provider order.
@@ -211,8 +241,9 @@ public actor QuotaManager {
     ///   3. Exhausted — last regardless of reset, because a spent vendor is
     ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
-        Self.arrange(
-            cache.values.map(\.snapshot),
+        let credit = geminiCreditLookup()
+        return Self.arrange(
+            cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )

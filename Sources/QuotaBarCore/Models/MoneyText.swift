@@ -19,13 +19,18 @@ import Foundation
 public enum MoneyText {
 
     /// `amount` in `code`, e.g. "$179.50", "A$12.00", "150.00 CNY", "1234 JPY".
+    /// A negative figure keeps its sign outside the symbol ("-A$5.00"): a
+    /// prepay account can go negative in the ten-minute billing lag, and that
+    /// is a different fact from a positive balance.
     public static func format(_ amount: Decimal, code: String) -> String {
-        let value = NSDecimalNumber(decimal: amount).doubleValue
+        let raw = NSDecimalNumber(decimal: amount).doubleValue
+        let sign = raw < 0 ? "-" : ""
+        let value = abs(raw)
         let digits = minorUnitDigits(code)
         switch code.uppercased() {
-        case "AUD": return String(format: "A$%.\(digits)f", value)
-        case "USD": return String(format: "$%.\(digits)f", value)
-        default:    return String(format: "%.\(digits)f %@", value, code)
+        case "AUD": return sign + String(format: "A$%.\(digits)f", value)
+        case "USD": return sign + String(format: "$%.\(digits)f", value)
+        default:    return sign + String(format: "%.\(digits)f %@", value, code)
         }
     }
 

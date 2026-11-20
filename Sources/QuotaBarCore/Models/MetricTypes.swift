@@ -541,6 +541,17 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// urgency bands, exhaustion sorting, the advice engine, the menu-bar icon
     /// or the history recorder — all of which read snapshots.
     public var apiCredits: [APICreditEntry] = []
+    /// The prepaid Gemini API credit the user configured for the Cloud Billing
+    /// account behind their AI Studio key, drawn under the Gemini row. That
+    /// balance is account-wide, shared by every project and key on it.
+    ///
+    /// Kept outside `apiCredits` for two reasons. Nothing measured this figure:
+    /// Google exposes AI Studio's Prepay balance only in its Billing tab and no
+    /// documented API returns it, so an entry here would let `BalanceSeries`
+    /// record a typed number as a vendor reading, and quota retention would
+    /// mark it stale or erase it with a poll it has nothing to do with. It is
+    /// attached on read from `GeminiAPICreditStore`, not stored in the cache.
+    public var geminiAPICredit: GeminiAPICredit? = nil
     /// Model-scoped windows the vendor published beside the plan-wide ones —
     /// Anthropic's `limits[]` `weekly_scoped` rows, currently the Fable weekly
     /// cap.

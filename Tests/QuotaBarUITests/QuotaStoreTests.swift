@@ -31,6 +31,16 @@ private final class Recorded: @unchecked Sendable {
     var all: [[VendorIdentifier]] { lock.lock(); defer { lock.unlock() }; return batches }
 }
 
+private final class GeminiCreditBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: GeminiAPICredit?
+    init(_ value: GeminiAPICredit?) { _value = value }
+    var value: GeminiAPICredit? {
+        get { lock.lock(); defer { lock.unlock() }; return _value }
+        set { lock.lock(); _value = newValue; lock.unlock() }
+    }
+}
+
 private actor FirstPollGate {
     private var started = false
     private var entered: CheckedContinuation<Void, Never>?
@@ -122,6 +132,38 @@ struct QuotaStoreTests {
         #expect(s.hasLoaded)
         #expect(s.isRefreshing == false)
         #expect(hits.count(.claude) == 1)
+    }
+
+    @Test("a configured credit reloads snapshots without a poll or a history write")
+    func configuredCreditReloadsLocally() async throws {
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        func credit(_ balance: Decimal) throws -> GeminiAPICredit {
+            try #require(GeminiAPICredit(currencyCode: "AUD", prepaidBalance: balance,
+                                         configuredAt: stamp))
+        }
+        let hits = Hits()
+        let recorder = Recorded()
+        let box = GeminiCreditBox(try credit(12))
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [StubProvider(vendorId: .gemini, hits: hits)] },
+            geminiCreditLookup: { box.value })
+        let store = QuotaStore(
+            manager: manager,
+            historyRecorder: { @Sendable snaps in recorder.add(snaps) })
+
+        await store.load()
+        #expect(hits.count(.gemini) == 1)
+        #expect(recorder.all.count == 1)
+        #expect(store.snapshots.first?.geminiAPICredit == (try credit(12)))
+
+        box.value = try credit(5)
+        await store.reloadConfiguredCredit()
+        #expect(store.snapshots.first?.geminiAPICredit == (try credit(5)))
+        // A typed figure is not a poll: no vendor request and no history row.
+        #expect(hits.count(.gemini) == 1)
+        #expect(recorder.all.count == 1)
     }
 
     @Test("onSummaryChange fires with the new summary")
