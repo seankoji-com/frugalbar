@@ -170,9 +170,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let subscriptionCredits: [APICreditEntryPresentation]
     public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let openAIUsageCredit: OpenAIUsageCreditPresentation?
-    /// The linked Console organisation's monthly API-credit entitlement, e.g.
-    /// "$100.00 monthly credit", with its billing-cycle meter. The meter is
-    /// cycle progress, not spend: the linked payload publishes no used figure.
+    /// The linked Console organisation's monthly API-credit entitlement, drawn
+    /// as a **Monthly credit** line with its amount and a billing-cycle meter.
+    /// The meter is cycle progress, not spend: the linked payload publishes no
+    /// used figure.
     ///
     /// It is an entitlement, not a balance and not a quota: it is read by the
     /// independent billing session and drawn as one line under the row. It is
@@ -187,8 +188,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// in 5 days". They are drawn on their own line and not in the window grid,
     /// so without this the figures would be invisible to VoiceOver.
     public let scopedSpeech: String?
-    /// The configured Gemini API credit, drawn under the Gemini row. Nil when
-    /// none was configured or the row is not Gemini's.
+    /// The configured Gemini API budget, drawn under the Gemini row. Nil when
+    /// no spend cap was saved, or the row is not Gemini's.
     public let geminiAPICredit: GeminiAPICreditPresentation?
 
     /// The plan-wide ticket group, drawn under the Claude Code title.
@@ -252,7 +253,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
         }
         self.scopedSpeech = Self.scopedSpeech(for: snapshot.scopedBars, now: now)
         self.geminiAPICredit = snapshot.vendorId == .gemini
-            ? snapshot.geminiAPICredit.map { GeminiAPICreditPresentation(credit: $0) }
+            ? snapshot.geminiAPICredit.flatMap {
+                GeminiAPICreditPresentation(credit: $0, now: now)
+            }
             : nil
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction

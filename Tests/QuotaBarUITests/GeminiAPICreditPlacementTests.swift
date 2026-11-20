@@ -38,26 +38,91 @@ struct GeminiAPICreditPlacementTests {
         return snapshot
     }
 
-    @Test("each pool keeps its own label and the account's own money format")
-    func figuresAreLabelledApart() throws {
+    @Test("the configured credit draws only the API budget line")
+    func drawsOnlyTheBudget() throws {
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = try #require(TimeZone(identifier: "UTC"))
-        let p = GeminiAPICreditPresentation(credit: try credit(), calendar: utc)
+        let p = try #require(GeminiAPICreditPresentation(
+            credit: try credit(), now: now, calendar: utc))
 
-        #expect(p.figures.map(\.label) == ["Prepaid balance", "Monthly credit", "Monthly spend cap"])
-        #expect(p.figures.map(\.figure) == ["A$12.00", "A$7.50", "A$25.00"])
-        #expect(p.configuredNote == "Configured 20 Nov 2026")
+        #expect(p.budget.amountText == "A$25.00")
+        #expect(p.spoken.contains("API budget A$25.00"))
+        #expect(p.spoken.contains("configured 20 November 2026"))
         #expect(p.spoken.contains("not a vendor reading"))
-        #expect(p.spoken.contains("Prepaid balance A$12.00"))
-        #expect(p.spoken.contains("Monthly credit A$7.50"))
-        #expect(p.spoken.contains("Monthly spend cap A$25.00"))
+        // The prepaid balance and monthly grant stay in Settings, not the row.
+        #expect(!p.spoken.contains("Prepaid balance"))
+        #expect(!p.spoken.contains("A$12.00"))
+        #expect(!p.spoken.contains("A$7.50"))
+    }
+
+    @Test("the spend cap is a monthly API budget line, filled with calendar time")
+    func budgetIsCalendarMonthProgress() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let p = try #require(GeminiAPICreditPresentation(
+            credit: try credit(), now: now, calendar: utc))
+        let budget = p.budget
+
+        // 20 Nov 13:00 UTC is 19 days 13 hours into November's 30 days.
+        let expected = (19.0 + 13.0 / 24.0) / 30.0
+        #expect(abs(budget.fraction - expected) < 0.00001)
+        #expect(budget.percentText == "65%")
+        #expect(budget.countdown == "11d")
+        #expect(budget.spoken.contains("API budget A$25.00"))
+        #expect(budget.spoken.contains("65% of the calendar month elapsed"))
+        #expect(budget.spoken.contains("11 days left in the month"))
+        // The bar is time, never spend: Google publishes no API-key spend.
+        #expect(budget.spoken.contains("not spend"))
+        #expect(p.spoken.contains(budget.spoken))
+    }
+
+    @Test("the budget fill never reads the prepaid balance or the monthly credit")
+    func budgetIsNotABalanceFraction() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let configured = try credit()
+        let different = try #require(GeminiAPICredit(
+            currencyCode: "AUD", prepaidBalance: 0, monthlyCredit: 0,
+            monthlySpendCap: Decimal(string: "25")!, configuredAt: configuredAt))
+        let a = try #require(GeminiAPICreditPresentation(
+            credit: configured, now: now, calendar: utc))
+        let b = try #require(GeminiAPICreditPresentation(
+            credit: different, now: now, calendar: utc))
+
+        #expect(a.budget == b.budget)
+        // A balance-derived fill would draw 100% at an empty balance; a
+        // cap-derived fill would ignore the month entirely.
+        let fraction = a.budget.fraction
+        #expect(fraction != 1)
+        #expect(abs(fraction - 0.5) > 0.1)
+    }
+
+    @Test("a credit without a cap draws nothing and keeps its figures in Settings")
+    func noCapNoBudget() throws {
+        let noCap = try #require(GeminiAPICredit(
+            currencyCode: "AUD", prepaidBalance: 12, monthlyCredit: Decimal(string: "7.50")!,
+            monthlySpendCap: nil, configuredAt: configuredAt))
+        #expect(GeminiAPICreditPresentation(credit: noCap, now: now) == nil)
+    }
+
+    @Test("the budget meter follows the calendar month, including February")
+    func budgetCalendarBoundaries() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let february = try #require(ISO8601DateFormatter().date(from: "2028-02-15T00:00:00Z"))
+        let p = try #require(GeminiAPICreditPresentation(
+            credit: try credit(), now: february, calendar: utc))
+        let budget = p.budget
+        #expect(abs(budget.fraction - 14.0 / 29.0) < 0.00001)
+        #expect(budget.percentText == "48%")
+        #expect(budget.countdown == "15d")
     }
 
     @Test("only the Gemini row carries the configured credit")
     func onlyGeminiHostsIt() throws {
         let configured = try credit()
         let gemini = MetricRowPresentation(snapshot: snapshot(.gemini, credit: configured), now: now)
-        #expect(gemini.geminiAPICredit?.figures.count == 3)
+        #expect(gemini.geminiAPICredit?.budget.amountText == "A$25.00")
         #expect(gemini.subscriptionCredits.isEmpty)
 
         let argon = MetricRowPresentation(
@@ -84,11 +149,11 @@ struct GeminiAPICreditPlacementTests {
         }
         for status: ProviderStatus in [.measured(.none), .unavailable(.badResponse)] {
             let text = label(status)
-            #expect(text.contains("Gemini API credit"))
+            #expect(text.contains("API budget A$25.00"))
             #expect(text.contains("not a vendor reading"))
-            #expect(text.contains("A$12.00"))
-            #expect(text.contains("A$7.50"))
-            #expect(text.contains("A$25.00"))
+            #expect(!text.contains("Prepaid balance"))
+            #expect(!text.contains("A$12.00"))
+            #expect(!text.contains("A$7.50"))
         }
     }
 
@@ -113,6 +178,23 @@ struct GeminiAPICreditPlacementTests {
         #expect(plain.valueLabel == configured.valueLabel)
         #expect(plain.isExhausted == configured.isExhausted)
         #expect(configured.geminiAPICredit != nil)
+    }
+
+    @Test("the budget line adds its own height")
+    @MainActor
+    func budgetAddsHeight() throws {
+        func height(_ credit: GeminiAPICredit?) -> CGFloat {
+            let row = MetricRowView(snapshot: snapshot(.gemini, credit: credit))
+                .frame(width: Theme.popoverWidth - 2 * Theme.edgeMargin - 2 * Theme.cardPadding)
+            let host = NSHostingView(rootView: row)
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+        let withoutCap = try #require(GeminiAPICredit(
+            currencyCode: "AUD", prepaidBalance: 12, monthlyCredit: Decimal(string: "7.50")!,
+            monthlySpendCap: nil, configuredAt: configuredAt))
+        // A credit with no cap draws nothing, so the saved cap is the whole line.
+        #expect(height(try credit()) > height(withoutCap))
     }
 
     @Test("the configured credit stays inside the Antigravity service block")

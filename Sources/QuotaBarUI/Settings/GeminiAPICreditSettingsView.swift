@@ -38,7 +38,7 @@ struct GeminiAPICreditSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
             } else if draft.credit == nil {
-                Text("Enter a prepaid balance, a monthly credit, or both.")
+                Text("Enter a monthly spend cap, a prepaid balance, or a monthly credit.")
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
             }
@@ -60,13 +60,15 @@ struct GeminiAPICreditSettingsView: View {
                  Billing tab, and no documented Gemini API endpoint returns an \
                  API key's credit or spend. The balance belongs to the key's \
                  Cloud Billing account, shared by every project on it. \
-                 FrugalBar therefore shows the figures you enter here, labels \
-                 them configured, and dates them. They are not a measured \
-                 vendor balance: they draw no bar, take no part in quota \
-                 urgency, sorting or advice, and are never recorded in balance \
-                 history. The monthly spend cap is the limit you set in AI \
-                 Studio, shown as a limit only. A negative prepay balance is \
-                 accepted; Google documents a billing lag that can overdraw it.
+                 FrugalBar therefore records the figures you enter here and \
+                 dates them. They are not a measured vendor balance. The \
+                 popover draws only the monthly spend cap, as an API budget \
+                 line with a calendar-month progress bar. The prepaid balance \
+                 and monthly credit stay in Settings and take no part in quota \
+                 urgency, sorting, advice or balance history. The bar measures \
+                 time through the month, never spend, because no Gemini API \
+                 endpoint reports it. A negative prepay balance is accepted; \
+                 Google documents a billing lag that can overdraw it.
                  """)
                 .font(.caption)
                 .foregroundStyle(Theme.systemSecondaryText)

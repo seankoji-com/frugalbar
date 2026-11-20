@@ -40,6 +40,10 @@ struct GeminiAPICreditTests {
         // An empty prepay account is a real state, not a missing figure, and
         // Google documents a billing lag that can overdraw it.
         #expect(GeminiAPICredit(currencyCode: "AUD", prepaidBalance: 0, configuredAt: now) != nil)
+        // The cap may be the only figure: the popover draws it as the API
+        // budget, so a user who wants just that does not need a dummy balance.
+        #expect(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 25,
+                                configuredAt: now)?.monthlySpendCap == 25)
         let overdrawn = GeminiAPICredit(currencyCode: "AUD", prepaidBalance: -5,
                                         configuredAt: now)
         #expect(overdrawn?.prepaidBalance == -5)

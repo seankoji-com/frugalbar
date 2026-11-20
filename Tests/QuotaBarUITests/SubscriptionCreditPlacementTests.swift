@@ -92,7 +92,8 @@ struct SubscriptionCreditPlacementTests {
         // The entitlement belongs to the linked Console organisation and is
         // not the promo-credit pool, so it keeps its own line even when no
         // promo credit is published.
-        #expect(p.monthlyCredit?.title == "$123.45 monthly credit")
+        #expect(p.monthlyCredit?.title == "Monthly credit")
+        #expect(p.monthlyCredit?.amountText == "$123.45")
         #expect(p.monthlyCredit?.spoken.contains("next credit") == true)
         #expect(p.monthlyPromo == nil)
         #expect(p.subscriptionCredits.isEmpty)
@@ -134,7 +135,8 @@ struct SubscriptionCreditPlacementTests {
         // The cycle is the calendar month ending 15 Nov: 15 Oct–15 Nov is 31
         // days, and 11 Nov is 27 of them. This is elapsed time, never API
         // spend, which the linked payload does not publish.
-        #expect(meter.title == "$200.00 monthly credit")
+        #expect(meter.title == "Monthly credit")
+        #expect(meter.amountText == "$200.00")
         #expect(abs((meter.fraction ?? 0) - 27.0 / 31.0) < 0.001)
         #expect(meter.percentText == "87%")
         #expect(meter.countdown == "4d")
@@ -148,7 +150,8 @@ struct SubscriptionCreditPlacementTests {
         let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"200"}"#.utf8), now: now))
         let meter = MonthlyCreditBarPresentation(credit: credit, now: now)
-        #expect(meter.title == "$200.00 monthly credit")
+        #expect(meter.title == "Monthly credit")
+        #expect(meter.amountText == "$200.00")
         #expect(meter.fraction == nil)
         #expect(meter.percentText == nil)
         #expect(meter.countdown == nil)

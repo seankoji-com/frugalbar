@@ -57,24 +57,36 @@ Billing tab and enters in **Settings → API Keys → Google**. It holds:
 | Monthly credit | The recurring Developer Program grant, in the account's currency | AI Studio → Billing |
 | Monthly spend cap | The project's spend limit | AI Studio → Billing |
 
-The popover draws them under the **Gemini** row inside the **Antigravity**
-service block, each under its own label and in the account's own currency. The
-line always reads *configured* and carries the date it was saved.
+Settings records all three figures. The popover draws only the spend cap, as
+the account's **API budget** line under the **Gemini** row inside the
+**Antigravity** service block. The prepaid balance and monthly credit remain
+Settings values and are not drawn.
 
-For example, a project with an A$30 monthly spend cap records that cap as a
-limit beside its balance and recurring credit. The cap is shown as a limit
-only: it is never turned into a percentage, because the monthly spend that
-would give the percentage meaning was never measured.
+The spend cap is drawn as its own line in the same anatomy as Codex's separate
+monthly credit: the title and cap in the name column, one bar across the meter
+area, and the percentage and countdown beneath. The bar's fill is **elapsed
+calendar time**, never spend. Google publishes no spend figure for a Gemini API
+key, and the prepaid balance is a separate pool drawn down after the monthly
+grant, so neither can serve as the numerator. The visible figure is `MO 63%`;
+the tooltip and VoiceOver label say "63% of the calendar month elapsed", and
+the countdown says how many days are left in the month. The line uses the
+informational colour and draws no quota pace marker.
+
+For example, a project with an A$30 monthly spend cap records that cap as an
+A$30 API budget line; the bar shows where in the calendar month you are, not a
+percentage of the A$30 spent.
 
 ## What it is not
 
-- **Not a measured vendor balance.** Nothing in the card claims a poll produced
-  it. The saved date says how old it is.
+- **Not a measured vendor balance.** Nothing in the line claims a poll produced
+  it. The tooltip says when the cap was saved.
 - **Not a quota.** It never reaches `consumptionFraction`, urgency, exhaustion
   sorting, the advice engine, the menu-bar icon, the widget's average or the
   sync export.
-- **Not a bar or a fraction.** A balance with no measured usage has no
-  denominator.
+- **Not a spend bar.** The API budget meter is elapsed calendar time. It draws
+  no percentage of the cap spent, because a balance with no measured usage has
+  no spend numerator. The prepaid balance and monthly credit are not drawn in
+  the popover at all.
 - **Not balance history.** It is not an `APICreditEntry`, so `BalanceSeries`
   never charts it. A configured number recorded as a vendor history point would
   be a reading from no observation.
@@ -98,9 +110,12 @@ not move the same credit onto either of those rows.
   without another poll, shown when quota is unavailable, retained through a
   failed poll, hidden with the Gemini provider, and carried as no
   `apiCredits` entry.
-- `GeminiAPICreditPlacementTests` — one labelled figure per pool in
-  `MoneyText`'s account-currency form, spoken on measured and unavailable rows,
-  drawn below the row, and the Antigravity grouping left unchanged.
+- `GeminiAPICreditPlacementTests` — the spend cap drawn as a calendar-month
+  API budget line (percentage, countdown and spoken wording), the fill proven
+  independent of the prepaid balance and monthly credit, the balances absent
+  from the drawn line, spoken on measured and unavailable rows, drawn below the
+  row, the budget line's own height, and the Antigravity grouping left
+  unchanged.
 
 The attach-on-read path was proven red by removing the Gemini guard (the
 Argon row then carried the credit) and by carrying the figure in `apiCredits`

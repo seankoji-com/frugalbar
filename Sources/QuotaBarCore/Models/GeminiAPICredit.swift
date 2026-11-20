@@ -21,9 +21,13 @@ import Foundation
 /// would become a vendor balance-history point it never was. This field lives
 /// outside `apiCredits`, so it cannot reach `consumptionFraction`, the urgency
 /// bands, exhaustion sorting, the advice engine, the menu bar icon, the widget's
-/// average or any balance series. It draws no bar and no percentage: the spend
-/// cap below is a limit, not a denominator for a balance whose monthly usage
-/// was never read.
+/// average or any balance series. The popover draws only the spend cap, as an
+/// "API budget" line with a calendar-month progress meter
+/// (`GeminiAPICreditPresentation.Budget`); the prepaid balance and monthly
+/// grant stay in Settings and are not drawn. The meter's fill is elapsed
+/// calendar time, never spend, because no documented API returns an API key's
+/// spend and dividing the prepaid balance into the cap would mix two pools.
+/// That meter is presentation-only and outside every quota calculation.
 public struct GeminiAPICredit: Codable, Equatable, Sendable {
 
     /// The billing account's own currency, e.g. "AUD". One code applies to all
@@ -44,9 +48,9 @@ public struct GeminiAPICredit: Codable, Equatable, Sendable {
     /// converts it at redemption, so this is the account's own figure.
     public let monthlyCredit: Decimal?
 
-    /// The project's monthly spend cap. A configured limit only: it is never
-    /// divided into the balance to make a fraction, because the usage that
-    /// would give it meaning was not measured.
+    /// The project's monthly spend cap, drawn as the API budget's monthly
+    /// progress line. The meter's fill is elapsed calendar time, never a spend
+    /// fraction: the usage that would give one meaning was not measured.
     public let monthlySpendCap: Decimal?
 
     /// When the user saved these figures. The row states it because a
@@ -55,10 +59,11 @@ public struct GeminiAPICredit: Codable, Equatable, Sendable {
     public let configuredAt: Date
 
     /// At least one money figure is required: a currency and a date alone are
-    /// not a credit. The prepay balance may be negative (the vendor documents
+    /// not a figure. The prepay balance may be negative (the vendor documents
     /// a billing lag that overdraws it); the monthly credit may not, and a
     /// spend cap of zero is not a cap (every request would fail) and is refused
-    /// rather than drawn.
+    /// rather than drawn. The cap may be the only figure, so a user who wants
+    /// just the API budget does not have to invent a balance.
     public init?(
         currencyCode: String,
         prepaidBalance: Decimal? = nil,
@@ -77,7 +82,8 @@ public struct GeminiAPICredit: Codable, Equatable, Sendable {
               Self.valid(monthlyCredit, allowsNegative: false),
               Self.valid(monthlySpendCap, allowsNegative: false),
               monthlySpendCap.map({ $0 > 0 }) ?? true else { return nil }
-        guard prepaidBalance != nil || monthlyCredit != nil else { return nil }
+        guard prepaidBalance != nil || monthlyCredit != nil || monthlySpendCap != nil
+        else { return nil }
 
         self.currencyCode = code
         self.prepaidBalance = prepaidBalance
