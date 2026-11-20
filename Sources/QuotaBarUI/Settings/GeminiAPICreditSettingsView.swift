@@ -33,19 +33,22 @@ struct GeminiAPICreditSettingsView: View {
             TextField("Monthly spend cap", text: $capText)
                 .textFieldStyle(.roundedBorder)
 
-            if !draft.valid {
+            switch draft.problem {
+            case .invalid:
                 Text("Use a three-letter currency code and whole amounts (12 or 1,234.50). The monthly credit cannot be negative, and the spend cap must be above zero.")
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
-            } else if draft.credit == nil {
+            case .empty:
                 Text("Enter a monthly spend cap, a prepaid balance, or a monthly credit.")
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
+            case .none:
+                EmptyView()
             }
 
             HStack(spacing: 10) {
                 Button("Save configured credit") { save() }
-                    .disabled(!draft.valid || draft.credit == nil)
+                    .disabled(draft.credit == nil)
                 if configured {
                     Button("Remove") { remove() }
                 }
@@ -98,23 +101,49 @@ struct GeminiAPICreditSettingsView: View {
         .onChange(of: capText) { saved = false }
     }
 
-    /// The fields as a validated credit. `valid` distinguishes empty (fine)
-    /// from unparseable (refused), so a typo in one pool cannot silently drop
-    /// that pool and save the others as if the user had cleared it. Parsing is
-    /// whole-field: a prefix is never accepted as a number.
-    private var draft: (credit: GeminiAPICredit?, valid: Bool) {
+    enum DraftProblem: Equatable {
+        case none
+        case invalid
+        case empty
+    }
+
+    /// Which prompt an unresolved draft deserves. Empty input is not an invalid
+    /// amount: a fresh form asks for any one of the three figures, while a typo
+    /// or a bad currency code gets the invalid-input note.
+    static func problem(
+        credit: GeminiAPICredit?,
+        balance: GeminiAPICredit.AmountInput,
+        monthly: GeminiAPICredit.AmountInput,
+        cap: GeminiAPICredit.AmountInput,
+        currencyCode: String
+    ) -> DraftProblem {
+        if credit != nil { return .none }
+        guard balance != .invalid, monthly != .invalid, cap != .invalid
+        else { return .invalid }
+        let code = currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let hasValidCurrency = code.count == 3
+            && code.allSatisfy { $0.isASCII && $0.isLetter }
+        let hasAmount = balance != .empty || monthly != .empty || cap != .empty
+        return hasValidCurrency && !hasAmount ? .empty : .invalid
+    }
+
+    /// The fields as a validated credit, and which prompt the form should show.
+    /// Parsing is whole-field: a prefix is never accepted as a number.
+    private var draft: (credit: GeminiAPICredit?, problem: DraftProblem) {
         let balance = GeminiAPICredit.amount(from: balanceText)
         let monthly = GeminiAPICredit.amount(from: monthlyText)
         let cap = GeminiAPICredit.amount(from: capText)
         guard balance != .invalid, monthly != .invalid, cap != .invalid
-        else { return (nil, false) }
+        else { return (nil, .invalid) }
         let credit = GeminiAPICredit(
             currencyCode: currencyCode,
             prepaidBalance: balance.decimal,
             monthlyCredit: monthly.decimal,
             monthlySpendCap: cap.decimal,
             configuredAt: Date())
-        return (credit, credit != nil)
+        return (credit, Self.problem(credit: credit, balance: balance,
+                                     monthly: monthly, cap: cap,
+                                     currencyCode: currencyCode))
     }
 
     private func load() {

@@ -92,7 +92,9 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
         if let amountText, !parts.contains(where: { $0.contains(amountText) }) {
             parts.append("\(amountText) total")
         }
-        if entry.vendorId == .openai, let detail = entry.detail { parts.append(detail) }
+        // OpenAI's detail is the grant amount, which the amount line now draws
+        // and the remaining sentence already speaks. Do not repeat it; the
+        // stale marker comes from `isStale` below.
         if let resetText { parts.append(resetText.lowercased()) }
         if let paceMarker { parts.append("even-use marker at \(Int((paceMarker * 100).rounded())) percent of the month") }
         if isStale { parts.append("stale, the last poll failed") }

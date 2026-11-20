@@ -338,10 +338,11 @@ public struct MetricRowPresentation: Equatable, Sendable {
             // A placeholder never carries a stale figure, but if one ever did,
             // the eye and the spoken label must still agree.
             var spoken = [snapshot.displayName, reason.headline, reason.remedy]
+            // The configured budget is appended once by
+            // `combinedAccessibilityLabel`; this base label must not repeat it.
             // A configured credit is independent of the quota poll: an
             // unreadable Antigravity reading must not silence a figure the user
-            // typed in, or leave the visible line unspoken.
-            if let geminiAPICredit { spoken.append(geminiAPICredit.spoken) }
+            // typed in, and the combined label still speaks it.
             if let staleSpoken { spoken.append(staleSpoken) }
             self.accessibilityLabel = spoken.joined(separator: ", ")
             self.accessibilityLabelOmittingPercentage = accessibilityLabel

@@ -105,6 +105,24 @@ struct GeminiAPICreditPlacementTests {
         #expect(GeminiAPICreditPresentation(credit: noCap, now: now) == nil)
     }
 
+    @Test("the Gemini settings prompt distinguishes empty input from a bad amount")
+    func settingsPrompt() throws {
+        #expect(GeminiAPICreditSettingsView.problem(
+            credit: nil, balance: .empty, monthly: .empty, cap: .empty,
+            currencyCode: "AUD") == .empty)
+        #expect(GeminiAPICreditSettingsView.problem(
+            credit: nil, balance: .invalid, monthly: .empty, cap: .empty,
+            currencyCode: "AUD") == .invalid)
+        #expect(GeminiAPICreditSettingsView.problem(
+            credit: nil, balance: .empty, monthly: .empty, cap: .empty,
+            currencyCode: "AUDX") == .invalid)
+        let capOnly = try #require(GeminiAPICredit(
+            currencyCode: "AUD", monthlySpendCap: 25, configuredAt: configuredAt))
+        #expect(GeminiAPICreditSettingsView.problem(
+            credit: capOnly, balance: .empty, monthly: .empty, cap: .value(25),
+            currencyCode: "AUD") == .none)
+    }
+
     @Test("the budget meter follows the calendar month, including February")
     func budgetCalendarBoundaries() throws {
         var utc = Calendar(identifier: .gregorian)
@@ -154,6 +172,9 @@ struct GeminiAPICreditPlacementTests {
             #expect(!text.contains("Prepaid balance"))
             #expect(!text.contains("A$12.00"))
             #expect(!text.contains("A$7.50"))
+            // The budget line is spoken once, not once from the unavailable
+            // base label and again from the combined label.
+            #expect(text.components(separatedBy: "API budget A$25.00").count == 2)
         }
     }
 

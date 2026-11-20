@@ -233,6 +233,9 @@ struct MonthlyPromoCreditTests {
         #expect(try #require(presentation.barMetrics.windowLength) == 31 * 86_400.0)
         #expect(abs(try #require(presentation.paceMarker) - 21.0 / 31) < 0.00001)
         #expect(presentation.spoken.contains("$50.00 of $200.00 remaining"))
+        // The grant total appears once: the new amount line and the remaining
+        // sentence already name it, so the vendor detail must not repeat it.
+        #expect(presentation.spoken.components(separatedBy: "$200.00").count == 2)
 
         var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
             category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
@@ -250,6 +253,8 @@ struct MonthlyPromoCreditTests {
         #expect(snapshot.status == .measured(.none))
         #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
             .contains("Monthly credit, 75% used"))
+        let label = row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
+        #expect(label.components(separatedBy: "$200.00").count == 2)
         // The billing read is independent: a quota outage does not make this
         // grant stale. Only the session's own failed refresh does.
         var quotaStale = snapshot
