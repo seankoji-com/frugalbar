@@ -242,6 +242,34 @@ returns nil from `consumptionFraction`, because a count of credits has no cap to
 be a fraction *of*. The popover draws the entries in one card of their own
 (`APICreditSectionView`); the card is absent when nobody published one.
 
+**A configured credit is not a measurement, and Google's AI Studio credit
+cannot be measured.** The Prepay balance and monthly Google Developer Program
+credit on the Cloud Billing account behind a paid-tier Gemini API key are
+reported only in AI Studio's Billing tab. The balance is account-wide, shared
+by every project and key on it. The Gemini API
+(`generativelanguage.googleapis.com`) has no billing operation and
+an API key carries no billing IAM scope, so no documented API returns them —
+`GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
+It is drawn under the Gemini row inside the Antigravity block and always says
+*configured* and the date it was saved; it draws no bar and no percentage, and
+its spend cap is a limit only, never a denominator for a balance whose usage was
+never measured. The balance may be negative: Google documents a billing lag that
+overdraws it, and `MoneyText` prints the sign outside the symbol. It is
+deliberately **not** an `APICreditEntry`: that rides a
+snapshot's measured fetch and `BalanceSeries` charts every entry, so carrying it
+there would record a typed number as balance history. Amount fields accept one
+whole number only (`GeminiAPICredit.amount(from:)`): `Decimal(string:)` reads a
+prefix, so "1,234.50" and "30abc" would have saved 1 and 30. It lives in its own
+snapshot field, attached on read from `GeminiAPICreditStore` rather than stored
+in the poll cache — so a failed Antigravity poll neither erases nor stales it,
+a change takes effect without a poll, and only the Gemini row ever hosts it
+(Argon and the shared Claude/GPT pool are separate allowances). Read it on read:
+`QuotaManager.attachingGeminiCredit` is applied in `visibleCache` and
+`sortedSnapshots`, not in the fetch path. Saving from Settings replaces the
+snapshot list (`QuotaStore.reloadConfiguredCredit`): it never force-repolls a
+vendor and never runs the history recorder, because a typed figure is not a
+poll.
+
 **A unit is never converted across, and a scale is never guessed upward.**
 OpenAI's `credits.balance` is a **count of credits** — the unit its own console
 prints ("62,500 credits remaining") — so it is shown as credits and never as

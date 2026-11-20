@@ -454,6 +454,14 @@ public struct SettingsView: View {
                         .accessibilityElement(children: .combine)
                     }
                 }
+
+                // The AI Studio key's credit is a different surface from the
+                // Antigravity OAuth above: Google exposes its Prepay balance
+                // only in AI Studio's Billing tab, so these figures are typed
+                // by the account holder and labelled configured.
+                GeminiAPICreditSettingsView {
+                    Task { await store?.reloadConfiguredCredit() }
+                }
             }
 
         }

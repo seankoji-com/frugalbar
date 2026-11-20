@@ -229,6 +229,16 @@ struct MetricRowView: View {
                         if isGrouped { railElbow.padding(.top, 15) }
                     }
             }
+            // The configured AI Studio credit is not a quota window and not a
+            // balance a poll produced. It sits under Gemini's own row, inside
+            // the Antigravity block, so the service grouping stays intact.
+            if let credit = p.geminiAPICredit {
+                GeminiAPICreditView(presentation: credit)
+                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
+                    .overlay(alignment: .topLeading) {
+                        if isGrouped { railElbow.padding(.top, 13) }
+                    }
+            }
         }
         .backgroundPreferenceValue(RowRailAnchors.self) { anchors in
             if isGrouped, !continuesGroup, let avatar = anchors.avatar, !anchors.branches.isEmpty {

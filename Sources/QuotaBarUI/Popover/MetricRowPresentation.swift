@@ -187,6 +187,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// in 5 days". They are drawn on their own line and not in the window grid,
     /// so without this the figures would be invisible to VoiceOver.
     public let scopedSpeech: String?
+    /// The configured Gemini API credit, drawn under the Gemini row. Nil when
+    /// none was configured or the row is not Gemini's.
+    public let geminiAPICredit: GeminiAPICreditPresentation?
 
     /// The plan-wide ticket group, drawn under the Claude Code title.
     public var planResetCredits: ResetCredits? {
@@ -231,6 +234,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
         if let monthlyCredit { parts.append(monthlyCredit.spoken) }
         if let scopedSpeech { parts.append(scopedSpeech) }
         parts += subscriptionCredits.map { $0.spoken(stale: creditsStale) }
+        if let geminiAPICredit { parts.append(geminiAPICredit.spoken) }
         if let monthlyPromo { parts.append(monthlyPromo.spoken) }
         if let openAIUsageCredit { parts.append(openAIUsageCredit.spoken) }
         return parts.joined(separator: ". ")
@@ -247,6 +251,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
             MonthlyCreditBarPresentation(credit: $0, now: now)
         }
         self.scopedSpeech = Self.scopedSpeech(for: snapshot.scopedBars, now: now)
+        self.geminiAPICredit = snapshot.vendorId == .gemini
+            ? snapshot.geminiAPICredit.map { GeminiAPICreditPresentation(credit: $0) }
+            : nil
         self.name = snapshot.displayName
         self.fraction = snapshot.consumptionFraction
         self.isMeasured = snapshot.status.confidence == .measured
@@ -328,6 +335,10 @@ public struct MetricRowPresentation: Equatable, Sendable {
             // A placeholder never carries a stale figure, but if one ever did,
             // the eye and the spoken label must still agree.
             var spoken = [snapshot.displayName, reason.headline, reason.remedy]
+            // A configured credit is independent of the quota poll: an
+            // unreadable Antigravity reading must not silence a figure the user
+            // typed in, or leave the visible line unspoken.
+            if let geminiAPICredit { spoken.append(geminiAPICredit.spoken) }
             if let staleSpoken { spoken.append(staleSpoken) }
             self.accessibilityLabel = spoken.joined(separator: ", ")
             self.accessibilityLabelOmittingPercentage = accessibilityLabel

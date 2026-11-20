@@ -192,6 +192,19 @@ public final class QuotaStore {
         await reloadFromCache()
     }
 
+    /// Re-reads the configured Gemini API credit from preferences without
+    /// polling any vendor.
+    ///
+    /// The credit is attached to the Gemini snapshot on read, so a local
+    /// preference change needs only a new snapshot list. A force refresh here
+    /// would re-ask every provider — including one holding a vendor
+    /// `Retry-After` — for a figure no vendor supplies. `reloadFromCache` is
+    /// also deliberately not used: it runs the history recorder, which stamps a
+    /// reading at `now`, and a settings save is not a poll.
+    public func reloadConfiguredCredit() async {
+        snapshots = await manager.sortedSnapshots()
+    }
+
     /// Explicit user action — bypasses the cache.
     public func forceRefresh() async {
         if isRefreshing {

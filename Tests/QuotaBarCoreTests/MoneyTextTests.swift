@@ -24,6 +24,14 @@ struct MoneyTextTests {
         #expect(MoneyText.format(Decimal(12), code: "aud") == "A$12.00")
     }
 
+    @Test("a negative figure keeps its sign outside the symbol")
+    func negativeAmounts() {
+        #expect(MoneyText.format(Decimal(-5), code: "AUD") == "-A$5.00")
+        #expect(MoneyText.format(Decimal(string: "-179.5")!, code: "USD") == "-$179.50")
+        #expect(MoneyText.format(Decimal(string: "-12.5")!, code: "CNY") == "-12.50 CNY")
+        #expect(MoneyText.format(Decimal(-1234), code: "JPY") == "-1234 JPY")
+    }
+
     /// A zero-decimal currency has no cents to print.
     @Test("a zero-decimal currency prints no decimals")
     func zeroDecimalCurrencies() {
