@@ -411,7 +411,14 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
         await withCheckedContinuation { continuation in
             let gate = FirstResultGate(continuation)
             Task { gate.resume(await read(now)) }
-            Task { try? await Task.sleep(for: limit); gate.resume(await fallback()) }
+            Task {
+                try? await Task.sleep(for: limit)
+                // The last read is an earlier observation, so it is drawn as
+                // stale, keeping its own observation number and timestamp.
+                var last = await fallback()
+                last?.refreshFailed = true
+                gate.resume(last)
+            }
         }
     }
 

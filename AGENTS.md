@@ -569,8 +569,14 @@ runs the page scripts offline in CI; update it with any change to them. The name
 optional enrichment so it cannot push a measured usage read past the
 provider deadline. When the wait runs out it takes the session's last
 completed read (`lastRead`, with that read's identity, still bound by
-`resolve`) rather than nothing; returning nil dropped the line for the whole
-poll whenever claude.ai was slow.
+`resolve`) rather than nothing, marked stale because it is an earlier
+observation; returning nil dropped the line for the whole poll whenever
+claude.ai was slow. Because that copy can outlive a sign-in change the session
+sees before the pass commits, `keepOneClaudeMonthlyCredit` first clears any
+named row whose credit's identity is not the session's current attribution
+(including when the session has none). FrugalBar's own billing fetch carries
+`frugalbarOwnRead`, so the page's fetch observer does not report it as the
+page's own fetch and clear the verification the read is establishing.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one
 shown row's verified identity matches. No match, or an unverified row,
 attaches it nowhere, and Settings says why. Email, nickname and row order are

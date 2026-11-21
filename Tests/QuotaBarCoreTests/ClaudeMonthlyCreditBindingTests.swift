@@ -327,6 +327,45 @@ struct ClaudeMonthlyCreditBindingTests {
             ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: Date())
         }, now: now, limit: .milliseconds(50))
         #expect(credit?.amountUSD == 200)
+        // It is an earlier observation, so it is drawn as stale.
+        #expect(credit?.refreshFailed == true)
+    }
+
+    private struct NamedCreditRow: QuotaProvider {
+        let account: ClaudeAccount
+        let identities: Set<String>
+        var vendorId: VendorIdentifier { .claude }
+        var displayName: String { account.name }
+        var category: MetricCategory { .aiSubscriptions }
+        var instanceID: String { account.id }
+        func fetchSnapshot() async throws -> QuotaSnapshot {
+            var s = QuotaSnapshot(id: account.id, vendorId: .claude, displayName: account.name,
+                category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+                status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
+            var credit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: Date())
+            credit.webIdentities = identities
+            credit.observation = 1
+            s.monthlyAPICredit = credit
+            s.claudeAccount = account
+            return s
+        }
+    }
+
+    /// The row copied A's credit when its wait ran out; before the pass
+    /// committed, the session's next read found B signed in (or no one).
+    @Test("At commit a named row keeps the credit only while the session still attributes it the same way")
+    func commitChecksCurrentAttribution() async {
+        let a = identity(accountUUID, personalOrg)
+        let row = NamedCreditRow(account: account("primary"), identities: [a])
+        func poll(current: Set<String>?) async -> QuotaSnapshot? {
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+                providerFactory: { [row] }, monthlyCreditIdentities: { current })
+            return await manager.forceRefresh()["primary"]
+        }
+        #expect(await poll(current: [a])?.monthlyAPICredit != nil)
+        #expect(await poll(current: [identity(otherAccountUUID, personalOrg)])?.monthlyAPICredit == nil)
+        #expect(await poll(current: nil)?.monthlyAPICredit == nil)
     }
 
     /// End to end through the row: the fallback still has to bind to this row.

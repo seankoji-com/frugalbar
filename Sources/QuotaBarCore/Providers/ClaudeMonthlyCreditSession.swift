@@ -165,7 +165,10 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
       const before = await who();
       let billing;
       try {
-        const r = await fetch(query, {credentials: 'same-origin', signal: controller.signal});
+        // Marked as FrugalBar's own, so the passive observer below does not
+        // report it as the page's fetch and clear the verification this
+        // read is about to establish.
+        const r = await fetch(query, {credentials: 'same-origin', signal: controller.signal, frugalbarOwnRead: true});
         if (!r.ok) billing = {_retryAfter: r.headers.get('Retry-After') || ''};
         else {
           const p = await r.json();
@@ -199,6 +202,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
       const original = window.fetch;
       window.fetch = async function(...args) {
         const response = await original.apply(this, args);
+        if (args[1] && args[1].frugalbarOwnRead === true) return response;
         try {
           const u = new URL(response.url);
           if (u.origin === 'https://claude.ai' && u.pathname === '/api/quirky-lollipop/link-state'
