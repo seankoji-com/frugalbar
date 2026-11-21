@@ -67,6 +67,7 @@ actor ClaudeAccountDiscovery {
     private let backoff: ClaudeProxyBackoff
     private let grants: ClaudeGrantSchedule
     private let monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit?
+    private let lastMonthlyCredit: @Sendable () async -> ClaudeMonthlyCredit?
     private var profileWaits: [String: (until: Date, reason: UnavailableReason)] = [:]
     private var cachedProviders: [any QuotaProvider] = []
     private var discoverySignature: String?
@@ -84,10 +85,15 @@ actor ClaudeAccountDiscovery {
                     TestHost.isActive ? nil : await CredentialStore.claudePlanNameAsync()
                 },
                 backoff: ClaudeProxyBackoff? = nil, grants: ClaudeGrantSchedule? = nil,
-                monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil) {
+                monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil,
+                lastMonthlyCredit: (@Sendable () async -> ClaudeMonthlyCredit?)? = nil) {
         self.monthlyCredit = monthlyCredit ?? { now in
             guard !TestHost.isActive else { return nil }
             return await ClaudeMonthlyCreditSession.shared.read(now: now)
+        }
+        self.lastMonthlyCredit = lastMonthlyCredit ?? {
+            guard !TestHost.isActive else { return nil }
+            return await ClaudeMonthlyCreditSession.shared.lastRead()
         }
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
@@ -289,7 +295,8 @@ actor ClaudeAccountDiscovery {
         let result: [any QuotaProvider] = accounts.map { account in
             ClaudeAccountQuotaProvider(account: account, routes: groups[account.id] ?? [],
                 failure: unavailableBindings.first { $0.0.accountID == account.id }?.1,
-                backoff: backoff, grants: grants, creditRows: creditRows, monthlyCredit: monthlyCredit)
+                backoff: backoff, grants: grants, creditRows: creditRows, monthlyCredit: monthlyCredit,
+                lastMonthlyCredit: lastMonthlyCredit)
         }
         return remember(result, signature: signature, now: now, userInitiated: userInitiated)
     }
@@ -358,6 +365,10 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
     /// row matches the web session's account.
     var creditRows: [ClaudeMonthlyCreditBinding.Row] = []
     var monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit? = { _ in nil }
+    /// The last completed read, taken when the wait for this poll's read runs
+    /// out. Its identity is the one that read verified, so binding still
+    /// applies; only its freshness is older.
+    var lastMonthlyCredit: @Sendable () async -> ClaudeMonthlyCredit? = { nil }
     var vendorId: VendorIdentifier { .claude }
     var displayName: String { account.name }
     var category: MetricCategory { .aiSubscriptions }
@@ -374,7 +385,8 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
         // well inside the provider deadline: two stalled WebKit callbacks
         // (billing, then account) could otherwise outlast it and throw away a
         // usage reading that had already been measured.
-        async let credit = Self.bounded(monthlyCredit, now: now, limit: creditWaitLimit)
+        async let credit = Self.bounded(monthlyCredit, fallback: lastMonthlyCredit,
+                                        now: now, limit: creditWaitLimit)
         var snapshot = try await fetchUsage()
         let monthly = await credit
         if let monthly, case .bound(let id) = ClaudeMonthlyCreditBinding.resolve(
@@ -388,14 +400,18 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
 
     var creditWaitLimit: Duration = .seconds(4)
 
-    /// The read's result, or nil once `limit` passes, whichever is first. The
-    /// read keeps running and updates the session's state for the next poll.
+    /// The read's result, or once `limit` passes the last completed read
+    /// (`fallback`), whichever is first. The read keeps running and updates
+    /// the session's state for the next poll. Returning nil on the timeout
+    /// dropped the line from the row for that whole poll whenever claude.ai
+    /// took more than four seconds over its three requests.
     static func bounded(_ read: @escaping @Sendable (Date) async -> ClaudeMonthlyCredit?,
+                        fallback: @escaping @Sendable () async -> ClaudeMonthlyCredit? = { nil },
                         now: Date, limit: Duration) async -> ClaudeMonthlyCredit? {
         await withCheckedContinuation { continuation in
             let gate = FirstResultGate(continuation)
             Task { gate.resume(await read(now)) }
-            Task { try? await Task.sleep(for: limit); gate.resume(nil) }
+            Task { try? await Task.sleep(for: limit); gate.resume(await fallback()) }
         }
     }
 

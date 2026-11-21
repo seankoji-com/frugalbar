@@ -87,7 +87,15 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
 
     private func performRead(now: Date) async -> ClaudeMonthlyCredit? {
         _ = await readCredit(now: now)
-        guard !Task.isCancelled, isEnabled else { return nil }
+        guard !Task.isCancelled else { return nil }
+        return lastRead()
+    }
+
+    /// The credit from the last read that completed, with its identity, and
+    /// without starting a read. A row whose wait for an in-flight read runs
+    /// out takes this instead of dropping the line for a poll.
+    public func lastRead() -> ClaudeMonthlyCredit? {
+        guard !TestHost.isActive, isEnabled else { return nil }
         // Credit and identity are taken from the state at one instant, with
         // no suspension between, so they describe the same read.
         guard var credit = state.credit else { return nil }
@@ -286,13 +294,27 @@ struct ClaudeMonthlyCreditSessionState {
         let consistent = before != nil && before == after ? before : nil
         if apply(text: billingText, now: now) {
             verifiedAccount = consistent
-        } else if consistent == nil || consistent != verifiedAccount {
+        } else if Self.contradicts(verifiedAccount, reads: [envelope?["before"], envelope?["after"]]) {
             // The billing read failed, so the credit on screen is the earlier
-            // one. It stays attributed only while the same account is still
-            // verifiably signed in.
+            // one, now marked stale. It loses its account only when a read
+            // shows someone else, or no one, signed in. A read that simply
+            // did not answer (a timeout, a network failure) is no evidence of
+            // a change: dropping the attribution then hid the line until a
+            // later read happened to succeed.
             verifiedAccount = nil
         }
         verificationPending = false
+    }
+
+    /// True when an account read names a different account than `verified`,
+    /// or says no one is signed in. An unanswered read contradicts nothing.
+    static func contradicts(_ verified: String?, reads: [Any?]) -> Bool {
+        guard let verified else { return false }
+        return reads.contains { read in
+            if let object = read as? [String: Any], object["signedOut"] as? Bool == true { return true }
+            guard let uuid = (read as? [String: Any])?["uuid"] as? String else { return false }
+            return uuid.lowercased() != verified.lowercased()
+        }
     }
 
     static func account(_ value: Any?) -> String? {
