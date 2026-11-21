@@ -65,73 +65,28 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
-    /// The OAuth-row identity of the credit on screen: the signed-in web
-    /// account paired with the organisation the billing query names. Read by
-    /// Settings to say which row the credit is drawn under, or why none.
+    /// The OAuth-row identity of the credit on screen: the account verified to
+    /// have published it, paired with the organisation its billing query
+    /// names. Read by Settings to say why the credit is drawn under no row.
     public var webIdentities: Set<String>? { isEnabled ? state.webIdentities : nil }
 
     public func read(now: Date) async -> ClaudeMonthlyCredit? {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else { return nil }
         _ = await readCredit(now: now)
         guard !Task.isCancelled, isEnabled else { return nil }
-        await refreshWebAccountIfNeeded(now: now)
-        guard !Task.isCancelled, isEnabled else { return nil }
         // Credit and identity are taken from the state at one instant, with
-        // no suspension between, so they describe the same observation.
+        // no suspension between, so they describe the same read.
         guard var credit = state.credit else { return nil }
         credit.webIdentities = state.webIdentities
         return credit
     }
 
-    private var accountRead: Task<Void, Never>?
-
-    /// Reads which account the web session is signed in as, projected in the
-    /// page to its UUID only (no email, name or cookie). The billing query
-    /// names the organisation but not the account. Re-read whenever the query
-    /// changes and at most every five minutes otherwise; concurrent rows share
-    /// one in-flight read so they cannot get different answers.
-    private func refreshWebAccountIfNeeded(now: Date) async {
-        if let accountRead { await accountRead.value; return }
-        guard state.needsAccountRead(now: now) else { return }
-        guard webView.url?.scheme == "https", webView.url?.host == "claude.ai" else { return }
-        state.accountAttemptedAt = now
-        let generation = state.generation
-        let version = state.creditVersion
-        let task = Task { @MainActor in
-            let evaluation = ClaudeMonthlyCreditEvaluation()
-            let text = await evaluation.value { complete in
-                self.webView.callAsyncJavaScript(Self.accountQuery, arguments: [:], in: nil, in: .page) { result in
-                    let text: String?
-                    if case .success(let value) = result { text = value as? String }
-                    else { text = nil }
-                    Task { @MainActor in complete(text) }
-                }
-            }
-            guard self.state.generation == generation else { return }
-            self.state.applyAccountRead(ClaudeMonthlyCreditBinding.webAccount(fromProjection: text), forVersion: version)
-        }
-        accountRead = task
-        await task.value
-        accountRead = nil
-    }
-
-    private static let accountQuery = #"""
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
-    try {
-      const r = await fetch('/api/account', {credentials: 'same-origin', signal: controller.signal});
-      if (!r.ok) return JSON.stringify({status: r.status});
-      const p = await r.json();
-      const a = (p && p.account) || p || {};
-      return JSON.stringify({status: r.status, account: typeof a.uuid === 'string' ? a.uuid : null});
-    } catch (_) {
-      return null;
-    } finally { clearTimeout(timer); }
-    """#
-
     private func readCredit(now: Date) async -> ClaudeMonthlyCredit? {
         if let retryNotBefore = state.retryNotBefore, now < retryNotBefore { return state.credit }
-        if let attemptedAt = state.attemptedAt, now.timeIntervalSince(attemptedAt) < 300 { return state.credit }
+        // A credit the page fetched on its own carries no verified account;
+        // the next read verifies it rather than waiting out the five minutes.
+        if !state.verificationPending, let attemptedAt = state.attemptedAt,
+           now.timeIntervalSince(attemptedAt) < 300 { return state.credit }
         guard pendingRead == nil else { return state.credit }
         state.attemptedAt = now
         guard let query = state.query else {
@@ -165,17 +120,39 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
         return state.credit
     }
 
-    // Bound both the network request and the native callback wait. JavaScript
-    // aborts its own fetch; the native gate also handles a hung WebKit process.
+    // One page evaluation reads the signed-in account, then billing, then the
+    // account again. The credit is attributed to an account only when both
+    // account reads agree, so a sign-in change during the read cannot pass
+    // one account's credit off as another's. The account is projected to its
+    // UUID (no email, name or cookie). JavaScript aborts its own fetches; the
+    // native gate also handles a hung WebKit process.
     private static let refreshQuery = #"""
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
+    const who = async () => {
+      try {
+        const r = await fetch('/api/account', {credentials: 'same-origin', signal: controller.signal});
+        if (r.status === 401 || r.status === 403) return {signedOut: true};
+        if (!r.ok) return null;
+        const p = await r.json();
+        const a = (p && p.account) || p || {};
+        return typeof a.uuid === 'string' ? {uuid: a.uuid} : null;
+      } catch (_) { return null; }
+    };
     try {
-      const r = await fetch(query, {credentials: 'same-origin', signal: controller.signal});
-      if (!r.ok) return JSON.stringify({_retryAfter:r.headers.get('Retry-After')});
-      const p = await r.json();
-      return JSON.stringify({status:p.status,monthly_credit_usd:p.monthly_credit_usd,
-        next_grant_at:p.next_grant_at,grant_due:p.grant_due,grants_held_reason:p.grants_held_reason});
+      const before = await who();
+      let billing;
+      try {
+        const r = await fetch(query, {credentials: 'same-origin', signal: controller.signal});
+        if (!r.ok) billing = {_retryAfter: r.headers.get('Retry-After') || ''};
+        else {
+          const p = await r.json();
+          billing = {status:p.status,monthly_credit_usd:p.monthly_credit_usd,
+            next_grant_at:p.next_grant_at,grant_due:p.grant_due,grants_held_reason:p.grants_held_reason};
+        }
+      } catch (_) { billing = {_failed: true}; }
+      const after = await who();
+      return JSON.stringify({before, after, billing});
     } finally { clearTimeout(timer); }
     """#
 
@@ -228,68 +205,25 @@ struct ClaudeMonthlyCreditSessionState {
     var credit: ClaudeMonthlyCredit?
     var attemptedAt: Date?
     var retryNotBefore: Date?
-    /// Bumped whenever a billing response replaces the credit (or the query
-    /// changes). The account is valid only for the version it was read for.
-    private(set) var creditVersion = 0
-    /// The signed-in web account established for `accountVersion`.
-    var webAccountUUID: String?
-    private(set) var accountVersion: Int?
-    /// The account changed, or signed out, after this credit was observed:
-    /// the credit cannot be tied to any account until it is observed again.
-    private(set) var accountConflict = false
-    var accountAttemptedAt: Date?
+    /// The account verified to have published `credit`: both account reads
+    /// around the billing read that produced it named this account.
+    private(set) var verifiedAccount: String?
+    /// A credit arrived through the page's own fetch, with no account read
+    /// around it; the next read verifies it without waiting out the throttle.
+    private(set) var verificationPending = false
 
-    /// The identity of the credit on screen: the account read for this very
-    /// credit observation, paired with the organisation its billing query
-    /// names. Nil unless both are established for the current observation.
+    /// The identity of the credit on screen: its verified account paired with
+    /// the organisation its billing query names. Nil unless both are known.
     var webIdentities: Set<String>? {
-        guard accountVersion == creditVersion, !accountConflict, let webAccountUUID, let query,
+        guard credit != nil, let verifiedAccount, let query,
               let org = Self.organization(inQuery: query) else { return nil }
-        let identities = ClaudeMonthlyCreditBinding.webIdentities(accountUUID: webAccountUUID, organizationUUIDs: [org])
+        let identities = ClaudeMonthlyCreditBinding.webIdentities(accountUUID: verifiedAccount, organizationUUIDs: [org])
         return identities.isEmpty ? nil : identities
     }
 
     static func organization(inQuery query: String) -> String? {
         URLComponents(string: "https://claude.ai" + query)?.queryItems?
             .first { $0.name == "organization_uuid" }?.value
-    }
-
-    /// Every new credit observation needs its own account read before it can
-    /// be bound; an established one is rechecked every five minutes.
-    func needsAccountRead(now: Date) -> Bool {
-        guard query != nil else { return false }
-        guard accountVersion == creditVersion else { return true }
-        guard !accountConflict, let accountAttemptedAt else { return !accountConflict }
-        return now.timeIntervalSince(accountAttemptedAt) >= 300
-    }
-
-    mutating func applyAccountRead(_ read: ClaudeMonthlyCreditBinding.WebAccountRead, forVersion version: Int) {
-        guard version == creditVersion else { return }
-        // A conflicted observation stays unbound until billing is observed
-        // again; no later account read can claim it.
-        if accountVersion == version, accountConflict { return }
-        let established = accountVersion == version && !accountConflict ? webAccountUUID : nil
-        switch read {
-        case .account(let uuid):
-            if let established, established != uuid {
-                // Someone else signed in after this credit was observed.
-                webAccountUUID = nil
-                accountConflict = true
-            } else {
-                webAccountUUID = uuid
-                accountConflict = false
-            }
-            accountVersion = version
-        case .signedOut:
-            // Whoever signs in next did not publish this credit.
-            webAccountUUID = nil
-            accountConflict = true
-            accountVersion = version
-        case .unknown:
-            // A timeout or malformed answer establishes nothing new; an
-            // account already established for this observation stands.
-            break
-        }
     }
 
     mutating func reset() { self = Self() }
@@ -300,34 +234,69 @@ struct ClaudeMonthlyCreditSessionState {
         return !alreadyEnabled || !hasPage
     }
 
+    /// The page's own billing fetch. Nothing says who was signed in when it
+    /// ran, so a credit it replaces is unattributed until verified.
     mutating func observe(text: String, query: String, retryAfter: String?, now: Date) {
-        if self.query != query { credit = nil; creditVersion += 1 }
+        if self.query != query { credit = nil; verifiedAccount = nil }
         self.query = query
         attemptedAt = now
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
-        apply(text: text, now: now)
+        if apply(text: text, now: now) {
+            verifiedAccount = nil
+            verificationPending = true
+        }
     }
 
+    /// FrugalBar's own read: `{before, after, billing}` from `refreshQuery`.
     mutating func completeRead(text: String?, query: String, generation: UUID, now: Date) {
         guard self.generation == generation, self.query == query else { return }
-        let data = text?.data(using: .utf8)
-        let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: body?["_retryAfter"] as? String, now: now)
-        apply(text: text, now: now)
+        let envelope = text?.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        // A bare billing projection (no envelope) carries no account reads.
+        let billing = envelope?["billing"] as? [String: Any] ?? (envelope?["before"] == nil ? envelope : nil)
+        let billingText = envelope?["billing"] == nil && envelope?["before"] == nil
+            ? text
+            : billing.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+                .flatMap { String(data: $0, encoding: .utf8) }
+        retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: billing?["_retryAfter"] as? String, now: now)
+        let before = Self.account(envelope?["before"]), after = Self.account(envelope?["after"])
+        // Both reads around the billing read named the same account.
+        let consistent = before != nil && before == after ? before : nil
+        if apply(text: billingText, now: now) {
+            verifiedAccount = consistent
+        } else if consistent == nil || consistent != verifiedAccount {
+            // The billing read failed, so the credit on screen is the earlier
+            // one. It stays attributed only while the same account is still
+            // verifiably signed in.
+            verifiedAccount = nil
+        }
+        verificationPending = false
     }
 
-    private mutating func apply(text: String?, now: Date) {
+    static func account(_ value: Any?) -> String? {
+        guard let object = value as? [String: Any], let uuid = object["uuid"] as? String,
+              UUID(uuidString: uuid) != nil else { return nil }
+        return uuid
+    }
+
+    /// Applies a billing projection. True when it replaced the credit
+    /// (including with "no entitlement"); false when the read failed and the
+    /// previous credit was kept, marked stale.
+    @discardableResult
+    private mutating func apply(text: String?, now: Date) -> Bool {
         guard let data = text?.data(using: .utf8),
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               body["_retryAfter"] == nil, body["_failed"] == nil else {
             credit?.refreshFailed = true
-            return
+            return false
         }
         do {
             credit = try ClaudeMonthlyCredit.decode(data, now: now)
-            // A fresh observation may come from a different sign-in.
-            creditVersion += 1
-        } catch { credit?.refreshFailed = true }
+            return true
+        } catch {
+            credit?.refreshFailed = true
+            return false
+        }
     }
 }
 

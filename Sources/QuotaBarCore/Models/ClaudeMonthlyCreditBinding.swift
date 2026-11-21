@@ -52,25 +52,6 @@ public enum ClaudeMonthlyCreditBinding: Equatable, Sendable {
         })
     }
 
-    /// What the page's `/api/account` read established.
-    public enum WebAccountRead: Equatable, Sendable {
-        case account(String)
-        /// 401/403: the web session is no longer signed in.
-        case signedOut
-        /// Timed out, failed, or answered in a shape we do not recognise.
-        case unknown
-    }
-
-    /// Decodes the session's `{status, account}` projection of `/api/account`.
-    public static func webAccount(fromProjection text: String?) -> WebAccountRead {
-        guard let data = text?.data(using: .utf8),
-              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let status = body["status"] as? Int else { return .unknown }
-        if status == 401 || status == 403 { return .signedOut }
-        guard (200..<300).contains(status), let account = body["account"] as? String,
-              UUID(uuidString: account) != nil else { return .unknown }
-        return .account(account)
-    }
 
     /// The shown Claude account rows and their verified identities, as the
     /// last discovery stored them. Empty when Claude has no named rows.

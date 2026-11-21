@@ -75,98 +75,91 @@ struct ClaudeMonthlyCreditBindingTests {
             rows: rows) == .noMatchingAccount)
     }
 
-    @Test("The account projection decodes; 401/403 is signed out; anything else is unknown")
-    func projection() {
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":200,"account":"\#(accountUUID)"}"#)
-            == .account(accountUUID))
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":401}"#) == .signedOut)
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":403}"#) == .signedOut)
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":200,"account":"nope"}"#) == .unknown)
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":500}"#) == .unknown)
-        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: nil) == .unknown)
-    }
-
     private func query(_ org: String) -> String {
         "/api/quirky-lollipop/link-state?organization_uuid=\(org)&include_candidates=false"
     }
 
     private static let linked = #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2027-02-15T14:49:22Z"}"#
 
-    /// One billing observation for `org`, as the page's observer reports it.
-    private func observe(_ state: inout ClaudeMonthlyCreditSessionState, _ org: String) {
-        state.observe(text: Self.linked, query: query(org), retryAfter: nil, now: now)
-    }
-
     private var rowA: [ClaudeMonthlyCreditBinding.Row] {
         [.init(accountID: "a", identity: identity(accountUUID, personalOrg))]
+    }
+
+    /// A state whose billing query names `org`, as the page's first billing
+    /// fetch establishes it.
+    private func state(for org: String) -> ClaudeMonthlyCreditSessionState {
+        var state = ClaudeMonthlyCreditSessionState()
+        state.observe(text: Self.linked, query: query(org), retryAfter: nil, now: now)
+        return state
+    }
+
+    /// FrugalBar's own read: account, billing, account, as `refreshQuery`
+    /// returns it.
+    private func read(_ state: inout ClaudeMonthlyCreditSessionState, before: String?, after: String?,
+                      billing: String = linked) {
+        func who(_ uuid: String?) -> String {
+            switch uuid { case nil: "null"; case "out": #"{"signedOut":true}"#; case let u?: #"{"uuid":"\#(u)"}"# }
+        }
+        let text = #"{"before":\#(who(before)),"after":\#(who(after)),"billing":\#(billing)}"#
+        state.completeRead(text: text, query: state.query!, generation: state.generation, now: now)
+    }
+
+    @Test("A credit the page fetched on its own is unattributed until FrugalBar verifies it")
+    func observedCreditIsUnverified() {
+        var s = state(for: personalOrg)
+        #expect(s.credit != nil)
+        #expect(s.webIdentities == nil)
+        #expect(s.verificationPending)
+        read(&s, before: accountUUID, after: accountUUID)
+        #expect(!s.verificationPending)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: s.webIdentities, rows: rowA) == .bound(accountID: "a"))
     }
 
     /// The account belongs to A and B, only A has a row, and billing is open
     /// for B. Matching against memberships put B's credit on A's row.
     @Test("The credit's organisation is the one its billing query names, not any membership")
     func billingOrganisationDecides() {
-        var state = ClaudeMonthlyCreditSessionState()
-        observe(&state, otherOrg)
-        state.applyAccountRead(.account(accountUUID), forVersion: state.creditVersion)
-        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: state.webIdentities, rows: rowA) == .noMatchingAccount)
-
-        observe(&state, personalOrg)
-        // A new observation needs its own account read before anything binds.
-        #expect(state.webIdentities == nil)
-        #expect(state.needsAccountRead(now: now))
-        state.applyAccountRead(.account(accountUUID), forVersion: state.creditVersion)
-        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: state.webIdentities, rows: rowA) == .bound(accountID: "a"))
+        var s = state(for: otherOrg)
+        read(&s, before: accountUUID, after: accountUUID)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: s.webIdentities, rows: rowA) == .noMatchingAccount)
     }
 
-    /// A signs out and B signs in to the same organisation: the billing query
-    /// is unchanged, so a query-keyed account let B's credit wear A's identity.
-    @Test("A sign-in swap in the same organisation never binds the new credit to the old account")
-    func sameOrganisationSwap() {
-        var state = ClaudeMonthlyCreditSessionState()
-        observe(&state, personalOrg)
-        state.applyAccountRead(.account(accountUUID), forVersion: state.creditVersion)
-        #expect(state.webIdentities == [identity(accountUUID, personalOrg)])
-
-        // B's billing response arrives through the observer.
-        observe(&state, personalOrg)
-        #expect(state.webIdentities == nil)
-        state.applyAccountRead(.account(otherAccountUUID), forVersion: state.creditVersion)
-        #expect(state.webIdentities == [identity(otherAccountUUID, personalOrg)])
-        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: state.webIdentities, rows: rowA) == .noMatchingAccount)
+    /// A's credit was observed, then B signed in to the same organisation
+    /// before the account was read: separate requests let B claim A's credit.
+    @Test("A sign-in change around the billing read leaves the credit unattributed")
+    func swapDuringRead() {
+        var s = state(for: personalOrg)
+        read(&s, before: accountUUID, after: otherAccountUUID)
+        #expect(s.webIdentities == nil)
+        read(&s, before: nil, after: accountUUID)
+        #expect(s.webIdentities == nil)
+        read(&s, before: "out", after: "out")
+        #expect(s.webIdentities == nil)
     }
 
-    /// The billing refresh failed, so A's credit is still on screen, and the
-    /// account read now answers B.
-    @Test("An account that changes under an unchanged credit unbinds it")
-    func accountChangesUnderCredit() {
-        var state = ClaudeMonthlyCreditSessionState()
-        observe(&state, personalOrg)
-        let version = state.creditVersion
-        state.applyAccountRead(.account(accountUUID), forVersion: version)
-        state.observe(text: #"{"_failed":true}"#, query: query(personalOrg), retryAfter: nil, now: now)
-        #expect(state.creditVersion == version)
-        state.applyAccountRead(.account(otherAccountUUID), forVersion: version)
-        #expect(state.webIdentities == nil)
-        // It stays unbound until the credit itself is observed again.
-        #expect(!state.needsAccountRead(now: now.addingTimeInterval(600)))
+    /// The billing refresh failed, so A's credit is still on screen.
+    @Test("After a failed billing read the credit stays attributed only while the same account is verified")
+    func failedBillingRead() {
+        var s = state(for: personalOrg)
+        read(&s, before: accountUUID, after: accountUUID)
+        #expect(s.webIdentities != nil)
+        read(&s, before: accountUUID, after: accountUUID, billing: #"{"_failed":true}"#)
+        #expect(s.webIdentities == [identity(accountUUID, personalOrg)])
+        #expect(s.credit?.refreshFailed == true)
+        read(&s, before: otherAccountUUID, after: otherAccountUUID, billing: #"{"_retryAfter":""}"#)
+        #expect(s.webIdentities == nil)
+        // Once lost, a failed read cannot restore it: only a fresh credit can.
+        read(&s, before: accountUUID, after: accountUUID, billing: #"{"_failed":true}"#)
+        #expect(s.webIdentities == nil)
     }
 
-    @Test("Signing out unbinds the credit; a failed read keeps an established account")
-    func accountInvalidation() {
-        var state = ClaudeMonthlyCreditSessionState()
-        observe(&state, personalOrg)
-        state.applyAccountRead(.account(accountUUID), forVersion: state.creditVersion)
-        state.applyAccountRead(.unknown, forVersion: state.creditVersion)
-        #expect(state.webIdentities != nil)
-        state.applyAccountRead(.signedOut, forVersion: state.creditVersion)
-        #expect(state.webIdentities == nil)
-        // Whoever signs in next did not publish this credit.
-        state.applyAccountRead(.account(otherAccountUUID), forVersion: state.creditVersion)
-        #expect(state.webIdentities == nil)
-        // A read for an older observation is ignored.
-        observe(&state, personalOrg)
-        state.applyAccountRead(.account(accountUUID), forVersion: state.creditVersion - 1)
-        #expect(state.webIdentities == nil)
+    @Test("A billing response the page fetches itself drops an earlier verification")
+    func observationDropsVerification() {
+        var s = state(for: personalOrg)
+        read(&s, before: accountUUID, after: accountUUID)
+        s.observe(text: Self.linked, query: query(personalOrg), retryAfter: nil, now: now)
+        #expect(s.webIdentities == nil)
+        #expect(s.verificationPending)
     }
 
     @Test("A stalled billing read does not hold the row past its bound")

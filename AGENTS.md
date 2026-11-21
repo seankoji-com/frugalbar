@@ -544,14 +544,18 @@ The credit's identity is the signed-in claude.ai account (read in the page from
 billing query itself names (`organization_uuid`), hashed exactly as discovery
 hashes an OAuth profile (`account|<uuid>|<org>`). Never match against the
 account's other memberships: billing open for organisation B would then put
-B's credit on organisation A's row. The account belongs to one billing
-*observation*, not to the query: every response that replaces the credit bumps
-`creditVersion` and needs its own account read, because a sign-out and
-sign-in to the same organisation leaves the query unchanged. If the account
-read for an observation later answers a different account, or a 401/403, the
-observation is unbound until billing is observed again. Concurrent rows share
-one in-flight read, and `read` takes the credit and its identity from the
-state at one instant. The named row waits at most four seconds for this
+B's credit on organisation A's row. Separate billing and account requests can
+authenticate as different people (a sign-out and sign-in to the same
+organisation leaves the query unchanged), so FrugalBar's own read is one page
+evaluation: account, billing, account. The credit is attributed
+(`verifiedAccount`) only when both account reads name the same account. A
+credit the page fetched by itself has no account reads around it and stays
+unattributed until the next read verifies it (that read skips the five-minute
+throttle once). A failed billing read keeps the earlier credit attributed only
+while the same account is still verified; anything else drops the attribution
+until a fresh credit is read. `read` takes the credit and its identity from the
+state at one instant. Settings says "Shown under" only from the snapshots the
+popover is displaying, never from the session alone. The named row waits at most four seconds for this
 optional enrichment so it cannot push a measured usage read past the
 provider deadline.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one

@@ -135,18 +135,31 @@ public struct SettingsView: View {
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
-    @State private var claudeCreditPlacement: String?
+    @State private var claudeCreditRows: [ClaudeMonthlyCreditBinding.Row] = []
     @State private var openDesignEnabled = false
     @State private var showOpenDesign = false
 
     /// Which Claude row the linked monthly credit is drawn under, or why it is
     /// drawn under none. Nil when Claude has no named account rows: the single
     /// unnamed row is then the only place it can go.
-    nonisolated static func claudeCreditPlacement(webIdentities: Set<String>?,
+    ///
+    /// "Shown under" is read from the snapshots the popover is displaying, not
+    /// from the billing session, so the sentence can never name a row the
+    /// popover does not show the credit under (a cached poll can lag a new
+    /// sign-in by up to a refresh).
+    nonisolated static func claudeCreditPlacement(snapshots: [QuotaSnapshot], webIdentities: Set<String>?,
                                                   rows: [ClaudeMonthlyCreditBinding.Row]) -> String? {
         guard !rows.isEmpty else { return nil }
-        return ClaudeMonthlyCreditBinding.resolve(webIdentities: webIdentities, rows: rows)
-            .explanation { ClaudeAccountStore.displayName(forInstanceKey: $0) }
+        if let shown = snapshots.first(where: { $0.vendorId == .claude && $0.monthlyAPICredit != nil }),
+           let account = shown.claudeAccount {
+            return "Shown under \(account.name), the account signed in here."
+        }
+        let binding = ClaudeMonthlyCreditBinding.resolve(webIdentities: webIdentities, rows: rows)
+        if case .bound(let id) = binding {
+            let name = ClaudeAccountStore.displayName(forInstanceKey: id) ?? "the matching Claude account"
+            return "Matched to \(name); the line appears there after the next refresh."
+        }
+        return binding.explanation { ClaudeAccountStore.displayName(forInstanceKey: $0) }
     }
     @State private var claudeMonthlyEnabled = false
     @State private var showOpenAIMonthlyCredit = false
@@ -380,7 +393,10 @@ public struct SettingsView: View {
                     claudeMonthlyEnabled = true
                     showClaudeMonthlyCredit = true
                 }
-                if claudeMonthlyEnabled, let placement = claudeCreditPlacement {
+                if claudeMonthlyEnabled, let placement = Self.claudeCreditPlacement(
+                    snapshots: store?.snapshots ?? [],
+                    webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
+                    rows: claudeCreditRows) {
                     Label(placement, systemImage: "link")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -504,20 +520,13 @@ public struct SettingsView: View {
             claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
             openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
             openDesignEnabled = OpenDesignWebSession.shared.isEnabled
-            claudeCreditPlacement = Self.claudeCreditPlacement(
-                webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
-                rows: ClaudeMonthlyCreditBinding.storedRows())
+            claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
             Task {
-                // Ask the billing session itself: `load()` may be served from
-                // cache or join a pass already in flight, and would then leave
-                // the placement describing the previous sign-in.
                 _ = await ClaudeMonthlyCreditSession.shared.read(now: Date())
+                claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
                 await store?.load()
-                claudeCreditPlacement = Self.claudeCreditPlacement(
-                    webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
-                    rows: ClaudeMonthlyCreditBinding.storedRows())
             }
         }) { ClaudeMonthlyCreditConnectionView() }
         .sheet(isPresented: $showOpenDesign, onDismiss: {

@@ -658,6 +658,13 @@ public actor QuotaManager {
         let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
             && creditInvalidation == monthlyCreditInvalidation
         let acceptsOpenAIMonthlyCredit = openAICreditInvalidation == openAIMonthlyCreditInvalidation
+        // A vendor forgotten during this pass (a disconnect) has no result:
+        // it is neither committed nor counted as read, so a pass queued
+        // behind this one fetches it afresh rather than skipping it.
+        for provider in providersToFetch
+        where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
+            results[provider.instanceID] = nil
+        }
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })
@@ -665,7 +672,6 @@ public actor QuotaManager {
         for provider in providersToFetch {
             let id = provider.instanceID
             guard var snap = results[id] else { continue }
-            if forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] { continue }
             if deadlineFailures.contains(id) {
                 snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
                 snap.monthlyAPICredit?.refreshFailed = true
