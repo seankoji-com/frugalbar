@@ -611,7 +611,9 @@ struct DesktopWidgetView: View {
                 }
                 Text(percentText)
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.onSurface)
+                    // A spent window's bar has no width to carry its red, so
+                    // the figure does.
+                    .foregroundStyle(headroomColor(item) == Theme.errorBold ? Theme.errorBold : Theme.onSurface)
             } else {
                 Text(item.unmeasuredText)
                     .font(.system(size: 10.5).monospacedDigit())

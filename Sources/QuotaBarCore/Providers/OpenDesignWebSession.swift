@@ -79,10 +79,10 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
         releaseWaiters()
     }
 
-    func get(url: String, workspaceID: String?) async -> OpenDesignResult {
+    func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult {
         guard !TestHost.isActive, isEnabled, !Task.isCancelled else { return .failure(.notConfigured) }
         guard !pending else { return .failure(.timedOut) }
-        let started = generation
+        let started = connection
         pending = true
         defer { pending = false }
         guard await pageReady() else {

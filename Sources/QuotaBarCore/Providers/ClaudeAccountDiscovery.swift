@@ -370,7 +370,11 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
         // Billing is independent of the usage read: read it concurrently, and
         // attach it whether or not usage answered, as the unnamed row does.
-        async let credit = monthlyCredit(now)
+        // The billing page's reads are optional enrichment. They are bounded
+        // well inside the provider deadline: two stalled WebKit callbacks
+        // (billing, then account) could otherwise outlast it and throw away a
+        // usage reading that had already been measured.
+        async let credit = Self.bounded(monthlyCredit, now: now, limit: creditWaitLimit)
         var snapshot = try await fetchUsage()
         let monthly = await credit
         if let monthly, case .bound(let id) = ClaudeMonthlyCreditBinding.resolve(
@@ -380,6 +384,19 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
             snapshot.monthlyAPICredit = nil
         }
         return snapshot
+    }
+
+    var creditWaitLimit: Duration = .seconds(4)
+
+    /// The read's result, or nil once `limit` passes, whichever is first. The
+    /// read keeps running and updates the session's state for the next poll.
+    static func bounded(_ read: @escaping @Sendable (Date) async -> ClaudeMonthlyCredit?,
+                        now: Date, limit: Duration) async -> ClaudeMonthlyCredit? {
+        await withCheckedContinuation { continuation in
+            let gate = FirstResultGate(continuation)
+            Task { gate.resume(await read(now)) }
+            Task { try? await Task.sleep(for: limit); gate.resume(nil) }
+        }
     }
 
     private func fetchUsage() async throws -> QuotaSnapshot {

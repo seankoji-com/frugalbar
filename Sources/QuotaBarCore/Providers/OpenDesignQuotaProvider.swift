@@ -37,9 +37,9 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
     }
 
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
-        guard await transport.isConnected else { return unavailable(Self.notConnected) }
+        guard let connection = await transport.connection else { return unavailable(Self.notConnected) }
         let workspace: Workspace
-        switch await transport.get(url: Self.apiBase + "current", workspaceID: nil) {
+        switch await transport.get(url: Self.apiBase + "current", workspaceID: nil, connection: connection) {
         case .failure(let reason): return unavailable(reason)
         case .response(let status, let data, let retryAfter):
             if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
@@ -50,7 +50,7 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
             workspace = decoded
         }
         let path = Self.apiBase + workspace.workspaceId + "/billing/coding-plan-usage"
-        switch await transport.get(url: path, workspaceID: workspace.workspaceId) {
+        switch await transport.get(url: path, workspaceID: workspace.workspaceId, connection: connection) {
         case .failure(let reason): return unavailable(reason)
         case .response(let status, let data, let retryAfter):
             if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
@@ -72,8 +72,12 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
     /// filed under the workspace it was read for, so switching workspaces
     /// starts a new series, and a failed poll (filed under the bare vendor id)
     /// never keeps another workspace's figures on screen.
+    /// Every workspace series key starts with this, so vendor-wide history
+    /// reads find all of them.
+    public static let instancePrefix = "opendesign:"
+
     static func seriesID(workspaceID: String) -> String {
-        "opendesign:" + ClaudeAccount.digest("opendesign|" + workspaceID)
+        instancePrefix + ClaudeAccount.digest("opendesign|" + workspaceID)
     }
 
     /// The id becomes a path component, so only a plain token is accepted.
@@ -215,18 +219,23 @@ enum OpenDesignResult: Sendable {
 /// How the provider reaches OpenDesign. Production goes through the signed-in
 /// in-app web session; tests inject a stub and assert it was called.
 protocol OpenDesignTransport: Sendable {
-    var isConnected: Bool { get async }
-    func get(url: String, workspaceID: String?) async -> OpenDesignResult
+    /// The current connection's generation, or nil when not signed in. Both
+    /// GETs of one read carry it, so workspace discovery and usage cannot come
+    /// from two different connections.
+    var connection: UUID? { get async }
+    func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult
 }
 
 struct OpenDesignDisconnectedTransport: OpenDesignTransport {
-    var isConnected: Bool { get async { false } }
-    func get(url: String, workspaceID: String?) async -> OpenDesignResult { .failure(.notConfigured) }
+    var connection: UUID? { get async { nil } }
+    func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult { .failure(.notConfigured) }
 }
 
 struct OpenDesignWebTransport: OpenDesignTransport {
-    var isConnected: Bool { get async { await OpenDesignWebSession.shared.isEnabled } }
-    func get(url: String, workspaceID: String?) async -> OpenDesignResult {
-        await OpenDesignWebSession.shared.get(url: url, workspaceID: workspaceID)
+    var connection: UUID? {
+        get async { await MainActor.run { OpenDesignWebSession.shared.isEnabled ? OpenDesignWebSession.shared.generation : nil } }
+    }
+    func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult {
+        await OpenDesignWebSession.shared.get(url: url, workspaceID: workspaceID, connection: connection)
     }
 }

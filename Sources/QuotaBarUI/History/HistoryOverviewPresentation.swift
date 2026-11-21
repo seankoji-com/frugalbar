@@ -22,12 +22,21 @@ public enum HistoryOverviewPresentation {
         /// inherited the pre-workspace `opencode` key also owns the readings an
         /// install recorded under that key before workspaces existed.
         public let keys: [String]
+        /// Stored keys this subject owns by prefix: OpenDesign files each
+        /// workspace it reads under its own `opendesign:` key.
+        public let keyPrefix: String?
 
-        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil) {
+        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil,
+                    keyPrefix: String? = nil) {
             self.id = id
             self.vendor = vendor
             self.name = name
             self.keys = keys ?? [id]
+            self.keyPrefix = keyPrefix
+        }
+
+        public func owns(_ key: String) -> Bool {
+            keys.contains(key) || keyPrefix.map(key.hasPrefix) == true
         }
     }
 
@@ -48,6 +57,10 @@ public enum HistoryOverviewPresentation {
             if vendor == .claude, !claudeAccounts.isEmpty {
                 return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name, keys: $0.historyKeys) }
                     + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
+            }
+            if vendor == .opendesign {
+                return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName,
+                                keyPrefix: OpenDesignQuotaProvider.instancePrefix)]
             }
             guard vendor == .opencode else {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)]
@@ -161,7 +174,7 @@ public enum HistoryOverviewPresentation {
         var unread: [Unread] = []
         var empty: [Subject] = []
         for subject in subjects {
-            let all = readings.filter { subject.keys.contains($0.vendor) }.map { $0.namingInstance(subject.id) }
+            let all = readings.filter { subject.owns($0.vendor) }.map { $0.namingInstance(subject.id) }
             let own = HistoryPresentation.consumptionReadings(all)
             guard let label = longestMeasuredLabel(own) else {
                 if let lastPoll = all.max(by: { $0.measuredAt < $1.measuredAt }) {

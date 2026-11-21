@@ -177,8 +177,14 @@ public actor QuotaManager {
     /// flight is harmless: its provider re-checks the connection and reports
     /// not-configured, which retention cannot cover with figures that are gone.
     public func forgetReadings(of vendor: VendorIdentifier) {
+        forgottenVendors[vendor, default: 0] += 1
         for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor { cache[key] = nil }
     }
+
+    /// Bumped by `forgetReadings`. A pass that started before the bump drops
+    /// that vendor's result at commit, so a read that completed just before
+    /// the disconnect cannot write the forgotten reading back.
+    private var forgottenVendors: [VendorIdentifier: Int] = [:]
 
     /// Disconnecting the OpenAI billing session is a local state change, not a
     /// reason to poll quota. Clear the independently read grant immediately so
@@ -594,6 +600,7 @@ public actor QuotaManager {
 
         let creditInvalidation = monthlyCreditInvalidation
         let openAICreditInvalidation = openAIMonthlyCreditInvalidation
+        let forgottenAtStart = forgottenVendors
         let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
         await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
@@ -658,6 +665,7 @@ public actor QuotaManager {
         for provider in providersToFetch {
             let id = provider.instanceID
             guard var snap = results[id] else { continue }
+            if forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] { continue }
             if deadlineFailures.contains(id) {
                 snap.monthlyAPICredit = cache[id]?.snapshot.monthlyAPICredit
                 snap.monthlyAPICredit?.refreshFailed = true

@@ -334,6 +334,7 @@ public actor QuotaHistoryStore {
         switch vendor {
         case .opencode: prefix = OpenCodeGoWorkspaceStore.instancePrefix
         case .claude: prefix = ClaudeAccount.instancePrefix
+        case .opendesign: prefix = OpenDesignQuotaProvider.instancePrefix
         default: return ("vendor = ?", [vendor.rawValue])
         }
         // The instance prefix (`opencode-go:`) carries no `%` or `_`, so a bare

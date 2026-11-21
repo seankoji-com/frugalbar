@@ -510,8 +510,11 @@ public struct SettingsView: View {
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
             Task {
+                // Ask the billing session itself: `load()` may be served from
+                // cache or join a pass already in flight, and would then leave
+                // the placement describing the previous sign-in.
+                _ = await ClaudeMonthlyCreditSession.shared.read(now: Date())
                 await store?.load()
-                // The load read the billing session; say where its credit went.
                 claudeCreditPlacement = Self.claudeCreditPlacement(
                     webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
                     rows: ClaudeMonthlyCreditBinding.storedRows())

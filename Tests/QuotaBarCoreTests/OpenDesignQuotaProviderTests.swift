@@ -25,8 +25,9 @@ struct OpenDesignQuotaProviderTests {
             self.connected = connected
             self._answers = answers
         }
-        var isConnected: Bool { get async { connected } }
-        func get(url: String, workspaceID: String?) async -> OpenDesignResult {
+        var connection: UUID? { get async { connected ? Self.generation : nil } }
+        static let generation = UUID()
+        func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult {
             lock.withLock { _calls.append((url, workspaceID)) }
             return lock.withLock { _answers[url] } ?? .response(status: 404, data: Data())
         }
@@ -172,6 +173,33 @@ struct OpenDesignQuotaProviderTests {
         #expect(second.status.unavailableReason == .badResponse)
         #expect(second.row1 == nil)
         #expect(s.calls.count == 3)
+    }
+
+    /// The read finished while the pass waited on another provider, then the
+    /// user disconnected; the pass's commit wrote the reading back.
+    @Test("A disconnect during a pass keeps the pass from writing the reading back")
+    func forgetDuringPass() async throws {
+        let s = stub(usage: #"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":1,"limitCredits":2}]}"#)
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 5, minPollInterval: 0),
+            providerFactory: { [OpenDesignQuotaProvider(transport: s), SlowProvider()] })
+        let pass = Task { await manager.forceRefresh() }
+        // OpenDesign has answered; the slow provider holds the pass open.
+        try await Task.sleep(for: .milliseconds(150))
+        await manager.forgetReadings(of: .opendesign)
+        _ = await pass.value
+        #expect(await manager.cachedSnapshots()[VendorIdentifier.opendesign.rawValue] == nil)
+        #expect(s.calls.count == 2)
+    }
+
+    private struct SlowProvider: QuotaProvider {
+        let vendorId: VendorIdentifier = .muse
+        let displayName = "Slow"
+        let category: MetricCategory = .aiSubscriptions
+        func fetchSnapshot() async throws -> QuotaSnapshot {
+            try? await Task.sleep(for: .milliseconds(500))
+            return unavailable(.badResponse)
+        }
     }
 
     @Test("The page projection decodes status, body and Retry-After")

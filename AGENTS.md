@@ -109,9 +109,14 @@ finite count (a 400-digit string parses to infinity, and a ratio of two traps
 the percentage's `Int` conversion). A reading is filed under its workspace
 (`OpenDesignQuotaProvider.seriesID`), and a failure under the bare vendor id;
 `QuotaManager` retains figures only within one series, so a workspace switch
-or a failed poll never shows another workspace's quota. Disconnect bumps the
-session's generation (an in-flight read is discarded) and drops the cached
-reading. The payload contract comes from
+or a failed poll never shows another workspace's quota, and a switch never
+reads as a usage drop to the event detectors. History finds every workspace
+key by the `opendesign:` prefix (`vendorClause`, `Subject.keyPrefix`,
+`vendor(forInstanceKey:)`); the one OpenDesign History subject draws them as a
+single line, so a workspace switch shows as a step there. Both GETs carry one
+connection generation. Disconnect bumps it (an in-flight read is discarded),
+drops the cached reading without running the history recorder, and a pass
+already in flight drops OpenDesign's result at commit (`forgetReadings`). The payload contract comes from
 token-monitor PR 1366's synthetic fixtures and has not been checked against a
 captured response.
 
@@ -539,9 +544,16 @@ The credit's identity is the signed-in claude.ai account (read in the page from
 billing query itself names (`organization_uuid`), hashed exactly as discovery
 hashes an OAuth profile (`account|<uuid>|<org>`). Never match against the
 account's other memberships: billing open for organisation B would then put
-B's credit on organisation A's row. The account is re-read whenever the query
-changes, a 401/403 clears it, and concurrent rows share one in-flight read, so
-the identity and the credit always describe the same sign-in and query.
+B's credit on organisation A's row. The account belongs to one billing
+*observation*, not to the query: every response that replaces the credit bumps
+`creditVersion` and needs its own account read, because a sign-out and
+sign-in to the same organisation leaves the query unchanged. If the account
+read for an observation later answers a different account, or a 401/403, the
+observation is unbound until billing is observed again. Concurrent rows share
+one in-flight read, and `read` takes the credit and its identity from the
+state at one instant. The named row waits at most four seconds for this
+optional enrichment so it cannot push a measured usage read past the
+provider deadline.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one
 shown row's verified identity matches. No match, or an unverified row,
 attaches it nowhere, and Settings says why. Email, nickname and row order are

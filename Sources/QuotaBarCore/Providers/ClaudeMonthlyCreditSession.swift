@@ -72,13 +72,13 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
 
     public func read(now: Date) async -> ClaudeMonthlyCredit? {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else { return nil }
-        let credit = await readCredit(now: now)
+        _ = await readCredit(now: now)
         guard !Task.isCancelled, isEnabled else { return nil }
         await refreshWebAccountIfNeeded(now: now)
         guard !Task.isCancelled, isEnabled else { return nil }
-        guard var credit else { return nil }
-        // Computed from the same query the credit was read for, so the two
-        // can never describe different organisations.
+        // Credit and identity are taken from the state at one instant, with
+        // no suspension between, so they describe the same observation.
+        guard var credit = state.credit else { return nil }
         credit.webIdentities = state.webIdentities
         return credit
     }
@@ -96,7 +96,7 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
         guard webView.url?.scheme == "https", webView.url?.host == "claude.ai" else { return }
         state.accountAttemptedAt = now
         let generation = state.generation
-        let query = state.query
+        let version = state.creditVersion
         let task = Task { @MainActor in
             let evaluation = ClaudeMonthlyCreditEvaluation()
             let text = await evaluation.value { complete in
@@ -107,8 +107,8 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
                     Task { @MainActor in complete(text) }
                 }
             }
-            guard self.state.generation == generation, self.state.query == query else { return }
-            self.state.applyAccountRead(ClaudeMonthlyCreditBinding.webAccount(fromProjection: text), query: query)
+            guard self.state.generation == generation else { return }
+            self.state.applyAccountRead(ClaudeMonthlyCreditBinding.webAccount(fromProjection: text), forVersion: version)
         }
         accountRead = task
         await task.value
@@ -228,16 +228,22 @@ struct ClaudeMonthlyCreditSessionState {
     var credit: ClaudeMonthlyCredit?
     var attemptedAt: Date?
     var retryNotBefore: Date?
-    /// The signed-in web account, and the billing query it was read for.
+    /// Bumped whenever a billing response replaces the credit (or the query
+    /// changes). The account is valid only for the version it was read for.
+    private(set) var creditVersion = 0
+    /// The signed-in web account established for `accountVersion`.
     var webAccountUUID: String?
-    var accountReadFor: String?
+    private(set) var accountVersion: Int?
+    /// The account changed, or signed out, after this credit was observed:
+    /// the credit cannot be tied to any account until it is observed again.
+    private(set) var accountConflict = false
     var accountAttemptedAt: Date?
 
-    /// The identity of the credit on screen: the signed-in account paired
-    /// with the organisation the billing query itself names. Nil unless both
-    /// are known for the current query.
+    /// The identity of the credit on screen: the account read for this very
+    /// credit observation, paired with the organisation its billing query
+    /// names. Nil unless both are established for the current observation.
     var webIdentities: Set<String>? {
-        guard let webAccountUUID, let query, accountReadFor == query,
+        guard accountVersion == creditVersion, !accountConflict, let webAccountUUID, let query,
               let org = Self.organization(inQuery: query) else { return nil }
         let identities = ClaudeMonthlyCreditBinding.webIdentities(accountUUID: webAccountUUID, organizationUUIDs: [org])
         return identities.isEmpty ? nil : identities
@@ -248,28 +254,41 @@ struct ClaudeMonthlyCreditSessionState {
             .first { $0.name == "organization_uuid" }?.value
     }
 
-    /// A new query (another organisation, or a fresh sign-in) needs its
-    /// account read before any binding; otherwise every five minutes.
+    /// Every new credit observation needs its own account read before it can
+    /// be bound; an established one is rechecked every five minutes.
     func needsAccountRead(now: Date) -> Bool {
         guard query != nil else { return false }
-        if accountReadFor != query { return true }
-        guard let accountAttemptedAt else { return true }
+        guard accountVersion == creditVersion else { return true }
+        guard !accountConflict, let accountAttemptedAt else { return !accountConflict }
         return now.timeIntervalSince(accountAttemptedAt) >= 300
     }
 
-    mutating func applyAccountRead(_ read: ClaudeMonthlyCreditBinding.WebAccountRead, query: String?) {
+    mutating func applyAccountRead(_ read: ClaudeMonthlyCreditBinding.WebAccountRead, forVersion version: Int) {
+        guard version == creditVersion else { return }
+        // A conflicted observation stays unbound until billing is observed
+        // again; no later account read can claim it.
+        if accountVersion == version, accountConflict { return }
+        let established = accountVersion == version && !accountConflict ? webAccountUUID : nil
         switch read {
         case .account(let uuid):
-            webAccountUUID = uuid
-            accountReadFor = query
+            if let established, established != uuid {
+                // Someone else signed in after this credit was observed.
+                webAccountUUID = nil
+                accountConflict = true
+            } else {
+                webAccountUUID = uuid
+                accountConflict = false
+            }
+            accountVersion = version
         case .signedOut:
-            // The session no longer proves who is signed in.
+            // Whoever signs in next did not publish this credit.
             webAccountUUID = nil
-            accountReadFor = nil
+            accountConflict = true
+            accountVersion = version
         case .unknown:
-            // A timeout or malformed answer keeps an account already proven
-            // for this query; it never carries one over to another query.
-            if accountReadFor != query { webAccountUUID = nil; accountReadFor = nil }
+            // A timeout or malformed answer establishes nothing new; an
+            // account already established for this observation stands.
+            break
         }
     }
 
@@ -282,7 +301,7 @@ struct ClaudeMonthlyCreditSessionState {
     }
 
     mutating func observe(text: String, query: String, retryAfter: String?, now: Date) {
-        if self.query != query { credit = nil }
+        if self.query != query { credit = nil; creditVersion += 1 }
         self.query = query
         attemptedAt = now
         retryNotBefore = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
@@ -304,8 +323,11 @@ struct ClaudeMonthlyCreditSessionState {
             credit?.refreshFailed = true
             return
         }
-        do { credit = try ClaudeMonthlyCredit.decode(data, now: now) }
-        catch { credit?.refreshFailed = true }
+        do {
+            credit = try ClaudeMonthlyCredit.decode(data, now: now)
+            // A fresh observation may come from a different sign-in.
+            creditVersion += 1
+        } catch { credit?.refreshFailed = true }
     }
 }
 
