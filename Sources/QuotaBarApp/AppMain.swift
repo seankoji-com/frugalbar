@@ -192,6 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onSummaryChange = { [weak self] _ in
             self?.applyStatusItemPresentation()
         }
+        store.onQuotaRefreshCompleted = { [weak self] snapshots in
+            await self?.checkForQuotaTransitions(snapshots)
+        }
         applyStatusItemPresentation()
         DesktopWidgetWindow.configure(store: store)
 
@@ -231,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     self.sync?.submit(snapshots: self.store.snapshots)
                 }
-                await self?.checkForQuotaTransitions()
+                await self?.checkExternalEvents()
             }
             self?.schedulerToken = token
         }
@@ -244,9 +247,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `observeTransitions` runs on every poll regardless of the toggles, so
     /// the observer's "previous" state stays current even while notifications
     /// are off — only delivery is gated below.
-    private func checkForQuotaTransitions() async {
+    private func checkForQuotaTransitions(_ snapshots: [QuotaSnapshot]) async {
         let now = Date()
-        let transitions = await notificationObserver.observeTransitions(current: store.snapshots, now: now)
+        let transitions = await notificationObserver.observeTransitions(current: snapshots, now: now)
         if CredentialStore.isNotificationsEnabled, !transitions.recoveries.isEmpty {
             deliverRecoveryNotification(for: transitions.recoveries)
         }
@@ -255,20 +258,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !resets.isEmpty {
             deliverResetNotification(for: resets)
         }
-        await recordAIEvents(transitions, now: now)
-    }
-
-    /// Records every poll-derived event (resets for all vendors, not just the
-    /// opted-in ones — the log is a record, the banner is the opt-in), then
-    /// the external sources when due, and notifies on what was actually new.
-    private func recordAIEvents(_ transitions: QuotaTransitions, now: Date) async {
-        var fresh = await eventEngine.recordPollEvents(
+        let fresh = await eventEngine.recordPollEvents(
             resets: transitions.resets,
             restores: transitions.restores,
             creditGrants: transitions.creditGrants,
             now: now
         )
-        fresh += await eventEngine.pollExternalSources(now: now, vendors: store.configuredVendors)
+        await postEventBanners(fresh, now: now)
+    }
+
+    private func checkExternalEvents() async {
+        let now = Date()
+        let fresh = await eventEngine.pollExternalSources(now: now, vendors: store.configuredVendors)
+        await postEventBanners(fresh, now: now)
+    }
+
+    private func postEventBanners(_ fresh: [AIEvent], now: Date) async {
         guard !fresh.isEmpty else { return }
         await store.reloadRecentEvents()
         let banners = AIEventNotification.banners(

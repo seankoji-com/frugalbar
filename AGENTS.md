@@ -107,7 +107,9 @@ puts those in `QuotaSnapshot.scopedBars`, which is deliberately outside `bars`:
 a scoped cap only blocks one model, while every `bars` consumer reads a window
 as plan-wide (exhaustion sorting, the advice engine's worst bar, the menu bar,
 the widget's average, `displayBars`' collapse). The popover draws them under the
-row with their own percentage and reset. `percent` is a percentage, so it is
+row with their own percentage and reset while the plan's 5H and WK windows
+are usable. A spent or blocked plan window hides the scoped rows in the
+popover. `percent` is a percentage, so it is
 divided by 100 directly — running it through the flat windows'
 fraction-or-percentage heuristic would turn 1% into 100%.
 
@@ -251,7 +253,7 @@ by every project and key on it. The Gemini API
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
 It is drawn under the Gemini row inside the Antigravity block as the **API
-budget** line, in the anatomy of Codex's separate monthly credit: name column,
+credit** line, in the anatomy of Codex's separate API credit: name column,
 one bar, and a percentage and countdown beneath. The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
@@ -444,7 +446,9 @@ right ("20d remaining"), matching the OpenAI Codex rows; an expiry the
 vendor did not publish says "Expiry not published" rather than borrowing the
 reset window's date. Claude splits the grant set by the allowance it resets: the
 plan-wide ticket sits under `Claude Code`, and a model's tickets sit under that
-model's scoped row (Fable).
+model's scoped row (Fable). A spent or blocked plan window hides model-scoped
+tickets, including tickets without a matching scoped row. The plan ticket
+stays visible, and the spoken label still describes the model tickets.
 
 The grant **id** names the model first: an id containing Fable is
 model-scoped even when it also clears a shared plan window
@@ -492,7 +496,7 @@ billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
 above and not a balance or quota. The billing client reads that amount with
 `Number(value)`, so the decoder accepts both a JSON number and a numeric string;
 accepting only `String?` silently dropped a live entitlement. It draws under the
-row as a **Monthly credit** line with the amount beneath the title (through
+row as an **API credit** line with the amount beneath the title (through
 `MoneyText.format`, so a whole USD amount keeps its cents) and an `MO` meter.
 
 **That meter is billing-cycle progress, never API spend.** The linked payload

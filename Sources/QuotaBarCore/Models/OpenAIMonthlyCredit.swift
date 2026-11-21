@@ -44,7 +44,7 @@ public struct OpenAIMonthlyCredit: Sendable, Equatable {
         APICreditEntry(
             id: "openai.monthly-credit",
             vendorId: .openai,
-            label: "Monthly credit",
+            label: "API credit",
             metric: .currency(balance: remainingUSD, limit: grantUSD, spent: nil,
                               currencyCode: "USD"),
             currencyBasis: .prepaidCredit,

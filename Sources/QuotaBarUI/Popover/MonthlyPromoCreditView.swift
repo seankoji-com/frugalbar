@@ -8,7 +8,7 @@ import QuotaBarCore
 /// It still has no place in quota maths: `fraction` is presentation-only and
 /// never reaches `consumptionFraction`, urgency, sorting or advice.
 public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
-    /// "Usage credits" for Claude's promo, "Monthly credit" for OpenAI's
+    /// "Usage credits" for Claude's promo, "API credit" for OpenAI's
     /// API-organization grant, so the OpenAI row is not mistaken for the
     /// separate ChatGPT usage-credit count.
     let title: String
@@ -28,7 +28,7 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
     var isExhausted: Bool { fraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } ?? false }
 
     init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
-        title = entry.vendorId == .openai ? "Monthly credit" : "Usage credits"
+        title = entry.vendorId == .openai ? "API credit" : "Usage credits"
         if case .currency(_, let limit?, _, let code) = entry.metric, limit > 0 {
             amountText = MoneyText.format(limit, code: code)
         } else {

@@ -23,6 +23,10 @@ struct PopoverRowGrouping {
                 return PopoverRowGrouping.claudeAccountSubtitle(for: snapshot)
             }
             let plan = snapshot.shortPlanName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if snapshot.vendorId == .gemini {
+                if plan == header { return "" }
+                return plan.hasPrefix("Google AI ") ? String(plan.dropFirst("Google ".count)) : plan
+            }
             guard snapshot.id == snapshots.first?.id else { return suppressPlan ? "" : plan }
             guard !plan.isEmpty, plan != header, PopoverRowGrouping.planBadge(for: snapshot) == nil else {
                 return header

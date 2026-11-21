@@ -1272,7 +1272,7 @@ struct CommandCodeQuotaProviderTests {
     private static func body(
         fiveHourUsed: String = "1.25", fiveHourCap: String = "5",
         weeklyUsed: String = "5", weeklyCap: String = "20",
-        limited: String = "false", planId: String = "individual-pro",
+        limited: String = "false", planId: String = "individual-pro-v1",
         monthly: String = "60", purchased: String = "0", free: String = "0",
         fiveHourReset: String = "1767243600000", weeklyReset: String = "1767830400000"
     ) -> String {
@@ -1306,17 +1306,23 @@ struct CommandCodeQuotaProviderTests {
         creditsStatus: Int = 200,
         whoamiStatus: Int = 200,
         whoamiBody: String = #"{"org":{"id":"org-1"},"user":{"userName":"alice"}}"#,
+        whoamiDelay: TimeInterval = 0,
+        subscriptions: NewProviderStub.Stubbed = .init(status: 404, body: Data()),
         _ operation: @Sendable () async throws -> T
     ) async throws -> T {
         NewProviderStub.install(host: StubHost.commandcode) { request in
             let path = request.url?.path ?? ""
             if path.hasSuffix("/whoami") {
+                if whoamiDelay > 0 { Thread.sleep(forTimeInterval: whoamiDelay) }
                 return NewProviderStub.Stubbed(status: whoamiStatus, body: Data(whoamiBody.utf8))
             }
+            if path.hasSuffix("/subscriptions") { return subscriptions }
             return NewProviderStub.Stubbed(status: creditsStatus, body: Data(creditsBody.utf8))
         }
         defer { NewProviderStub.remove(host: StubHost.commandcode) }
-        return try await QuotaHTTP.$session.withValue(NewProviderStub.makeSession()) {
+        let session = NewProviderStub.makeSession()
+        defer { session.invalidateAndCancel() }
+        return try await QuotaHTTP.$session.withValue(session) {
             try await operation()
         }
     }
@@ -1362,7 +1368,7 @@ struct CommandCodeQuotaProviderTests {
     func planAllowances() {
         #expect(CommandCodeQuotaProvider.planAllowance("individual-go") == 10)
         #expect(CommandCodeQuotaProvider.planAllowance("individual-goat") == 70)
-        #expect(CommandCodeQuotaProvider.planAllowance("individual-pro") == 80)
+        #expect(CommandCodeQuotaProvider.planAllowance("individual-pro") == 30)
         #expect(CommandCodeQuotaProvider.planAllowance("individual-pro-v1") == 80)
         #expect(CommandCodeQuotaProvider.planAllowance("individual-max") == 150)
         #expect(CommandCodeQuotaProvider.planAllowance("individual-ultra") == 300)
@@ -1388,8 +1394,8 @@ struct CommandCodeQuotaProviderTests {
 
         #expect(credits.primaryFraction == nil)
         #expect(credits.usedText?.contains("12.50") == true)
-        #expect(credits.balanceCaption == "$12.50")
-        #expect(credits.balanceText == "$12.50")
+        #expect(credits.balanceCaption == nil)
+        #expect(credits.balanceText == nil)
         #expect(credits.quantityUnit == "credits")
         // A text-only row must not count as spent.
         #expect(credits.primaryFractionForWorstBarRanking == -1)
@@ -1401,7 +1407,7 @@ struct CommandCodeQuotaProviderTests {
         #expect(CommandCodeQuotaProvider.planAllowance("individual-provider") == nil)
         let credits = try #require(try snapshot(Self.body(planId: "individual-provider")).row3)
         #expect(credits.primaryFraction == nil)
-        #expect(credits.balanceCaption == "$60.00")
+        #expect(credits.balanceCaption == nil)
     }
 
     @Test("purchased and free credits widen the denominator")
@@ -1525,15 +1531,15 @@ struct CommandCodeQuotaProviderTests {
         #expect(snap.row2 == nil)
         #expect(snap.row3?.primaryFraction == nil)
         #expect(snap.row3?.usedText?.contains("3.00") == true)
-        #expect(snap.row3?.balanceCaption == "$3.00")
+        #expect(snap.row3?.balanceCaption == nil)
         #expect(snap.row3?.quantityUnit == "credits")
     }
 
-    @Test("a spent remaining-only balance prints $0.00, not a dash or a negative")
+    @Test("a zero remaining balance has detail without a visible currency caption")
     func creditsOnlyAtZero() throws {
         let snap = try snapshot(#"{"credits":{"monthlyCredits":0,"purchasedCredits":0,"freeCredits":0}}"#)
         #expect(snap.row3?.usedText == "No credits left")
-        #expect(snap.row3?.balanceCaption == "$0.00")
+        #expect(snap.row3?.balanceCaption == nil)
         #expect(snap.row3?.primaryFraction == nil)
     }
 
@@ -1614,16 +1620,106 @@ struct CommandCodeQuotaProviderTests {
 
     @Test("the org id from whoami reaches the credits call, with the key in a header")
     func orgIdForwarded() async throws {
-        _ = try await withCommandCode(creditsBody: Self.body()) {
-            try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+        let request = try await withCommandCode(creditsBody: Self.body()) {
+            _ = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            return try #require(NewProviderStub.requests(host: StubHost.commandcode)
+                .first { $0.url?.path.hasSuffix("/alpha/billing/credits") == true })
         }
 
-        let request = try #require(NewProviderStub.lastRequest(host: StubHost.commandcode))
         #expect(request.url?.path.hasSuffix("/alpha/billing/credits") == true)
         #expect(request.url?.query == "orgId=org-1")
         // The credential rides in the header, never the URL.
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer user_ok")
         #expect(request.url?.query?.contains("user_ok") != true)
+    }
+
+    private static func subscriptions(_ planID: String, status: String = "active") -> Data {
+        Data(#"{"data":{"planId":"\#(planID)","status":"\#(status)","currentPeriodStart":"2099-11-04T23:22:43.000Z","currentPeriodEnd":"2099-12-04T23:22:43.000Z"}}"#.utf8)
+    }
+
+    @Test("the GOAT subscription supplies the plan, fraction and reset when the credits omit a plan")
+    func subscriptionSuppliesGoat() async throws {
+        try await withCommandCode(
+            creditsBody: #"{"credits":{"monthlyCredits":0.0506,"purchasedCredits":0,"freeCredits":0}}"#,
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-goat"))
+        ) {
+            let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            let month = try #require(snap.row3)
+            #expect(snap.planName == "GOAT")
+            #expect(abs(try #require(month.primaryFraction) - 0.9992771428571429) < 1e-9)
+            #expect(month.resetsAt == ISO8601DateFormatter().date(from: "2099-12-04T23:22:43Z"))
+            #expect(month.windowLength == TimeInterval(30 * 86_400))
+            let request = try #require(NewProviderStub.requests(host: StubHost.commandcode)
+                .first { $0.url?.path.hasSuffix("/subscriptions") == true })
+            #expect(request.url?.query == "orgId=org-1")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer user_ok")
+        }
+    }
+
+    @Test(arguments: [
+        #"{"monthlyCredits":1,"purchasedCredits":5,"freeCredits":0}"#,
+        #"{"monthlyCredits":1,"purchasedCredits":0}"#,
+        #"{"planId":"individual-pro","monthlyCredits":1,"purchasedCredits":0,"freeCredits":0}"#,
+    ])
+    func subscriptionResetRequiresMatchingPlanAndExplicitZeroTopUps(credits: String) async throws {
+        try await withCommandCode(creditsBody: #"{"credits":\#(credits)}"#,
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-goat"))
+        ) {
+            let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            #expect(snap.planName == (credits.contains("planId") ? "Pro" : "GOAT"))
+            let month = try #require(snap.row3)
+            #expect(month.primaryFraction != nil)
+            #expect(month.resetsAt == nil)
+            #expect(month.windowLength == nil)
+            #expect(month.expectedPaceFraction == nil)
+        }
+    }
+
+    @Test(arguments: [401, 500, 200, 0])
+    func subscriptionFailureKeepsCredits(status: Int) async throws {
+        try await withCommandCode(creditsBody: #"{"credits":{"monthlyCredits":12.5}}"#,
+            whoamiDelay: status == 0 ? 0.55 : 0,
+            subscriptions: .init(status: status == 0 ? 200 : status, body: Data("not json".utf8),
+                                 hangs: status == 0)
+        ) {
+            let manager = QuotaManager(cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                perProviderTimeout: 1, minPollInterval: 0),
+                providerFactory: { [CommandCodeQuotaProvider(apiKey: "user_ok")] },
+                displayPreferences: { ProviderDisplayPreferences() })
+            let snap = try #require(await manager.forceRefresh()["commandcode"])
+            #expect(snap.status.confidence == .measured)
+            #expect(snap.planName == nil)
+            #expect(snap.row3?.usedText?.contains("12.50") == true)
+            #expect(NewProviderStub.requests(host: StubHost.commandcode)
+                .contains { $0.url?.path.hasSuffix("/subscriptions") == true })
+        }
+    }
+
+    @Test("one credential caches plans separately for two request scopes")
+    func subscriptionCacheIsScoped() async throws {
+        let provider = CommandCodeQuotaProvider(apiKey: "user_ok")
+        let credits = #"{"credits":{"monthlyCredits":12.5}}"#
+        try await withCommandCode(creditsBody: credits,
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-goat"))
+        ) {
+            let snapshot = try await provider.fetchSnapshot()
+            #expect(snapshot.planName == "GOAT")
+        }
+        try await withCommandCode(creditsBody: credits, whoamiBody: #"{"org":{"id":"org-2"}}"#,
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-pro", status: "trialing"))
+        ) {
+            let snapshot = try await provider.fetchSnapshot()
+            #expect(snapshot.planName == "Pro")
+            #expect(NewProviderStub.requests(host: StubHost.commandcode).contains {
+                $0.url?.path.hasSuffix("/subscriptions") == true && $0.url?.query == "orgId=org-2"
+            })
+        }
+        try await withCommandCode(creditsBody: credits) {
+            let snapshot = try await provider.fetchSnapshot()
+            #expect(snapshot.planName == "GOAT")
+            #expect(!NewProviderStub.requests(host: StubHost.commandcode)
+                .contains { $0.url?.path.hasSuffix("/subscriptions") == true })
+        }
     }
 
     @Test("no credential at all is 'not configured'")

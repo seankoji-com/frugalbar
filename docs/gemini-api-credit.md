@@ -58,7 +58,7 @@ Billing tab and enters in **Settings → API Keys → Google**. It holds:
 | Monthly spend cap | The project's spend limit | AI Studio → Billing |
 
 Settings records all three figures. The popover draws only the spend cap, as
-the account's **API budget** line under the **Gemini** row inside the
+the account's **API credit** line under the **Gemini** row inside the
 **Antigravity** service block. The prepaid balance and monthly credit remain
 Settings values and are not drawn.
 
@@ -73,7 +73,7 @@ the countdown says how many days are left in the month. The line uses the
 informational colour and draws no quota pace marker.
 
 For example, a project with an A$30 monthly spend cap records that cap as an
-A$30 API budget line; the bar shows where in the calendar month you are, not a
+A$30 API credit line; the bar shows where in the calendar month you are, not a
 percentage of the A$30 spent.
 
 ## What it is not
@@ -83,7 +83,7 @@ percentage of the A$30 spent.
 - **Not a quota.** It never reaches `consumptionFraction`, urgency, exhaustion
   sorting, the advice engine, the menu-bar icon, the widget's average or the
   sync export.
-- **Not a spend bar.** The API budget meter is elapsed calendar time. It draws
+- **Not a spend bar.** The API credit meter is elapsed calendar time. It draws
   no percentage of the cap spent, because a balance with no measured usage has
   no spend numerator. The prepaid balance and monthly credit are not drawn in
   the popover at all.
@@ -111,7 +111,7 @@ not move the same credit onto either of those rows.
   failed poll, hidden with the Gemini provider, and carried as no
   `apiCredits` entry.
 - `GeminiAPICreditPlacementTests` — the spend cap drawn as a calendar-month
-  API budget line (percentage, countdown and spoken wording), the fill proven
+  API credit line (percentage, countdown and spoken wording), the fill proven
   independent of the prepaid balance and monthly credit, the balances absent
   from the drawn line, spoken on measured and unavailable rows, drawn below the
   row, the budget line's own height, and the Antigravity grouping left

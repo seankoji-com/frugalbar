@@ -65,7 +65,7 @@ struct GeminiAPICreditSettingsView: View {
                  Cloud Billing account, shared by every project on it. \
                  FrugalBar therefore records the figures you enter here and \
                  dates them. They are not a measured vendor balance. The \
-                 popover draws only the monthly spend cap, as an API budget \
+                 popover draws only the monthly spend cap, as an API credit \
                  line with a calendar-month progress bar. The prepaid balance \
                  and monthly credit stay in Settings and take no part in quota \
                  urgency, sorting, advice or balance history. The bar measures \

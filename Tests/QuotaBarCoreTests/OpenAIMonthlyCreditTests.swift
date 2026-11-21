@@ -42,7 +42,7 @@ struct OpenAIMonthlyCreditTests {
         let entry = credit.entry
         #expect(entry.id == "openai.monthly-credit")
         #expect(entry.vendorId == .openai)
-        #expect(entry.label == "Monthly credit")
+        #expect(entry.label == "API credit")
         #expect(entry.isMonthlyPromo)
         #expect(entry.extendsSubscription)
         // The grant's issue date is kept on the reading, not used as the

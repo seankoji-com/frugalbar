@@ -1,8 +1,9 @@
+import CryptoKit
 import Foundation
 
 /// Command Code subscription usage.
 ///
-/// Two calls, mirroring the `cmd` CLI's own `/usage` command, both
+/// Calls behind the `cmd` CLI's own `/usage` command, all
 /// authenticated with the long-lived API key `cmd login` writes (or the
 /// `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY` environment variable):
 ///
@@ -10,6 +11,8 @@ import Foundation
 ///      only `org.id` is read, so the credits call can carry `?orgId=`.
 ///   2. `GET https://api.commandcode.ai/alpha/billing/credits` — the quota
 ///      payload: the two rolling windows and the credit balance.
+///   3. `GET https://api.commandcode.ai/alpha/billing/subscriptions` — the
+///      fallback plan and its published billing period.
 ///
 /// The `alpha` routes are not officially documented. The shapes below match
 /// what the CLI reads, corroborated by two independent open-source
@@ -30,19 +33,24 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
     public let category: MetricCategory = .aiSubscriptions
 
     private let apiKey: String?
+    private let subscriptionCache: SubscriptionCache
+    private static let sharedSubscriptionCache = SubscriptionCache()
 
     public init(apiKey: String? = nil) {
         self.apiKey = apiKey
+        self.subscriptionCache = apiKey == nil ? Self.sharedSubscriptionCache : SubscriptionCache()
     }
 
     // MARK: - Endpoints
 
     static let whoamiURL = "https://api.commandcode.ai/alpha/whoami?limits=1"
     static let creditsURL = "https://api.commandcode.ai/alpha/billing/credits"
+    static let subscriptionsURL = "https://api.commandcode.ai/alpha/billing/subscriptions"
 
     // MARK: - Fetch
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
+        let deadline = QuotaFetchContext.deadline ?? (ContinuousClock.now + .seconds(CachePolicy.default.perProviderTimeout))
         guard let key = await credential(injected: apiKey, for: .commandcode) else {
             return unavailable(.notConfigured)
         }
@@ -52,15 +60,10 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         // reading itself, so its errors are swallowed here on purpose — the
         // credits call's own status is what decides the outcome.
         let orgId = await Self.fetchOrgId(apiKey: key)
-
-        var url = Self.creditsURL
-        if let orgId, !orgId.isEmpty, var components = URLComponents(string: url) {
-            components.queryItems = [URLQueryItem(name: "orgId", value: orgId)]
-            url = components.url?.absoluteString ?? url
-        }
+        async let subscription = fetchSubscription(apiKey: key, orgId: orgId, deadline: deadline)
 
         let (data, http) = try await QuotaHTTP.get(
-            url: url,
+            url: Self.scopedURL(Self.creditsURL, orgId: orgId),
             headers: ["Accept": "application/json"],
             auth: .bearer(key)
         )
@@ -69,7 +72,14 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         guard let response = Self.decode(CreditsResponse.self, from: data) else {
             return unavailable(.badResponse)
         }
-        return Self.snapshot(from: response, provider: self, now: Date())
+        let plan = await subscription
+        return Self.snapshot(from: response, subscription: plan, provider: self, now: Date())
+    }
+
+    private static func scopedURL(_ url: String, orgId: String?) -> String {
+        guard let orgId, var components = URLComponents(string: url) else { return url }
+        components.queryItems = [URLQueryItem(name: "orgId", value: orgId)]
+        return components.url?.absoluteString ?? url
     }
 
     private static func fetchOrgId(apiKey: String) async -> String? {
@@ -80,20 +90,73 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         ), QuotaHTTP.failureReason(for: http.statusCode) == nil,
             let whoami = decode(WhoamiResponse.self, from: data)
         else { return nil }
-        return whoami.org?.id?.trimmed
+        guard let orgId = whoami.org?.id?.trimmed, !orgId.isEmpty else { return nil }
+        return orgId
+    }
+
+    private func fetchSubscription(
+        apiKey: String, orgId: String?, deadline: ContinuousClock.Instant
+    ) async -> Subscription? {
+        let key = SubscriptionCache.Key(digest: Data(SHA256.hash(data: Data(apiKey.utf8))), orgId: orgId)
+        if let cached = await subscriptionCache.lookup(key, now: Date()) { return cached }
+
+        // Return the optional result before the manager's whole-provider
+        // deadline, so it can publish credits even if subscriptions stalls.
+        let remaining = (deadline - ContinuousClock.now).components
+        let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
+        let budget = seconds - min(0.25, seconds / 5)
+        guard budget > 0, !Task.isCancelled else { return nil }
+        let outcome = await withDeadline(seconds: budget) { () -> Subscription? in
+            let (data, http) = try await QuotaHTTP.get(
+                url: Self.scopedURL(Self.subscriptionsURL, orgId: orgId),
+                headers: ["Accept": "application/json"],
+                auth: .bearer(apiKey)
+            )
+            guard QuotaHTTP.failureReason(for: http.statusCode) == nil,
+                  let plan = Self.decode(Subscription.self, from: data),
+                  plan.activePlanID != nil else { return nil }
+            return plan
+        }
+        guard case .success(let plan?) = outcome, !Task.isCancelled else { return nil }
+        await subscriptionCache.save(plan, for: key, now: Date())
+        return plan
+    }
+
+    private actor SubscriptionCache {
+        struct Key: Hashable {
+            let digest: Data
+            let orgId: String?
+        }
+
+        private var entries: [Key: (plan: Subscription, expiresAt: Date)] = [:]
+
+        func lookup(_ key: Key, now: Date) -> Subscription? {
+            entries = entries.filter { $0.value.expiresAt > now }
+            return entries[key]?.plan
+        }
+
+        func save(_ plan: Subscription, for key: Key, now: Date) {
+            let ttl = now.addingTimeInterval(3600)
+            let expiresAt = min(plan.currentPeriodEnd?.date ?? ttl, ttl)
+            if expiresAt > now { entries[key] = (plan, expiresAt) }
+        }
     }
 
     // MARK: - Snapshot construction
 
     static func snapshot(
         from response: CreditsResponse,
+        subscription: Subscription? = nil,
         provider: CommandCodeQuotaProvider,
         now: Date
     ) -> QuotaSnapshot {
         let windows = response.windowLimits
         let fiveHour = row(windows?.fiveHour, label: "5H", length: QuotaWindow.fiveHours, now: now)
         let weekly = row(windows?.weekly, label: "WK", length: QuotaWindow.week, now: now)
-        let credits = creditRow(response.credits)
+        let subscriptionPlan = subscription?.activePlanID
+        let planID = normalizedPlanID(response.credits?.planId) ?? subscriptionPlan
+        let billingPeriod = planID == subscriptionPlan ? subscription?.period : nil
+        let credits = creditRow(response.credits, planID: planID, billingPeriod: billingPeriod, now: now)
         let limited = windows?.limited?.value == true
 
         // Neither a window nor a credit bucket is nothing we can report. A
@@ -121,7 +184,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         else if let worst { badge = "\(Int(((1 - worst) * 100).rounded()))% left" }
         else { badge = nil }
 
-        let planName = planDisplayName(response.credits?.planId)
+        let planName = planDisplayName(planID)
 
         return QuotaSnapshot(
             id: provider.vendorId.rawValue,
@@ -193,18 +256,18 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
     /// When the plan id is unrecognised there is no published allowance, so the
     /// row degrades to the balance as text with no bar — never a guessed
     /// denominator.
-    static func creditRow(_ credits: Credits?) -> DualBarMetrics? {
+    private static func creditRow(
+        _ credits: Credits?, planID: String?, billingPeriod: DateInterval?, now: Date
+    ) -> DualBarMetrics? {
         guard let credits, let remaining = credits.remainingCredits else { return nil }
 
-        guard let allowance = planAllowance(credits.planId), allowance > 0 else {
-            let caption = remaining > 0 ? money(remaining) : money(0)
+        guard let allowance = planAllowance(planID), allowance > 0 else {
             return DualBarMetrics(
                 primaryFraction: nil,
                 label: "MO",
-                usedText: remaining > 0 ? "\(caption) credits left" : "No credits left",
+                usedText: remaining > 0 ? "\(money(remaining)) credits left" : "No credits left",
                 quantityRemaining: Decimal(remaining),
-                quantityUnit: "credits",
-                balanceText: caption
+                quantityUnit: "credits"
             )
         }
 
@@ -218,10 +281,20 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         guard total > 0 else { return nil }
 
         let used = min(max(total - remaining, 0), total)
+        let cycle = credits.purchasedCredits?.value == 0 && credits.freeCredits?.value == 0
+            ? billingPeriod : nil
         return DualBarMetrics(
             primaryFraction: used / total,
+            expectedPaceFraction: cycle.flatMap {
+                DualBarMetrics.proRataPace(resetsAt: $0.end, windowLength: $0.duration, now: now)
+            },
             label: "MO",
             usedText: "\(money(used))/\(money(total)) credits used",
+            resetText: cycle.map {
+                "Resets \(RelativeDateTimeFormatter().localizedString(for: $0.end, relativeTo: now))"
+            },
+            resetsAt: cycle?.end,
+            windowLength: cycle?.duration,
             quantityUsed: Decimal(used),
             quantityLimit: Decimal(total),
             quantityUnit: "credits"
@@ -241,7 +314,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         ("individual-pro-v1", "Pro", 80),
         ("individual-ultra", "Max", 300),
         ("individual-goat", "GOAT", 70),
-        ("individual-pro", "Pro", 80),
+        ("individual-pro", "Pro", 30), // command-code@1.93.0 distinguishes this from Pro v1.
         ("individual-max", "Max", 150),
         ("individual-go", "Go", 10),
         ("teams-pro", "Team Pro", 40),
@@ -249,10 +322,14 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
 
     /// The plan row whose id is the longest matching prefix, so
     /// `individual-pro-v1` never falls through to `individual-pro`.
-    private static func plan(_ raw: String?) -> (name: String, allowance: Double?)? {
+    private static func normalizedPlanID(_ raw: String?) -> String? {
         let normalized = (raw?.trimmed ?? "").lowercased()
             .replacingOccurrences(of: "_", with: "-")
-        guard !normalized.isEmpty else { return nil }
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func plan(_ raw: String?) -> (name: String, allowance: Double?)? {
+        guard let normalized = normalizedPlanID(raw) else { return nil }
         return plans
             .sorted { $0.prefix.count > $1.prefix.count }
             .first { normalized.hasPrefix($0.prefix) }
@@ -304,6 +381,24 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
     struct CreditsResponse: Decodable, Sendable {
         let credits: Credits?
         let windowLimits: WindowLimits?
+    }
+
+    struct Subscription: Decodable, Sendable {
+        let planId: String?
+        let status: String?
+        let currentPeriodStart: FlexibleTimestamp?
+        let currentPeriodEnd: FlexibleTimestamp?
+
+        var activePlanID: String? {
+            guard status == "active" || status == "trialing" else { return nil }
+            return CommandCodeQuotaProvider.normalizedPlanID(planId)
+        }
+
+        var period: DateInterval? {
+            guard let start = currentPeriodStart?.date, let end = currentPeriodEnd?.date,
+                  end > start else { return nil }
+            return DateInterval(start: start, end: end)
+        }
     }
 
     struct Credits: Decodable, Sendable {

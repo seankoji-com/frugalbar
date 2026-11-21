@@ -26,13 +26,33 @@ struct WindowGridPresentationTests {
         DualBarMetrics(primaryFraction: used, label: label, isBlocked: blocked, windowLength: length)
     }
 
-    private func snap(_ rows: [DualBarMetrics]) -> QuotaSnapshot {
+    private func snap(_ rows: [DualBarMetrics], vendor: VendorIdentifier = .kiro) -> QuotaSnapshot {
         QuotaSnapshot(
-            id: "x", vendorId: .kiro, displayName: "Kiro", category: .aiSubscriptions,
+            id: "x", vendorId: vendor, displayName: vendor.displayName, category: .aiSubscriptions,
             metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.none),
             resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 0), auxiliaryInfo: nil,
             row1: rows.count > 0 ? rows[0] : nil, row2: rows.count > 1 ? rows[1] : nil,
             row3: rows.count > 2 ? rows[2] : nil)
+    }
+
+    @Test("Command Code hides the spent monthly number and speaks the fractional percentage")
+    func spentCommandCodeMonth() throws {
+        let month = bar("MO", (70 - 0.0506) / 70, length: 30 * 86_400)
+        let grid = WindowGridPresentation(snapshot: snap([month], vendor: .commandcode))
+        let cell = try #require(grid.bars[.monthly])
+        #expect(WindowGridPresentation.isExhausted(cell))
+        #expect(WindowGridPresentation.visiblePercentText(for: cell) == nil)
+        #expect(WindowGridPresentation.showsExhaustionGlyph(for: cell))
+        #expect(grid.spokenSummary() == "monthly 99.93% used")
+    }
+
+    @Test("Command Code speaks a remaining balance while the monthly cell stays a dash")
+    func commandCodeBalanceWithoutPlan() {
+        let month = DualBarMetrics(primaryFraction: nil, label: "MO", usedText: "$12.50 credits left",
+                                   quantityRemaining: Decimal(string: "12.5"), quantityUnit: "credits")
+        let grid = WindowGridPresentation(snapshot: snap([month], vendor: .commandcode))
+        #expect(WindowGridPresentation.unmeasuredText(for: month) == "—")
+        #expect(grid.spokenSummary() == "monthly $12.50 credits left, no percentage")
     }
 
     @Test("bars go in the column their token names, whatever order the provider gave them")

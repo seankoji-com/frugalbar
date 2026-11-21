@@ -22,7 +22,7 @@ import Foundation
 /// outside `apiCredits`, so it cannot reach `consumptionFraction`, the urgency
 /// bands, exhaustion sorting, the advice engine, the menu bar icon, the widget's
 /// average or any balance series. The popover draws only the spend cap, as an
-/// "API budget" line with a calendar-month progress meter
+/// "API credit" line with a calendar-month progress meter
 /// (`GeminiAPICreditPresentation.Budget`); the prepaid balance and monthly
 /// grant stay in Settings and are not drawn. The meter's fill is elapsed
 /// calendar time, never spend, because no documented API returns an API key's
@@ -48,7 +48,7 @@ public struct GeminiAPICredit: Codable, Equatable, Sendable {
     /// converts it at redemption, so this is the account's own figure.
     public let monthlyCredit: Decimal?
 
-    /// The project's monthly spend cap, drawn as the API budget's monthly
+    /// The project's monthly spend cap, drawn as the API credit's monthly
     /// progress line. The meter's fill is elapsed calendar time, never a spend
     /// fraction: the usage that would give one meaning was not measured.
     public let monthlySpendCap: Decimal?
@@ -63,7 +63,7 @@ public struct GeminiAPICredit: Codable, Equatable, Sendable {
     /// a billing lag that overdraws it); the monthly credit may not, and a
     /// spend cap of zero is not a cap (every request would fail) and is refused
     /// rather than drawn. The cap may be the only figure, so a user who wants
-    /// just the API budget does not have to invent a balance.
+    /// just the API credit does not have to invent a balance.
     public init?(
         currencyCode: String,
         prepaidBalance: Decimal? = nil,

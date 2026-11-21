@@ -176,7 +176,7 @@ struct MetricRowView: View {
             // window grid and out of the plan-wide bars (see
             // `QuotaSnapshot.scopedBars`). Their tickets sit in the name
             // column under the model title, matching the plan row.
-            ForEach(Array(snapshot.scopedBars.enumerated()), id: \.offset) { _, bar in
+            ForEach(Array(p.visibleScopedBars.enumerated()), id: \.offset) { _, bar in
                 scopedWindowRow(bar, now: grid.now,
                                 credits: p.modelResetCredits(for: bar.label))
             }
@@ -186,7 +186,7 @@ struct MetricRowView: View {
             // A scoped group whose window the vendor did not publish still
             // keeps its tickets rather than silently dropping them.
             ForEach(Array(p.unmatchedResetCredits(
-                scopedLabels: snapshot.scopedBars.map(\.label)
+                scopedLabels: p.visibleScopedBars.map(\.label)
             ).enumerated()), id: \.offset) { _, group in
                 ResetTicketGroupView(credits: group.credits)
                     .overlay(alignment: .topLeading) {

@@ -280,7 +280,7 @@ enum ProviderBranchSnapshots {
         }
         return [
             try make("""
-            {"success":true,"credits":{"planId":"individual-pro","monthlyCredits":60,"purchasedCredits":0,"freeCredits":0},
+            {"success":true,"credits":{"planId":"individual-pro-v1","monthlyCredits":60,"purchasedCredits":0,"freeCredits":0},
              "windowLimits":{"limited":false,"fiveHour":{"used":1.25,"cap":5,"resetAt":1792040400000},
                              "weekly":{"used":5,"cap":20,"resetAt":1792627200000}}}
             """),

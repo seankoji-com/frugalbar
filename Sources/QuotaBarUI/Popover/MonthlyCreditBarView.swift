@@ -27,7 +27,7 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
     public let spoken: String
 
     public init(credit: ClaudeMonthlyCredit, now: Date, calendar: Calendar = .current) {
-        self.title = "Monthly credit"
+        self.title = "API credit"
         let amount = MoneyText.format(credit.amountUSD, code: "USD")
         self.amountText = amount
         self.isStale = credit.refreshFailed
@@ -150,7 +150,7 @@ struct MonthlyCreditBarView: View {
 /// A track and one informational fill. No pace tick and no state colour: the
 /// fill is time through a month, not a quota reading, so there is no "ahead of
 /// pace" verdict to draw. Shared by the linked Console credit meter and the
-/// configured Gemini API budget meter.
+/// configured Gemini API credit meter.
 struct MonthlyCycleBar: View {
     let fraction: Double
 
