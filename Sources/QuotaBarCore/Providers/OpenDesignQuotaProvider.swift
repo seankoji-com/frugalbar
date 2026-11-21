@@ -6,7 +6,8 @@ import Foundation
 /// then `/api/v1/workspaces/{id}/billing/coding-plan-usage` with the matching
 /// `X-Vela-Workspace-Id` header. Both are authenticated by the open-design.ai web
 /// session; an OpenDesign inference API key is answered `401 unauthenticated`
-/// (checked against a real key on 22 November 2026), so there is no key slot.
+/// (checked against a real key on 22 November 2026 AEDT, 21 November UTC), so
+/// there is no key slot.
 /// The session is an opt-in in-app WebKit sign-in, like Muse's portal: no
 /// cookie crosses into Swift.
 ///

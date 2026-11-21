@@ -6,9 +6,12 @@ import Foundation
 @MainActor
 final class CoalescedRead<Value: Sendable> {
     private var inFlight: Task<Value, Never>?
+    /// Callers that joined a read already in flight. Lets a test wait until a
+    /// caller has actually joined instead of guessing with yields.
+    private(set) var joined = 0
 
     func run(_ operation: @escaping @MainActor () async -> Value) async -> Value {
-        if let inFlight { return await inFlight.value }
+        if let inFlight { joined += 1; return await inFlight.value }
         let task = Task { @MainActor in await operation() }
         inFlight = task
         let value = await task.value

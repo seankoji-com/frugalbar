@@ -97,7 +97,7 @@ answer and is asked alone, so its failure stays this provider's answer.
 
 **OpenDesign is read through its web sign-in, not an API key.** An OpenDesign
 inference key gets `401 unauthenticated` from the usage endpoints (checked with
-a real key on 22 November 2026), so there is no key slot. `OpenDesignWebSession`
+a real key on 22 November 2026 AEDT, 21 November UTC), so there is no key slot. `OpenDesignWebSession`
 is an in-app WebKit sign-in; the provider's two GETs
 (`/api/v1/workspaces/current`, then `/{id}/billing/coding-plan-usage` with
 `X-Vela-Workspace-Id`) run inside that page, and only the status and JSON body
@@ -554,8 +554,13 @@ unattributed until the next read verifies it (that read skips the five-minute
 throttle once). A failed billing read keeps the earlier credit attributed only
 while the same account is still verified; anything else drops the attribution
 until a fresh credit is read. `read` takes the credit and its identity from the
-state at one instant. Settings says "Shown under" only from the snapshots the
-popover is displaying, never from the session alone. The named row waits at most four seconds for this
+state at one instant, and rows asking while a read is in flight share it
+(`CoalescedRead`). Rows still read one after another, so `QuotaManager`
+enforces the invariant at commit: at most one Claude row carries the credit,
+the most recently measured observation (`keepOneClaudeMonthlyCredit`).
+Settings says "Shown under" only from the snapshots the popover is
+displaying, never from the session alone. `scripts/test-claude-monthly-credit-scripts.mjs`
+runs the page scripts offline in CI; update it with any change to them. The named row waits at most four seconds for this
 optional enrichment so it cannot push a measured usage read past the
 provider deadline.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one

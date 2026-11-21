@@ -168,28 +168,74 @@ struct ClaudeMonthlyCreditBindingTests {
     @MainActor
     func concurrentRowsShareOneRead() async {
         let shared = CoalescedRead<Int>()
-        var started = 0
-        // Every operation that starts is parked here and released together,
-        // so a regression that runs two reads fails instead of hanging.
-        var waiting: [CheckedContinuation<Void, Never>] = []
-        let operation: @MainActor () async -> Int = {
-            started += 1
-            let mine = started
-            await withCheckedContinuation { waiting.append($0) }
-            return mine
-        }
+        // Every operation that starts is parked here and released together.
+        // One that starts after the release does not park, so a regression
+        // that runs two reads fails promptly instead of hanging.
+        let gate = ReadGate()
+        let operation: @MainActor () async -> Int = { await gate.enter() }
         async let first = shared.run(operation)
         async let second = shared.run(operation)
-        // Let both callers reach the gate before the read completes.
-        for _ in 0..<50 { await Task.yield() }
-        waiting.forEach { $0.resume() }
-        waiting = []
+        // Wait, bounded, until the second caller has joined the first read
+        // (or, under a regression, started a read of its own).
+        for _ in 0..<10_000 where shared.joined == 0 && gate.started < 2 { await Task.yield() }
+        #expect(shared.joined == 1)
+        gate.release()
         let results = await [first, second]
         #expect(results == [1, 1])
-        #expect(started == 1)
+        #expect(gate.started == 1)
         // A caller after completion starts a new read.
         let later = await shared.run { 7 }
         #expect(later == 7)
+    }
+
+    @MainActor
+    private final class ReadGate {
+        private(set) var started = 0
+        private var released = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func enter() async -> Int {
+            started += 1
+            let mine = started
+            if !released { await withCheckedContinuation { waiting.append($0) } }
+            return mine
+        }
+
+        func release() {
+            released = true
+            waiting.forEach { $0.resume() }
+            waiting = []
+        }
+    }
+
+    private struct CreditRow: QuotaProvider {
+        let instanceID: String
+        let measuredAt: Date
+        var vendorId: VendorIdentifier { .claude }
+        var displayName: String { instanceID }
+        var category: MetricCategory { .aiSubscriptions }
+        func fetchSnapshot() async throws -> QuotaSnapshot {
+            var s = QuotaSnapshot(id: instanceID, vendorId: .claude, displayName: instanceID, category: .aiSubscriptions,
+                metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.none),
+                resetsAt: nil, lastUpdated: measuredAt, auxiliaryInfo: nil)
+            s.monthlyAPICredit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: measuredAt)
+            return s
+        }
+    }
+
+    /// Row A read A's credit, the billing session then changed account, and
+    /// row B (asking after A's read had finished) read B's: both lines drawn.
+    @Test("One poll never leaves the credit on two Claude rows; the newest observation wins")
+    func oneCreditPerPoll() async {
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                [CreditRow(instanceID: "claude-account:a", measuredAt: self.now),
+                 CreditRow(instanceID: "claude-account:b", measuredAt: self.now.addingTimeInterval(30))]
+            })
+        let snapshots = await manager.forceRefresh()
+        #expect(snapshots["claude-account:a"]?.monthlyAPICredit == nil)
+        #expect(snapshots["claude-account:b"]?.monthlyAPICredit != nil)
     }
 
     @Test("A stalled billing read does not hold the row past its bound")

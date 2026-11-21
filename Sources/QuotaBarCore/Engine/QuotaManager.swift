@@ -755,8 +755,28 @@ public actor QuotaManager {
                 lastUserFetchAt: force ? now : previous?.lastUserFetchAt,
                 vendorRetryAfter: Self.vendorRetryAfter(from: snap.status))
         }
+        keepOneClaudeMonthlyCredit()
         lastCompleteFetch = now
         return visibleCache()
+    }
+
+    /// The linked Console credit belongs to one Claude row. Rows read it one
+    /// after another, and a row not fetched this pass keeps its cached line,
+    /// so an account change in the billing session could leave the old row's
+    /// credit beside the new row's. Keep only the most recently measured
+    /// verified observation; every other row's line is cleared.
+    private func keepOneClaudeMonthlyCredit() {
+        let holders = cache.filter { $0.value.snapshot.vendorId == .claude && $0.value.snapshot.monthlyAPICredit != nil }
+        guard holders.count > 1,
+              let newest = holders.max(by: {
+                  ($0.value.snapshot.monthlyAPICredit!.measuredAt, $1.key) < ($1.value.snapshot.monthlyAPICredit!.measuredAt, $0.key)
+              })?.key else { return }
+        for (id, entry) in holders where id != newest {
+            var snapshot = entry.snapshot
+            snapshot.monthlyAPICredit = nil
+            cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
     }
 
     /// Adds the user's hand-entered renewal countdown, when they recorded one
