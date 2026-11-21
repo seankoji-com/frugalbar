@@ -72,8 +72,14 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         guard let response = Self.decode(CreditsResponse.self, from: data) else {
             return unavailable(.badResponse)
         }
+        let measuredAt = Date()
+        let credits = Self.snapshot(from: response, provider: self, now: measuredAt)
+        // Either deadline task can run first under scheduler contention.
+        // Preserve the completed read even when the manager's timer wins.
+        QuotaFetchContext.retainOnTimeout?(credits)
         let plan = await subscription
-        return Self.snapshot(from: response, subscription: plan, provider: self, now: Date())
+        guard let plan else { return credits }
+        return Self.snapshot(from: response, subscription: plan, provider: self, now: measuredAt)
     }
 
     private static func scopedURL(_ url: String, orgId: String?) -> String {

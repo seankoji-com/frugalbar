@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - QuotaManager actor
 
@@ -592,12 +593,25 @@ public actor QuotaManager {
                     // does not bound a provider that issues several requests.
                     let startedAt = DispatchTime.now().uptimeNanoseconds
                     let deadline = ContinuousClock.now + .seconds(budget)
-                    let outcome = await withDeadline(seconds: budget) {
-                        try await QuotaFetchContext.$deadline.withValue(deadline) {
-                            try await QuotaFetchContext.$isUserInitiated.withValue(force) {
-                                try await provider.fetchSnapshot()
+                    let retained = Mutex<QuotaSnapshot?>(nil)
+                    let retain: @Sendable (QuotaSnapshot) -> Void = { snapshot in
+                        retained.withLock {
+                            guard ContinuousClock.now <= deadline,
+                                  snapshot.status.confidence == .measured else { return }
+                            $0 = snapshot
+                        }
+                    }
+                    var outcome = await withDeadline(seconds: budget) {
+                        try await QuotaFetchContext.$retainOnTimeout.withValue(retain) {
+                            try await QuotaFetchContext.$deadline.withValue(deadline) {
+                                try await QuotaFetchContext.$isUserInitiated.withValue(force) {
+                                    try await provider.fetchSnapshot()
+                                }
                             }
                         }
+                    }
+                    if case .failure(.timedOut) = outcome, let snapshot = retained.withLock({ $0 }) {
+                        outcome = .success(snapshot)
                     }
                     // A vendor-wide hand-entered renewal has no account
                     // binding. It cannot be copied onto every Claude account.
