@@ -115,6 +115,35 @@ private actor AutomaticFetchGate {
 
 struct QuotaManagerTests {
 
+    @Test("the provider deadline preserves a measured snapshot while optional work hangs")
+    func providerDeadlineKeepsPublishedReading() async throws {
+        struct EnrichingProvider: QuotaProvider {
+            let vendorId: VendorIdentifier = .commandcode
+            let displayName = "Command Code"
+            let category: MetricCategory = .aiSubscriptions
+
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                let snapshot = QuotaSnapshot(
+                    id: vendorId.rawValue, vendorId: vendorId, displayName: displayName,
+                    category: category, metric: .percentage(usedFraction: 0.4, displayDetails: nil),
+                    status: .healthy, resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 1_800_000_000),
+                    auxiliaryInfo: nil)
+                QuotaFetchContext.retainOnTimeout?(snapshot)
+                try await Task.sleep(for: .seconds(30))
+                return snapshot
+            }
+        }
+
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 30, backgroundRefreshInterval: 120,
+                perProviderTimeout: 1, minPollInterval: 0),
+            providerFactory: { [EnrichingProvider()] })
+        let reading = try #require(await manager.forceRefresh()["commandcode"])
+        #expect(reading.status.confidence == .measured)
+        #expect(reading.consumptionFraction == 0.4)
+        #expect(reading.staleReading == nil)
+    }
+
     @Test("a throwing provider does not prevent its peers from returning")
     func throwingProviderDoesNotBlockPeers() async {
         let manager = QuotaManager(

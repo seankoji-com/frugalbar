@@ -5,6 +5,8 @@ import Foundation
 enum QuotaFetchContext {
     @TaskLocal static var isUserInitiated = true
     @TaskLocal static var deadline: ContinuousClock.Instant?
+    /// Register an already measured snapshot before awaiting an optional enrichment.
+    @TaskLocal static var retainOnTimeout: (@Sendable (QuotaSnapshot) -> Void)?
 }
 
 // MARK: - Provider adapter protocol
