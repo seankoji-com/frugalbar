@@ -54,6 +54,10 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
     private func reset() {
         pendingRead?.finish(nil)
         pendingRead = nil
+        // A row already waiting on the old read still gets that read's
+        // result, which `performRead` turns into nil once disabled; new rows
+        // start afresh.
+        sharedRead = CoalescedRead()
         state.reset()
         resetScripts()
     }
@@ -70,8 +74,18 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
     /// names. Read by Settings to say why the credit is drawn under no row.
     public var webIdentities: Set<String>? { isEnabled ? state.webIdentities : nil }
 
+    private var sharedRead = CoalescedRead<ClaudeMonthlyCredit?>()
+
+    /// Every Claude row asks for the credit in the same poll. A row that asks
+    /// while a read is in flight waits for that read's result rather than
+    /// taking the cached credit, so two rows can never be handed different
+    /// observations (one the old account's, one the new) in one poll.
     public func read(now: Date) async -> ClaudeMonthlyCredit? {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else { return nil }
+        return await sharedRead.run { await self.performRead(now: now) }
+    }
+
+    private func performRead(now: Date) async -> ClaudeMonthlyCredit? {
         _ = await readCredit(now: now)
         guard !Task.isCancelled, isEnabled else { return nil }
         // Credit and identity are taken from the state at one instant, with

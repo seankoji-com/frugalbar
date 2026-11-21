@@ -162,6 +162,36 @@ struct ClaudeMonthlyCreditBindingTests {
         #expect(s.verificationPending)
     }
 
+    /// Two named rows in one poll: one started the read, the other took the
+    /// cached credit while it was pending, and the popover drew both lines.
+    @Test("Rows that ask while a read is in flight all get that read's result")
+    @MainActor
+    func concurrentRowsShareOneRead() async {
+        let shared = CoalescedRead<Int>()
+        var started = 0
+        // Every operation that starts is parked here and released together,
+        // so a regression that runs two reads fails instead of hanging.
+        var waiting: [CheckedContinuation<Void, Never>] = []
+        let operation: @MainActor () async -> Int = {
+            started += 1
+            let mine = started
+            await withCheckedContinuation { waiting.append($0) }
+            return mine
+        }
+        async let first = shared.run(operation)
+        async let second = shared.run(operation)
+        // Let both callers reach the gate before the read completes.
+        for _ in 0..<50 { await Task.yield() }
+        waiting.forEach { $0.resume() }
+        waiting = []
+        let results = await [first, second]
+        #expect(results == [1, 1])
+        #expect(started == 1)
+        // A caller after completion starts a new read.
+        let later = await shared.run { 7 }
+        #expect(later == 7)
+    }
+
     @Test("A stalled billing read does not hold the row past its bound")
     func boundedCreditWait() async {
         let started = ContinuousClock.now

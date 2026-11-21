@@ -152,7 +152,7 @@ public struct SettingsView: View {
         guard !rows.isEmpty else { return nil }
         if let shown = snapshots.first(where: { $0.vendorId == .claude && $0.monthlyAPICredit != nil }),
            let account = shown.claudeAccount {
-            return "Shown under \(account.name), the account signed in here."
+            return "Shown under \(account.name)."
         }
         let binding = ClaudeMonthlyCreditBinding.resolve(webIdentities: webIdentities, rows: rows)
         if case .bound(let id) = binding {

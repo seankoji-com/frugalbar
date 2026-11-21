@@ -31,7 +31,9 @@ struct SettingsCreditPlacementTests {
         let text = SettingsView.claudeCreditPlacement(
             snapshots: [snapshot(a, credit: true), snapshot(b, credit: false)],
             webIdentities: ["ib"], rows: rows)
-        #expect(text?.hasPrefix("Shown under Primary") == true)
+        // The displayed row, and no claim about who is signed in: here the
+        // web identity matches Secondary while the popover still shows Primary.
+        #expect(text == "Shown under Primary.")
     }
 
     @Test("A binding the popover does not show yet is not described as shown")
