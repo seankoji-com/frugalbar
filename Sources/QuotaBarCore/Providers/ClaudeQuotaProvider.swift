@@ -76,8 +76,8 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         if snapshot.planName == nil, account == nil {
             snapshot.planName = await CredentialStore.claudePlanNameAsync()
         }
-        // The web session's organization has no binding to these OAuth
-        // accounts. Keep it off named rows until that binding is established.
+        // A named row's credit is attached by `ClaudeAccountQuotaProvider`,
+        // which binds the web session's account to exactly one row.
         let monthly = await credit
         snapshot.monthlyAPICredit = account == nil ? monthly : nil
         snapshot.claudeAccount = account

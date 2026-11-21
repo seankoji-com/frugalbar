@@ -237,10 +237,9 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
                 DualBarMetrics.proRataPace(resetsAt: reset, windowLength: $0, now: now)
             },
             label: label,
-            // Only read by the view when `isBlocked` is true, so the
-            // non-blocked case is left `nil` rather than a colour that can
-            // never render.
-            blockedColor: window.isBlocked ? "#ffb4ab" : nil,
+            // No vendor tint: a blocked window wears the shared spent red
+            // (`Theme.errorBold`), like every other exhausted row.
+            blockedColor: nil,
             isBlocked: window.isBlocked,
             usedText: usedText,
             resetText: reset.map { "Resets \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))" },

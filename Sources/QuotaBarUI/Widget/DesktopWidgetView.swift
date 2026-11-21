@@ -585,7 +585,10 @@ struct DesktopWidgetView: View {
     }
 
     private func headroomColor(_ item: AggregateBurndownPresentation.HeadroomItem) -> Color {
-        if item.isBlocked || item.urgency == .critical { return Theme.error }
+        if item.isBlocked || (item.remainingFraction.map { 1 - $0 >= QuotaSnapshot.exhaustionThreshold } ?? false) {
+            return Theme.errorBold
+        }
+        if item.urgency == .critical { return Theme.error }
         if item.urgency == .warning { return Theme.tertiary }
         return Theme.healthy
     }
@@ -608,7 +611,9 @@ struct DesktopWidgetView: View {
                 }
                 Text(percentText)
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.onSurface)
+                    // A spent window's bar has no width to carry its red, so
+                    // the figure does.
+                    .foregroundStyle(headroomColor(item) == Theme.errorBold ? Theme.errorBold : Theme.onSurface)
             } else {
                 Text(item.unmeasuredText)
                     .font(.system(size: 10.5).monospacedDigit())

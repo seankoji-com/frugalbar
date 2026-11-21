@@ -37,6 +37,28 @@ struct HistoryOverviewPresentationTests {
         #expect(HistoryOverviewPresentation.hiddenNames(order: order, hidden: [.grok]) == ["Grok"])
     }
 
+    /// OpenDesign files each workspace under its own `opendesign:` key; an
+    /// exact-key subject found none of them and History showed no usage.
+    @Test("the OpenDesign subject owns every workspace key, and the store's vendor read includes them")
+    func openDesignWorkspaceKeys() {
+        let subjects = HistoryOverviewPresentation.subjects(
+            order: [.opendesign], hidden: [], workspaces: [], claudeAccounts: [])
+        let subject = subjects.first
+        let key = OpenDesignQuotaProvider.seriesID(workspaceID: "ws-a")
+        #expect(subject?.owns(key) == true)
+        #expect(subject?.owns("opendesign") == true)
+        #expect(subject?.owns("opencode") == false)
+        let clause = QuotaHistoryStore.vendorClause(for: .opendesign)
+        #expect(clause.values == ["opendesign", OpenDesignQuotaProvider.instancePrefix + "%"])
+        #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key) == .opendesign)
+
+        let (cards, _, _) = HistoryOverviewPresentation.overview(subjects: subjects, readings: [
+            record(key, "5H", at: 0, 0.2, windowLength: 5 * 3600),
+            record(key, "5H", at: 600, 0.3, windowLength: 5 * 3600),
+        ])
+        #expect(cards.count == 1)
+    }
+
     // MARK: - Cards
 
     @Test("each card is its own longest window, in subject order, with no figure carried over")

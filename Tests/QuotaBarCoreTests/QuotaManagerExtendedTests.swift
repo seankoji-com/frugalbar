@@ -254,8 +254,9 @@ struct QuotaManagerExtendedTests {
         #expect(sorted[12].vendorId == .commandcode)
         #expect(sorted[13].vendorId == .clinepass)
         #expect(sorted[14].vendorId == .muse)
-        #expect(sorted[15].vendorId == .githubRest)
-        #expect(sorted[16].vendorId == .githubGraphql)
+        #expect(sorted[15].vendorId == .opendesign)
+        #expect(sorted[16].vendorId == .githubRest)
+        #expect(sorted[17].vendorId == .githubGraphql)
 
     }
 

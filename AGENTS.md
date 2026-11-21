@@ -95,6 +95,31 @@ last published fraction, and drawing it would report a window nothing is
 metered against. A configured `FRUGALBAR_GEMINI_API_BASE` is the operator's
 answer and is asked alone, so its failure stays this provider's answer.
 
+**OpenDesign is read through its web sign-in, not an API key.** An OpenDesign
+inference key gets `401 unauthenticated` from the usage endpoints (checked with
+a real key on 22 November 2026 AEDT, 21 November UTC), so there is no key slot. `OpenDesignWebSession`
+is an in-app WebKit sign-in; the provider's two GETs
+(`/api/v1/workspaces/current`, then `/{id}/billing/coding-plan-usage` with
+`X-Vela-Workspace-Id`) run inside that page, and only the status and JSON body
+reach Swift. Windows are chosen by `durationSeconds` (18000 → 5H, 604800 → WK,
+28–31 days → MO), never by order, and MO is drawn only when published. A
+mismatched workspace id, a duplicate window, or a zero or unparseable limit
+fails the read rather than drawing a bar, and so does a figure that is not a
+finite count (a 400-digit string parses to infinity, and a ratio of two traps
+the percentage's `Int` conversion). A reading is filed under its workspace
+(`OpenDesignQuotaProvider.seriesID`), and a failure under the bare vendor id;
+`QuotaManager` retains figures only within one series, so a workspace switch
+or a failed poll never shows another workspace's quota, and a switch never
+reads as a usage drop to the event detectors. History finds every workspace
+key by the `opendesign:` prefix (`vendorClause`, `Subject.keyPrefix`,
+`vendor(forInstanceKey:)`); the one OpenDesign History subject draws them as a
+single line, so a workspace switch shows as a step there. Both GETs carry one
+connection generation. Disconnect bumps it (an in-flight read is discarded),
+drops the cached reading without running the history recorder, and a pass
+already in flight drops OpenDesign's result at commit (`forgetReadings`). The payload contract comes from
+token-monitor PR 1366's synthetic fixtures and has not been checked against a
+captured response.
+
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
 
@@ -428,11 +453,23 @@ never their own `Date()`, so they cannot straddle a rounding boundary. Don't
 add a second marker or extra over/under-pace segments: three colours and two
 triangles per bar made the card unreadable. A column the vendor does not publish
 shows a faint dash, never a track, which would read as 0% used. A window the
-vendor blocked but still reports a percentage for (OpenCode Go) wears the
-vendor's blocked colour, which sits too close to amber to tell apart, so a
-`BlockedGlyph` (`nosign`) sits beside its figure everywhere it is drawn and the
-spoken label says "blocked". Without a percentage the cell already says
-"Blocked" in words and draws a dashed placeholder.
+vendor blocked but still reports a percentage for (OpenCode Go) wears the same
+spent red as an exhausted window, and a `BlockedGlyph` (`nosign`) sits beside
+its figure everywhere it is drawn and the spoken label says "blocked", so
+blocked and spent stay distinguishable without colour. Without a percentage the
+cell already says "Blocked" in words and draws a dashed placeholder.
+
+**An exhausted or blocked row draws one red: `Theme.errorBold`.** Its bars, the
+figures under them, the reset countdown and fallback text, and the avatar's
+ring and tag all use it. `DualBarProgressView.stateColor` ignores a vendor's
+`blockedColor`: OpenCode Go once passed `#ffb4ab` (`Theme.error`, the pale text
+coral), and its workspaces drew pink hatching beside Command Code's deep red.
+`Theme.error` stays for text that is critically low but not spent. An exhausted
+avatar in the popover is the logo in greyscale at 55% opacity inside a 1.5pt
+red ring, with the countdown (or `nosign` when no reset was published) in a red
+capsule on the top-left corner, so the logo stays recognisable. The ring and
+tag draw outside the 28pt frame and do not move it, so the grouped-workspace
+connector still lines up. The inspector and widget keep the struck-through mark.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
@@ -498,6 +535,40 @@ above and not a balance or quota. The billing client reads that amount with
 accepting only `String?` silently dropped a live entitlement. It draws under the
 row as an **API credit** line with the amount beneath the title (through
 `MoneyText.format`, so a whole USD amount keeps its cents) and an `MO` meter.
+
+**The credit belongs to one named row, chosen by identity.** With multi-account
+discovery every Claude row is a named account, and named rows used to drop the
+credit outright, so the line disappeared for everyone with discovered accounts.
+The credit's identity is the signed-in claude.ai account (read in the page from
+`/api/account`, projected to its UUID only) paired with the organisation the
+billing query itself names (`organization_uuid`), hashed exactly as discovery
+hashes an OAuth profile (`account|<uuid>|<org>`). Never match against the
+account's other memberships: billing open for organisation B would then put
+B's credit on organisation A's row. Separate billing and account requests can
+authenticate as different people (a sign-out and sign-in to the same
+organisation leaves the query unchanged), so FrugalBar's own read is one page
+evaluation: account, billing, account. The credit is attributed
+(`verifiedAccount`) only when both account reads name the same account. A
+credit the page fetched by itself has no account reads around it and stays
+unattributed until the next read verifies it (that read skips the five-minute
+throttle once). A failed billing read keeps the earlier credit attributed only
+while the same account is still verified; anything else drops the attribution
+until a fresh credit is read. `read` takes the credit and its identity from the
+state at one instant, and rows asking while a read is in flight share it
+(`CoalescedRead`). Rows still read one after another, so `QuotaManager`
+enforces the invariant at commit: at most one Claude row carries the credit,
+the latest observation in the order the session accepted billing results
+(`ClaudeMonthlyCredit.observation`, `keepOneClaudeMonthlyCredit`), never by
+`measuredAt`, which is when a provider started. A tie keeps none.
+Settings says "Shown under" only from the snapshots the popover is
+displaying, never from the session alone. `scripts/test-claude-monthly-credit-scripts.mjs`
+runs the page scripts offline in CI; update it with any change to them. The named row waits at most four seconds for this
+optional enrichment so it cannot push a measured usage read past the
+provider deadline.
+`ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one
+shown row's verified identity matches. No match, or an unverified row,
+attaches it nowhere, and Settings says why. Email, nickname and row order are
+never evidence.
 
 **That meter is billing-cycle progress, never API spend.** The linked payload
 publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills

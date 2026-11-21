@@ -39,36 +39,58 @@ assert.deepEqual(JSON.parse(messages[1].payload), { _failed: true });
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction('fetch', 'query', 'AbortController', 'setTimeout', 'clearTimeout', refresh);
-let timer, cleared, options;
+let timer, cleared;
 const setTimer = (callback, milliseconds) => {
   assert.equal(milliseconds, 4000);
   timer = callback;
   return 1;
 };
 const clearTimer = id => { assert.equal(id, 1); cleared = true; };
-const result = await run(async (_, opts) => {
-  options = opts;
-  return { ok: true, json: async () => payload };
-}, '/fixture', AbortController, setTimer, clearTimer);
-assert.equal(JSON.parse(result).monthly_credit_usd, '12.34');
-assert.equal('private_account_field' in JSON.parse(result), false);
-assert.equal('granted_total_usd' in JSON.parse(result), false);
-assert.equal(options.credentials, 'same-origin');
-assert.equal(options.signal.aborted, false);
+const accountUUID = '11111111-1111-4111-8111-111111111111';
+const account = { uuid: accountUUID, email_address: 'private@example.test', full_name: 'Private' };
+// One evaluation reads the account, then billing, then the account again.
+const calls = [];
+const options = [];
+const stub = (billing = () => ({ ok: true, json: async () => payload }),
+              who = () => ({ ok: true, status: 200, json: async () => account })) => async (url, opts) => {
+  calls.push(url);
+  options.push(opts);
+  return url === '/api/account' ? who(calls.length) : billing();
+};
+const result = JSON.parse(await run(stub(), '/fixture', AbortController, setTimer, clearTimer));
+assert.deepEqual(calls, ['/api/account', '/fixture', '/api/account']);
+assert.deepEqual(result.before, { uuid: accountUUID });
+assert.deepEqual(result.after, { uuid: accountUUID });
+// The account crosses as its UUID only: no email or name.
+assert.equal(JSON.stringify(result).includes('private@example.test'), false);
+assert.equal(result.billing.monthly_credit_usd, '12.34');
+assert.equal('private_account_field' in result.billing, false);
+assert.equal('granted_total_usd' in result.billing, false);
+assert.ok(options.every(o => o.credentials === 'same-origin' && o.signal.aborted === false));
 timer();
-assert.equal(options.signal.aborted, true);
+assert.ok(options.every(o => o.signal.aborted === true));
 assert.equal(cleared, true);
 // HTTP failure never forwards an error body as entitlement data.
-const failure = await run(async () => ({ ok: false, headers: { get: () => '600' } }),
-  '/fixture', AbortController, setTimer, clearTimer);
-assert.deepEqual(JSON.parse(failure), { _retryAfter: '600' });
-// Timer cleanup also runs when fetching or reading the body throws.
-for (const fetch of [
-  async () => { throw new Error('offline fixture'); },
-  async () => ({ ok: true, json: async () => { throw new Error('invalid fixture'); } }),
+calls.length = 0;
+const failure = JSON.parse(await run(stub(() => ({ ok: false, headers: { get: () => '600' } })),
+  '/fixture', AbortController, setTimer, clearTimer));
+assert.deepEqual(failure.billing, { _retryAfter: '600' });
+// A signed-out session reports it, and a failed account read is null, never a guess.
+calls.length = 0;
+const signedOut = JSON.parse(await run(stub(undefined, n => n === 1
+  ? { ok: false, status: 401 } : { ok: false, status: 500 }), '/fixture', AbortController, setTimer, clearTimer));
+assert.deepEqual(signedOut.before, { signedOut: true });
+assert.equal(signedOut.after, null);
+// Timer cleanup also runs when fetching or reading the billing body throws,
+// and the failure is reported as a failed read rather than thrown.
+for (const billing of [
+  () => { throw new Error('offline fixture'); },
+  () => ({ ok: true, json: async () => { throw new Error('invalid fixture'); } }),
 ]) {
   cleared = false;
-  await assert.rejects(run(fetch, '/fixture', AbortController, setTimer, clearTimer));
+  calls.length = 0;
+  const thrown = JSON.parse(await run(stub(billing), '/fixture', AbortController, setTimer, clearTimer));
+  assert.deepEqual(thrown.billing, { _failed: true });
   assert.equal(cleared, true);
 }
-console.log('Production WebKit scripts passed: field projection, origin/path filters, generation, HTTP failure, abort and cleanup');
+console.log('Production WebKit scripts passed: field projection, account bracketing, origin/path filters, generation, HTTP failure, abort and cleanup');

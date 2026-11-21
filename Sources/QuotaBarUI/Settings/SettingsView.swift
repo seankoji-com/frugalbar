@@ -135,6 +135,32 @@ public struct SettingsView: View {
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
+    @State private var claudeCreditRows: [ClaudeMonthlyCreditBinding.Row] = []
+    @State private var openDesignEnabled = false
+    @State private var showOpenDesign = false
+
+    /// Which Claude row the linked monthly credit is drawn under, or why it is
+    /// drawn under none. Nil when Claude has no named account rows: the single
+    /// unnamed row is then the only place it can go.
+    ///
+    /// "Shown under" is read from the snapshots the popover is displaying, not
+    /// from the billing session, so the sentence can never name a row the
+    /// popover does not show the credit under (a cached poll can lag a new
+    /// sign-in by up to a refresh).
+    nonisolated static func claudeCreditPlacement(snapshots: [QuotaSnapshot], webIdentities: Set<String>?,
+                                                  rows: [ClaudeMonthlyCreditBinding.Row]) -> String? {
+        guard !rows.isEmpty else { return nil }
+        if let shown = snapshots.first(where: { $0.vendorId == .claude && $0.monthlyAPICredit != nil }),
+           let account = shown.claudeAccount {
+            return "Shown under \(account.name)."
+        }
+        let binding = ClaudeMonthlyCreditBinding.resolve(webIdentities: webIdentities, rows: rows)
+        if case .bound(let id) = binding {
+            let name = ClaudeAccountStore.displayName(forInstanceKey: id) ?? "the matching Claude account"
+            return "Matched to \(name); the line appears there after the next refresh."
+        }
+        return binding.explanation { ClaudeAccountStore.displayName(forInstanceKey: $0) }
+    }
     @State private var claudeMonthlyEnabled = false
     @State private var showOpenAIMonthlyCredit = false
     @State private var openAIMonthlyEnabled = false
@@ -343,6 +369,22 @@ public struct SettingsView: View {
                     Text("Clearing this app's Meta sign-in…").font(.caption)
                 }
             }
+            Section("OpenDesign Go usage") {
+                Text("Sign in to OpenDesign to read your current workspace's 5-hour and weekly coding-plan usage, and its monthly window when OpenDesign publishes one. An OpenDesign API key cannot read usage, so there is no key slot.")
+                    .font(.caption)
+                Button(openDesignEnabled ? "Open OpenDesign sign-in" : "Connect OpenDesign") {
+                    OpenDesignWebSession.shared.connect()
+                    openDesignEnabled = true
+                    showOpenDesign = true
+                }
+                if openDesignEnabled {
+                    Button("Disconnect OpenDesign") {
+                        OpenDesignWebSession.shared.disconnect()
+                        openDesignEnabled = false
+                        Task { await store?.forgetReadings(of: .opendesign) }
+                    }
+                }
+            }
             Section("Claude monthly API credit") {
                 Text("Connect Claude's billing page to read the linked Console monthly allowance and next credit date. This is separate from extra usage and is never shown as a remaining balance.")
                     .font(.caption)
@@ -350,6 +392,14 @@ public struct SettingsView: View {
                     ClaudeMonthlyCreditSession.shared.connect()
                     claudeMonthlyEnabled = true
                     showClaudeMonthlyCredit = true
+                }
+                if claudeMonthlyEnabled, let placement = Self.claudeCreditPlacement(
+                    snapshots: store?.snapshots ?? [],
+                    webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
+                    rows: claudeCreditRows) {
+                    Label(placement, systemImage: "link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if claudeMonthlyEnabled {
                     Button("Disconnect monthly credit") {
@@ -469,10 +519,19 @@ public struct SettingsView: View {
         .onAppear {
             claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
             openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
+            openDesignEnabled = OpenDesignWebSession.shared.isEnabled
+            claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
-            Task { await store?.load() }
+            Task {
+                _ = await ClaudeMonthlyCreditSession.shared.read(now: Date())
+                claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
+                await store?.load()
+            }
         }) { ClaudeMonthlyCreditConnectionView() }
+        .sheet(isPresented: $showOpenDesign, onDismiss: {
+            Task { await store?.forceRefresh() }
+        }) { OpenDesignConnectionView() }
         .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
             Task { await store?.forceRefresh() }
         }) { OpenAIMonthlyCreditConnectionView() }
@@ -1186,7 +1245,7 @@ public struct SettingsView: View {
             entry(.critical, title: "Critically low",
                   "Past the provider's own critical level. Some providers also go critical when the vendor blocks a window; its bar says which."),
             entry(.healthy, isExhausted: true, title: "Exhausted",
-                  "A window is used up, or the vendor blocked every window without a figure. Its reset countdown overlays the faded logo; this sign appears when no reset date was published."),
+                  "A window is used up, or the vendor blocked every window without a figure. The logo turns grey inside a red ring, with its reset countdown in a red tag at the top-left corner; this sign replaces the countdown when no reset date was published."),
             entry(.unavailable(.notConfigured), title: "Could not be read",
                   "No figure is shown; the row names the reason instead."),
         ]
@@ -1482,6 +1541,9 @@ public struct SettingsView: View {
         case .commandcode: provider = CommandCodeQuotaProvider(apiKey: key)
         case .clinepass:   provider = ClinePassQuotaProvider(apiKey: key)
         case .muse:        provider = MuseQuotaProvider(apiKey: key)
+        // OpenDesign has no key slot: an inference key cannot read usage, so
+        // it connects through its web sign-in. The switch must stay exhaustive.
+        case .opendesign:  provider = OpenDesignQuotaProvider()
         case .githubGraphql: provider = GitHubGraphQLProvider(token: key)
         }
 

@@ -113,7 +113,7 @@ struct SettingsLegendTests {
                 == .exhausted(reset: "23h"))
         }
         #expect(entry("Exhausted")?.symbol == "nosign")
-        #expect(entry("Exhausted")?.tint == Theme.error)
+        #expect(entry("Exhausted")?.tint == Theme.errorBold)
 
         // A blocked window that still reports a figure is badged by the
         // provider's level (OpenCode Go goes critical), not by a blocked

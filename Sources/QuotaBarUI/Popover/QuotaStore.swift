@@ -191,6 +191,18 @@ public final class QuotaStore {
         await reloadFromCache()
     }
 
+    /// Removes a disconnected sign-in provider's readings without polling.
+    /// Deliberately not `reloadFromCache`: that runs the history recorder,
+    /// which would stamp every other provider's cached figures as a fresh
+    /// poll at the moment of the disconnect.
+    public func forgetReadings(of vendor: VendorIdentifier) async {
+        await manager.forgetReadings(of: vendor)
+        let snaps = await manager.sortedSnapshots()
+        snapshots = snaps
+        summary = SystemHealthSummary.compute(from: snaps)
+        onSummaryChange?(summary)
+    }
+
     public func clearOpenAIMonthlyCredit() async {
         await manager.clearOpenAIMonthlyCredit()
         await reloadFromCache()

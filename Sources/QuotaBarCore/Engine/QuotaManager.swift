@@ -149,6 +149,7 @@ public actor QuotaManager {
             CommandCodeQuotaProvider(),
             ClinePassQuotaProvider(),
             MuseQuotaProvider(),
+            OpenDesignQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ] as [any QuotaProvider])
@@ -169,6 +170,21 @@ public actor QuotaManager {
                 lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
         }
     }
+
+    /// Drops every cached reading of one vendor. Disconnecting a sign-in-only
+    /// provider (OpenDesign) is the user saying "stop showing this": its last
+    /// reading must not survive as a retained, stale row. A pass already in
+    /// flight is harmless: its provider re-checks the connection and reports
+    /// not-configured, which retention cannot cover with figures that are gone.
+    public func forgetReadings(of vendor: VendorIdentifier) {
+        forgottenVendors[vendor, default: 0] += 1
+        for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor { cache[key] = nil }
+    }
+
+    /// Bumped by `forgetReadings`. A pass that started before the bump drops
+    /// that vendor's result at commit, so a read that completed just before
+    /// the disconnect cannot write the forgotten reading back.
+    private var forgottenVendors: [VendorIdentifier: Int] = [:]
 
     /// Disconnecting the OpenAI billing session is a local state change, not a
     /// reason to poll quota. Clear the independently read grant immediately so
@@ -223,7 +239,7 @@ public actor QuotaManager {
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .antigravityClaude, .antigravityArgon, .copilot, .opencode,
         .openrouter, .deepseek, .grok, .kiro, .devpass,
-        .commandcode, .clinepass, .muse,
+        .commandcode, .clinepass, .muse, .opendesign,
         .githubRest, .githubGraphql,
     ]
 
@@ -584,6 +600,7 @@ public actor QuotaManager {
 
         let creditInvalidation = monthlyCreditInvalidation
         let openAICreditInvalidation = openAIMonthlyCreditInvalidation
+        let forgottenAtStart = forgottenVendors
         let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
         await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
@@ -641,6 +658,13 @@ public actor QuotaManager {
         let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
             && creditInvalidation == monthlyCreditInvalidation
         let acceptsOpenAIMonthlyCredit = openAICreditInvalidation == openAIMonthlyCreditInvalidation
+        // A vendor forgotten during this pass (a disconnect) has no result:
+        // it is neither committed nor counted as read, so a pass queued
+        // behind this one fetches it afresh rather than skipping it.
+        for provider in providersToFetch
+        where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
+            results[provider.instanceID] = nil
+        }
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })
@@ -679,8 +703,13 @@ public actor QuotaManager {
             // failures in a row must report the newest reason rather than
             // freeze the first one indefinitely, and a placeholder carries no
             // figures worth keeping.
+            // Retention also stays inside one series: a provider that files
+            // readings per discovered workspace (OpenDesign) reports a failure
+            // under its bare id, and another workspace's figures must not stand
+            // in for it.
             if let reason = snap.status.unavailableReason,
-               let previous = cache[id], previous.snapshot.status.confidence == .measured {
+               let previous = cache[id], previous.snapshot.status.confidence == .measured,
+               previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was
                 // computed at the last successful fetch and frozen there — a
                 // vendor down for days would otherwise keep showing e.g. "3
@@ -726,8 +755,31 @@ public actor QuotaManager {
                 lastUserFetchAt: force ? now : previous?.lastUserFetchAt,
                 vendorRetryAfter: Self.vendorRetryAfter(from: snap.status))
         }
+        keepOneClaudeMonthlyCredit()
         lastCompleteFetch = now
         return visibleCache()
+    }
+
+    /// The linked Console credit belongs to one Claude row. Rows read it one
+    /// after another, and a row not fetched this pass keeps its cached line,
+    /// so an account change in the billing session could leave the old row's
+    /// credit beside the new row's. Keep only the latest observation, by the
+    /// order the billing session accepted it (`observation`), never by when a
+    /// provider happened to start; every other row's line is cleared. Two rows
+    /// holding the same observation cannot both have been bound to it, so a
+    /// tie keeps none.
+    private func keepOneClaudeMonthlyCredit() {
+        let holders = cache.filter { $0.value.snapshot.vendorId == .claude && $0.value.snapshot.monthlyAPICredit != nil }
+        guard holders.count > 1 else { return }
+        let latest = holders.map { $0.value.snapshot.monthlyAPICredit!.observation }.max()!
+        let winners = holders.filter { $0.value.snapshot.monthlyAPICredit!.observation == latest }.map(\.key)
+        let newest = winners.count == 1 ? winners[0] : nil
+        for (id, entry) in holders where id != newest {
+            var snapshot = entry.snapshot
+            snapshot.monthlyAPICredit = nil
+            cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
     }
 
     /// Adds the user's hand-entered renewal countdown, when they recorded one

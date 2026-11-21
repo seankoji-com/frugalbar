@@ -119,7 +119,8 @@ struct ReadingReadout: View {
     }
 
     static func color(isBlocked: Bool, urgency: Urgency) -> Color {
-        if isBlocked || urgency == .critical { return Theme.error }
+        if isBlocked { return Theme.errorBold }
+        if urgency == .critical { return Theme.error }
         if urgency == .warning { return Theme.tertiary }
         return Theme.healthy
     }

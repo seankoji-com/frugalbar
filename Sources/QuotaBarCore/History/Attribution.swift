@@ -180,7 +180,8 @@ public enum AttributionEngine {
         .antigravityClaude,
         .antigravityArgon,
         .clinepass,
-        .muse
+        .muse,
+        .opendesign
     ]
 
     /// Which local activity sources (if any) can speak for a vendor.

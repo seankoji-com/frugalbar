@@ -399,7 +399,8 @@ public struct MetricDetailModalView: View {
         case .unavailable, .lastPollFailed: Theme.outline
         case .healthy: Theme.secondary
         case .runningLow: Theme.tertiary
-        case .critical, .exhausted, .blocked: Theme.error
+        case .critical: Theme.error
+        case .exhausted, .blocked: Theme.errorBold
         }
     }
 

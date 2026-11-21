@@ -73,14 +73,16 @@ public struct DualBarProgressView: View {
     nonisolated static func stateColor(for metrics: DualBarMetrics, presentedPaceMarker: Double?) -> Color {
         let consumed = metrics.primaryFraction.map { max(0, min(1, $0)) }
         if metrics.isBlocked {
-            // The vendor told us this window cannot be used: its own colour
-            // when it gave one, otherwise the shared error tone. Whatever the
-            // percentage says. A blocked window that reported 40% used must
+            // The vendor told us this window cannot be used: the shared spent
+            // red, whatever the percentage says and whatever tint the vendor
+            // suggested. One red for every exhausted or blocked window: a
+            // vendor tint (OpenCode Go's pale #ffb4ab) drew pink hatching
+            // beside the deep red of a spent window. A blocked window that reported 40% used must
             // not be drawn green, which is failure rendering as health. This
             // also matches the hatched placeholder's fallback, so a blocked
             // window with no reading never shows a label in one colour beside
             // a bar drawn in another.
-            return metrics.blockedColor.flatMap(Color.init(hexString:)) ?? Theme.errorBold
+            return Theme.errorBold
         } else if consumed == nil {
             // No reading and not vendor-flagged blocked: neutral, not a
             // fabricated "healthy" green.
