@@ -573,8 +573,12 @@ completed read (`lastRead`, with that read's identity, still bound by
 observation; returning nil dropped the line for the whole poll whenever
 claude.ai was slow. Because that copy can outlive a sign-in change the session
 sees before the pass commits, `keepOneClaudeMonthlyCredit` first clears any
-named row whose credit's identity is not the session's current attribution
-(including when the session has none). FrugalBar's own billing fetch carries
+named row (by its `claude-account:` id, since a deadline placeholder keeps the
+credit but not the account) whose credit's identity is not the session's
+current attribution, including when the session has none. The attribution is
+sampled on the main actor and the cache is written on the manager's, so a
+sign-in change landing between the two can survive one pass; the next poll
+clears it. FrugalBar's own billing fetch carries
 `frugalbarOwnRead`, so the page's fetch observer does not report it as the
 page's own fetch and clear the verification the read is establishing.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one

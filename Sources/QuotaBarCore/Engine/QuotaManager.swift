@@ -786,8 +786,10 @@ public actor QuotaManager {
     /// could otherwise outlive a sign-in change the session saw in between.
     private func keepOneClaudeMonthlyCredit(currentIdentities: Set<String>?? = .none) {
         if case .some(let current) = currentIdentities {
+            // A named row is known by its stable instance id: a deadline
+            // placeholder carries the previous credit but no account.
             for (id, entry) in cache where entry.snapshot.vendorId == .claude
-                && entry.snapshot.claudeAccount != nil
+                && id.hasPrefix(ClaudeAccount.instancePrefix)
                 && entry.snapshot.monthlyAPICredit != nil
                 && (current == nil || entry.snapshot.monthlyAPICredit?.webIdentities != current) {
                 var snapshot = entry.snapshot
