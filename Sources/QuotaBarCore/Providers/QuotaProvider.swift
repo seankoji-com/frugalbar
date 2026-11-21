@@ -4,6 +4,7 @@ import Foundation
 /// Direct provider callers retain manual-refresh semantics.
 enum QuotaFetchContext {
     @TaskLocal static var isUserInitiated = true
+    @TaskLocal static var deadline: ContinuousClock.Instant?
 }
 
 // MARK: - Provider adapter protocol

@@ -308,9 +308,7 @@ public struct DualBarMetrics: Sendable, Equatable {
     ///
     /// The popover prints this in the cell instead of a dash. A bar with a
     /// fraction keeps its percentage. A bar the vendor blocked keeps "Blocked".
-    /// Only a USD figure is money. A credit count is not converted: Command
-    /// Code sets `balanceText` on the one row whose credits are already priced
-    /// in dollars, and the export unit stays "credits".
+    /// Only a USD figure is money. A credit count is not converted.
     public var balanceText: String?
     public var balanceCaption: String? {
         guard primaryFraction == nil, !isBlocked else { return nil }

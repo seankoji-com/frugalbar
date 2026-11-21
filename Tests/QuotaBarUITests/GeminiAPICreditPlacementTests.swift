@@ -38,7 +38,7 @@ struct GeminiAPICreditPlacementTests {
         return snapshot
     }
 
-    @Test("the configured credit draws only the API budget line")
+    @Test("the configured credit draws only the API credit line")
     func drawsOnlyTheBudget() throws {
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = try #require(TimeZone(identifier: "UTC"))
@@ -46,7 +46,7 @@ struct GeminiAPICreditPlacementTests {
             credit: try credit(), now: now, calendar: utc))
 
         #expect(p.budget.amountText == "A$25.00")
-        #expect(p.spoken.contains("API budget A$25.00"))
+        #expect(p.spoken.contains("API credit A$25.00"))
         #expect(p.spoken.contains("configured 20 November 2026"))
         #expect(p.spoken.contains("not a vendor reading"))
         // The prepaid balance and monthly grant stay in Settings, not the row.
@@ -55,7 +55,7 @@ struct GeminiAPICreditPlacementTests {
         #expect(!p.spoken.contains("A$7.50"))
     }
 
-    @Test("the spend cap is a monthly API budget line, filled with calendar time")
+    @Test("the spend cap is a monthly API credit line, filled with calendar time")
     func budgetIsCalendarMonthProgress() throws {
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = try #require(TimeZone(identifier: "UTC"))
@@ -68,7 +68,7 @@ struct GeminiAPICreditPlacementTests {
         #expect(abs(budget.fraction - expected) < 0.00001)
         #expect(budget.percentText == "65%")
         #expect(budget.countdown == "11d")
-        #expect(budget.spoken.contains("API budget A$25.00"))
+        #expect(budget.spoken.contains("API credit A$25.00"))
         #expect(budget.spoken.contains("65% of the calendar month elapsed"))
         #expect(budget.spoken.contains("11 days left in the month"))
         // The bar is time, never spend: Google publishes no API-key spend.
@@ -180,14 +180,14 @@ struct GeminiAPICreditPlacementTests {
         }
         for status: ProviderStatus in [.measured(.none), .unavailable(.badResponse)] {
             let text = label(status)
-            #expect(text.contains("API budget A$25.00"))
+            #expect(text.contains("API credit A$25.00"))
             #expect(text.contains("not a vendor reading"))
             #expect(!text.contains("Prepaid balance"))
             #expect(!text.contains("A$12.00"))
             #expect(!text.contains("A$7.50"))
             // The budget line is spoken once, not once from the unavailable
             // base label and again from the combined label.
-            #expect(text.components(separatedBy: "API budget A$25.00").count == 2)
+            #expect(text.components(separatedBy: "API credit A$25.00").count == 2)
         }
     }
 

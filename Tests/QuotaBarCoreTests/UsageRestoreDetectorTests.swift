@@ -11,13 +11,14 @@ struct UsageRestoreDetectorTests {
         _ vendor: VendorIdentifier,
         bars: [DualBarMetrics],
         measured: Bool = true,
-        credits: Int? = nil
+        credits: Int? = nil,
+        at lastUpdated: Date? = nil
     ) -> QuotaSnapshot {
         var s = QuotaSnapshot(
             id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
             category: .aiSubscriptions, metric: .subscription(tierName: "T", renewalDate: nil),
             status: measured ? .measured(.none) : .unavailable(.notConfigured),
-            resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+            resetsAt: nil, lastUpdated: lastUpdated ?? now, auxiliaryInfo: nil)
         s.row1 = bars.first
         s.row2 = bars.dropFirst().first
         s.resetCreditsAvailable = credits
@@ -156,15 +157,22 @@ struct UsageRestoreDetectorTests {
         #expect(events.isEmpty)
     }
 
-    @Test("the observer surfaces restores without also reporting a reset")
+    @Test("the observer surfaces a confirmed restore without also reporting a reset")
     func observerReportsRestoreOnly() async {
         let observer = QuotaNotificationObserver()
         let reset = now.addingTimeInterval(3 * 86_400)
         _ = await observer.observeTransitions(
             current: [snapshot(.openai, bars: [bar("WK", fraction: 0.8, resetsAt: reset)])], now: now)
+        let later = now.addingTimeInterval(120)
+        let candidate = await observer.observeTransitions(
+            current: [snapshot(.openai, bars: [bar("WK", fraction: 0.05, resetsAt: reset)], at: later)],
+            now: later)
+        // A drop is a candidate until the next fresh read agrees.
+        #expect(candidate.restores.isEmpty)
+        let confirming = now.addingTimeInterval(240)
         let t = await observer.observeTransitions(
-            current: [snapshot(.openai, bars: [bar("WK", fraction: 0.05, resetsAt: reset)])],
-            now: now.addingTimeInterval(120))
+            current: [snapshot(.openai, bars: [bar("WK", fraction: 0.05, resetsAt: reset)], at: confirming)],
+            now: confirming)
         #expect(t.restores.count == 1)
         #expect(t.resets.isEmpty)
         #expect(t.creditGrants.isEmpty)

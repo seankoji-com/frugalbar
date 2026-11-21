@@ -13,7 +13,7 @@ struct PopoverRowGroupingTests {
                     snapshot("argon", vendor: .antigravityArgon, plan: "Google AI Pro")]
         let group = PopoverRowGrouping.groups(for: rows)[0]
         #expect(group.rowSubtitle(for: rows[0])
-            == "Antigravity\nGoogle AI Pro")
+            == "AI Pro")
         #expect(group.rowSubtitle(for: rows[1]) == "")
         #expect(group.accessibilityLabel == "Antigravity, Google AI Pro")
         let codex = snapshot("codex", vendor: .openai, plan: "Pro 200")
@@ -22,8 +22,7 @@ struct PopoverRowGroupingTests {
             == "ChatGPT · Pro 200")
         let absent = snapshot("gemini", vendor: .gemini, plan: nil)
         let absentGroup = PopoverRowGrouping.groups(for: [absent])[0]
-        #expect(absentGroup.rowSubtitle(for: absent)
-            == "Antigravity")
+        #expect(absentGroup.rowSubtitle(for: absent) == "")
         let standalone = snapshot("single workspace")
         let singleGroup = PopoverRowGrouping.groups(for: [standalone])[0]
         #expect(singleGroup.rowSubtitle(for: standalone) == nil)

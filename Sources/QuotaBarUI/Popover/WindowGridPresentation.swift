@@ -8,8 +8,7 @@ import QuotaBarCore
 /// same window lines up down the whole card instead of every vendor stacking
 /// its own bars in its own order. Columns are keyed on the token rather than
 /// on `windowLength`: the token is what each provider deliberately chose to
-/// call the window, and a length can be missing (Command Code's monthly plan
-/// credits publish no reset) or ambiguous.
+/// call the window, and a length can be missing or ambiguous.
 public enum WindowColumn: Int, CaseIterable, Sendable, Identifiable {
     case fiveHour, weekly, monthly
 
@@ -56,9 +55,11 @@ public struct WindowGridPresentation: Equatable, Sendable {
     /// land on different sides of a rounding boundary (59m30s is "1h" to one
     /// and "59 minutes" to the other if each reads its own clock).
     public let now: Date
+    private let vendorId: VendorIdentifier
 
     public init(snapshot: QuotaSnapshot, now: Date = Date()) {
         self.now = now
+        self.vendorId = snapshot.vendorId
         var bars: [WindowColumn: DualBarMetrics] = [:]
         var extras: [DualBarMetrics] = []
         for bar in snapshot.displayBars {
@@ -154,7 +155,15 @@ public struct WindowGridPresentation: Equatable, Sendable {
         let now = explicitNow ?? self.now
         func spoken(_ bar: DualBarMetrics, name: String, isColumn: Bool = false) -> String {
             var text: String
-            if let percent = Self.percentText(for: bar) {
+            let isCommandCodeMonth = vendorId == .commandcode && isColumn && bar.label == WindowColumn.monthly.label
+            let percent: String?
+            if isCommandCodeMonth, let fraction = bar.primaryFraction, fraction < 1, Self.isExhausted(bar) {
+                percent = fraction.formatted(.percent.precision(.fractionLength(2))
+                    .locale(Locale(identifier: "en_US_POSIX")))
+            } else {
+                percent = Self.percentText(for: bar)
+            }
+            if let percent {
                 text = "\(name) \(percent) used"
                 // The vendor can block a window and still report how much of
                 // it was used (OpenCode Go does). The bar then wears the
@@ -164,6 +173,8 @@ public struct WindowGridPresentation: Equatable, Sendable {
                 text = "\(name) blocked"
             } else if let balance = bar.balanceCaption {
                 text = "\(name) \(balance) remaining, no percentage"
+            } else if isCommandCodeMonth, let detail = bar.usedText {
+                text = "\(name) \(detail), no percentage"
             } else {
                 text = "\(name) no reading"
             }

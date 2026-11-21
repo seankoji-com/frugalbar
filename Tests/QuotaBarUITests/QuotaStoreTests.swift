@@ -186,11 +186,31 @@ struct QuotaStoreTests {
         #expect(hits.count(.claude) == 2)
     }
 
+    /// The notification observer runs from this hook, so a manual fresh read
+    /// can confirm or discard a restore candidate between scheduled polls.
+    @Test("load and manual refresh report their published snapshots in order")
+    func userRefreshCompletionHook() async {
+        let hits = Hits()
+        let s = store([StubProvider(vendorId: .claude, hits: hits)])
+        var seen: [Int] = []
+        s.onQuotaRefreshCompleted = { snapshots in
+            #expect(snapshots.count == 1)
+            seen.append(hits.count(.claude))
+        }
+        await s.load()
+        #expect(seen == [1])
+        await s.forceRefresh()
+        #expect(seen == [1, 2])
+        #expect(s.snapshots.count == 1)
+    }
+
     @Test("manual refresh during a successful poll shares its request")
     func overlappingRefreshesCollapse() async {
         let hits = Hits()
         let gate = FirstPollGate()
         let s = store([StubProvider(vendorId: .claude, hits: hits, gate: gate)], cacheTTL: 0)
+        var observed: [[String]] = []
+        s.onQuotaRefreshCompleted = { observed.append($0.map(\.id)) }
         async let first: Void = s.load()
         await gate.waitForEntry()
         #expect(s.isRefreshing)
@@ -199,7 +219,52 @@ struct QuotaStoreTests {
         await gate.resume()
         await first
         #expect(hits.count(.claude) == 1)
+        #expect(observed == [["claude"]])
         #expect(s.isRefreshing == false)
+    }
+
+    @Test("a manual rebound discards a restore candidate before the next scheduled read")
+    func manualReboundDiscardsRestoreCandidate() async {
+        actor Readings: QuotaProvider {
+            let vendorId: VendorIdentifier = .gemini
+            let displayName = "Gemini"
+            let category: MetricCategory = .aiSubscriptions
+            let start: Date
+            var fractions = [0.9, 0.0, 0.9, 0.0]
+
+            init(start: Date) { self.start = start }
+
+            func fetchSnapshot() async throws -> QuotaSnapshot {
+                let now = start.addingTimeInterval(Double(4 - fractions.count) * 120)
+                let fraction = fractions.removeFirst()
+                return QuotaSnapshot(
+                    id: vendorId.rawValue, vendorId: vendorId, displayName: displayName, category: category,
+                    metric: .subscription(tierName: nil, renewalDate: nil), status: .healthy,
+                    resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                    row1: DualBarMetrics(primaryFraction: fraction, label: "WK",
+                                        resetsAt: start.addingTimeInterval(86_400)))
+            }
+        }
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let provider = Readings(start: now)
+        let manager = QuotaManager(cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+            minPollInterval: 0), providerFactory: { [provider] }, displayPreferences: { PrefsBox().value })
+        let store = QuotaStore(manager: manager)
+        let observer = QuotaNotificationObserver()
+        var restores: [UsageRestoredEvent] = []
+        var observed: [Double] = []
+        store.onQuotaRefreshCompleted = { snapshots in
+            observed += snapshots.compactMap { $0.row1?.primaryFraction }
+            restores += await observer.observeTransitions(current: snapshots, now: now).restores
+        }
+
+        await store.load()
+        await store.load()
+        await store.forceRefresh()
+        await store.load()
+        #expect(observed == [0.9, 0, 0.9, 0])
+        #expect(restores.isEmpty)
     }
 
     @Test("a queued manual click bypasses the automatic floor and vendor backoff")

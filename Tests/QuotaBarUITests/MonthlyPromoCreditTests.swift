@@ -239,7 +239,7 @@ struct MonthlyPromoCreditTests {
         #expect(entry.extendsSubscription)
         // The grant's issue date is not the billing cycle's start.
         #expect(entry.monthlyPeriodStart == nil)
-        #expect(presentation.title == "Monthly credit")
+        #expect(presentation.title == "API credit")
         #expect(presentation.amountText == "$200.00")
         #expect(presentation.fraction == 0.75)
         #expect(presentation.percentText == "75%")
@@ -267,7 +267,7 @@ struct MonthlyPromoCreditTests {
         #expect(snapshot.row1?.primaryFraction == 0.2)
         #expect(snapshot.status == .measured(.none))
         #expect(row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
-            .contains("Monthly credit, 75% used"))
+            .contains("API credit, 75% used"))
         let label = row.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
         #expect(label.components(separatedBy: "$200.00").count == 2)
         // The billing read is independent: a quota outage does not make this
@@ -344,7 +344,7 @@ struct MonthlyPromoCreditTests {
         let end = date("2026-11-09T00:00:00Z")
         let presentation = MonthlyPromoCreditPresentation(
             entry: APICreditEntry(
-                id: "openai.monthly-credit", vendorId: .openai, label: "Monthly credit",
+                id: "openai.monthly-credit", vendorId: .openai, label: "API credit",
                 metric: .currency(balance: 100, limit: 200, spent: nil, currencyCode: "USD"),
                 currencyBasis: .prepaidCredit, monthlyPeriodEnd: end, monthlyPeriodStart: start),
             now: date("2026-10-25T00:00:00Z"), isStale: false)

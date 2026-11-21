@@ -591,9 +591,12 @@ public actor QuotaManager {
                     // A whole-provider deadline. URLSession's per-request timeout
                     // does not bound a provider that issues several requests.
                     let startedAt = DispatchTime.now().uptimeNanoseconds
+                    let deadline = ContinuousClock.now + .seconds(budget)
                     let outcome = await withDeadline(seconds: budget) {
-                        try await QuotaFetchContext.$isUserInitiated.withValue(force) {
-                            try await provider.fetchSnapshot()
+                        try await QuotaFetchContext.$deadline.withValue(deadline) {
+                            try await QuotaFetchContext.$isUserInitiated.withValue(force) {
+                                try await provider.fetchSnapshot()
+                            }
                         }
                     }
                     // A vendor-wide hand-entered renewal has no account

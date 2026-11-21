@@ -48,6 +48,10 @@ public final class QuotaStore {
     /// that previously let the popover clobber the menu bar's refresh handler.
     public var onSummaryChange: (@MainActor (SystemHealthSummary) -> Void)?
 
+    /// Observes each published pass in order, including user refreshes that
+    /// join a load already in progress. The observer ignores cached repeats.
+    public var onQuotaRefreshCompleted: (@MainActor ([QuotaSnapshot]) async -> Void)?
+
     private let manager: QuotaManager
     private let historyRecorder: (@Sendable ([QuotaSnapshot]) async -> Void)?
     private let readingsLoader: (@Sendable (_ since: Date) async -> [QuotaHistoryStore.ReadingRecord])?
@@ -241,12 +245,17 @@ public final class QuotaStore {
         isRefreshing = true
         defer { isRefreshing = false }
         _ = await fetch()
-        await reloadFromCache()
+        await publishRefresh()
         while forcedRefreshPending {
             forcedRefreshPending = false
             _ = await manager.forceRefresh()
-            await reloadFromCache()
+            await publishRefresh()
         }
+    }
+
+    private func publishRefresh() async {
+        await reloadFromCache()
+        await onQuotaRefreshCompleted?(snapshots)
     }
 
     private func reloadFromCache() async {

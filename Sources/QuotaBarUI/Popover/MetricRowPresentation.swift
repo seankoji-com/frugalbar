@@ -171,7 +171,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
     public let monthlyPromo: MonthlyPromoCreditPresentation?
     public let openAIUsageCredit: OpenAIUsageCreditPresentation?
     /// The linked Console organisation's monthly API-credit entitlement, drawn
-    /// as a **Monthly credit** line with its amount and a billing-cycle meter.
+    /// as a **API credit** line with its amount and a billing-cycle meter.
     /// The meter is cycle progress, not spend: the linked payload publishes no
     /// used figure.
     ///
@@ -188,7 +188,9 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// in 5 days". They are drawn on their own line and not in the window grid,
     /// so without this the figures would be invisible to VoiceOver.
     public let scopedSpeech: String?
-    /// The configured Gemini API budget, drawn under the Gemini row. Nil when
+    let visibleScopedBars: [DualBarMetrics]
+    private let hidesModelWindows: Bool
+    /// The configured Gemini API credit, drawn under the Gemini row. Nil when
     /// no spend cap was saved, or the row is not Gemini's.
     public let geminiAPICredit: GeminiAPICreditPresentation?
 
@@ -200,6 +202,7 @@ public struct MetricRowPresentation: Equatable, Sendable {
     /// The ticket group scoped to a model window, matched case-insensitively
     /// against the scoped bar's label ("Fable").
     public func modelResetCredits(for label: String) -> ResetCredits? {
+        guard !hidesModelWindows else { return nil }
         for group in resetCreditGroups {
             if case .model(let name) = group.scope,
                name.caseInsensitiveCompare(label) == .orderedSame {
@@ -216,7 +219,8 @@ public struct MetricRowPresentation: Equatable, Sendable {
         resetCreditGroups.filter { group in
             if group.scope.isPlan { return false }
             if case .model(let name) = group.scope {
-                return !scopedLabels.contains { name.caseInsensitiveCompare($0) == .orderedSame }
+                return !hidesModelWindows
+                    && !scopedLabels.contains { name.caseInsensitiveCompare($0) == .orderedSame }
             }
             return true
         }
@@ -252,6 +256,12 @@ public struct MetricRowPresentation: Equatable, Sendable {
             MonthlyCreditBarPresentation(credit: $0, now: now)
         }
         self.scopedSpeech = Self.scopedSpeech(for: snapshot.scopedBars, now: now)
+        let hidesModelWindows = snapshot.bars.contains {
+            ($0.label == "5H" || $0.label == "WK")
+                && (WindowGridPresentation.isExhausted($0) || $0.isBlocked)
+        }
+        self.hidesModelWindows = hidesModelWindows
+        self.visibleScopedBars = hidesModelWindows ? [] : snapshot.scopedBars
         self.geminiAPICredit = snapshot.vendorId == .gemini
             ? snapshot.geminiAPICredit.flatMap {
                 GeminiAPICreditPresentation(credit: $0, now: now)

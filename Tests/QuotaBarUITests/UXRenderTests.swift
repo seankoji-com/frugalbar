@@ -392,6 +392,31 @@ struct UXRenderTests {
         }.padding(12).background(Theme.surface), name: "agy-claude-icons", directory: directory)
     }
 
+    @Test func renderPopoverRegressionStates() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = ClaudeAccountFixtures.now
+        let reset = now.addingTimeInterval(4 * 86_400)
+        var claude = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 1, fable: 0.95)
+        claude.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
+            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
+            now: now)
+        var gemini = QuotaSnapshot(id: "gemini", vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+            status: .healthy, resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
+            row2: DualBarMetrics(primaryFraction: 0.4, label: "WK", resetsAt: reset,
+                                 windowLength: QuotaWindow.week), planName: "Google AI Pro")
+        gemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 25, configuredAt: now)
+        let command = QuotaSnapshot(id: "commandcode", vendorId: .commandcode, displayName: "Command Code",
+            category: .aiSubscriptions, metric: .subscription(tierName: "GOAT", renewalDate: nil),
+            status: .critical, resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
+            row3: DualBarMetrics(primaryFraction: (70 - 0.0506) / 70, label: "MO",
+                                 resetsAt: reset, windowLength: 30 * 86_400), planName: "GOAT")
+        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [claude, gemini, command],
+            now: now).padding(12).frame(width: 384).background(Theme.surface),
+            name: "popover-regression-states", directory: directory)
+    }
+
     @Test func render() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

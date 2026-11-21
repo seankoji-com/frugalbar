@@ -80,7 +80,7 @@ public enum UsageRestoreDetector {
     /// differ by exactly 0.15 subtract to a hair under it, so without this a
     /// drop of exactly the threshold would count for some readings and not
     /// for others.
-    private static let tolerance: Double = 1e-9
+    static let tolerance: Double = 1e-9
 
     public static func detect(
         previous: [String: QuotaSnapshot],

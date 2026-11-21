@@ -10,11 +10,13 @@ struct QuotaTransitionDetectorTests {
 
     // MARK: - Snapshot builders
 
-    private func measured(_ vendor: VendorIdentifier, urgency: Urgency) -> QuotaSnapshot {
+    private func measured(
+        _ vendor: VendorIdentifier, urgency: Urgency, at lastUpdated: Date = Date()
+    ) -> QuotaSnapshot {
         QuotaSnapshot(
             id: vendor.rawValue, vendorId: vendor, displayName: vendor.displayName,
             category: .aiSubscriptions, metric: .subscription(tierName: "T", renewalDate: nil),
-            status: .measured(urgency), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
+            status: .measured(urgency), resetsAt: nil, lastUpdated: lastUpdated, auxiliaryInfo: nil)
     }
 
     private func unavailable(
@@ -116,12 +118,19 @@ struct QuotaTransitionDetectorTests {
     @Test("a second observe call with the same healthy state does not re-fire")
     func repeatedHealthyStateDoesNotRefire() async {
         let observer = QuotaNotificationObserver()
-        _ = await observer.observe(current: [measured(.claude, urgency: .critical)])
-        let recovered = await observer.observe(current: [measured(.claude, urgency: .none)])
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = await observer.observe(current: [measured(.claude, urgency: .critical, at: start)])
+        // The recovery waits for the next fresh read to agree.
+        let candidate = await observer.observe(
+            current: [measured(.claude, urgency: .none, at: start + 120)])
+        #expect(candidate.isEmpty)
+        let recovered = await observer.observe(
+            current: [measured(.claude, urgency: .none, at: start + 240)])
         #expect(recovered == [QuotaRecoveryEvent(vendorId: .claude, displayName: "Claude")])
 
         // Same healthy reading again: already fired for this transition, must stay silent.
-        let repeated = await observer.observe(current: [measured(.claude, urgency: .none)])
+        let repeated = await observer.observe(
+            current: [measured(.claude, urgency: .none, at: start + 360)])
         #expect(repeated.isEmpty)
     }
 }

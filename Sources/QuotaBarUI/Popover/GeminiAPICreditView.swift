@@ -4,7 +4,7 @@ import QuotaBarCore
 /// Pure presentation for the configured Gemini API credit.
 ///
 /// The monthly spend cap is the only configured figure the popover draws. It
-/// becomes the account's API budget line, in the same anatomy as Codex's
+/// becomes the account's API credit line, in the same anatomy as Codex's
 /// separate monthly credit: name column, one bar, percentage and countdown
 /// beneath. The prepaid balance and monthly grant stay in Settings because
 /// Google publishes them only in AI Studio; they are not drawn in the popover.
@@ -22,7 +22,7 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
     /// informational colour, never a quota state colour, and takes no part in
     /// quota maths.
     public struct Budget: Equatable, Sendable {
-        public static let title = "API budget"
+        public static let title = "API credit"
         /// The configured cap in the billing account's own money.
         public let amountText: String
         /// Elapsed share of the calendar month, 0…1.
@@ -89,7 +89,7 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
         }
 
         let amount = MoneyText.format(cap, code: currencyCode)
-        var parts = ["API budget \(amount)",
+        var parts = ["API credit \(amount)",
                      "\(percent)% of the calendar month elapsed"]
         if let dayPhrase { parts.append(dayPhrase) }
         parts.append("not spend, the fill is elapsed calendar time")
