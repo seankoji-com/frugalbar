@@ -20,7 +20,8 @@ public actor QuotaManager {
         displayPreferences: { CredentialStore.providerDisplayPreferences },
         geminiCreditLookup: { GeminiAPICreditStore.load() },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
-        monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } })
+        monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
+        monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } })
 
     // --- State ---
     /// Keyed by each provider's stable `instanceID`, not by vendor: one vendor
@@ -44,6 +45,7 @@ public actor QuotaManager {
     private let geminiCreditLookup: @Sendable () -> GeminiAPICredit?
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
     private let monthlyCreditConnection: @Sendable () async -> String?
+    private let monthlyCreditIdentities: (@Sendable () async -> Set<String>?)?
     private var monthlyCreditInvalidation = 0
     private var openAIMonthlyCreditInvalidation = 0
     private var activeTaskIsForced = false
@@ -104,6 +106,9 @@ public actor QuotaManager {
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
         monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
+        // The billing session's current attribution, checked at commit. Nil
+        // (isolated managers) skips the check; tests that need it inject one.
+        monthlyCreditIdentities: (@Sendable () async -> Set<String>?)? = nil,
         // Cache policy time is injectable independently of vendor observations
         // and real elapsed deadlines, so tests never race the scheduler.
         clock: @escaping @Sendable () -> Date = { Date() }
@@ -116,6 +121,7 @@ public actor QuotaManager {
         self.displayPreferences = displayPreferences
         self.geminiCreditLookup = geminiCreditLookup
         self.monthlyCreditConnection = monthlyCreditConnection
+        self.monthlyCreditIdentities = monthlyCreditIdentities
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -655,6 +661,11 @@ public actor QuotaManager {
         }
 
         let currentCreditConnection = await monthlyCreditConnection()
+        // Read once, with no suspension between here and the cache write
+        // below, so the check describes the session as the pass commits.
+        let currentCreditIdentities: Set<String>?? = if let monthlyCreditIdentities {
+            .some(await monthlyCreditIdentities())
+        } else { .none }
         let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
             && creditInvalidation == monthlyCreditInvalidation
         let acceptsOpenAIMonthlyCredit = openAICreditInvalidation == openAIMonthlyCreditInvalidation
@@ -755,7 +766,7 @@ public actor QuotaManager {
                 lastUserFetchAt: force ? now : previous?.lastUserFetchAt,
                 vendorRetryAfter: Self.vendorRetryAfter(from: snap.status))
         }
-        keepOneClaudeMonthlyCredit()
+        keepOneClaudeMonthlyCredit(currentIdentities: currentCreditIdentities)
         lastCompleteFetch = now
         return visibleCache()
     }
@@ -768,7 +779,25 @@ public actor QuotaManager {
     /// provider happened to start; every other row's line is cleared. Two rows
     /// holding the same observation cannot both have been bound to it, so a
     /// tie keeps none.
-    private func keepOneClaudeMonthlyCredit() {
+    ///
+    /// Before that, a named row keeps the credit only while the billing
+    /// session still attributes it to the same identity. A row that took the
+    /// last read when its wait ran out, or a cached line from an earlier pass,
+    /// could otherwise outlive a sign-in change the session saw in between.
+    private func keepOneClaudeMonthlyCredit(currentIdentities: Set<String>?? = .none) {
+        if case .some(let current) = currentIdentities {
+            // A named row is known by its stable instance id: a deadline
+            // placeholder carries the previous credit but no account.
+            for (id, entry) in cache where entry.snapshot.vendorId == .claude
+                && id.hasPrefix(ClaudeAccount.instancePrefix)
+                && entry.snapshot.monthlyAPICredit != nil
+                && (current == nil || entry.snapshot.monthlyAPICredit?.webIdentities != current) {
+                var snapshot = entry.snapshot
+                snapshot.monthlyAPICredit = nil
+                cache[id] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                    lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+            }
+        }
         let holders = cache.filter { $0.value.snapshot.vendorId == .claude && $0.value.snapshot.monthlyAPICredit != nil }
         guard holders.count > 1 else { return }
         let latest = holders.map { $0.value.snapshot.monthlyAPICredit!.observation }.max()!

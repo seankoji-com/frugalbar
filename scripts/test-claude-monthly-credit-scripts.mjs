@@ -36,6 +36,9 @@ assert.equal(messages.length, 1);
 await window.fetch(response(endpoint, false));
 assert.equal(messages[1].retryAfter, '600');
 assert.deepEqual(JSON.parse(messages[1].payload), { _failed: true });
+// FrugalBar's own bracketed read is not reported as the page's fetch.
+await window.fetch(response(endpoint), { credentials: 'same-origin', frugalbarOwnRead: true });
+assert.equal(messages.length, 2);
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction('fetch', 'query', 'AbortController', 'setTimeout', 'clearTimeout', refresh);
@@ -67,6 +70,7 @@ assert.equal(result.billing.monthly_credit_usd, '12.34');
 assert.equal('private_account_field' in result.billing, false);
 assert.equal('granted_total_usd' in result.billing, false);
 assert.ok(options.every(o => o.credentials === 'same-origin' && o.signal.aborted === false));
+assert.equal(options[1].frugalbarOwnRead, true);
 timer();
 assert.ok(options.every(o => o.signal.aborted === true));
 assert.equal(cleared, true);

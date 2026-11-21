@@ -153,6 +153,37 @@ struct ClaudeMonthlyCreditBindingTests {
         #expect(s.webIdentities == nil)
     }
 
+    /// A refresh that timed out, or whose account reads got no answer, says
+    /// nothing about who is signed in. Dropping the attribution then hid the
+    /// Primary row's line until some later read happened to succeed.
+    @Test("A refresh that got no answer keeps the credit on its row, marked stale")
+    func unansweredRefreshKeepsAttribution() {
+        let bound = ClaudeMonthlyCreditBinding.bound(accountID: "a")
+        var s = state(for: personalOrg)
+        read(&s, before: accountUUID, after: accountUUID)
+        // The whole page evaluation timed out.
+        s.completeRead(text: nil, query: s.query!, generation: s.generation, now: now)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: s.webIdentities, rows: rowA) == bound)
+        #expect(s.credit?.refreshFailed == true)
+        // Billing and both account reads failed inside the page.
+        read(&s, before: nil, after: nil, billing: #"{"_failed":true}"#)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: s.webIdentities, rows: rowA) == bound)
+        // One account read answered with the same account.
+        read(&s, before: nil, after: accountUUID, billing: #"{"_failed":true}"#)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: s.webIdentities, rows: rowA) == bound)
+    }
+
+    @Test("A failed refresh that shows another account, or none, still drops the attribution")
+    func contradictedRefreshDropsAttribution() {
+        let cases: [(String?, String?)] = [(nil, "out"), ("out", nil), (nil, otherAccountUUID), (otherAccountUUID, accountUUID)]
+        for evidence in cases {
+            var s = state(for: personalOrg)
+            read(&s, before: accountUUID, after: accountUUID)
+            read(&s, before: evidence.0, after: evidence.1, billing: #"{"_failed":true}"#)
+            #expect(s.webIdentities == nil, "before \(evidence.0 ?? "nil"), after \(evidence.1 ?? "nil")")
+        }
+    }
+
     @Test("A billing response the page fetches itself drops an earlier verification")
     func observationDropsVerification() {
         var s = state(for: personalOrg)
@@ -283,5 +314,86 @@ struct ClaudeMonthlyCreditBindingTests {
             ClaudeMonthlyCredit(amountUSD: 2, nextGrantAt: nil, measuredAt: Date())
         }, now: now, limit: .seconds(5))
         #expect(quick?.amountUSD == 2)
+    }
+
+    /// The wait ran out while claude.ai answered slowly, and the row drew no
+    /// line for that poll although the last read had a verified credit.
+    @Test("A row whose wait runs out takes the last completed read, not nothing")
+    func boundedWaitFallsBackToLastRead() async {
+        let credit = await ClaudeAccountQuotaProvider.bounded({ _ in
+            try? await Task.sleep(for: .seconds(30))
+            return ClaudeMonthlyCredit(amountUSD: 1, nextGrantAt: nil, measuredAt: Date())
+        }, fallback: {
+            ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: Date())
+        }, now: now, limit: .milliseconds(50))
+        #expect(credit?.amountUSD == 200)
+        // It is an earlier observation, so it is drawn as stale.
+        #expect(credit?.refreshFailed == true)
+    }
+
+    private struct NamedCreditRow: QuotaProvider {
+        let account: ClaudeAccount
+        let identities: Set<String>
+        var keepsAccount = true
+        var vendorId: VendorIdentifier { .claude }
+        var displayName: String { account.name }
+        var category: MetricCategory { .aiSubscriptions }
+        var instanceID: String { account.id }
+        func fetchSnapshot() async throws -> QuotaSnapshot {
+            var s = QuotaSnapshot(id: account.id, vendorId: .claude, displayName: account.name,
+                category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+                status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil)
+            var credit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: Date())
+            credit.webIdentities = identities
+            credit.observation = 1
+            s.monthlyAPICredit = credit
+            s.claudeAccount = keepsAccount ? account : nil
+            return s
+        }
+    }
+
+    /// The row copied A's credit when its wait ran out; before the pass
+    /// committed, the session's next read found B signed in (or no one).
+    @Test("At commit a named row keeps the credit only while the session still attributes it the same way")
+    func commitChecksCurrentAttribution() async {
+        let a = identity(accountUUID, personalOrg)
+        // A deadline placeholder keeps the previous credit but not the
+        // account, so the check must not rely on `claudeAccount`.
+        for keepsAccount in [true, false] {
+            let row = NamedCreditRow(account: account("claude-account:primary"), identities: [a],
+                                     keepsAccount: keepsAccount)
+            func poll(current: Set<String>?) async -> QuotaSnapshot? {
+                let manager = QuotaManager(
+                    cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+                    providerFactory: { [row] }, monthlyCreditIdentities: { current })
+                return await manager.forceRefresh()["claude-account:primary"]
+            }
+            #expect(await poll(current: [a])?.monthlyAPICredit != nil)
+            let switched = await poll(current: [identity(otherAccountUUID, personalOrg)])
+            #expect(switched != nil)
+            #expect(switched?.monthlyAPICredit == nil, "keepsAccount \(keepsAccount)")
+            let cleared = await poll(current: nil)
+            #expect(cleared != nil)
+            #expect(cleared?.monthlyAPICredit == nil, "keepsAccount \(keepsAccount)")
+        }
+    }
+
+    /// End to end through the row: the fallback still has to bind to this row.
+    @Test("The fallback credit is drawn only under the row its identity names")
+    func fallbackStillBinds() async throws {
+        let web = identity(accountUUID, personalOrg)
+        func row(_ id: String) -> ClaudeAccountQuotaProvider {
+            var credit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: now)
+            credit.webIdentities = [web]
+            var p = ClaudeAccountQuotaProvider(account: account(id), routes: [], failure: .notConfigured,
+                backoff: ClaudeProxyBackoff(), grants: ClaudeGrantSchedule(), creditRows: rows())
+            p.monthlyCredit = { _ in try? await Task.sleep(for: .seconds(30)); return nil }
+            let last = credit
+            p.lastMonthlyCredit = { last }
+            p.creditWaitLimit = .milliseconds(50)
+            return p
+        }
+        #expect(try await row("primary").fetchSnapshot(now: now).monthlyAPICredit?.amountUSD == 200)
+        #expect(try await row("secondary").fetchSnapshot(now: now).monthlyAPICredit == nil)
     }
 }

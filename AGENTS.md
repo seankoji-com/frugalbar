@@ -551,9 +551,12 @@ evaluation: account, billing, account. The credit is attributed
 (`verifiedAccount`) only when both account reads name the same account. A
 credit the page fetched by itself has no account reads around it and stays
 unattributed until the next read verifies it (that read skips the five-minute
-throttle once). A failed billing read keeps the earlier credit attributed only
-while the same account is still verified; anything else drops the attribution
-until a fresh credit is read. `read` takes the credit and its identity from the
+throttle once). A failed billing read keeps the earlier credit, marked stale,
+and keeps its attribution unless an account read in that evaluation names a
+different account or says no one is signed in (`contradicts`). An account read
+that got no answer, or a whole evaluation that timed out, is not evidence of a
+change: dropping the attribution then hid the line until a later read happened
+to succeed. Once dropped, only a fresh verified credit restores it. `read` takes the credit and its identity from the
 state at one instant, and rows asking while a read is in flight share it
 (`CoalescedRead`). Rows still read one after another, so `QuotaManager`
 enforces the invariant at commit: at most one Claude row carries the credit,
@@ -564,7 +567,20 @@ Settings says "Shown under" only from the snapshots the popover is
 displaying, never from the session alone. `scripts/test-claude-monthly-credit-scripts.mjs`
 runs the page scripts offline in CI; update it with any change to them. The named row waits at most four seconds for this
 optional enrichment so it cannot push a measured usage read past the
-provider deadline.
+provider deadline. When the wait runs out it takes the session's last
+completed read (`lastRead`, with that read's identity, still bound by
+`resolve`) rather than nothing, marked stale because it is an earlier
+observation; returning nil dropped the line for the whole poll whenever
+claude.ai was slow. Because that copy can outlive a sign-in change the session
+sees before the pass commits, `keepOneClaudeMonthlyCredit` first clears any
+named row (by its `claude-account:` id, since a deadline placeholder keeps the
+credit but not the account) whose credit's identity is not the session's
+current attribution, including when the session has none. The attribution is
+sampled on the main actor and the cache is written on the manager's, so a
+sign-in change landing between the two can survive one pass; the next poll
+clears it. FrugalBar's own billing fetch carries
+`frugalbarOwnRead`, so the page's fetch observer does not report it as the
+page's own fetch and clear the verification the read is establishing.
 `ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one
 shown row's verified identity matches. No match, or an unverified row,
 attaches it nowhere, and Settings says why. Email, nickname and row order are
