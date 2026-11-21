@@ -557,7 +557,9 @@ until a fresh credit is read. `read` takes the credit and its identity from the
 state at one instant, and rows asking while a read is in flight share it
 (`CoalescedRead`). Rows still read one after another, so `QuotaManager`
 enforces the invariant at commit: at most one Claude row carries the credit,
-the most recently measured observation (`keepOneClaudeMonthlyCredit`).
+the latest observation in the order the session accepted billing results
+(`ClaudeMonthlyCredit.observation`, `keepOneClaudeMonthlyCredit`), never by
+`measuredAt`, which is when a provider started. A tie keeps none.
 Settings says "Shown under" only from the snapshots the popover is
 displaying, never from the session alone. `scripts/test-claude-monthly-credit-scripts.mjs`
 runs the page scripts offline in CI; update it with any change to them. The named row waits at most four seconds for this

@@ -11,6 +11,10 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
     /// (`ClaudeMonthlyCreditBinding.webIdentities`). Nil until the session
     /// has read which account is signed in; never drawn.
     public var webIdentities: Set<String>? = nil
+    /// Increases with every billing result the session accepts, in the order
+    /// it accepted them, and is kept by a failed refresh. Orders two rows'
+    /// credits by when they were observed, not when their providers started.
+    public var observation = 0
 
     public static func decode(_ data: Data, now: Date) throws -> Self? {
         let payload = try JSONDecoder().decode(Payload.self, from: data)

@@ -211,6 +211,7 @@ struct ClaudeMonthlyCreditBindingTests {
     private struct CreditRow: QuotaProvider {
         let instanceID: String
         let measuredAt: Date
+        let observation: Int
         var vendorId: VendorIdentifier { .claude }
         var displayName: String { instanceID }
         var category: MetricCategory { .aiSubscriptions }
@@ -218,24 +219,55 @@ struct ClaudeMonthlyCreditBindingTests {
             var s = QuotaSnapshot(id: instanceID, vendorId: .claude, displayName: instanceID, category: .aiSubscriptions,
                 metric: .subscription(tierName: nil, renewalDate: nil), status: .measured(.none),
                 resetsAt: nil, lastUpdated: measuredAt, auxiliaryInfo: nil)
-            s.monthlyAPICredit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: measuredAt)
+            var credit = ClaudeMonthlyCredit(amountUSD: 200, nextGrantAt: nil, measuredAt: measuredAt)
+            credit.observation = observation
+            s.monthlyAPICredit = credit
             return s
         }
     }
 
-    /// Row A read A's credit, the billing session then changed account, and
-    /// row B (asking after A's read had finished) read B's: both lines drawn.
-    @Test("One poll never leaves the credit on two Claude rows; the newest observation wins")
-    func oneCreditPerPoll() async {
+    private func poll(_ rows: [CreditRow]) async -> [String: QuotaSnapshot] {
         let manager = QuotaManager(
             cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
-            providerFactory: {
-                [CreditRow(instanceID: "claude-account:a", measuredAt: self.now),
-                 CreditRow(instanceID: "claude-account:b", measuredAt: self.now.addingTimeInterval(30))]
-            })
-        let snapshots = await manager.forceRefresh()
+            providerFactory: { rows })
+        return await manager.forceRefresh()
+    }
+
+    /// Row A read A's credit, the billing session then changed account, and
+    /// row B read B's: both lines drawn. B's provider started first, so a
+    /// start-time comparison kept A's stale credit and cleared B's.
+    @Test("One poll never leaves the credit on two Claude rows; the latest observation wins")
+    func oneCreditPerPoll() async {
+        let snapshots = await poll([
+            CreditRow(instanceID: "claude-account:a", measuredAt: now.addingTimeInterval(30), observation: 1),
+            CreditRow(instanceID: "claude-account:b", measuredAt: now, observation: 2),
+        ])
         #expect(snapshots["claude-account:a"]?.monthlyAPICredit == nil)
-        #expect(snapshots["claude-account:b"]?.monthlyAPICredit != nil)
+        #expect(snapshots["claude-account:b"]?.monthlyAPICredit?.observation == 2)
+    }
+
+    @Test("Two rows holding the same observation keep neither")
+    func tiedObservationKeepsNone() async {
+        let snapshots = await poll([
+            CreditRow(instanceID: "claude-account:a", measuredAt: now, observation: 3),
+            CreditRow(instanceID: "claude-account:b", measuredAt: now, observation: 3),
+        ])
+        #expect(snapshots["claude-account:a"]?.monthlyAPICredit == nil)
+        #expect(snapshots["claude-account:b"]?.monthlyAPICredit == nil)
+    }
+
+    @Test("Each accepted billing result takes the next observation; a failed refresh keeps it")
+    func observationOrder() {
+        var s = state(for: personalOrg)
+        let first = s.credit?.observation ?? 0
+        read(&s, before: accountUUID, after: accountUUID)
+        let second = s.credit?.observation ?? 0
+        #expect(second > first)
+        read(&s, before: accountUUID, after: accountUUID, billing: #"{"_failed":true}"#)
+        #expect(s.credit?.observation == second)
+        s.reset()
+        s.observe(text: Self.linked, query: query(personalOrg), retryAfter: nil, now: now)
+        #expect((s.credit?.observation ?? 0) > second)
     }
 
     @Test("A stalled billing read does not hold the row past its bound")

@@ -763,14 +763,17 @@ public actor QuotaManager {
     /// The linked Console credit belongs to one Claude row. Rows read it one
     /// after another, and a row not fetched this pass keeps its cached line,
     /// so an account change in the billing session could leave the old row's
-    /// credit beside the new row's. Keep only the most recently measured
-    /// verified observation; every other row's line is cleared.
+    /// credit beside the new row's. Keep only the latest observation, by the
+    /// order the billing session accepted it (`observation`), never by when a
+    /// provider happened to start; every other row's line is cleared. Two rows
+    /// holding the same observation cannot both have been bound to it, so a
+    /// tie keeps none.
     private func keepOneClaudeMonthlyCredit() {
         let holders = cache.filter { $0.value.snapshot.vendorId == .claude && $0.value.snapshot.monthlyAPICredit != nil }
-        guard holders.count > 1,
-              let newest = holders.max(by: {
-                  ($0.value.snapshot.monthlyAPICredit!.measuredAt, $1.key) < ($1.value.snapshot.monthlyAPICredit!.measuredAt, $0.key)
-              })?.key else { return }
+        guard holders.count > 1 else { return }
+        let latest = holders.map { $0.value.snapshot.monthlyAPICredit!.observation }.max()!
+        let winners = holders.filter { $0.value.snapshot.monthlyAPICredit!.observation == latest }.map(\.key)
+        let newest = winners.count == 1 ? winners[0] : nil
         for (id, entry) in holders where id != newest {
             var snapshot = entry.snapshot
             snapshot.monthlyAPICredit = nil

@@ -240,7 +240,15 @@ struct ClaudeMonthlyCreditSessionState {
             .first { $0.name == "organization_uuid" }?.value
     }
 
-    mutating func reset() { self = Self() }
+    /// Numbers billing results in the order they were accepted. Survives a
+    /// reconnect so a later observation always carries a larger number.
+    private(set) var observationCounter = 0
+
+    mutating func reset() {
+        let counter = observationCounter
+        self = Self()
+        observationCounter = counter
+    }
 
     /// Opening an enabled connection is inspection, not reconnection.
     mutating func openConnection(alreadyEnabled: Bool, hasPage: Bool) -> Bool {
@@ -306,6 +314,8 @@ struct ClaudeMonthlyCreditSessionState {
         }
         do {
             credit = try ClaudeMonthlyCredit.decode(data, now: now)
+            observationCounter += 1
+            credit?.observation = observationCounter
             return true
         } catch {
             credit?.refreshFailed = true
