@@ -368,7 +368,7 @@ public struct SettingsView: View {
                     Button("Disconnect OpenDesign") {
                         OpenDesignWebSession.shared.disconnect()
                         openDesignEnabled = false
-                        Task { await store?.forceRefresh() }
+                        Task { await store?.forgetReadings(of: .opendesign) }
                     }
                 }
             }
@@ -509,7 +509,13 @@ public struct SettingsView: View {
                 rows: ClaudeMonthlyCreditBinding.storedRows())
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
-            Task { await store?.load() }
+            Task {
+                await store?.load()
+                // The load read the billing session; say where its credit went.
+                claudeCreditPlacement = Self.claudeCreditPlacement(
+                    webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
+                    rows: ClaudeMonthlyCreditBinding.storedRows())
+            }
         }) { ClaudeMonthlyCreditConnectionView() }
         .sheet(isPresented: $showOpenDesign, onDismiss: {
             Task { await store?.forceRefresh() }

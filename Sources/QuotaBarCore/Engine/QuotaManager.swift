@@ -171,6 +171,15 @@ public actor QuotaManager {
         }
     }
 
+    /// Drops every cached reading of one vendor. Disconnecting a sign-in-only
+    /// provider (OpenDesign) is the user saying "stop showing this": its last
+    /// reading must not survive as a retained, stale row. A pass already in
+    /// flight is harmless: its provider re-checks the connection and reports
+    /// not-configured, which retention cannot cover with figures that are gone.
+    public func forgetReadings(of vendor: VendorIdentifier) {
+        for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor { cache[key] = nil }
+    }
+
     /// Disconnecting the OpenAI billing session is a local state change, not a
     /// reason to poll quota. Clear the independently read grant immediately so
     /// it cannot survive a later quota outage through retention.
@@ -680,8 +689,13 @@ public actor QuotaManager {
             // failures in a row must report the newest reason rather than
             // freeze the first one indefinitely, and a placeholder carries no
             // figures worth keeping.
+            // Retention also stays inside one series: a provider that files
+            // readings per discovered workspace (OpenDesign) reports a failure
+            // under its bare id, and another workspace's figures must not stand
+            // in for it.
             if let reason = snap.status.unavailableReason,
-               let previous = cache[id], previous.snapshot.status.confidence == .measured {
+               let previous = cache[id], previous.snapshot.status.confidence == .measured,
+               previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was
                 // computed at the last successful fetch and frozen there — a
                 // vendor down for days would otherwise keep showing e.g. "3

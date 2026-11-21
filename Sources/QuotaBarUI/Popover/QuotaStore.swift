@@ -191,6 +191,12 @@ public final class QuotaStore {
         await reloadFromCache()
     }
 
+    /// Removes a disconnected sign-in provider's readings without polling.
+    public func forgetReadings(of vendor: VendorIdentifier) async {
+        await manager.forgetReadings(of: vendor)
+        await reloadFromCache()
+    }
+
     public func clearOpenAIMonthlyCredit() async {
         await manager.clearOpenAIMonthlyCredit()
         await reloadFromCache()

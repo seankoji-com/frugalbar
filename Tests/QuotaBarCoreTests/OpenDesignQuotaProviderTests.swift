@@ -12,19 +12,23 @@ struct OpenDesignQuotaProviderTests {
     /// A stub transport that records every request it served.
     final class Stub: OpenDesignTransport, @unchecked Sendable {
         let connected: Bool
-        let answers: [String: OpenDesignResult]
+        private var _answers: [String: OpenDesignResult]
+        var answers: [String: OpenDesignResult] {
+            get { lock.withLock { _answers } }
+            set { lock.withLock { _answers = newValue } }
+        }
         private let lock = NSLock()
         private var _calls: [(url: String, workspace: String?)] = []
         var calls: [(url: String, workspace: String?)] { lock.withLock { _calls } }
 
         init(connected: Bool = true, answers: [String: OpenDesignResult]) {
             self.connected = connected
-            self.answers = answers
+            self._answers = answers
         }
         var isConnected: Bool { get async { connected } }
         func get(url: String, workspaceID: String?) async -> OpenDesignResult {
             lock.withLock { _calls.append((url, workspaceID)) }
-            return answers[url] ?? .response(status: 404, data: Data())
+            return lock.withLock { _answers[url] } ?? .response(status: 404, data: Data())
         }
     }
 
@@ -122,6 +126,68 @@ struct OpenDesignQuotaProviderTests {
         }
         let offline = Stub(answers: [Self.current: .failure(.offline)])
         #expect(try await read(offline).status.unavailableReason == .offline)
+    }
+
+    /// A 400-digit figure parsed to infinity: one gave 0% used, two gave NaN
+    /// and trapped the percentage's Int conversion.
+    @Test("Overflowing credit figures fail the read instead of crashing or reading 0%")
+    func overflowingFigures() async throws {
+        let huge = String(repeating: "9", count: 400)
+        for (used, limit) in [("\"25\"", "\"\(huge)\""), ("\"\(huge)\"", "\"\(huge)\""), ("1e308", "1e-308")] {
+            let s = stub(usage: #"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":\#(used),"limitCredits":\#(limit)}]}"#)
+            let snapshot = try await read(s)
+            #expect(snapshot.status.unavailableReason == .badResponse, "\(used)/\(limit)")
+            #expect(snapshot.row1 == nil)
+        }
+    }
+
+    @Test("A 429's Retry-After becomes the vendor's instant")
+    func retryAfter() async throws {
+        let s = Stub(answers: [Self.current: .response(status: 429, data: Data(), retryAfter: "600")])
+        #expect(try await read(s).status.unavailableReason == .rateLimited(retryAfter: now.addingTimeInterval(600)))
+    }
+
+    @Test("Each workspace is its own series; a failure is filed under neither")
+    func seriesPerWorkspace() async throws {
+        let usage = #"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":1,"limitCredits":2}]}"#
+        let a = try await read(stub(usage: usage))
+        #expect(a.id == OpenDesignQuotaProvider.seriesID(workspaceID: "ws-a"))
+        #expect(a.id != OpenDesignQuotaProvider.seriesID(workspaceID: "ws-b"))
+        let failed = try await read(Stub(answers: [Self.current: .response(status: 500, data: Data())]))
+        #expect(failed.id == VendorIdentifier.opendesign.rawValue)
+    }
+
+    /// Workspace A read at 95%; the next poll could not read the workspace.
+    /// Retention would have kept A's 95% on screen as the current reading.
+    @Test("A failed poll never keeps another series' figures on screen")
+    func noRetentionAcrossSeries() async throws {
+        let s = stub(usage: #"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":95,"limitCredits":100}]}"#)
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [OpenDesignQuotaProvider(transport: s)] })
+        let first = try #require(await manager.forceRefresh()[VendorIdentifier.opendesign.rawValue])
+        #expect(first.row1?.primaryFraction == 0.95)
+        s.answers = [Self.current: .response(status: 500, data: Data())]
+        let second = try #require(await manager.forceRefresh()[VendorIdentifier.opendesign.rawValue])
+        #expect(second.status.unavailableReason == .badResponse)
+        #expect(second.row1 == nil)
+        #expect(s.calls.count == 3)
+    }
+
+    @Test("The page projection decodes status, body and Retry-After")
+    func projection() {
+        guard case .response(let status, let data, let retry) = OpenDesignWebSession.result(
+            fromProjection: #"{"status":429,"body":"","retryAfter":"30"}"#) else {
+            Issue.record("expected a response"); return
+        }
+        #expect(status == 429 && data.isEmpty && retry == "30")
+        guard case .failure(let reason) = OpenDesignWebSession.result(fromProjection: #"{"transport":true}"#) else {
+            Issue.record("expected a failure"); return
+        }
+        #expect(reason == .offline)
+        guard case .failure(.badResponse) = OpenDesignWebSession.result(fromProjection: #"{"status":0}"#) else {
+            Issue.record("a refused URL is not a response"); return
+        }
     }
 
     @Test("Without a connected sign-in nothing is requested")

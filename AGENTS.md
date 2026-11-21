@@ -104,7 +104,14 @@ is an in-app WebKit sign-in; the provider's two GETs
 reach Swift. Windows are chosen by `durationSeconds` (18000 → 5H, 604800 → WK,
 28–31 days → MO), never by order, and MO is drawn only when published. A
 mismatched workspace id, a duplicate window, or a zero or unparseable limit
-fails the read rather than drawing a bar. The payload contract comes from
+fails the read rather than drawing a bar, and so does a figure that is not a
+finite count (a 400-digit string parses to infinity, and a ratio of two traps
+the percentage's `Int` conversion). A reading is filed under its workspace
+(`OpenDesignQuotaProvider.seriesID`), and a failure under the bare vendor id;
+`QuotaManager` retains figures only within one series, so a workspace switch
+or a failed poll never shows another workspace's quota. Disconnect bumps the
+session's generation (an in-flight read is discarded) and drops the cached
+reading. The payload contract comes from
 token-monitor PR 1366's synthetic fixtures and has not been checked against a
 captured response.
 
@@ -527,13 +534,18 @@ row as an **API credit** line with the amount beneath the title (through
 **The credit belongs to one named row, chosen by identity.** With multi-account
 discovery every Claude row is a named account, and named rows used to drop the
 credit outright, so the line disappeared for everyone with discovered accounts.
-The web session now reads the signed-in claude.ai account in the page
-(`/api/account`, projected to its UUID and its organisations' UUIDs, nothing
-else) and hashes each pair exactly as discovery hashes an OAuth profile
-(`account|<uuid>|<org>`). `ClaudeMonthlyCreditBinding.resolve` attaches the
-credit only when exactly one shown row's verified identity is among them. No
-match, an unverified row, or two matching rows attaches it nowhere, and
-Settings says why. Email, nickname and row order are never evidence.
+The credit's identity is the signed-in claude.ai account (read in the page from
+`/api/account`, projected to its UUID only) paired with the organisation the
+billing query itself names (`organization_uuid`), hashed exactly as discovery
+hashes an OAuth profile (`account|<uuid>|<org>`). Never match against the
+account's other memberships: billing open for organisation B would then put
+B's credit on organisation A's row. The account is re-read whenever the query
+changes, a 401/403 clears it, and concurrent rows share one in-flight read, so
+the identity and the credit always describe the same sign-in and query.
+`ClaudeMonthlyCreditBinding.resolve` attaches the credit only when exactly one
+shown row's verified identity matches. No match, or an unverified row,
+attaches it nowhere, and Settings says why. Email, nickname and row order are
+never evidence.
 
 **That meter is billing-cycle progress, never API spend.** The linked payload
 publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills

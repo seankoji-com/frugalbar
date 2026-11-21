@@ -3,7 +3,8 @@ import WebKit
 
 /// An opt-in open-design.ai sign-in owned by WebKit. The two usage GETs run
 /// inside the signed-in page, exactly as the dashboard makes them; only the
-/// status code and the JSON body cross into Swift, never a cookie or header.
+/// status code, `Retry-After` and the JSON body cross into Swift, never a
+/// cookie or credential.
 @MainActor
 public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
     public static let shared = OpenDesignWebSession()
@@ -11,6 +12,10 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
     public private(set) var webView: WKWebView!
     private var navigationWaiters: [ClaudeMonthlyCreditEvaluation] = []
     private var pending = false
+    /// Bumped on connect and disconnect. A read that started under an older
+    /// generation is discarded, so a disconnect cannot be followed by quota
+    /// from the request that was already in flight.
+    private(set) var generation = UUID()
 
     public var isEnabled: Bool { CredentialStore.preferences.bool(forKey: Self.enabledKey) }
 
@@ -23,13 +28,16 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
     }
 
     public func connect() {
+        if !isEnabled { generation = UUID() }
         CredentialStore.preferences.set(true, forKey: Self.enabledKey)
         if webView.url == nil { webView.load(URLRequest(url: OpenDesignQuotaProvider.dashboardURL)) }
     }
 
     public func disconnect() {
         CredentialStore.preferences.set(false, forKey: Self.enabledKey)
+        generation = UUID()
         webView.stopLoading()
+        releaseWaiters()
         // WebKit owns the sign-in. Signing out uses OpenDesign's own flow in
         // the connection sheet; FrugalBar never enumerates its cookies.
     }
@@ -48,21 +56,39 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
         let waiter = ClaudeMonthlyCreditEvaluation()
         navigationWaiters.append(waiter)
         _ = await waiter.value(waitForTimeout: { try await Task.sleep(for: .seconds(6)) }) { _ in }
+        // Whatever ended the wait (load, failure, timeout, cancellation),
+        // this waiter is done and must not accumulate across polls.
+        navigationWaiters.removeAll { $0 === waiter }
         return isOnOpenDesign
     }
 
-    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    private func releaseWaiters() {
         let waiters = navigationWaiters
         navigationWaiters = []
-        waiters.forEach { $0.finish("ready") }
+        waiters.forEach { $0.finish(nil) }
+    }
+
+    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { releaseWaiters() }
+
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        releaseWaiters()
+    }
+
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                        withError error: Error) {
+        releaseWaiters()
     }
 
     func get(url: String, workspaceID: String?) async -> OpenDesignResult {
         guard !TestHost.isActive, isEnabled, !Task.isCancelled else { return .failure(.notConfigured) }
         guard !pending else { return .failure(.timedOut) }
+        let started = generation
         pending = true
         defer { pending = false }
-        guard await pageReady() else { return .failure(.timedOut) }
+        guard await pageReady() else {
+            return generation == started && isEnabled ? .failure(.timedOut) : .failure(.notConfigured)
+        }
+        guard generation == started, isEnabled else { return .failure(.notConfigured) }
         let evaluation = ClaudeMonthlyCreditEvaluation()
         let text = await evaluation.value(waitForTimeout: { try await Task.sleep(for: .seconds(10)) }) { complete in
             var arguments: [String: Any] = ["url": url]
@@ -73,14 +99,22 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
                 Task { @MainActor in complete(text) }
             }
         }
+        // Disconnected (or reconnected) while the request was in flight.
+        guard generation == started, isEnabled else { return .failure(.notConfigured) }
+        return Self.result(fromProjection: text)
+    }
+
+    /// Decodes the page's `{status, body, retryAfter}` projection.
+    nonisolated static func result(fromProjection text: String?) -> OpenDesignResult {
         guard let text, let data = text.data(using: .utf8),
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .failure(.timedOut)
         }
         if body["transport"] != nil { return .failure(.offline) }
-        guard let status = body["status"] as? Int else { return .failure(.badResponse) }
+        guard let status = body["status"] as? Int, status > 0 else { return .failure(.badResponse) }
         let payload = (body["body"] as? String).flatMap { $0.data(using: .utf8) } ?? Data()
-        return .response(status: status, data: payload)
+        let retryAfter = (body["retryAfter"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return .response(status: status, data: payload, retryAfter: retryAfter)
     }
 
     /// Only `amr-api.open-design.ai` workspace URLs are requested; anything else
@@ -97,7 +131,7 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
       if (typeof workspace === 'string') headers['X-Vela-Workspace-Id'] = workspace;
       const r = await fetch(u.href, {credentials: 'include', redirect: 'error', headers, signal: controller.signal});
       const body = r.ok ? await r.text() : '';
-      return JSON.stringify({status: r.status, body});
+      return JSON.stringify({status: r.status, body, retryAfter: r.headers.get('Retry-After') || ''});
     } catch (_) {
       return JSON.stringify({transport: true});
     } finally { clearTimeout(timer); }

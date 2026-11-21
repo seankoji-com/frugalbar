@@ -5,10 +5,11 @@ import Foundation
 ///
 /// The billing web session and the OAuth rows are separate sign-ins. A row is
 /// identified by its OAuth profile's account and organisation UUIDs
-/// (`ClaudeAccountProfile.instanceID`); the web session publishes the signed-in
-/// account's UUID and the organisations it belongs to. The credit is attached
-/// only when exactly one row's identity is among the web session's, so it can
-/// never land on an arbitrary row. Email, nickname and row order are not
+/// (`ClaudeAccountProfile.instanceID`). The credit's identity is the signed-in
+/// web account's UUID paired with the organisation its own billing query names
+/// (`organization_uuid`), never another organisation the account belongs to.
+/// The credit is attached only when exactly one row has that identity, so it
+/// can never land on an arbitrary row. Email, nickname and row order are not
 /// evidence of equivalence.
 public enum ClaudeMonthlyCreditBinding: Equatable, Sendable {
     /// The credit belongs to this row.
@@ -51,14 +52,24 @@ public enum ClaudeMonthlyCreditBinding: Equatable, Sendable {
         })
     }
 
-    /// Decodes the session's `{account, orgs}` projection of `/api/account`.
-    public static func webIdentities(fromProjection text: String?) -> Set<String>? {
+    /// What the page's `/api/account` read established.
+    public enum WebAccountRead: Equatable, Sendable {
+        case account(String)
+        /// 401/403: the web session is no longer signed in.
+        case signedOut
+        /// Timed out, failed, or answered in a shape we do not recognise.
+        case unknown
+    }
+
+    /// Decodes the session's `{status, account}` projection of `/api/account`.
+    public static func webAccount(fromProjection text: String?) -> WebAccountRead {
         guard let data = text?.data(using: .utf8),
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let account = body["account"] as? String,
-              let orgs = body["orgs"] as? [String] else { return nil }
-        let identities = webIdentities(accountUUID: account, organizationUUIDs: orgs)
-        return identities.isEmpty ? nil : identities
+              let status = body["status"] as? Int else { return .unknown }
+        if status == 401 || status == 403 { return .signedOut }
+        guard (200..<300).contains(status), let account = body["account"] as? String,
+              UUID(uuidString: account) != nil else { return .unknown }
+        return .account(account)
     }
 
     /// The shown Claude account rows and their verified identities, as the
@@ -75,7 +86,7 @@ public enum ClaudeMonthlyCreditBinding: Equatable, Sendable {
         case .webAccountUnknown:
             return "Not shown yet: the billing page has not said which Claude account is signed in."
         case .noMatchingAccount:
-            return "Not shown: the account signed in here is none of the Claude accounts FrugalBar reads, so the credit has no row to belong to."
+            return "Not shown: the account and organisation open on this billing page match none of the Claude accounts FrugalBar reads, so the credit has no row to belong to."
         case .ambiguous:
             return "Not shown: several Claude rows belong to the account signed in here, and the billing page does not say which organisation it shows."
         }

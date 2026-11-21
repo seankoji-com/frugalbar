@@ -352,8 +352,9 @@ public struct VendorAvatarView: View {
                 if case .exhausted(let reset) = overlay {
                     exhaustedBadge(reset: reset)
                         .fixedSize()
-                        .alignmentGuide(.leading) { _ in -ExhaustedStyle.badgeOffset.width }
-                        .alignmentGuide(.top) { _ in -ExhaustedStyle.badgeOffset.height }
+                        // `offset` moves the drawing without moving layout, so
+                        // the tag hangs off the corner and the frame stays 28pt.
+                        .offset(ExhaustedStyle.badgeOffset)
                 }
             }
 

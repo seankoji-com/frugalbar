@@ -75,12 +75,53 @@ struct ClaudeMonthlyCreditBindingTests {
             rows: rows) == .noMatchingAccount)
     }
 
-    @Test("The page projection decodes to identities; anything else is unknown")
+    @Test("The account projection decodes; 401/403 is signed out; anything else is unknown")
     func projection() {
-        let text = #"{"account":"\#(accountUUID.uppercased())","orgs":["\#(personalOrg)","not-a-uuid"]}"#
-        #expect(ClaudeMonthlyCreditBinding.webIdentities(fromProjection: text) == [identity(accountUUID, personalOrg)])
-        #expect(ClaudeMonthlyCreditBinding.webIdentities(fromProjection: #"{"account":null,"orgs":[]}"#) == nil)
-        #expect(ClaudeMonthlyCreditBinding.webIdentities(fromProjection: "null") == nil)
-        #expect(ClaudeMonthlyCreditBinding.webIdentities(fromProjection: nil) == nil)
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":200,"account":"\#(accountUUID)"}"#)
+            == .account(accountUUID))
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":401}"#) == .signedOut)
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":403}"#) == .signedOut)
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":200,"account":"nope"}"#) == .unknown)
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: #"{"status":500}"#) == .unknown)
+        #expect(ClaudeMonthlyCreditBinding.webAccount(fromProjection: nil) == .unknown)
+    }
+
+    private func query(_ org: String) -> String {
+        "/api/quirky-lollipop/link-state?organization_uuid=\(org)&include_candidates=false"
+    }
+
+    /// The account belongs to A and B, only A has a row, and billing is open
+    /// for B. Matching against memberships put B's credit on A's row.
+    @Test("The credit's organisation is the one its billing query names, not any membership")
+    func billingOrganisationDecides() {
+        var state = ClaudeMonthlyCreditSessionState()
+        state.query = query(otherOrg)
+        state.applyAccountRead(.account(accountUUID), query: state.query)
+        let rowsA: [ClaudeMonthlyCreditBinding.Row] = [.init(accountID: "a", identity: identity(accountUUID, personalOrg))]
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: state.webIdentities, rows: rowsA) == .noMatchingAccount)
+
+        state.query = query(personalOrg)
+        // A new query needs its own account read before anything binds.
+        #expect(state.webIdentities == nil)
+        #expect(state.needsAccountRead(now: now))
+        state.applyAccountRead(.account(accountUUID), query: state.query)
+        #expect(ClaudeMonthlyCreditBinding.resolve(webIdentities: state.webIdentities, rows: rowsA) == .bound(accountID: "a"))
+    }
+
+    @Test("Signing out clears the account; a failed read never carries it to another query")
+    func accountInvalidation() {
+        var state = ClaudeMonthlyCreditSessionState()
+        state.query = query(personalOrg)
+        state.applyAccountRead(.account(accountUUID), query: state.query)
+        #expect(state.webIdentities != nil)
+        state.applyAccountRead(.unknown, query: state.query)
+        #expect(state.webIdentities != nil)
+        state.applyAccountRead(.signedOut, query: state.query)
+        #expect(state.webIdentities == nil)
+
+        state.applyAccountRead(.account(accountUUID), query: state.query)
+        state.query = query(otherOrg)
+        state.applyAccountRead(.unknown, query: state.query)
+        #expect(state.webIdentities == nil)
     }
 }

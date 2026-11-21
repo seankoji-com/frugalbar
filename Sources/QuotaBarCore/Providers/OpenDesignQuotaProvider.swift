@@ -41,8 +41,10 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
         let workspace: Workspace
         switch await transport.get(url: Self.apiBase + "current", workspaceID: nil) {
         case .failure(let reason): return unavailable(reason)
-        case .response(let status, let data):
-            if let reason = Self.failureReason(status: status) { return unavailable(reason) }
+        case .response(let status, let data, let retryAfter):
+            if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
+                return unavailable(reason)
+            }
             guard let decoded = try? JSONDecoder().decode(Workspace.self, from: data),
                   Self.validWorkspaceID(decoded.workspaceId) else { return unavailable(.badResponse) }
             workspace = decoded
@@ -50,22 +52,28 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
         let path = Self.apiBase + workspace.workspaceId + "/billing/coding-plan-usage"
         switch await transport.get(url: path, workspaceID: workspace.workspaceId) {
         case .failure(let reason): return unavailable(reason)
-        case .response(let status, let data):
-            if let reason = Self.failureReason(status: status) { return unavailable(reason) }
+        case .response(let status, let data, let retryAfter):
+            if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
+                return unavailable(reason)
+            }
             return Self.snapshot(from: data, workspace: workspace, provider: self, now: now)
         }
     }
 
     /// 401 means the session is gone; a 403 does not prove that, but either
-    /// way the user's next step is to sign in again. 429 is a throttle. Any
-    /// other non-2xx is a failed read, never a healthy one.
-    static func failureReason(status: Int) -> UnavailableReason? {
-        switch status {
-        case 200..<300: nil
-        case 401, 403: .credentialRejected
-        case 429: .rateLimited(retryAfter: nil)
-        default: .badResponse
-        }
+    /// way the user's next step is to sign in again. 429 is a throttle, and its
+    /// `Retry-After` is the vendor's instruction. Any other non-2xx is a failed
+    /// read, never a healthy one.
+    static func failureReason(status: Int, retryAfter: String? = nil, now: Date = Date()) -> UnavailableReason? {
+        QuotaHTTP.failureReason(for: status, retryAfter: retryAfter, now: now)
+    }
+
+    /// History and retention belong to one workspace. A successful reading is
+    /// filed under the workspace it was read for, so switching workspaces
+    /// starts a new series, and a failed poll (filed under the bare vendor id)
+    /// never keeps another workspace's figures on screen.
+    static func seriesID(workspaceID: String) -> String {
+        "opendesign:" + ClaudeAccount.digest("opendesign|" + workspaceID)
     }
 
     /// The id becomes a path component, so only a plain token is accepted.
@@ -99,15 +107,21 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
         let value: Double?
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
+            let raw: Double?
             if let number = try? c.decode(Double.self) {
-                value = number.isFinite && number >= 0 ? number : nil
+                raw = number
             } else if let text = try? c.decode(String.self),
                       text.range(of: #"^[0-9]+(\.[0-9]+)?$"#, options: .regularExpression) != nil {
-                value = Double(text)
+                raw = Double(text)
             } else {
-                value = nil
+                raw = nil
             }
+            // A 400-digit string parses to infinity; a ratio of two of them is
+            // NaN and traps the percentage's Int conversion.
+            value = raw.flatMap { $0.isFinite && $0 >= 0 && $0 <= Self.maximum ? $0 : nil }
         }
+        /// Above this a credit count is not a figure a plan publishes.
+        static let maximum = 9_007_199_254_740_991.0
     }
 
     enum Span { case fiveHour, week, month }
@@ -146,7 +160,7 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
             .compactMap { $0?.trimmed }.first { !$0.isEmpty }
             .map { "OpenDesign Go · " + $0.capitalized }
         return QuotaSnapshot(
-            id: provider.vendorId.rawValue,
+            id: seriesID(workspaceID: workspace.workspaceId),
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,
@@ -167,7 +181,8 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
     /// One window. A missing or zero limit is not a window with room in it: it
     /// fails the whole read rather than drawing a bar nobody measured.
     static func row(_ window: Window, span: Span, now: Date) -> DualBarMetrics? {
-        guard let used = window.usedCredits?.value, let limit = window.limitCredits?.value, limit > 0 else { return nil }
+        guard let used = window.usedCredits?.value, let limit = window.limitCredits?.value, limit > 0,
+              (used / limit).isFinite else { return nil }
         let fraction = min(max(used / limit, 0), 1)
         let reset = window.resetsAt.flatMap(ClinePassQuotaProvider.parseResetsAt)
         let label: String
@@ -193,7 +208,7 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
 
 /// What one OpenDesign GET produced.
 enum OpenDesignResult: Sendable {
-    case response(status: Int, data: Data)
+    case response(status: Int, data: Data, retryAfter: String? = nil)
     case failure(UnavailableReason)
 }
 

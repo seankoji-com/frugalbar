@@ -224,7 +224,7 @@ public struct QuotaTimelineChart: View {
     }
 
     private func colorForPoint(_ point: HistoryPresentation.TimelinePoint) -> Color {
-        if point.isBlocked { return Theme.errorBold }
+        if point.isBlocked || point.fraction >= QuotaSnapshot.exhaustionThreshold { return Theme.errorBold }
         if point.urgency == .critical { return Theme.error }
         if point.urgency == .warning { return Theme.tertiary }
         return Theme.healthy

@@ -34,6 +34,15 @@ struct ExhaustedTreatmentTests {
         #expect(MetricDetailModalView.color(for: .blocked) == Theme.errorBold)
     }
 
+    @Test("A fully used chart reading is the spent red even when the vendor did not block it")
+    func spentChartPoint() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let spent = BurndownPresentation.Point(timestamp: at, usedFraction: 1, isBlocked: false, urgency: .critical)
+        let low = BurndownPresentation.Point(timestamp: at, usedFraction: 0.95, isBlocked: false, urgency: .critical)
+        #expect(DetailChartStyle.color(for: spent) == Theme.errorBold)
+        #expect(DetailChartStyle.color(for: low) == Theme.error)
+    }
+
     @Test("The exhausted avatar keeps a greyscale logo and a red ring and tag")
     func avatarDesignB() {
         let exhausted = VendorAvatarView.Overlay.exhausted(reset: "13d")
@@ -72,6 +81,29 @@ struct ExhaustedTreatmentTests {
         // The mark is still there, and the transparent margin stayed transparent.
         #expect(opaque > 10)
         #expect(bitmap.colorAt(x: 0, y: 0)?.alphaComponent ?? 1 < 0.5)
+    }
+
+    /// The tag must hang off the top-left corner, outside the ring. An
+    /// alignment-guide placement left it inside the ring.
+    @Test("The countdown tag is drawn outside the ring, off the top-left corner")
+    func badgeHangsOffCorner() throws {
+        let inset: CGFloat = 20
+        let avatar = VendorAvatarView(vendorId: .claude, status: .healthy, isExhausted: true,
+                                      exhaustedReset: "13d", showsResetOverlay: true, size: 28)
+        let host = NSHostingView(rootView: avatar.padding(inset).background(Color.black))
+        host.frame.size = CGSize(width: 28 + inset * 2, height: 28 + inset * 2)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        func isRed(_ x: CGFloat, _ y: CGFloat) -> Bool {
+            // Avatar-local point to bitmap pixel (bitmap rows run top-down).
+            guard let c = bitmap.colorAt(x: Int((x + inset) * scale), y: Int((y + inset) * scale))?
+                .usingColorSpace(.deviceRGB) else { return false }
+            return c.redComponent > 0.7 && c.greenComponent < 0.4 && c.blueComponent < 0.4
+        }
+        // 7pt left of the square: beyond the ring (at -3), inside the tag.
+        #expect(isRed(-7, 0))
     }
 
     @Test("The exhausted avatar keeps its frame, so the workspace connector lines up")
