@@ -39,6 +39,7 @@ public enum SnapshotExportTable {
         case .commandcode:   [.row1: "5h", .row2: "weekly", .row3: "credits"]
         case .clinepass:     [.row1: "5h", .row2: "weekly", .row3: "monthly"]
         case .muse:          [.row1: "5h", .row2: "weekly"]
+        case .opendesign:    [.row1: "5h", .row2: "weekly", .row3: "monthly"]
         case .githubRest:    [.row1: "rest", .row2: "graphql"]
         case .githubGraphql: [.row1: "graphql"]
         }

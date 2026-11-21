@@ -101,12 +101,23 @@ struct MetricRowView: View {
     @State private var isHovered = false
 
     private func urgencyColor(_ p: MetricRowPresentation) -> Color {
-        switch p.urgency {
-        case .none:     Theme.secondary
-        case .warning:  Theme.tertiary
-        case .critical: Theme.error
+        Self.urgencyColor(urgency: p.urgency, isExhausted: p.isExhausted)
+    }
+
+    /// A row that is critically low keeps the coral text red; a row with
+    /// nothing left uses the deeper spent red the bars use, so an exhausted
+    /// row never mixes two reds.
+    nonisolated static func urgencyColor(urgency: Urgency, isExhausted: Bool) -> Color {
+        if isExhausted { return exhaustedTextColor }
+        switch urgency {
+        case .none:     return Theme.secondary
+        case .warning:  return Theme.tertiary
+        case .critical: return Theme.error
         }
     }
+
+    /// The colour of an exhausted row's reset countdown and fallback text.
+    nonisolated static let exhaustedTextColor = Theme.errorBold
 
     /// The second line of the name column. Published exhausted reset text wins.
     /// Otherwise draw the plan unless `suppressPlan`, when the header already
@@ -132,7 +143,7 @@ struct MetricRowView: View {
 
     private func subtitleColor(_ p: MetricRowPresentation) -> Color {
         p.isExhausted && subtitle(p) == p.exhaustedResetText
-            ? Theme.error : Theme.onSurfaceVariant.opacity(0.85)
+            ? Self.exhaustedTextColor : Theme.onSurfaceVariant.opacity(0.85)
     }
 
     @ViewBuilder
@@ -436,7 +447,7 @@ struct MetricRowView: View {
                 if let reset = p.exhaustedResetFallback, reset != subtitle(p) {
                     Text(reset)
                         .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.error)
+                        .foregroundStyle(Self.exhaustedTextColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 // Tickets sit inside the name column, directly under the

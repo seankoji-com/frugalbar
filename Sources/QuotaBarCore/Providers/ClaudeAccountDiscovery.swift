@@ -66,6 +66,7 @@ actor ClaudeAccountDiscovery {
     private let directPlan: @Sendable () async -> String?
     private let backoff: ClaudeProxyBackoff
     private let grants: ClaudeGrantSchedule
+    private let monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit?
     private var profileWaits: [String: (until: Date, reason: UnavailableReason)] = [:]
     private var cachedProviders: [any QuotaProvider] = []
     private var discoverySignature: String?
@@ -82,7 +83,12 @@ actor ClaudeAccountDiscovery {
                 directPlan: @escaping @Sendable () async -> String? = {
                     TestHost.isActive ? nil : await CredentialStore.claudePlanNameAsync()
                 },
-                backoff: ClaudeProxyBackoff? = nil, grants: ClaudeGrantSchedule? = nil) {
+                backoff: ClaudeProxyBackoff? = nil, grants: ClaudeGrantSchedule? = nil,
+                monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil) {
+        self.monthlyCredit = monthlyCredit ?? { now in
+            guard !TestHost.isActive else { return nil }
+            return await ClaudeMonthlyCreditSession.shared.read(now: now)
+        }
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
         self.directCredential = directCredential; self.directPlan = directPlan
@@ -279,12 +285,35 @@ actor ClaudeAccountDiscovery {
         let currentSources = Set(bindings.map(\.source))
         bindings += oldBindings.filter { !currentSources.contains($0.source) }
         if let data = try? JSONEncoder().encode(bindings) { defaults.set(data, forKey: Self.bindingsKey) }
+        let creditRows = Self.creditRows(accounts: accounts, bindings: bindings)
         let result: [any QuotaProvider] = accounts.map { account in
             ClaudeAccountQuotaProvider(account: account, routes: groups[account.id] ?? [],
                 failure: unavailableBindings.first { $0.0.accountID == account.id }?.1,
-                backoff: backoff, grants: grants)
+                backoff: backoff, grants: grants, creditRows: creditRows, monthlyCredit: monthlyCredit)
         }
         return remember(result, signature: signature, now: now, userInitiated: userInitiated)
+    }
+
+    /// Each shown account's verified OAuth identity (account + organisation),
+    /// from the bindings discovery itself established. An account with no
+    /// verified identity has none, so it can never receive the credit.
+    private static func creditRows(accounts: [ClaudeAccount],
+                                   bindings: [ClaudeAccountBinding]) -> [ClaudeMonthlyCreditBinding.Row] {
+        accounts.map { account in
+            let identities = Set(bindings.filter { $0.accountID == account.id && $0.verified }.compactMap(\.identity))
+            // Two different verified identities on one row cannot happen by
+            // construction; if they ever did, the row is not provably one
+            // organisation and gets no identity.
+            return .init(accountID: account.id, identity: identities.count == 1 ? identities.first : nil)
+        }
+    }
+
+    /// The rows Settings explains the credit's placement against.
+    static func storedCreditRows(defaults: UserDefaults = CredentialStore.preferences) -> [ClaudeMonthlyCreditBinding.Row] {
+        let bindings = defaults.data(forKey: bindingsKey).flatMap {
+            try? JSONDecoder().decode([ClaudeAccountBinding].self, from: $0)
+        } ?? []
+        return creditRows(accounts: ClaudeAccountStore.all(in: defaults), bindings: bindings)
     }
 
     private func remember(_ providers: [any QuotaProvider], signature: String,
@@ -325,12 +354,35 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
     let failure: UnavailableReason?
     let backoff: ClaudeProxyBackoff
     let grants: ClaudeGrantSchedule
+    /// Every shown row's identity, so the credit binds only when exactly one
+    /// row matches the web session's account.
+    var creditRows: [ClaudeMonthlyCreditBinding.Row] = []
+    var monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit? = { _ in nil }
     var vendorId: VendorIdentifier { .claude }
     var displayName: String { account.name }
     var category: MetricCategory { .aiSubscriptions }
     var instanceID: String { account.id }
 
     func fetchSnapshot() async throws -> QuotaSnapshot {
+        try await fetchSnapshot(now: Date())
+    }
+
+    func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
+        // Billing is independent of the usage read: read it concurrently, and
+        // attach it whether or not usage answered, as the unnamed row does.
+        async let credit = monthlyCredit(now)
+        var snapshot = try await fetchUsage()
+        let monthly = await credit
+        if let monthly, case .bound(let id) = ClaudeMonthlyCreditBinding.resolve(
+            webIdentities: monthly.webIdentities, rows: creditRows), id == account.id {
+            snapshot.monthlyAPICredit = monthly
+        } else {
+            snapshot.monthlyAPICredit = nil
+        }
+        return snapshot
+    }
+
+    private func fetchUsage() async throws -> QuotaSnapshot {
         var firstFailure = failure
         for route in routes.sorted(by: { ($0.proxy == nil ? 1 : 0) < ($1.proxy == nil ? 1 : 0) }) {
             if let reason = route.failure { firstFailure = firstFailure ?? reason; continue }

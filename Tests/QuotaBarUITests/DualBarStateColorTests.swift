@@ -56,15 +56,16 @@ struct DualBarStateColorTests {
 
     // MARK: A blocked window is never drawn as healthy
 
-    @Test("a blocked window wears the vendor's colour whatever its percentage and pace")
-    func blockedUsesVendorColour() throws {
-        let vendor = try #require(Color(hexString: "#ffb4ab"))
+    /// One red for every spent or blocked row: a vendor tint (OpenCode Go's
+    /// pale #ffb4ab) once drew pink hatching beside the deep spent red.
+    @Test("a blocked window is the spent red whatever its percentage, pace or vendor tint")
+    func blockedUsesSpentRed() {
         for (used, pace) in [(0.05, 0.03), (0.40, nil), (0.90, 0.20)] as [(Double, Double?)] {
             let metrics = DualBarMetrics(
                 primaryFraction: used, expectedPaceFraction: pace, label: "WK",
                 blockedColor: "#ffb4ab", isBlocked: true,
                 resetsAt: Date(timeIntervalSince1970: 1_900_000_000), windowLength: QuotaWindow.week)
-            #expect(DualBarProgressView.stateColor(for: metrics) == vendor)
+            #expect(DualBarProgressView.stateColor(for: metrics) == Theme.errorBold)
         }
     }
 

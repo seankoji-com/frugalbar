@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreImage
 import QuotaBarCore
 
 /// Official branded vector and pixel definitions for each vendor.
@@ -155,6 +156,18 @@ public enum VendorSVGLogo {
               <path fill="#FFFFFF" d="M16.9 15.1a.4.4 0 01.75 0l.5 1.35a.4.4 0 00.24.24l1.35.5a.4.4 0 010 .75l-1.35.5a.4.4 0 00-.24.24l-.5 1.35a.4.4 0 01-.75 0l-.5-1.35a.4.4 0 00-.24-.24l-1.35-.5a.4.4 0 010-.75l1.35-.5a.4.4 0 00.24-.24l.5-1.35z"/>
             </svg>
             """
+        case .opendesign:
+            // OpenDesign's mark (a speech-bubble ring with a cursor), drawn
+            // white on a near-black badge. The source ships `currentColor`, so
+            // the fill is explicit, and its native coordinates sit inside a
+            // padded viewBox rather than a `<g transform>`.
+            return """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="71.587 72.374 442.258 442.258" width="24" height="24" fill="none">
+              <rect x="71.587" y="72.374" width="442.258" height="442.258" rx="84" fill="#111114"/>
+              <path fill="#FFFFFF" fill-rule="evenodd" d="M292.716 112.374C392.751 112.374 473.845 193.468 473.845 293.503C473.845 393.538 392.751 474.632 292.716 474.632H135.685C122.347 474.632 111.587 463.874 111.587 450.536C111.587 410.139 111.587 329.633 111.587 293.503C111.587 193.468 192.681 112.374 292.716 112.374ZM292.716 148.6C212.689 148.6 147.813 213.476 147.813 293.504C147.813 373.532 212.689 438.407 292.716 438.407C372.744 438.407 437.619 373.532 437.619 293.504C437.619 213.476 372.744 148.6 292.716 148.6Z"/>
+              <path fill="#FFFFFF" d="M281.618 378.232L226.395 232.908C224.608 228.205 229.201 223.594 233.873 225.402L379.265 281.651C385.249 283.966 383.6 292.898 377.189 292.898H292.803V376.155C292.803 382.61 283.91 384.262 281.618 378.232Z"/>
+            </svg>
+            """
         case .githubRest, .githubGraphql:
             return """
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -167,8 +180,8 @@ public enum VendorSVGLogo {
 }
 
 
-/// Official vendor mark with a status badge, or a reset countdown over the
-/// faded mark when a quota is exhausted.
+/// Official vendor mark with a status badge, or, when a quota is exhausted, a
+/// greyscale mark in a red ring with a reset-countdown tag.
 public struct VendorAvatarView: View {
 
     let vendorId: VendorIdentifier
@@ -213,10 +226,16 @@ public struct VendorAvatarView: View {
         }
     }
 
+    /// The exhausted treatment shows the logo in greyscale.
+    private var isGreyscale: Bool {
+        Self.logoTreatment(for: Self.overlay(status: status, isExhausted: isExhausted,
+            exhaustedReset: exhaustedReset, showsResetOverlay: showsResetOverlay)).saturation == 0
+    }
+
     @ViewBuilder
     private func logo(for vendor: VendorIdentifier) -> some View {
         if let nsImg = VendorSVGLogo.nsImage(for: vendor) {
-            Image(nsImage: nsImg)
+            Image(nsImage: isGreyscale ? (Self.greyscale(nsImg, size: size) ?? nsImg) : nsImg)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
@@ -224,9 +243,25 @@ public struct VendorAvatarView: View {
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.23))
         } else {
             RoundedRectangle(cornerRadius: size * 0.23)
-                .fill(Color(hexString: vendor.accentColorHex) ?? Theme.primary)
+                .fill(isGreyscale ? Theme.outline
+                      : Color(hexString: vendor.accentColorHex) ?? Theme.primary)
                 .frame(width: size, height: size)
         }
+    }
+
+    /// The logo with its colour removed, alpha kept. Done on the image rather
+    /// than with SwiftUI's `.saturation`, which an offscreen capture of the
+    /// view (the render tests, a snapshot of the popover) does not apply.
+    nonisolated static func greyscale(_ image: NSImage, size: CGFloat) -> NSImage? {
+        let pixels = max(size, 24) * 4
+        var rect = CGRect(x: 0, y: 0, width: pixels, height: pixels)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+              let filter = CIFilter(name: "CIColorControls") else { return nil }
+        filter.setValue(CIImage(cgImage: cg), forKey: kCIInputImageKey)
+        filter.setValue(0, forKey: kCIInputSaturationKey)
+        guard let output = filter.outputImage,
+              let rendered = CIContext().createCGImage(output, from: output.extent) else { return nil }
+        return NSImage(cgImage: rendered, size: image.size)
     }
 
     /// What the avatar draws over the logo.
@@ -235,16 +270,43 @@ public struct VendorAvatarView: View {
         case none
         /// Existing inspector and widget treatment.
         case struckThrough
-        /// The logo faded under its published countdown, or a blocked glyph
-        /// when the vendor supplied no reset date.
+        /// The logo in greyscale inside a red ring, with a top-left capsule
+        /// carrying the published countdown, or a blocked glyph when the
+        /// vendor supplied no reset date.
         case exhausted(reset: String?)
         /// A `StatusIndicatorDot` in the corner.
         case badge(symbol: String, tint: Color)
 
         static let exhaustedSymbol = "nosign"
-        static let exhaustedTint = Theme.error
+        /// The spent red, shared with the exhausted bars and countdown text.
+        static let exhaustedTint = Theme.errorBold
         static let strikeSymbol = "xmark"
-        static let strikeTint = Theme.error
+        static let strikeTint = Theme.errorBold
+    }
+
+    /// Geometry of the exhausted treatment (design B). The logo stays legible
+    /// in greyscale; the ring and capsule carry the state.
+    enum ExhaustedStyle {
+        static let logoSaturation: Double = 0
+        static let logoOpacity: Double = 0.55
+        static let ringWidth: CGFloat = 1.5
+        /// Negative inset: the ring sits just outside the rounded square.
+        static let ringInset: CGFloat = -3
+        /// Top-left, clear of the name column to the right.
+        static let badgeOffset = CGSize(width: -10, height: -7)
+        static let badgeFontSize: CGFloat = 9.5
+        static let badgeBorderWidth: CGFloat = 1.5
+        static let badgeTextColor = Color.white
+        static let badgeBorderColor = Theme.card
+    }
+
+    /// Opacity and saturation of the logo itself for each overlay.
+    nonisolated static func logoTreatment(for overlay: Overlay) -> (opacity: Double, saturation: Double) {
+        switch overlay {
+        case .exhausted: (ExhaustedStyle.logoOpacity, ExhaustedStyle.logoSaturation)
+        case .struckThrough: (0.40, 1)
+        case .none, .badge: (1, 1)
+        }
     }
 
     /// The exhausted overlay replaces the dot. Beyond that, the
@@ -264,10 +326,12 @@ public struct VendorAvatarView: View {
     public var body: some View {
         let overlay = Self.overlay(status: status, isExhausted: isExhausted,
                                    exhaustedReset: exhaustedReset, showsResetOverlay: showsResetOverlay)
+        let treatment = Self.logoTreatment(for: overlay)
         ZStack(alignment: .topTrailing) {
             ZStack {
-                // Keep the vendor visible beneath the reset countdown.
-                mark.opacity(isExhausted ? (showsResetOverlay ? 0.28 : 0.40) : 1)
+                // Greyscale, not faded out: the vendor stays recognisable.
+                mark
+                    .opacity(treatment.opacity)
 
                 if overlay == .struckThrough {
                     Image(systemName: Overlay.strikeSymbol)
@@ -275,29 +339,23 @@ public struct VendorAvatarView: View {
                         .foregroundStyle(Overlay.strikeTint)
                 }
 
-                if case .exhausted(let reset) = overlay {
-                    RoundedRectangle(cornerRadius: size * 0.23)
-                        .fill(Theme.card.opacity(0.72))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: size * 0.23)
-                                .strokeBorder(Overlay.exhaustedTint.opacity(0.35), lineWidth: 0.5)
-                        }
-                    if let reset {
-                        Text(reset)
-                            .font(.system(size: size * 0.39, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(Overlay.exhaustedTint)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.65)
-                            .padding(.horizontal, 1)
-                    } else {
-                        Image(systemName: Overlay.exhaustedSymbol)
-                            .font(.system(size: size * 0.6, weight: .semibold))
-                            .foregroundStyle(Overlay.exhaustedTint)
-                    }
+                if case .exhausted = overlay {
+                    RoundedRectangle(cornerRadius: size * 0.23 - ExhaustedStyle.ringInset)
+                        .strokeBorder(Overlay.exhaustedTint, lineWidth: ExhaustedStyle.ringWidth)
+                        .padding(ExhaustedStyle.ringInset)
                 }
             }
             .frame(width: size, height: size)
+            // Drawn outside the square, so it never shifts the avatar's frame
+            // and the grouped-workspace connector keeps its alignment.
+            .overlay(alignment: .topLeading) {
+                if case .exhausted(let reset) = overlay {
+                    exhaustedBadge(reset: reset)
+                        .fixedSize()
+                        .alignmentGuide(.leading) { _ in -ExhaustedStyle.badgeOffset.width }
+                        .alignmentGuide(.top) { _ in -ExhaustedStyle.badgeOffset.height }
+                }
+            }
 
             // Size the badge from the avatar and tuck it toward the inside so
             // it never hangs off the corner.
@@ -307,6 +365,26 @@ public struct VendorAvatarView: View {
             }
         }
         .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func exhaustedBadge(reset: String?) -> some View {
+        Group {
+            if let reset {
+                Text(reset)
+                    .font(.system(size: ExhaustedStyle.badgeFontSize, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            } else {
+                Image(systemName: Overlay.exhaustedSymbol)
+                    .font(.system(size: ExhaustedStyle.badgeFontSize, weight: .bold))
+            }
+        }
+        .foregroundStyle(ExhaustedStyle.badgeTextColor)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Capsule().fill(Overlay.exhaustedTint))
+        .overlay(Capsule().strokeBorder(ExhaustedStyle.badgeBorderColor, lineWidth: ExhaustedStyle.badgeBorderWidth))
     }
 }
 

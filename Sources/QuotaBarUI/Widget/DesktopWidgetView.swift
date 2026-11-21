@@ -585,7 +585,8 @@ struct DesktopWidgetView: View {
     }
 
     private func headroomColor(_ item: AggregateBurndownPresentation.HeadroomItem) -> Color {
-        if item.isBlocked || item.urgency == .critical { return Theme.error }
+        if item.isBlocked { return Theme.errorBold }
+        if item.urgency == .critical { return Theme.error }
         if item.urgency == .warning { return Theme.tertiary }
         return Theme.healthy
     }

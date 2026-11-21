@@ -7,6 +7,10 @@ public struct ClaudeMonthlyCredit: Sendable, Equatable {
     public let nextGrantAt: Date?
     public let measuredAt: Date
     public var refreshFailed = false
+    /// The OAuth-row identities the signed-in web account could have
+    /// (`ClaudeMonthlyCreditBinding.webIdentities`). Nil until the session
+    /// has read which account is signed in; never drawn.
+    public var webIdentities: Set<String>? = nil
 
     public static func decode(_ data: Data, now: Date) throws -> Self? {
         let payload = try JSONDecoder().decode(Payload.self, from: data)

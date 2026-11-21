@@ -9,6 +9,53 @@ import WebKit
 @Suite("UX renders", .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil))
 @MainActor
 struct UXRenderTests {
+    /// Design B avatars, the single spent red across Command Code and OpenCode
+    /// Go, a named Claude row carrying the linked monthly credit, and an
+    /// OpenDesign Go row.
+    @Test func renderExhaustedAndNewRows() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = ClaudeAccountFixtures.now
+        func bar(_ label: String, _ fraction: Double?, _ hours: Double, blocked: Bool = false) -> DualBarMetrics {
+            let length: TimeInterval = label == "5H" ? QuotaWindow.fiveHours
+                : label == "WK" ? QuotaWindow.week : 30 * 86400
+            return DualBarMetrics(primaryFraction: fraction,
+                expectedPaceFraction: DualBarMetrics.proRataPace(resetsAt: now.addingTimeInterval(hours * 3600),
+                    windowLength: length, now: now), label: label,
+                blockedColor: blocked ? "#ffb4ab" : nil, isBlocked: blocked,
+                resetsAt: now.addingTimeInterval(hours * 3600), windowLength: length)
+        }
+        func snapshot(_ id: String, _ vendor: VendorIdentifier, _ plan: String?,
+                      _ rows: [DualBarMetrics]) -> QuotaSnapshot {
+            QuotaSnapshot(id: id, vendorId: vendor, displayName: id, category: .aiSubscriptions,
+                metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
+                resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+                row1: rows.first, row2: rows.dropFirst().first, row3: rows.dropFirst(2).first, planName: plan)
+        }
+        var primary = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 0.42, fable: 0.18)
+        primary.row1 = bar("5H", 0.12, 3)
+        primary.row2 = bar("WK", 0.42, 4 * 24)
+        primary.monthlyAPICredit = ClaudeMonthlyCredit(amountUSD: 200,
+            nextGrantAt: now.addingTimeInterval(9 * 86400), measuredAt: now)
+        let commandCode = snapshot("Command Code", .commandcode, "Pro", [bar("MO", 1, 13 * 24)])
+        let workspaces = [
+            snapshot("Alpha", .opencode, "OpenCode Go", [bar("WK", 1, 20, blocked: true), bar("MO", 0.50, 25 * 24)]),
+            snapshot("Beta", .opencode, "OpenCode Go", [bar("5H", 0.16, 0.6), bar("WK", 0.20, 24)]),
+        ]
+        let openDesign = snapshot("OpenDesign", .opendesign, "OpenDesign Go · Pro",
+                                  [bar("5H", 0.08, 2), bar("WK", 0.31, 3 * 24)])
+        try await save(MetricSectionView(category: .aiSubscriptions,
+            snapshots: [primary, commandCode] + workspaces + [openDesign], onSelect: { _ in }, now: now)
+            .padding(12).frame(width: 384).background(Theme.surface), name: "exhausted-and-new-rows", directory: directory)
+        try await save(HStack(spacing: 24) {
+            VendorAvatarView(vendorId: .claude, status: .healthy, size: 28)
+            VendorAvatarView(vendorId: .claude, status: .healthy, isExhausted: true,
+                             exhaustedReset: "13d", showsResetOverlay: true, size: 28)
+            VendorAvatarView(vendorId: .commandcode, status: .healthy, isExhausted: true,
+                             showsResetOverlay: true, size: 28)
+        }.padding(20).background(Theme.card), name: "exhausted-avatar", directory: directory)
+    }
+
     @Test func renderReadabilityGroups() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

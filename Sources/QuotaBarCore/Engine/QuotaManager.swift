@@ -149,6 +149,7 @@ public actor QuotaManager {
             CommandCodeQuotaProvider(),
             ClinePassQuotaProvider(),
             MuseQuotaProvider(),
+            OpenDesignQuotaProvider(),
             GitHubRestProvider(),
             GitHubGraphQLProvider(),
         ] as [any QuotaProvider])
@@ -223,7 +224,7 @@ public actor QuotaManager {
     static let canonicalOrder: [VendorIdentifier] = [
         .claude, .openai, .gemini, .antigravityClaude, .antigravityArgon, .copilot, .opencode,
         .openrouter, .deepseek, .grok, .kiro, .devpass,
-        .commandcode, .clinepass, .muse,
+        .commandcode, .clinepass, .muse, .opendesign,
         .githubRest, .githubGraphql,
     ]
 

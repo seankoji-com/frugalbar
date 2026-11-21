@@ -15,7 +15,8 @@ enum DetailChartStyle {
     }
 
     static func color(for point: BurndownPresentation.Point) -> Color {
-        if point.isBlocked || point.urgency == .critical { return Theme.error }
+        if point.isBlocked { return Theme.errorBold }
+        if point.urgency == .critical { return Theme.error }
         if point.urgency == .warning { return Theme.tertiary }
         return Theme.healthy
     }

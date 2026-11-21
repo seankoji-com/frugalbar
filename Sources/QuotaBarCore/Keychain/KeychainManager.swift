@@ -796,6 +796,11 @@ public enum CredentialStore {
             // rather than being renewed behind the CLI's back.
             return GrokQuotaProvider.discoverCLIToken()
 
+        case .opendesign:
+            // Deliberately nothing. OpenDesign's usage is read through its
+            // in-app web sign-in; no CLI holds a credential that reads it.
+            return nil
+
         case .kiro:
             // Deliberately nothing. Kiro's credential is a bearer token paired
             // with a CodeWhisperer profile ARN, and one without the other is
@@ -960,6 +965,7 @@ extension CredentialStore {
         case .commandcode:   "~/.commandcode/auth.json"
         case .clinepass:     "~/.cline/data/settings/providers.json"
         case .muse:          "Muse CLI login Keychain"
+        case .opendesign:    "open-design.ai web session"
         case .githubRest:    "gh auth token"
         case .githubGraphql: "gh auth token"
         }

@@ -95,6 +95,19 @@ last published fraction, and drawing it would report a window nothing is
 metered against. A configured `FRUGALBAR_GEMINI_API_BASE` is the operator's
 answer and is asked alone, so its failure stays this provider's answer.
 
+**OpenDesign is read through its web sign-in, not an API key.** An OpenDesign
+inference key gets `401 unauthenticated` from the usage endpoints (checked with
+a real key on 22 November 2026), so there is no key slot. `OpenDesignWebSession`
+is an in-app WebKit sign-in; the provider's two GETs
+(`/api/v1/workspaces/current`, then `/{id}/billing/coding-plan-usage` with
+`X-Vela-Workspace-Id`) run inside that page, and only the status and JSON body
+reach Swift. Windows are chosen by `durationSeconds` (18000 → 5H, 604800 → WK,
+28–31 days → MO), never by order, and MO is drawn only when published. A
+mismatched workspace id, a duplicate window, or a zero or unparseable limit
+fails the read rather than drawing a bar. The payload contract comes from
+token-monitor PR 1366's synthetic fixtures and has not been checked against a
+captured response.
+
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
 
@@ -428,11 +441,23 @@ never their own `Date()`, so they cannot straddle a rounding boundary. Don't
 add a second marker or extra over/under-pace segments: three colours and two
 triangles per bar made the card unreadable. A column the vendor does not publish
 shows a faint dash, never a track, which would read as 0% used. A window the
-vendor blocked but still reports a percentage for (OpenCode Go) wears the
-vendor's blocked colour, which sits too close to amber to tell apart, so a
-`BlockedGlyph` (`nosign`) sits beside its figure everywhere it is drawn and the
-spoken label says "blocked". Without a percentage the cell already says
-"Blocked" in words and draws a dashed placeholder.
+vendor blocked but still reports a percentage for (OpenCode Go) wears the same
+spent red as an exhausted window, and a `BlockedGlyph` (`nosign`) sits beside
+its figure everywhere it is drawn and the spoken label says "blocked", so
+blocked and spent stay distinguishable without colour. Without a percentage the
+cell already says "Blocked" in words and draws a dashed placeholder.
+
+**An exhausted or blocked row draws one red: `Theme.errorBold`.** Its bars, the
+figures under them, the reset countdown and fallback text, and the avatar's
+ring and tag all use it. `DualBarProgressView.stateColor` ignores a vendor's
+`blockedColor`: OpenCode Go once passed `#ffb4ab` (`Theme.error`, the pale text
+coral), and its workspaces drew pink hatching beside Command Code's deep red.
+`Theme.error` stays for text that is critically low but not spent. An exhausted
+avatar in the popover is the logo in greyscale at 55% opacity inside a 1.5pt
+red ring, with the countdown (or `nosign` when no reset was published) in a red
+capsule on the top-left corner, so the logo stays recognisable. The ring and
+tag draw outside the 28pt frame and do not move it, so the grouped-workspace
+connector still lines up. The inspector and widget keep the struck-through mark.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
@@ -498,6 +523,17 @@ above and not a balance or quota. The billing client reads that amount with
 accepting only `String?` silently dropped a live entitlement. It draws under the
 row as an **API credit** line with the amount beneath the title (through
 `MoneyText.format`, so a whole USD amount keeps its cents) and an `MO` meter.
+
+**The credit belongs to one named row, chosen by identity.** With multi-account
+discovery every Claude row is a named account, and named rows used to drop the
+credit outright, so the line disappeared for everyone with discovered accounts.
+The web session now reads the signed-in claude.ai account in the page
+(`/api/account`, projected to its UUID and its organisations' UUIDs, nothing
+else) and hashes each pair exactly as discovery hashes an OAuth profile
+(`account|<uuid>|<org>`). `ClaudeMonthlyCreditBinding.resolve` attaches the
+credit only when exactly one shown row's verified identity is among them. No
+match, an unverified row, or two matching rows attaches it nowhere, and
+Settings says why. Email, nickname and row order are never evidence.
 
 **That meter is billing-cycle progress, never API spend.** The linked payload
 publishes no used or remaining figure, so `MonthlyCreditBarPresentation` fills

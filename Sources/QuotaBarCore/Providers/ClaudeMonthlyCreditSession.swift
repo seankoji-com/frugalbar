@@ -65,8 +65,67 @@ public final class ClaudeMonthlyCreditSession: NSObject, WKScriptMessageHandler 
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
+    /// Which OAuth-row identities the signed-in web account could have. Read
+    /// by Settings to say which row the credit is drawn under, or why none.
+    public var webIdentities: Set<String>? { isEnabled ? state.webIdentities : nil }
+
     public func read(now: Date) async -> ClaudeMonthlyCredit? {
         guard !TestHost.isActive, !Task.isCancelled, isEnabled else { return nil }
+        await refreshWebIdentitiesIfNeeded(now: now)
+        guard !Task.isCancelled, isEnabled else { return nil }
+        return withIdentities(await readCredit(now: now))
+    }
+
+    private func withIdentities(_ credit: ClaudeMonthlyCredit?) -> ClaudeMonthlyCredit? {
+        guard var credit else { return nil }
+        credit.webIdentities = state.webIdentities
+        return credit
+    }
+
+    /// Reads which account the web session is signed in as, projected in the
+    /// page to UUIDs only (no email, name or cookie), at most every five
+    /// minutes. The billing page's own link-state does not name the account,
+    /// and without this the credit cannot be bound to an OAuth row.
+    private func refreshWebIdentitiesIfNeeded(now: Date) async {
+        if let at = state.identitiesAttemptedAt, now.timeIntervalSince(at) < 300 { return }
+        guard webView.url?.scheme == "https", webView.url?.host == "claude.ai" else { return }
+        state.identitiesAttemptedAt = now
+        let generation = state.generation
+        let evaluation = ClaudeMonthlyCreditEvaluation()
+        let text = await evaluation.value { complete in
+            self.webView.callAsyncJavaScript(Self.accountQuery, arguments: [:], in: nil, in: .page) { result in
+                let text: String?
+                if case .success(let value) = result { text = value as? String }
+                else { text = nil }
+                Task { @MainActor in complete(text) }
+            }
+        }
+        guard state.generation == generation else { return }
+        // A failed read keeps the last known account: the signed-in account
+        // does not change because one request timed out.
+        if let identities = ClaudeMonthlyCreditBinding.webIdentities(fromProjection: text) {
+            state.webIdentities = identities
+        }
+    }
+
+    private static let accountQuery = #"""
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      const r = await fetch('/api/account', {credentials: 'same-origin', signal: controller.signal});
+      if (!r.ok) return null;
+      const p = await r.json();
+      const a = (p && p.account) || p || {};
+      const account = typeof a.uuid === 'string' ? a.uuid : null;
+      const memberships = Array.isArray(a.memberships) ? a.memberships
+        : (Array.isArray(p.memberships) ? p.memberships : []);
+      const orgs = memberships.map(m => m && m.organization && m.organization.uuid)
+        .filter(u => typeof u === 'string');
+      return JSON.stringify({account, orgs});
+    } finally { clearTimeout(timer); }
+    """#
+
+    private func readCredit(now: Date) async -> ClaudeMonthlyCredit? {
         if let retryNotBefore = state.retryNotBefore, now < retryNotBefore { return state.credit }
         if let attemptedAt = state.attemptedAt, now.timeIntervalSince(attemptedAt) < 300 { return state.credit }
         guard pendingRead == nil else { return state.credit }
@@ -165,6 +224,8 @@ struct ClaudeMonthlyCreditSessionState {
     var credit: ClaudeMonthlyCredit?
     var attemptedAt: Date?
     var retryNotBefore: Date?
+    var webIdentities: Set<String>?
+    var identitiesAttemptedAt: Date?
 
     mutating func reset() { self = Self() }
 
