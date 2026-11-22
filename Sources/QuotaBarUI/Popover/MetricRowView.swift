@@ -91,6 +91,7 @@ struct MetricRowView: View {
     var isGrouped: Bool = false
     var suppressPlan: Bool = false
     var groupSubtitle: String? = nil
+    var showAntigravityAccountBadge: Bool = false
     var continuesGroup: Bool = false
     var now: Date? = nil
 
@@ -318,7 +319,7 @@ struct MetricRowView: View {
         let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
         let accountLabel: String = if let account = snapshot.claudeAccount {
             "Account \(account.badge). Claude Code. \(namedLabel)"
-        } else if let account = snapshot.antigravityAccount {
+        } else if showAntigravityAccountBadge, let account = snapshot.antigravityAccount {
             "Account \(account.badge), \(account.name). \(namedLabel)"
         } else {
             namedLabel
@@ -423,7 +424,9 @@ struct MetricRowView: View {
             .anchorPreference(key: GroupAvatarAnchors.self, value: .bounds) { [snapshot.id: $0] }
             .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(avatar: $0) }
             .overlay(alignment: .bottomTrailing) {
-                if let badge = snapshot.claudeAccount?.badge ?? snapshot.antigravityAccount?.badge {
+                let badge = snapshot.claudeAccount?.badge
+                    ?? (showAntigravityAccountBadge ? snapshot.antigravityAccount?.badge : nil)
+                if let badge {
                     Text(badge)
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(Theme.onSurface)

@@ -43,7 +43,9 @@ actor AntigravityAccountDiscovery {
     private let defaults: UserDefaults
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
     private let directCredential: @Sendable () async -> String?
-    private let apiBases: [String]
+    private let environment: [String: String]
+    private let apiBaseOverride: [String]?
+    private let proxyBudgetSeconds: TimeInterval
 
     private struct CachedPlan {
         let accounts: [AntigravityAccount]
@@ -68,12 +70,16 @@ actor AntigravityAccountDiscovery {
             if let session = await GeminiOAuthSession.loadRefreshed() { return session.accessToken }
             return await CredentialStore.antigravityAccessTokenAsync()
         },
-        apiBases: [String]? = nil
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        apiBases: [String]? = nil,
+        proxyBudgetSeconds: TimeInterval = 4.0
     ) {
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
         self.directCredential = directCredential
-        self.apiBases = apiBases ?? GeminiQuotaProvider.productionAPIHosts
+        self.environment = environment
+        self.apiBaseOverride = apiBases
+        self.proxyBudgetSeconds = proxyBudgetSeconds
     }
 
     func providers(now: Date = Date()) async -> [any QuotaProvider] {
@@ -102,13 +108,22 @@ actor AntigravityAccountDiscovery {
         }
 
         let batch = AntigravityRequestBatch()
-        var routes: [AntigravityAccountRoute] = []
-        var unavailableBindings: [(AntigravityAccountBinding, UnavailableReason)] = []
-        var proxyInventoryFailed = false
-        var inventoryFailure: UnavailableReason?
+        let configuredBase = GeminiQuotaProvider.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
+        // Honour FRUGALBAR_GEMINI_API_BASE during discovery so identity probes
+        // hit the exact same authoritative host as GeminiQuotaProvider, and
+        // never probe production hosts when an invalid override is configured.
+        let bases: [String] = if let override = self.apiBaseOverride {
+            override
+        } else if configuredBase.invalid {
+            []
+        } else if let value = configuredBase.value {
+            [value]
+        } else {
+            GeminiQuotaProvider.productionAPIHosts
+        }
 
-        if let token = directToken {
-            routes.append(AntigravityAccountRoute(
+        let directRoute: AntigravityAccountRoute? = directToken.map { token in
+            AntigravityAccountRoute(
                 source: "direct|" + AntigravityAccount.digest(token),
                 sourceLabel: "This Mac's Google OAuth session",
                 isPrimary: true,
@@ -118,11 +133,26 @@ actor AntigravityAccountDiscovery {
                 projectID: nil,
                 planName: nil,
                 failure: nil
-            ))
+            )
         }
 
-        if let config {
-            do {
+        // Run the direct local identity probe concurrently with the bounded
+        // proxy discovery + proxy identity probes so a slow or hung CLIProxyAPI
+        // host can never stall the healthy local account past QuotaManager's deadline.
+        let proxyBudget = self.proxyBudgetSeconds
+        async let probedDirect: AntigravityAccountRoute? = {
+            guard let directRoute else { return nil }
+            return await Self.probeIdentity(route: directRoute, bases: bases, batch: batch, now: now)
+        }()
+
+        let proxyOutcome: (
+            routes: [AntigravityAccountRoute],
+            unavailableBindings: [(AntigravityAccountBinding, UnavailableReason)],
+            inventoryFailed: Bool,
+            inventoryFailure: UnavailableReason?
+        ) = await {
+            guard let config else { return ([], [], false, nil) }
+            let outcome: DeadlineOutcome<[AntigravityAccountRoute]> = await withDeadline(seconds: proxyBudget) {
                 let files = try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
                 let prefix = Self.proxySourcePrefix(config)
                 let enabled = files.filter {
@@ -133,6 +163,7 @@ actor AntigravityAccountDiscovery {
                 let fileIndices = Dictionary(grouping: enabled, by: { $0.id ?? "" })
                     .mapValues { Set($0.map(\.authIndex)) }
                 var seen = Set<String>()
+                var proxyRoutes: [AntigravityAccountRoute] = []
                 for file in enabled where seen.insert(file.authIndex).inserted {
                     let hint = Self.safeAccountHint(file.email).map { " · " + $0 } ?? ""
                     let sourceID: String
@@ -141,7 +172,7 @@ actor AntigravityAccountDiscovery {
                     } else {
                         sourceID = "index|" + file.authIndex
                     }
-                    routes.append(AntigravityAccountRoute(
+                    proxyRoutes.append(AntigravityAccountRoute(
                         source: prefix + AntigravityAccount.digest(sourceID),
                         sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint,
                         isPrimary: false,
@@ -153,33 +184,39 @@ actor AntigravityAccountDiscovery {
                         failure: nil
                     ))
                 }
-            } catch {
-                proxyInventoryFailed = true
-                let reason = unavailableReason(for: error)
-                inventoryFailure = reason
-                let activeIDs = Set(oldAccounts.map(\.id))
-                unavailableBindings += oldBindings.filter {
-                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
-                }.map { ($0, reason) }
-            }
-        }
-
-        // Probe loadCodeAssist concurrently per route using the shared pass batch
-        // so the pool providers reuse the exact same response with no extra calls.
-        let bases = self.apiBases
-        let discovered = await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
-            for route in routes {
-                group.addTask {
-                    await Self.probeIdentity(route: route, bases: bases, batch: batch, now: now)
+                return await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
+                    for route in proxyRoutes {
+                        group.addTask {
+                            await Self.probeIdentity(route: route, bases: bases, batch: batch, now: now)
+                        }
+                    }
+                    var probed: [AntigravityAccountRoute] = []
+                    for await route in group { probed.append(route) }
+                    return probed
                 }
             }
-            var result: [AntigravityAccountRoute] = []
-            for await route in group { result.append(route) }
-            return result.sorted { lhs, rhs in
-                if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
-                return lhs.source < rhs.source
+            switch outcome {
+            case .success(let probedProxy):
+                return (probedProxy, [], false, nil)
+            case .failure(let reason):
+                let activeIDs = Set(oldAccounts.map(\.id))
+                let unavailable = oldBindings.filter {
+                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
+                }.map { ($0, reason) }
+                return ([], unavailable, true, reason)
             }
+        }()
+
+        var discovered: [AntigravityAccountRoute] = []
+        if let local = await probedDirect { discovered.append(local) }
+        discovered.append(contentsOf: proxyOutcome.routes)
+        discovered.sort { lhs, rhs in
+            if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
+            return lhs.source < rhs.source
         }
+        let unavailableBindings = proxyOutcome.unavailableBindings
+        let proxyInventoryFailed = proxyOutcome.inventoryFailed
+        let inventoryFailure = proxyOutcome.inventoryFailure
         guard !Task.isCancelled else { return [] }
 
         var groups: [String: [AntigravityAccountRoute]] = [:]
@@ -208,14 +245,28 @@ actor AntigravityAccountDiscovery {
         for route in discovered {
             let previous = oldBindings.first { $0.source == route.source }
             let identity = route.verifiedIdentity
-            let id = identity.flatMap { identities[$0] } ?? previous?.accountID
-                ?? AntigravityAccount.instanceID(identity: "source|" + route.source)
-            let verified = identity != nil || previous?.verified == true
+            // Never merge a currently unverified route into a verified project
+            // binding from an earlier pass (e.g., if a proxy auth file was
+            // replaced or now returns VALIDATION_REQUIRED). Only reuse a
+            // previous binding when the route verified now, or when its prior
+            // binding was already source-scoped (unverified).
+            let id: String
+            let verified: Bool
+            if let identity {
+                id = identities[identity] ?? identity
+                verified = true
+            } else if let previous, !previous.verified {
+                id = previous.accountID
+                verified = false
+            } else {
+                id = AntigravityAccount.instanceID(identity: "source|" + route.source)
+                verified = false
+            }
             bindings.append(AntigravityAccountBinding(
                 source: route.source,
                 accountID: id,
                 verified: verified,
-                identity: identity ?? previous?.identity
+                identity: identity
             ))
             if let identity, let previous, previous.accountID != id,
                !previous.verified || previous.identity == identity {
@@ -328,7 +379,8 @@ actor AntigravityAccountDiscovery {
                     account: account,
                     transports: transports,
                     initialFailure: transports.isEmpty ? initialFailure : nil,
-                    apiBaseOverride: apiBases.count == 1 ? apiBases[0] : nil,
+                    environment: environment,
+                    apiBaseOverride: apiBaseOverride?.count == 1 ? apiBaseOverride?[0] : nil,
                     allowance: allowance,
                     requests: batch
                 ))
@@ -422,7 +474,22 @@ private struct AntigravityDiscoveryFailureProvider: QuotaProvider {
         case .argon:  .antigravityArgon
         }
     }
+    var instanceID: String {
+        "\(AntigravityAccount.instancePrefix)proxy-unavailable:\(AntigravityAccount.poolSuffix(for: allowance))"
+    }
     var displayName: String { vendorId.displayName }
     var category: MetricCategory { .aiSubscriptions }
-    func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        QuotaSnapshot(
+            id: instanceID,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .subscription(tierName: "", renewalDate: nil),
+            status: .unavailable(reason),
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
+    }
 }

@@ -238,9 +238,14 @@ public actor QuotaManager {
         to snapshot: QuotaSnapshot, credit: GeminiAPICredit?
     ) -> QuotaSnapshot {
         guard let credit, snapshot.vendorId == .gemini else { return snapshot }
-        // Only the primary local account hosts the user-configured Gemini API
-        // credit; secondary accounts never duplicate it.
-        if let account = snapshot.antigravityAccount, !account.isPrimary { return snapshot }
+        // Only the primary local account (or legacy bare "gemini" id) hosts
+        // the user-configured Gemini API credit; secondary accounts and
+        // proxy-only outage placeholders never attach it.
+        if let account = snapshot.antigravityAccount {
+            guard account.isPrimary else { return snapshot }
+        } else if snapshot.id != VendorIdentifier.gemini.rawValue {
+            return snapshot
+        }
         var updated = snapshot
         updated.geminiAPICredit = credit
         return updated
@@ -775,7 +780,9 @@ public actor QuotaManager {
             // readings per discovered workspace (OpenDesign) reports a failure
             // under its bare id, and another workspace's figures must not stand
             // in for it.
+            let isHardRestriction: Bool = if case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,
+               !isHardRestriction,
                let previous = cache[id], previous.snapshot.status.confidence == .measured,
                previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was

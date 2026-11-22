@@ -39,7 +39,12 @@ struct AntigravityAccountSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.systemSecondaryText)
         }
+        .onAppear { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in reload() }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .frugalbarAntigravityAccountsDidChange)
+                .receive(on: RunLoop.main)
+        ) { _ in reload() }
     }
 
     private func reload() {

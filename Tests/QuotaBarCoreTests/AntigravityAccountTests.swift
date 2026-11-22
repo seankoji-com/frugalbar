@@ -530,4 +530,120 @@ struct AntigravityAccountTests {
             #expect(second.values.allSatisfy { $0.antigravityAccount?.isPrimary == true })
         }
     }
+
+    @Test("discovery honours FRUGALBAR_GEMINI_API_BASE and makes no production calls when invalid")
+    func discoveryHonoursConfiguredAPIBase() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        let session = makeSession(fixture: fixture)
+
+        try await QuotaHTTP.$session.withValue(session) {
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suiteName,
+                proxyConfig: { nil },
+                directCredential: { directToken },
+                environment: ["FRUGALBAR_GEMINI_API_BASE": "http://evil.example.com"]
+            )
+            let providers = await discovery.providers(now: now)
+            // Invalid override must make zero production calls during discovery.
+            #expect(fixture.calls().isEmpty)
+            let gemini = try #require(providers.first { $0.vendorId == .gemini })
+            let snap = try await gemini.fetchSnapshot()
+            #expect(snap.status.confidence == .unavailable)
+            if case .unavailable(.unsupported(let msg)) = snap.status {
+                #expect(msg.contains("FRUGALBAR_GEMINI_API_BASE"))
+            } else {
+                Issue.record("Expected .unsupported for invalid FRUGALBAR_GEMINI_API_BASE, got \(snap.status)")
+            }
+        }
+    }
+
+    @Test("a previously verified proxy binding is isolated if its probe later fails verification")
+    func priorBindingNeverMergesUnverifiedRoute() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        let session = makeSession(fixture: fixture)
+
+        await QuotaHTTP.$session.withValue(session) {
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suiteName,
+                proxyConfig: { proxyConfig },
+                directCredential: { directToken }
+            )
+            // Pass 1: direct and proxy verify the same project → merged into 1 account.
+            let pass1 = await discovery.providers(now: now)
+            #expect(pass1.count == 3)
+
+            // Pass 2: proxy credential now fails with VALIDATION_REQUIRED (unverified).
+            // Must isolate under its own source-scoped ID rather than staying merged with primary.
+            fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+            let pass2 = await discovery.providers(now: now.addingTimeInterval(60))
+            #expect(pass2.count == 6)
+            let accounts = AntigravityAccountStore.all(in: defaults)
+            #expect(accounts.count == 2)
+        }
+    }
+
+    @Test("QuotaManager drops stale measured bars when an account transitions to 403 TOS_VIOLATION or VALIDATION_REQUIRED")
+    func managerDropsMeasuredBarsOnAccountRestriction() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        let session = makeSession(fixture: fixture)
+
+        try await QuotaHTTP.$session.withValue(session) {
+            final class ClockBox: @unchecked Sendable {
+                var value: Date
+                init(_ value: Date) { self.value = value }
+            }
+            let clock = ClockBox(now)
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suiteName,
+                proxyConfig: { proxyConfig },
+                directCredential: { directToken }
+            )
+            let manager = QuotaManager(
+                cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 300, perProviderTimeout: 10, minPollInterval: 0),
+                providerFactory: { [] },
+                antigravityProviderFactory: { await discovery.providers(now: clock.value) }
+            )
+            let first = await manager.forceRefresh()
+            let secondaryBefore = try #require(first.values.first {
+                $0.vendorId == .gemini && $0.antigravityAccount?.isPrimary == false
+            })
+            #expect(secondaryBefore.status.confidence == .measured)
+
+            // Transition secondary account to TOS_VIOLATION and re-poll the same manager.
+            fixture.secondaryErrorReason = "TOS_VIOLATION"
+            clock.value = now.addingTimeInterval(60)
+            let second = await manager.forceRefresh()
+            let secondaryAfter = try #require(second.values.first {
+                $0.vendorId == .gemini && $0.antigravityAccount?.isPrimary == false
+            })
+            #expect(secondaryAfter.status == .unavailable(.unsupported("Account suspended (TOS violation)")))
+            #expect(secondaryAfter.status.confidence == .unavailable)
+            #expect(secondaryAfter.staleReading == nil)
+        }
+    }
+
+    @Test("proxy-only discovery outage placeholder never attaches configured GeminiAPICredit")
+    func proxyOnlyFailureDoesNotAttachGeminiCredit() async throws {
+        let credit = try #require(GeminiAPICredit(currencyCode: "USD", prepaidBalance: 45, monthlyCredit: 10, configuredAt: now))
+        let placeholder = QuotaSnapshot(
+            id: "\(AntigravityAccount.instancePrefix)proxy-unavailable:gemini",
+            vendorId: .gemini,
+            displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "", renewalDate: nil),
+            status: .unavailable(.timedOut),
+            resetsAt: nil,
+            lastUpdated: now,
+            auxiliaryInfo: nil
+        )
+        let attached = QuotaManager.attachingGeminiCredit(to: placeholder, credit: credit)
+        #expect(attached.geminiAPICredit == nil)
+    }
 }

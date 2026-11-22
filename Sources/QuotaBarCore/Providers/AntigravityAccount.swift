@@ -210,6 +210,7 @@ public enum AntigravityAccountStore {
         }
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)
+            NotificationCenter.default.post(name: .frugalbarAntigravityAccountsDidChange, object: nil)
         }
         defaults.set(badges, forKey: badgesKey)
         defaults.set(aliases, forKey: aliasesKey)
@@ -283,6 +284,10 @@ public enum AntigravityAccountStore {
         }
         return key
     }
+}
+
+public extension Notification.Name {
+    static let frugalbarAntigravityAccountsDidChange = Notification.Name("frugalbarAntigravityAccountsDidChange")
 }
 
 private extension String {

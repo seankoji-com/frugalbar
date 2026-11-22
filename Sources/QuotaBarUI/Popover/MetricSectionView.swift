@@ -46,6 +46,7 @@ struct MetricSectionView: View {
                             isGrouped: group.isGrouped,
                             suppressPlan: group.suppressPlan,
                             groupSubtitle: group.rowSubtitle(for: snap),
+                            showAntigravityAccountBadge: group.showAntigravityAccountBadge,
                             continuesGroup: snap.id != group.snapshots.last?.id,
                             now: groupNow
                         )

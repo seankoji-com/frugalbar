@@ -60,7 +60,7 @@ public enum HistoryOverviewPresentation {
                     + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
             }
             if let allowance = AntigravityAccount.allowance(for: vendor), !antigravityAccounts.isEmpty {
-                return antigravityAccounts.map { account in
+                var subjects = antigravityAccounts.map { account in
                     Subject(
                         id: account.poolInstanceID(for: allowance),
                         vendor: vendor,
@@ -70,6 +70,17 @@ public enum HistoryOverviewPresentation {
                         keys: account.poolHistoryKeys(for: allowance)
                     )
                 }
+                // When only proxy accounts are active (no local primary owns the
+                // legacy bare vendor key), keep a fallback unattributed subject
+                // so pre-existing legacy readings on disk remain accessible.
+                if !antigravityAccounts.contains(where: \.isPrimary) {
+                    subjects.append(Subject(
+                        id: vendor.rawValue,
+                        vendor: vendor,
+                        name: "\(vendor.displayName) (unattributed)"
+                    ))
+                }
+                return subjects
             }
             if vendor == .opendesign {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName,

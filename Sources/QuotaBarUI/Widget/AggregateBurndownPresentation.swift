@@ -420,9 +420,15 @@ public enum AggregateBurndownPresentation {
             }
         }
 
+        let hasMultipleAGY = Set(snapshots.compactMap { $0.antigravityAccount?.id }).count > 1
         var refs: [(id: String, vendorId: VendorIdentifier, name: String, snapshot: QuotaSnapshot?)] =
-            selectedInstances(snapshots: snapshots, filters: filters).map {
-                ($0.id, $0.vendorId, $0.displayName, $0)
+            selectedInstances(snapshots: snapshots, filters: filters).map { snap in
+                let label: String = if hasMultipleAGY, let agy = snap.antigravityAccount {
+                    "\(snap.displayName) · \(agy.name)"
+                } else {
+                    snap.displayName
+                }
+                return (snap.id, snap.vendorId, label, snap)
             }
         let covered = Set(refs.map(\.vendorId))
         for vendor in filters.vendors.subtracting(covered).sorted(by: { $0.rawValue < $1.rawValue }) {

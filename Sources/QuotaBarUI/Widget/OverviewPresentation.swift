@@ -68,7 +68,8 @@ public enum OverviewPresentation {
     /// nothing useful to say about it. One that is configured but unreadable
     /// keeps its tile and says why, so a failure never reads as health.
     public static func tiles(snapshots: [QuotaSnapshot], filters: WidgetFilters) -> [Tile] {
-        snapshots.compactMap { snapshot in
+        let hasMultipleAGY = Set(snapshots.compactMap { $0.antigravityAccount?.id }).count > 1
+        return snapshots.compactMap { snapshot in
             if snapshot.status.unavailableReason == .notConfigured { return nil }
             if !filters.vendors.isEmpty, !filters.vendors.contains(snapshot.vendorId) { return nil }
 
@@ -95,10 +96,15 @@ public enum OverviewPresentation {
             // not exhausted.
             let spent = snapshot.quotaBars.contains { ($0.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold }
             let exhausted = spent || snapshot.isFullyBlockedWithoutReading
+            let tileName: String = if hasMultipleAGY, let agy = snapshot.antigravityAccount {
+                "\(snapshot.rowTitle) · \(agy.name)"
+            } else {
+                snapshot.rowTitle
+            }
             return Tile(
                 instanceID: snapshot.id,
                 vendorId: snapshot.vendorId,
-                name: snapshot.rowTitle,
+                name: tileName,
                 planName: snapshot.shortPlanName.isEmpty ? nil : snapshot.shortPlanName,
                 status: snapshot.status,
                 isExhausted: measured && exhausted,

@@ -9,6 +9,7 @@ struct PopoverRowGrouping {
         let suppressPlan: Bool
         let snapshots: [QuotaSnapshot]
         var headerPlan: String? = nil
+        var showAntigravityAccountBadge: Bool = false
 
         var isGrouped: Bool { header != nil }
         var accessibilityLabel: String? {
@@ -117,7 +118,8 @@ struct PopoverRowGrouping {
                 let hasMultipleAGY = service == "Antigravity" && Self.hasMultipleAntigravityAccounts(in: run)
                 let headerPlan = sharedPlan && !hasClaudeAccounts && !hasMultipleAGY ? plan : nil
                 groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
-                                    snapshots: run, headerPlan: headerPlan))
+                                    snapshots: run, headerPlan: headerPlan,
+                                    showAntigravityAccountBadge: hasMultipleAGY))
             } else if grouped {
                 let isGoGroup = vendor == .opencode && run.allSatisfy {
                     $0.planName == "OpenCode Go" || $0.planName == "OpenCode Go Plus"
