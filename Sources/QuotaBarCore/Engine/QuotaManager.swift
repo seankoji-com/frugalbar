@@ -780,9 +780,10 @@ public actor QuotaManager {
             // readings per discovered workspace (OpenDesign) reports a failure
             // under its bare id, and another workspace's figures must not stand
             // in for it.
-            let isHardRestriction: Bool = if case .unsupported = snap.status.unavailableReason { true } else { false }
+            let isAntigravityRestriction: Bool = if AntigravityAccount.allowance(for: provider.vendorId) != nil,
+                case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,
-               !isHardRestriction,
+               !isAntigravityRestriction,
                let previous = cache[id], previous.snapshot.status.confidence == .measured,
                previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was

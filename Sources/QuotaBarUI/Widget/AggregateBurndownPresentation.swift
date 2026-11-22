@@ -420,11 +420,21 @@ public enum AggregateBurndownPresentation {
             }
         }
 
-        let hasMultipleAGY = Set(snapshots.compactMap { $0.antigravityAccount?.id }).count > 1
+        let agyAccounts = Dictionary(
+            snapshots.compactMap { $0.antigravityAccount.map { ($0.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let hasMultipleAGY = agyAccounts.count > 1
+        let duplicateAGYNames = Set(
+            Dictionary(grouping: agyAccounts.values, by: \.name)
+                .filter { $0.value.count > 1 }.keys
+        )
         var refs: [(id: String, vendorId: VendorIdentifier, name: String, snapshot: QuotaSnapshot?)] =
             selectedInstances(snapshots: snapshots, filters: filters).map { snap in
                 let label: String = if hasMultipleAGY, let agy = snap.antigravityAccount {
-                    "\(snap.displayName) · \(agy.name)"
+                    duplicateAGYNames.contains(agy.name)
+                        ? "\(snap.displayName) · \(agy.name) (#\(agy.badge))"
+                        : "\(snap.displayName) · \(agy.name)"
                 } else {
                     snap.displayName
                 }

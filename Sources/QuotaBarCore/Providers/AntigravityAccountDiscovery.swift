@@ -152,8 +152,17 @@ actor AntigravityAccountDiscovery {
             inventoryFailure: UnavailableReason?
         ) = await {
             guard let config else { return ([], [], false, nil) }
-            let outcome: DeadlineOutcome<[AntigravityAccountRoute]> = await withDeadline(seconds: proxyBudget) {
-                let files = try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+            let inventoryOutcome: DeadlineOutcome<[CLIProxyAuthFile]> = await withDeadline(seconds: proxyBudget) {
+                try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+            }
+            switch inventoryOutcome {
+            case .failure(let reason):
+                let activeIDs = Set(oldAccounts.map(\.id))
+                let unavailable = oldBindings.filter {
+                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
+                }.map { ($0, reason) }
+                return ([], unavailable, true, reason)
+            case .success(let files):
                 let prefix = Self.proxySourcePrefix(config)
                 let enabled = files.filter {
                     $0.provider.lowercased() == "antigravity"
@@ -184,26 +193,36 @@ actor AntigravityAccountDiscovery {
                         failure: nil
                     ))
                 }
-                return await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
+                // Bound each proxy route's identity probe independently so one
+                // slow proxy account never discards healthy sibling probes.
+                let probedProxy = await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
                     for route in proxyRoutes {
                         group.addTask {
-                            await Self.probeIdentity(route: route, bases: bases, batch: batch, now: now)
+                            let outcome = await withDeadline(seconds: proxyBudget) {
+                                await Self.probeIdentity(route: route, bases: bases, batch: batch, now: now)
+                            }
+                            switch outcome {
+                            case .success(let probed): return probed
+                            case .failure(let reason):
+                                return AntigravityAccountRoute(
+                                    source: route.source,
+                                    sourceLabel: route.sourceLabel,
+                                    isPrimary: route.isPrimary,
+                                    accessToken: route.accessToken,
+                                    proxy: route.proxy,
+                                    authFile: route.authFile,
+                                    projectID: nil,
+                                    planName: nil,
+                                    failure: reason
+                                )
+                            }
                         }
                     }
                     var probed: [AntigravityAccountRoute] = []
                     for await route in group { probed.append(route) }
                     return probed
                 }
-            }
-            switch outcome {
-            case .success(let probedProxy):
                 return (probedProxy, [], false, nil)
-            case .failure(let reason):
-                let activeIDs = Set(oldAccounts.map(\.id))
-                let unavailable = oldBindings.filter {
-                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
-                }.map { ($0, reason) }
-                return ([], unavailable, true, reason)
             }
         }()
 
@@ -241,25 +260,27 @@ actor AntigravityAccountDiscovery {
             identities[identity] = previousID ?? identity
         }
 
+        let verifiedAccountIDs = Set(discovered.compactMap { route in
+            route.verifiedIdentity.map { identities[$0] ?? $0 }
+        })
         var aliases: [String: Set<String>] = [:]
         for route in discovered {
             let previous = oldBindings.first { $0.source == route.source }
             let identity = route.verifiedIdentity
-            // Never merge a currently unverified route into a verified project
-            // binding from an earlier pass (e.g., if a proxy auth file was
-            // replaced or now returns VALIDATION_REQUIRED). Only reuse a
-            // previous binding when the route verified now, or when its prior
-            // binding was already source-scoped (unverified).
+            // Never merge a currently unverified route into a verified account
+            // ID — even if that verified account previously adopted this
+            // route's source-scoped ID during promotion.
             let id: String
             let verified: Bool
             if let identity {
                 id = identities[identity] ?? identity
                 verified = true
-            } else if let previous, !previous.verified {
-                id = previous.accountID
-                verified = false
             } else {
-                id = AntigravityAccount.instanceID(identity: "source|" + route.source)
+                let candidate = (previous?.verified == false ? previous?.accountID : nil)
+                    ?? AntigravityAccount.instanceID(identity: "source|" + route.source)
+                id = verifiedAccountIDs.contains(candidate)
+                    ? AntigravityAccount.instanceID(identity: "unverified|" + route.source)
+                    : candidate
                 verified = false
             }
             bindings.append(AntigravityAccountBinding(

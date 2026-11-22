@@ -208,13 +208,19 @@ public enum AntigravityAccountStore {
             if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
             return (Int(lhs.badge) ?? 0) < (Int(rhs.badge) ?? 0)
         }
+        let changed: Bool
         if let data = try? JSONEncoder().encode(result), defaults.data(forKey: accountsKey) != data {
             defaults.set(data, forKey: accountsKey)
-            NotificationCenter.default.post(name: .frugalbarAntigravityAccountsDidChange, object: nil)
+            changed = true
+        } else {
+            changed = false
         }
         defaults.set(badges, forKey: badgesKey)
         defaults.set(aliases, forKey: aliasesKey)
         defaults.set(names, forKey: nicknamesKey)
+        if changed {
+            NotificationCenter.default.post(name: .frugalbarAntigravityAccountsDidChange, object: nil)
+        }
         return all(in: defaults)
     }
 

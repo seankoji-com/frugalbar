@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import QuotaBarCore
 @testable import QuotaBarUI
@@ -174,5 +176,101 @@ struct AntigravityAccountPresentationTests {
             now: now
         )
         #expect(series.map(\.displayName) == ["Gemini · Personal", "Gemini · Work"])
+    }
+
+    @Test(
+        "render Antigravity multi-account screenshots",
+        .enabled(if: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"] != nil)
+    )
+    func renderAntigravityScreenshots() async throws {
+        let dir = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]))
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        func savePNG<V: View>(_ view: V, width: CGFloat, name: String) async throws {
+            let framed = view
+                .frame(width: width)
+                .padding(14)
+                .background(Theme.surface)
+                .environment(\.colorScheme, .dark)
+            let host = NSHostingView(rootView: framed)
+            host.appearance = NSAppearance(named: .darkAqua)
+            host.frame.size = host.fittingSize
+            let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let data = try #require(bitmap.representation(using: .png, properties: [:]))
+            try data.write(to: dir.appendingPathComponent("\(name).png"))
+            window.close()
+        }
+
+        // 1. Multi-account popover card (Personal + Work, including 403 restriction example)
+        let workRestricted = AntigravityAccount(
+            id: "agy-account:tertiary-fixture",
+            badge: "3",
+            sourceLabel: "CLI Proxy (proxy.example.test) · lab@example.test",
+            fallbackName: "Account 3",
+            nickname: "Lab",
+            planName: "Google AI Pro",
+            isPrimary: false
+        )
+        var restrictedSnap = QuotaSnapshot(
+            id: workRestricted.poolInstanceID(for: .gemini),
+            vendorId: .gemini,
+            displayName: "Gemini",
+            category: .aiSubscriptions,
+            metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+            status: .unavailable(.unsupported("Google account verification required")),
+            resetsAt: nil,
+            lastUpdated: now,
+            auxiliaryInfo: nil,
+            planName: "Google AI Pro"
+        )
+        restrictedSnap.antigravityAccount = workRestricted
+
+        let multiSnaps = [
+            makeSnapshot(account: primary, allowance: .gemini, fraction: 0.22, plan: "Google AI Ultra"),
+            makeSnapshot(account: primary, allowance: .claude, fraction: 0.45, plan: "Google AI Ultra"),
+            makeSnapshot(account: primary, allowance: .argon, fraction: 0.10, plan: "Google AI Ultra"),
+            makeSnapshot(account: secondary, allowance: .gemini, fraction: 0.78, plan: "Google AI Pro"),
+            makeSnapshot(account: secondary, allowance: .claude, fraction: 0.61, plan: "Google AI Pro"),
+            restrictedSnap
+        ]
+        try await savePNG(
+            MetricSectionView(category: .aiSubscriptions, snapshots: multiSnaps, now: now),
+            width: 390,
+            name: "agy-popover-multi-account"
+        )
+
+        // 2. Single-account popover card (unchanged single-account look)
+        let singleSnaps = [
+            makeSnapshot(account: primary, allowance: .gemini, fraction: 0.22, plan: "Google AI Ultra"),
+            makeSnapshot(account: primary, allowance: .claude, fraction: 0.45, plan: "Google AI Ultra"),
+            makeSnapshot(account: primary, allowance: .argon, fraction: 0.10, plan: "Google AI Ultra")
+        ]
+        try await savePNG(
+            MetricSectionView(category: .aiSubscriptions, snapshots: singleSnaps, now: now),
+            width: 390,
+            name: "agy-popover-single-account"
+        )
+
+        // 3. Settings — Antigravity accounts nickname editor
+        try await savePNG(
+            Form {
+                AntigravityAccountSettingsView(
+                    accounts: [primary, secondary],
+                    load: nil,
+                    saveNickname: { _, _ in }
+                )
+            }
+            .formStyle(.grouped)
+            .frame(height: 360),
+            width: 480,
+            name: "agy-settings-accounts"
+        )
     }
 }
