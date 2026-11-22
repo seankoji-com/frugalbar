@@ -52,12 +52,17 @@ swift test "${args[@]}" --filter "$isolated" 2>&1 | tee "$logs/isolated.log" \
 echo "==> parallel: --skip $isolated"
 if ! swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log"; then
   fail "parallel invocation failed"
-  echo "=== DIAG SYNC (with coverage) ==="
-  swift test "${args[@]}" --filter SyncSignInTests 2>&1 || echo "SYNC COV FAILED: $?"
-  echo "=== DIAG SYNC (no coverage) ==="
-  swift test -c debug --filter SyncSignInTests 2>&1 || echo "SYNC NOCOV FAILED: $?"
-  echo "=== DIAG REST (skip SyncSignInTests) ==="
-  swift test "${args[@]}" --parallel --skip "$isolated|SyncSignInTests" 2>&1 | tail -n 15 || echo "REST FAILED: $?"
+  echo "=== DIAG BACKTRACE loopbackListenerBindsLoopbackOnly ==="
+  SWIFT_BACKTRACE=enable=yes,interactive=no,output-to=stderr swift test "${args[@]}" --skip-build --filter loopbackListenerBindsLoopbackOnly 2>&1 || echo "LOOPBACK1 FAILED: $?"
+  echo "=== DIAG BACKTRACE loopbackListenerIgnoresOtherPathsAndCloses ==="
+  SWIFT_BACKTRACE=enable=yes,interactive=no,output-to=stderr swift test "${args[@]}" --skip-build --filter loopbackListenerIgnoresOtherPathsAndCloses 2>&1 || echo "LOOPBACK2 FAILED: $?"
+  echo "=== DIAG BACKTRACE SyncSignInTests (lldb) ==="
+  HELPER=$(find "$(xcode-select -p)" -name swiftpm-testing-helper -type f 2>/dev/null | head -n 1)
+  BUNDLE=$(find .build -name QuotaBarPackageTests -type f -path '*.xctest/Contents/MacOS/*' 2>/dev/null | head -n 1)
+  echo "HELPER=$HELPER BUNDLE=$BUNDLE"
+  if [ -n "$HELPER" ] && [ -n "$BUNDLE" ]; then
+    lldb --batch -o "run --test-bundle-path $BUNDLE --testing-library swift-testing --filter loopbackListenerBindsLoopbackOnly" -o "bt" -o "quit" -- "$HELPER" 2>&1 || true
+  fi
 fi
 
 # Listing builds the test executable when needed. Keep any coverage output out
