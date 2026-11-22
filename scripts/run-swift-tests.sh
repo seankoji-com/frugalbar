@@ -52,12 +52,16 @@ swift test "${args[@]}" --filter "$isolated" 2>&1 | tee "$logs/isolated.log" \
 echo "==> parallel: --skip $isolated"
 if ! swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log"; then
   fail "parallel invocation failed"
-  echo "=== DIAG 1: AntigravityAccountTests ==="
-  swift test "${args[@]}" --filter AntigravityAccountTests 2>&1 || echo "DIAG 1 FAILED: $?"
-  echo "=== DIAG 2: AntigravityAccountPresentationTests ==="
-  swift test "${args[@]}" --filter AntigravityAccountPresentationTests 2>&1 || echo "DIAG 2 FAILED: $?"
-  echo "=== DIAG 3: parallel without AntigravityAccount ==="
-  swift test "${args[@]}" --parallel --skip "$isolated|AntigravityAccount" 2>&1 | tail -n 30 || echo "DIAG 3 FAILED: $?"
+  echo "=== DIAG CORE (parallel) ==="
+  if ! swift test "${args[@]}" --parallel --filter QuotaBarCoreTests --skip "$isolated" 2>&1 | tail -n 20; then
+    echo "=== DIAG CORE (serial) ==="
+    swift test "${args[@]}" --no-parallel --filter QuotaBarCoreTests --skip "$isolated" 2>&1 | tail -n 30 || echo "CORE SERIAL FAILED: $?"
+  fi
+  echo "=== DIAG UI (parallel) ==="
+  if ! swift test "${args[@]}" --parallel --filter QuotaBarUITests 2>&1 | tail -n 20; then
+    echo "=== DIAG UI (serial) ==="
+    swift test "${args[@]}" --no-parallel --filter QuotaBarUITests 2>&1 | tail -n 30 || echo "UI SERIAL FAILED: $?"
+  fi
 fi
 
 # Listing builds the test executable when needed. Keep any coverage output out
