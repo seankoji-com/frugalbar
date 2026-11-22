@@ -500,7 +500,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let body = try JSONEncoder().encode(["project": project])
         return try await post(
             transport: transport, directToken: directToken,
-            url: base + "retrieveUserQuotaSummary", body: body, now: now)
+            url: base + "retrieveUserQuotaSummary", body: body,
+            headers: ["User-Agent": quotaUserAgent], now: now)
     }
 
     private struct Reading {
@@ -559,11 +560,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
         return try await post(
             transport: transport, directToken: directToken,
-            url: base + "loadCodeAssist", body: body, now: now)
+            url: base + "loadCodeAssist", body: body,
+            headers: ["User-Agent": quotaUserAgent], now: now)
     }
 
     private static func post(
-        transport: Transport, directToken: String?, url: String, body: Data, now: Date
+        transport: Transport, directToken: String?, url: String, body: Data,
+        headers: [String: String], now: Date
     ) async throws -> (Data, HTTPURLResponse) {
         switch transport {
         case .direct:
@@ -572,7 +575,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             }
             return try await boundedPost(
                 url: url, body: body,
-                headers: ["User-Agent": quotaUserAgent], auth: .bearer(token))
+                headers: headers, auth: .bearer(token))
         case .proxy(let config, let account, _):
             return try await bounded {
                 try await CLIProxyClient.callAntigravity(
