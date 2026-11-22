@@ -50,8 +50,27 @@ swift test "${args[@]}" --filter "$isolated" 2>&1 | tee "$logs/isolated.log" \
   || fail "isolated invocation failed"
 
 echo "==> parallel: --skip $isolated"
-swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log" \
-  || fail "parallel invocation failed"
+if ! swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log"; then
+  fail "parallel invocation failed"
+  python3 -c '
+import glob, json, os
+reports = sorted(glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/*.ips")), key=os.path.getmtime, reverse=True)
+print(f"Found {len(reports)} .ips reports:", [os.path.basename(r) for r in reports[:5]])
+for path in reports[:2]:
+    with open(path) as f:
+        lines = f.read().splitlines()
+    if len(lines) < 2: continue
+    body = json.loads("\n".join(lines[1:]))
+    print("=== CRASH:", os.path.basename(path), body.get("procName"), body.get("exception"), body.get("termination"), body.get("asi"))
+    idx = body.get("faultingThread", 0)
+    threads = body.get("threads", [])
+    images = body.get("usedImages", [])
+    if idx < len(threads):
+        for frame in threads[idx].get("frames", [])[:25]:
+            img = images[frame["imageIndex"]]["name"] if frame.get("imageIndex", 9999) < len(images) else "?"
+            print("  ", img, frame.get("symbol", hex(frame.get("imageOffset", 0))), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+' || true
+fi
 
 # Listing builds the test executable when needed. Keep any coverage output out
 # of the checkout, including when this is the first command after a clean build.
