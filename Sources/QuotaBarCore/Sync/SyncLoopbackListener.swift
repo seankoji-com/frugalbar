@@ -96,11 +96,9 @@ public final class SyncLoopbackListener: SyncCallbackListener {
         listener: SyncLoopbackListener,
         continuation: CheckedContinuation<[String: String], Error>
     ) {
-        let thread = Thread {
+        DispatchQueue(label: "frugalbar.sync.loopback", qos: .userInitiated).async {
             continuation.resume(with: Result { try listener.acceptLoop() })
         }
-        thread.name = "frugalbar.sync.loopback"
-        thread.start()
     }
 
     private func acceptLoop() throws -> [String: String] {
