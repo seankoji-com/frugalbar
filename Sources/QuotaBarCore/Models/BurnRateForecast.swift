@@ -145,9 +145,20 @@ public struct BurnRateForecast: Sendable, Equatable {
     ) -> BurnRateForecast? {
         guard snapshot.status.confidence == .measured, snapshot.staleReading == nil else { return nil }
         let history: [QuotaHistoryStore.ReadingRecord]
-        if let account = snapshot.claudeAccount, !account.historyAliases.isEmpty {
+        let aliasKeys: [String]? = {
+            if let account = snapshot.claudeAccount, !account.historyAliases.isEmpty {
+                return account.historyKeys
+            }
+            if let account = snapshot.antigravityAccount,
+               let allowance = AntigravityAccount.allowance(for: snapshot.vendorId) {
+                let keys = account.poolHistoryKeys(for: allowance)
+                return keys.count > 1 ? keys : nil
+            }
+            return nil
+        }()
+        if let aliasKeys {
             struct SampleKey: Hashable { let label: String; let date: Date }
-            let keys = Set(account.historyKeys)
+            let keys = Set(aliasKeys)
             let own = readings.filter {
                 keys.contains($0.vendor) && $0.confidence == .measured && !$0.elapsedOnly && $0.fraction != nil
             }.sorted {

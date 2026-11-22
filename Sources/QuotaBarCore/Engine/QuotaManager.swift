@@ -20,6 +20,7 @@ public actor QuotaManager {
         displayPreferences: { CredentialStore.providerDisplayPreferences },
         geminiCreditLookup: { GeminiAPICreditStore.load() },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
+        antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
         monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } })
 
@@ -36,6 +37,7 @@ public actor QuotaManager {
     private let clock: @Sendable () -> Date
     private let providerFactory: @Sendable () -> [any QuotaProvider]
     private let claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])?
+    private let antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     /// The configured Gemini API credit, read on every snapshot read rather
@@ -103,6 +105,7 @@ public actor QuotaManager {
         // Only the live manager opts into account discovery. Test factories
         // retain full control and never read ambient credentials or preferences.
         claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
+        antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
         monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
@@ -117,6 +120,7 @@ public actor QuotaManager {
         self.clock = clock
         self.providerFactory = providerFactory
         self.claudeProviderFactory = claudeProviderFactory
+        self.antigravityProviderFactory = antigravityProviderFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
         self.geminiCreditLookup = geminiCreditLookup
@@ -234,6 +238,14 @@ public actor QuotaManager {
         to snapshot: QuotaSnapshot, credit: GeminiAPICredit?
     ) -> QuotaSnapshot {
         guard let credit, snapshot.vendorId == .gemini else { return snapshot }
+        // Only the primary local account (or legacy bare "gemini" id) hosts
+        // the user-configured Gemini API credit; secondary accounts and
+        // proxy-only outage placeholders never attach it.
+        if let account = snapshot.antigravityAccount {
+            guard account.isPrimary else { return snapshot }
+        } else if snapshot.id != VendorIdentifier.gemini.rawValue {
+            return snapshot
+        }
         var updated = snapshot
         updated.geminiAPICredit = credit
         return updated
@@ -328,7 +340,18 @@ public actor QuotaManager {
             guard antigravity.contains(vendor) else { return byVendor[vendor] }
             guard !addedAntigravity else { return nil }
             addedAntigravity = true
-            return prefs.visibleOrder.filter { antigravity.contains($0) }.flatMap { byVendor[$0] ?? [] }
+            let poolOrder = prefs.visibleOrder.filter { antigravity.contains($0) }
+            let allAGY = poolOrder.flatMap { byVendor[$0] ?? [] }
+            let accountIDs = allAGY.reduce(into: [String]()) { order, snapshot in
+                let key = snapshot.antigravityAccount?.id ?? ""
+                if !order.contains(key) { order.append(key) }
+            }
+            guard accountIDs.count > 1 else { return allAGY }
+            return accountIDs.flatMap { accountID in
+                poolOrder.flatMap { pool in
+                    (byVendor[pool] ?? []).filter { ($0.antigravityAccount?.id ?? "") == accountID }
+                }
+            }
         }
 
         // A custom order has two exceptions: visible nonempty Antigravity pools
@@ -489,6 +512,30 @@ public actor QuotaManager {
             allProviders.removeAll { $0.vendorId == .claude }
             allProviders.insert(contentsOf: accounts, at: min(insertion, allProviders.count))
         }
+        let antigravityVendors: Set<VendorIdentifier> = [.gemini, .antigravityClaude, .antigravityArgon]
+        if !antigravityVendors.isSubset(of: hidden), let discoverAGY = antigravityProviderFactory {
+            let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
+                await QuotaFetchContext.$isUserInitiated.withValue(force) { await discoverAGY() }
+            }
+            let agyProviders: [any QuotaProvider]
+            switch discovery {
+            case .success(let found): agyProviders = found
+            case .failure(let reason):
+                let previous = cache.values.map(\.snapshot).filter { antigravityVendors.contains($0.vendorId) }
+                agyProviders = previous.isEmpty
+                    ? [
+                        UnavailableAntigravityInstance(id: VendorIdentifier.gemini.rawValue, vendorId: .gemini, name: VendorIdentifier.gemini.displayName, account: nil, reason: reason),
+                        UnavailableAntigravityInstance(id: VendorIdentifier.antigravityClaude.rawValue, vendorId: .antigravityClaude, name: VendorIdentifier.antigravityClaude.displayName, account: nil, reason: reason),
+                        UnavailableAntigravityInstance(id: VendorIdentifier.antigravityArgon.rawValue, vendorId: .antigravityArgon, name: VendorIdentifier.antigravityArgon.displayName, account: nil, reason: reason),
+                    ]
+                    : previous.map {
+                        UnavailableAntigravityInstance(id: $0.id, vendorId: $0.vendorId, name: $0.displayName, account: $0.antigravityAccount, reason: reason)
+                    }
+            }
+            let insertion = allProviders.firstIndex { antigravityVendors.contains($0.vendorId) } ?? allProviders.count
+            allProviders.removeAll { antigravityVendors.contains($0.vendorId) }
+            allProviders.insert(contentsOf: agyProviders, at: min(insertion, allProviders.count))
+        }
         let providers: [any QuotaProvider] = allProviders.filter { !hidden.contains($0.vendorId) }
         // A workspace that was removed (or disabled) must not linger in the
         // cache. Only the multi-instance vendor is pruned here: a single
@@ -508,6 +555,14 @@ public actor QuotaManager {
                 cache[key] = nil
             }
         }
+        let liveAntigravity = Set(allProviders.filter { antigravityVendors.contains($0.vendorId) }.map(\.instanceID))
+        if antigravityProviderFactory != nil {
+            let legacyAGYKeys = Set(antigravityVendors.map(\.rawValue))
+            for key in Array(cache.keys) where (legacyAGYKeys.contains(key)
+                || key.hasPrefix(AntigravityAccount.instancePrefix)) && !liveAntigravity.contains(key) {
+                cache[key] = nil
+            }
+        }
         // Remember the build order so several instances of one vendor keep the
         // order the user arranged them in when the list is sorted.
         instanceOrder = providers.map(\.instanceID)
@@ -523,6 +578,13 @@ public actor QuotaManager {
                 if entry.accountID == snapshot.id { copy.accountName = provider.account.name }
                 return copy
             }
+            cache[provider.instanceID] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
+                lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
+        }
+        for case let provider as GeminiQuotaProvider in providers {
+            guard let account = provider.account, let entry = cache[provider.instanceID] else { continue }
+            var snapshot = entry.snapshot
+            snapshot.antigravityAccount = account
             cache[provider.instanceID] = CacheEntry(snapshot: snapshot, fetchedAt: entry.fetchedAt,
                 lastUserFetchAt: entry.lastUserFetchAt, vendorRetryAfter: entry.vendorRetryAfter)
         }
@@ -718,7 +780,10 @@ public actor QuotaManager {
             // readings per discovered workspace (OpenDesign) reports a failure
             // under its bare id, and another workspace's figures must not stand
             // in for it.
+            let isAntigravityRestriction: Bool = if AntigravityAccount.allowance(for: provider.vendorId) != nil,
+                case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,
+               !isAntigravityRestriction,
                let previous = cache[id], previous.snapshot.status.confidence == .measured,
                previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was
@@ -887,6 +952,7 @@ public actor QuotaManager {
             rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
             rebuilt.openAIAccountKey = updated.openAIAccountKey
             rebuilt.claudeAccount = updated.claudeAccount
+            rebuilt.antigravityAccount = updated.antigravityAccount
             rebuilt.resetCreditExpiries = updated.resetCreditExpiries
             rebuilt.resetCreditGroups = updated.resetCreditGroups
             rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
@@ -960,6 +1026,7 @@ public actor QuotaManager {
         rebuilt.openAIMonthlyCreditReadAt = updated.openAIMonthlyCreditReadAt
         rebuilt.openAIAccountKey = updated.openAIAccountKey
         rebuilt.claudeAccount = updated.claudeAccount
+        rebuilt.antigravityAccount = updated.antigravityAccount
         rebuilt.resetCreditExpiries = updated.resetCreditExpiries
         rebuilt.resetCreditGroups = updated.resetCreditGroups
         rebuilt.resetCreditsAvailable = updated.resetCreditsAvailable
@@ -984,7 +1051,7 @@ public actor QuotaManager {
         for provider: any QuotaProvider,
         reason: UnavailableReason
     ) -> QuotaSnapshot {
-        QuotaSnapshot(
+        var snapshot = QuotaSnapshot(
             id: provider.instanceID,
             vendorId: provider.vendorId,
             displayName: provider.displayName,
@@ -995,6 +1062,27 @@ public actor QuotaManager {
             lastUpdated: Date(),
             auxiliaryInfo: reason.remedy
         )
+        if let agy = provider as? GeminiQuotaProvider {
+            snapshot.antigravityAccount = agy.account
+        }
+        return snapshot
+    }
+}
+
+private struct UnavailableAntigravityInstance: QuotaProvider {
+    let id: String
+    let vendorId: VendorIdentifier
+    let name: String
+    let account: AntigravityAccount?
+    let reason: UnavailableReason
+    var instanceID: String { id }
+    var displayName: String { name }
+    var category: MetricCategory { .aiSubscriptions }
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        var snapshot = unavailable(reason)
+        snapshot.antigravityAccount = account
+        snapshot.planName = account?.planName
+        return snapshot
     }
 }
 

@@ -269,8 +269,15 @@ public struct MetricDetailModalView: View {
         let m = await eventsLoader(
             vendor, snapshot.id, nil, loadTime.addingTimeInterval(-Self.historyLookback), nil)
         guard !Task.isCancelled else { return }
+        let agyAliases: [String] = if let account = snapshot.antigravityAccount,
+                                      let allowance = AntigravityAccount.allowance(for: snapshot.vendorId) {
+            account.poolHistoryAliases(for: allowance)
+        } else {
+            []
+        }
         readings = (r ?? []).map { record in
-            snapshot.claudeAccount?.historyAliases.contains(record.vendor) == true
+            (snapshot.claudeAccount?.historyAliases.contains(record.vendor) == true
+                || agyAliases.contains(record.vendor))
                 ? record.namingInstance(snapshot.id) : record
         }
         readingsFailed = r == nil

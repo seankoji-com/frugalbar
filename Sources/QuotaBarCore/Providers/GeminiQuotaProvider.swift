@@ -11,6 +11,17 @@ import Foundation
 /// constraint.
 public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public enum Allowance: Sendable { case gemini, claude, argon }
+    enum Transport: Sendable {
+        case direct(accessToken: String?, batchKey: String)
+        case proxy(config: CLIProxyConfig, account: CLIProxyAuthFile, batchKey: String)
+
+        var batchKey: String {
+            switch self {
+            case .direct(_, let key), .proxy(_, _, let key): key
+            }
+        }
+    }
+
     private let allowance: Allowance
     public var vendorId: VendorIdentifier {
         switch allowance {
@@ -19,11 +30,14 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         case .argon: .antigravityArgon
         }
     }
+    public var instanceID: String { account?.poolInstanceID(for: allowance) ?? vendorId.rawValue }
     private let requests: AntigravityRequestBatch?
+    public let account: AntigravityAccount?
+    private let transports: [Transport]
+    private let initialFailure: UnavailableReason?
     public var displayName: String { vendorId.displayName }
     public let category: MetricCategory = .aiSubscriptions
 
-    private let accessToken: String?
     private let apiBaseOverride: String?
     private let configuredAPIBase: (value: String?, invalid: Bool)
 
@@ -82,7 +96,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     init(accessToken: String? = nil,
          environment: [String: String] = ProcessInfo.processInfo.environment,
          allowance: Allowance, requests: AntigravityRequestBatch?) {
-        self.accessToken = accessToken
+        self.account = nil
+        self.transports = [.direct(accessToken: accessToken, batchKey: "default")]
+        self.initialFailure = nil
         self.apiBaseOverride = nil
         self.configuredAPIBase = Self.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
         self.allowance = allowance
@@ -90,20 +106,82 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     init(accessToken: String?, apiBaseOverride: String?, allowance: Allowance = .gemini) {
-        self.accessToken = accessToken
+        self.account = nil
+        self.transports = [.direct(accessToken: accessToken, batchKey: "default")]
+        self.initialFailure = nil
         self.apiBaseOverride = apiBaseOverride
         self.configuredAPIBase = (nil, false)
         self.allowance = allowance
         self.requests = nil
     }
 
-    private struct CodeAssist: Decodable, Sendable {
+    init(account: AntigravityAccount,
+         transports: [Transport],
+         initialFailure: UnavailableReason? = nil,
+         environment: [String: String] = ProcessInfo.processInfo.environment,
+         apiBaseOverride: String? = nil,
+         allowance: Allowance,
+         requests: AntigravityRequestBatch?) {
+        self.account = account
+        self.transports = transports
+        self.initialFailure = initialFailure
+        self.apiBaseOverride = apiBaseOverride
+        self.configuredAPIBase = apiBaseOverride == nil
+            ? Self.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
+            : (nil, false)
+        self.allowance = allowance
+        self.requests = requests
+    }
+
+    struct CodeAssist: Decodable, Sendable {
         struct Plan: Decodable, Sendable { let planType: String? }
         struct Tier: Decodable, Sendable { let id: String?; let name: String? }
         let planInfo: Plan?
         let currentTier: Tier?
         let paidTier: Tier?
         let cloudaicompanionProject: String?
+
+        var planName: String? {
+            paidTier?.name ?? planInfo?.planType ?? currentTier?.name
+        }
+    }
+
+    private struct GoogleErrorPayload: Decodable {
+        struct Body: Decodable {
+            struct Detail: Decodable {
+                let reason: String?
+            }
+            let status: String?
+            let details: [Detail]?
+        }
+        let error: Body?
+    }
+
+    /// Maps Google Cloud Code 403 account-restriction errors to a clear
+    /// `.unsupported(...)` reason (confidence `.unavailable`, never measured or
+    /// healthy). Isolated per account so one restricted account never degrades
+    /// another.
+    static func googleErrorReason(statusCode: Int, data: Data) -> UnavailableReason? {
+        guard statusCode == 403,
+              let payload = try? JSONDecoder().decode(GoogleErrorPayload.self, from: data),
+              let error = payload.error
+        else { return nil }
+        let reasons = (error.details ?? []).compactMap { $0.reason?.uppercased() }
+        if reasons.contains("VALIDATION_REQUIRED") {
+            return .unsupported("Google account verification required")
+        }
+        if reasons.contains("TOS_VIOLATION") {
+            return .unsupported("Account suspended (TOS violation)")
+        }
+        return nil
+    }
+
+    private func stamped(_ snapshot: QuotaSnapshot) -> QuotaSnapshot {
+        guard let account else { return snapshot }
+        var copy = snapshot
+        copy.antigravityAccount = account
+        if copy.planName == nil { copy.planName = account.planName }
+        return copy
     }
 
     struct QuotaSummary: Decodable, Sendable {
@@ -145,13 +223,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     public func fetchSnapshot() async throws -> QuotaSnapshot {
         let configured = configuredAPIBase
         if apiBaseOverride == nil, configured.invalid {
-            return unavailable(.unsupported("FRUGALBAR_GEMINI_API_BASE is not a valid https://*.googleapis.com URL"))
+            return stamped(unavailable(.unsupported("FRUGALBAR_GEMINI_API_BASE is not a valid https://*.googleapis.com URL")))
+        }
+        guard !transports.isEmpty else {
+            return stamped(unavailable(initialFailure ?? .notConfigured))
         }
 
         let requests = requests ?? AntigravityRequestBatch()
-        guard let token = await requests.token(injected: accessToken), !token.isEmpty else {
-            return unavailable(.notConfigured)
-        }
 
         // A configured base is the operator's answer: one host, and its failure
         // is this provider's answer. Otherwise both production hosts are asked,
@@ -159,6 +237,53 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let bases = apiBaseOverride.map { [$0] }
             ?? configured.value.map { [$0] }
             ?? Self.productionAPIHosts
+
+        var firstFailure: UnavailableReason? = initialFailure
+        var firstTransportFailure: Error?
+
+        for transport in transports {
+            let outcome = try await fetchSnapshot(transport: transport, bases: bases, requests: requests)
+            switch outcome {
+            case .measured(let snapshot):
+                return stamped(snapshot)
+            case .failed(let reason):
+                firstFailure = firstFailure ?? reason
+            case .transportError(let error):
+                firstTransportFailure = firstTransportFailure ?? error
+            }
+        }
+
+        if let firstTransportFailure, firstFailure == nil {
+            throw firstTransportFailure
+        }
+        return stamped(unavailable(firstFailure ?? .badResponse))
+    }
+
+    private enum TransportOutcome {
+        case measured(QuotaSnapshot)
+        case failed(UnavailableReason)
+        case transportError(Error)
+    }
+
+    private func fetchSnapshot(
+        transport: Transport,
+        bases: [String],
+        requests: AntigravityRequestBatch
+    ) async throws -> TransportOutcome {
+        let directToken: String?
+        let sourceLabel: String
+        switch transport {
+        case .direct(let injected, let batchKey):
+            guard let resolved = await requests.token(accountID: batchKey, injected: injected),
+                  !resolved.isEmpty else {
+                return .failed(.notConfigured)
+            }
+            directToken = resolved
+            sourceLabel = "Google OAuth"
+        case .proxy(let config, _, _):
+            directToken = nil
+            sourceLabel = "CLI Proxy (\(config.url.host ?? "configured host"))"
+        }
 
         let now = Date()
         var resolvedBase: String?
@@ -173,17 +298,30 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
         // than turned into a reason here. It stands while no host has supplied
-        // a reading; only a credential rejection may overrule it.
+        // a reading; only a credential rejection or account restriction may
+        // overrule it.
         var transportFailure: Error?
+        let batchAccountID = transport.batchKey
         for base in bases {
             do {
                 // Scope before reading quota. A populated project-less summary
                 // can describe a different pool; its numbers cannot establish
                 // that this account has allowance left.
-                let (assistData, assistHTTP) = try await requests.response(key: base + "assist") {
-                    try await Self.loadCodeAssist(token: token, base: base)
+                let (assistData, assistHTTP) = try await requests.response(
+                    accountID: batchAccountID, key: base + "assist"
+                ) {
+                    try await Self.loadCodeAssist(transport: transport, directToken: directToken, base: base, now: now)
                 }
-                if let reason = QuotaHTTP.failureReason(for: assistHTTP.statusCode) {
+                if let googleReason = Self.googleErrorReason(statusCode: assistHTTP.statusCode, data: assistData) {
+                    lastFailure = googleReason
+                    transportFailure = nil
+                    break
+                }
+                if let reason = QuotaHTTP.failureReason(
+                    for: assistHTTP.statusCode,
+                    retryAfter: assistHTTP.value(forHTTPHeaderField: "Retry-After"),
+                    now: now
+                ) {
                     lastFailure = reason
                     if reason == .credentialRejected {
                         transportFailure = nil
@@ -199,10 +337,22 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = .unsupported("Antigravity did not identify a quota project")
                     continue
                 }
-                let (data, http) = try await requests.response(key: base + "quota:" + project) {
-                    try await Self.quotaSummary(token: token, base: base, project: project)
+                let (data, http) = try await requests.response(
+                    accountID: batchAccountID, key: base + "quota:" + project
+                ) {
+                    try await Self.quotaSummary(
+                        transport: transport, directToken: directToken, base: base, project: project, now: now)
                 }
-                if let reason = QuotaHTTP.failureReason(for: http.statusCode) {
+                if let googleReason = Self.googleErrorReason(statusCode: http.statusCode, data: data) {
+                    lastFailure = googleReason
+                    transportFailure = nil
+                    break
+                }
+                if let reason = QuotaHTTP.failureReason(
+                    for: http.statusCode,
+                    retryAfter: http.value(forHTTPHeaderField: "Retry-After"),
+                    now: now
+                ) {
                     lastFailure = reason
                     // A rejected credential is a verdict on the token, not on
                     // the host: the next host would receive the same token and
@@ -237,12 +387,18 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = noQuotaReason
                     continue
                 }
-                resolvedPlan = assist.paidTier?.name ?? assist.planInfo?.planType ?? assist.currentTier?.name
+                resolvedPlan = assist.planName
                 resolvedBase = base
                 resolvedProject = project
                 resolvedGroup = group
                 readings = read
                 break
+            } catch let error as ProviderError {
+                lastFailure = error.reason
+                if error.reason == .credentialRejected {
+                    transportFailure = nil
+                    break
+                }
             } catch {
                 try Task.checkCancellation()
                 transportFailure = error
@@ -255,10 +411,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // group says "this *host* does not publish them", and which host
             // publishes them is exactly what differs between accounts here. So
             // it cannot stand in for a host that timed out and never said
-            // anything. A credential rejection is the exception, cleared above,
-            // because the token is the same wherever it is presented.
-            if let transportFailure { throw transportFailure }
-            return unavailable(lastFailure ?? .badResponse)
+            // anything. A credential rejection or account restriction is the
+            // exception, cleared above, because the token is the same wherever
+            // it is presented.
+            if let transportFailure { return .transportError(transportFailure) }
+            return .failed(lastFailure ?? .badResponse)
         }
 
         // Shortest window first, so the row reads 5H then WK like every other
@@ -273,8 +430,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         let sourceHost = URL(string: base)?.host ?? base
         let sourceSuffix = Self.productionAPIHosts.contains(base) ? "" : " · Source: \(sourceHost)"
 
-        return QuotaSnapshot(
-            id: vendorId.rawValue, vendorId: vendorId,
+        return .measured(QuotaSnapshot(
+            id: instanceID, vendorId: vendorId,
             displayName: allowance == .claude ? Self.claudeDisplayName(group) : displayName,
             category: category, metric: .subscription(tierName: plan, renewalDate: nil),
             status: .measured(urgency), resetsAt: ordered.first?.reset, lastUpdated: now,
@@ -285,8 +442,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             row1: ordered[safe: 0].map { $0.bar }, row2: ordered[safe: 1].map { $0.bar },
             row3: ordered[safe: 2].map { $0.bar },
             badgeText: "\(Int(((1 - worst) * 100).rounded()))% left",
-            planName: plan, cliSource: "Google OAuth\(sourceSuffix)"
-        )
+            planName: plan, cliSource: "\(sourceLabel)\(sourceSuffix)"
+        ))
     }
 
     private var noQuotaReason: UnavailableReason {
@@ -338,12 +495,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     /// Only Google's selected project scopes this account's quota. Never fall
     /// back to a project-less response after a scoped request fails.
     private static func quotaSummary(
-        token: String, base: String, project: String
+        transport: Transport, directToken: String?, base: String, project: String, now: Date
     ) async throws -> (Data, HTTPURLResponse) {
         let body = try JSONEncoder().encode(["project": project])
-        return try await boundedPost(
+        return try await post(
+            transport: transport, directToken: directToken,
             url: base + "retrieveUserQuotaSummary", body: body,
-            headers: ["User-Agent": quotaUserAgent], auth: .bearer(token))
+            headers: ["User-Agent": quotaUserAgent], now: now)
     }
 
     private struct Reading {
@@ -395,24 +553,54 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
     }
 
-    private static func loadCodeAssist(token: String, base: String) async throws -> (Data, HTTPURLResponse) {
+    static func loadCodeAssist(
+        transport: Transport, directToken: String?, base: String, now: Date
+    ) async throws -> (Data, HTTPURLResponse) {
         let body = try JSONEncoder().encode(
             ["metadata": ["ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]])
-        return try await boundedPost(
+        return try await post(
+            transport: transport, directToken: directToken,
             url: base + "loadCodeAssist", body: body,
-            headers: ["User-Agent": quotaUserAgent], auth: .bearer(token))
+            headers: ["User-Agent": quotaUserAgent], now: now)
+    }
+
+    private static func post(
+        transport: Transport, directToken: String?, url: String, body: Data,
+        headers: [String: String], now: Date
+    ) async throws -> (Data, HTTPURLResponse) {
+        switch transport {
+        case .direct:
+            guard let token = directToken, !token.isEmpty else {
+                throw ProviderError(.notConfigured)
+            }
+            return try await boundedPost(
+                url: url, body: body,
+                headers: headers, auth: .bearer(token))
+        case .proxy(let config, let account, _):
+            return try await bounded {
+                try await CLIProxyClient.callAntigravity(
+                    config: config, account: account, url: url, body: body, now: now)
+            }
+        }
     }
 
     private static func boundedPost(
         url: String, body: Data, headers: [String: String], auth: QuotaHTTP.Auth
+    ) async throws -> (Data, HTTPURLResponse) {
+        try await bounded {
+            try await QuotaHTTP.post(url: url, body: body, headers: headers, auth: auth)
+        }
+    }
+
+    private static func bounded(
+        _ operation: @escaping @Sendable () async throws -> (Data, HTTPURLResponse)
     ) async throws -> (Data, HTTPURLResponse) {
         try Task.checkCancellation()
         // Preserve the original transport error for the engine. withDeadline's
         // own error mapping must not replace an offline URLError with timeout.
         let outcome = await withDeadline(seconds: GeminiRequestBudget.seconds) {
             do {
-                return Result<(Data, HTTPURLResponse), any Error>.success(
-                    try await QuotaHTTP.post(url: url, body: body, headers: headers, auth: auth))
+                return Result<(Data, HTTPURLResponse), any Error>.success(try await operation())
             } catch {
                 return .failure(error)
             }

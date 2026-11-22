@@ -107,7 +107,8 @@ extension QuotaHistoryStore {
         var requestedIDs: [String: String] = [:]
         for id in seriesIds ?? [] {
             var sourceIDs = [id]
-            if id.hasPrefix(ClaudeAccount.instancePrefix), let separator = id.firstIndex(of: "|") {
+            if (id.hasPrefix(ClaudeAccount.instancePrefix) || id.hasPrefix(AntigravityAccount.instancePrefix)),
+               let separator = id.firstIndex(of: "|") {
                 let account = String(id[..<separator])
                 let suffix = String(id[separator...])
                 sourceIDs += instanceKeyLookup(account).map { $0 + suffix }

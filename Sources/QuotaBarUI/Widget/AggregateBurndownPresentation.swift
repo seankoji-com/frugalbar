@@ -383,13 +383,18 @@ public enum AggregateBurndownPresentation {
         now: Date,
         instanceName: (String) -> String? = {
             ClaudeAccountStore.displayName(forInstanceKey: $0)
+                ?? AntigravityAccountStore.displayName(forInstanceKey: $0)
                 ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: $0)
         },
         instancePosition: (String) -> Int? = {
             ClaudeAccountStore.position(ofInstanceKey: $0)
+                ?? AntigravityAccountStore.position(ofInstanceKey: $0)
                 ?? OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0)
         },
-        canonicalInstanceKey: (String) -> String = ClaudeAccountStore.canonicalInstanceKey
+        canonicalInstanceKey: (String) -> String = {
+            let claude = ClaudeAccountStore.canonicalInstanceKey($0)
+            return claude == $0 ? AntigravityAccountStore.canonicalInstanceKey($0) : claude
+        }
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let resolved = readings.map { $0.namingInstance(canonicalInstanceKey($0.vendor)) }
@@ -415,9 +420,25 @@ public enum AggregateBurndownPresentation {
             }
         }
 
+        let agyAccounts = Dictionary(
+            snapshots.compactMap { $0.antigravityAccount.map { ($0.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let hasMultipleAGY = agyAccounts.count > 1
+        let duplicateAGYNames = Set(
+            Dictionary(grouping: agyAccounts.values, by: \.name)
+                .filter { $0.value.count > 1 }.keys
+        )
         var refs: [(id: String, vendorId: VendorIdentifier, name: String, snapshot: QuotaSnapshot?)] =
-            selectedInstances(snapshots: snapshots, filters: filters).map {
-                ($0.id, $0.vendorId, $0.displayName, $0)
+            selectedInstances(snapshots: snapshots, filters: filters).map { snap in
+                let label: String = if hasMultipleAGY, let agy = snap.antigravityAccount {
+                    duplicateAGYNames.contains(agy.name)
+                        ? "\(snap.displayName) · \(agy.name) (#\(agy.badge))"
+                        : "\(snap.displayName) · \(agy.name)"
+                } else {
+                    snap.displayName
+                }
+                return (snap.id, snap.vendorId, label, snap)
             }
         let covered = Set(refs.map(\.vendorId))
         for vendor in filters.vendors.subtracting(covered).sorted(by: { $0.rawValue < $1.rawValue }) {

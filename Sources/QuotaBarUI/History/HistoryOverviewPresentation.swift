@@ -51,12 +51,36 @@ public enum HistoryOverviewPresentation {
         order: [VendorIdentifier],
         hidden: Set<VendorIdentifier>,
         workspaces: [OpenCodeGoWorkspace],
-        claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all()
+        claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all(),
+        antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all()
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
                 return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name, keys: $0.historyKeys) }
                     + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
+            }
+            if let allowance = AntigravityAccount.allowance(for: vendor), !antigravityAccounts.isEmpty {
+                var subjects = antigravityAccounts.map { account in
+                    Subject(
+                        id: account.poolInstanceID(for: allowance),
+                        vendor: vendor,
+                        name: antigravityAccounts.count > 1
+                            ? "\(vendor.displayName) · \(account.name)"
+                            : vendor.displayName,
+                        keys: account.poolHistoryKeys(for: allowance)
+                    )
+                }
+                // When only proxy accounts are active (no local primary owns the
+                // legacy bare vendor key), keep a fallback unattributed subject
+                // so pre-existing legacy readings on disk remain accessible.
+                if !antigravityAccounts.contains(where: \.isPrimary) {
+                    subjects.append(Subject(
+                        id: vendor.rawValue,
+                        vendor: vendor,
+                        name: "\(vendor.displayName) (unattributed)"
+                    ))
+                }
+                return subjects
             }
             if vendor == .opendesign {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName,

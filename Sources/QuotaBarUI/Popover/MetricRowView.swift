@@ -91,6 +91,7 @@ struct MetricRowView: View {
     var isGrouped: Bool = false
     var suppressPlan: Bool = false
     var groupSubtitle: String? = nil
+    var showAntigravityAccountBadge: Bool = false
     var continuesGroup: Bool = false
     var now: Date? = nil
 
@@ -316,7 +317,13 @@ struct MetricRowView: View {
         }
         let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
         let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
-        let accountLabel = snapshot.claudeAccount.map { "Account \($0.badge). Claude Code. \(namedLabel)" } ?? namedLabel
+        let accountLabel: String = if let account = snapshot.claudeAccount {
+            "Account \(account.badge). Claude Code. \(namedLabel)"
+        } else if showAntigravityAccountBadge, let account = snapshot.antigravityAccount {
+            "Account \(account.badge), \(account.name). \(namedLabel)"
+        } else {
+            namedLabel
+        }
         return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(accountLabel)" } ?? accountLabel
     }
 
@@ -417,8 +424,10 @@ struct MetricRowView: View {
             .anchorPreference(key: GroupAvatarAnchors.self, value: .bounds) { [snapshot.id: $0] }
             .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(avatar: $0) }
             .overlay(alignment: .bottomTrailing) {
-                if let account = snapshot.claudeAccount {
-                    Text(account.badge)
+                let badge = snapshot.claudeAccount?.badge
+                    ?? (showAntigravityAccountBadge ? snapshot.antigravityAccount?.badge : nil)
+                if let badge {
+                    Text(badge)
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(Theme.onSurface)
                         .padding(.horizontal, 3)
