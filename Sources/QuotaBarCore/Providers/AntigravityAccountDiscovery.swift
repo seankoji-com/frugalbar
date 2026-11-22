@@ -140,91 +140,17 @@ actor AntigravityAccountDiscovery {
         // proxy discovery + proxy identity probes so a slow or hung CLIProxyAPI
         // host can never stall the healthy local account past QuotaManager's deadline.
         let proxyBudget = self.proxyBudgetSeconds
-        async let probedDirect: AntigravityAccountRoute? = {
-            guard let directRoute else { return nil }
-            return await Self.probeIdentity(route: directRoute, bases: bases, batch: batch, now: now)
-        }()
-
-        let proxyOutcome: (
-            routes: [AntigravityAccountRoute],
-            unavailableBindings: [(AntigravityAccountBinding, UnavailableReason)],
-            inventoryFailed: Bool,
-            inventoryFailure: UnavailableReason?
-        ) = await {
-            guard let config else { return ([], [], false, nil) }
-            let inventoryOutcome: DeadlineOutcome<[CLIProxyAuthFile]> = await withDeadline(seconds: proxyBudget) {
-                try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
-            }
-            switch inventoryOutcome {
-            case .failure(let reason):
-                let activeIDs = Set(oldAccounts.map(\.id))
-                let unavailable = oldBindings.filter {
-                    $0.source.hasPrefix(Self.proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
-                }.map { ($0, reason) }
-                return ([], unavailable, true, reason)
-            case .success(let files):
-                let prefix = Self.proxySourcePrefix(config)
-                let enabled = files.filter {
-                    $0.provider.lowercased() == "antigravity"
-                        && $0.disabled != true
-                        && !$0.authIndex.isEmpty
-                }.sorted { ($0.id ?? $0.authIndex, $0.authIndex) < ($1.id ?? $1.authIndex, $1.authIndex) }
-                let fileIndices = Dictionary(grouping: enabled, by: { $0.id ?? "" })
-                    .mapValues { Set($0.map(\.authIndex)) }
-                var seen = Set<String>()
-                var proxyRoutes: [AntigravityAccountRoute] = []
-                for file in enabled where seen.insert(file.authIndex).inserted {
-                    let hint = Self.safeAccountHint(file.email).map { " · " + $0 } ?? ""
-                    let sourceID: String
-                    if let id = file.id, !id.isEmpty, fileIndices[id]?.count == 1 {
-                        sourceID = "file|" + id
-                    } else {
-                        sourceID = "index|" + file.authIndex
-                    }
-                    proxyRoutes.append(AntigravityAccountRoute(
-                        source: prefix + AntigravityAccount.digest(sourceID),
-                        sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint,
-                        isPrimary: false,
-                        accessToken: nil,
-                        proxy: config,
-                        authFile: file,
-                        projectID: nil,
-                        planName: nil,
-                        failure: nil
-                    ))
-                }
-                // Bound each proxy route's identity probe independently so one
-                // slow proxy account never discards healthy sibling probes.
-                let probedProxy = await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
-                    for route in proxyRoutes {
-                        group.addTask {
-                            let outcome = await withDeadline(seconds: proxyBudget) {
-                                await Self.probeIdentity(route: route, bases: bases, batch: batch, now: now)
-                            }
-                            switch outcome {
-                            case .success(let probed): return probed
-                            case .failure(let reason):
-                                return AntigravityAccountRoute(
-                                    source: route.source,
-                                    sourceLabel: route.sourceLabel,
-                                    isPrimary: route.isPrimary,
-                                    accessToken: route.accessToken,
-                                    proxy: route.proxy,
-                                    authFile: route.authFile,
-                                    projectID: nil,
-                                    planName: nil,
-                                    failure: reason
-                                )
-                            }
-                        }
-                    }
-                    var probed: [AntigravityAccountRoute] = []
-                    for await route in group { probed.append(route) }
-                    return probed
-                }
-                return (probedProxy, [], false, nil)
-            }
-        }()
+        async let probedDirect = Self.probeDirectIdentity(
+            route: directRoute, bases: bases, batch: batch, now: now)
+        let proxyOutcome = await Self.discoverProxyRoutes(
+            config: config,
+            oldAccounts: oldAccounts,
+            oldBindings: oldBindings,
+            bases: bases,
+            batch: batch,
+            proxyBudget: proxyBudget,
+            now: now
+        )
 
         var discovered: [AntigravityAccountRoute] = []
         if let local = await probedDirect { discovered.append(local) }
@@ -408,6 +334,109 @@ actor AntigravityAccountDiscovery {
             }
         }
         return result
+    }
+
+    private struct ProxyDiscoveryOutcome: Sendable {
+        let routes: [AntigravityAccountRoute]
+        let unavailableBindings: [(AntigravityAccountBinding, UnavailableReason)]
+        let inventoryFailed: Bool
+        let inventoryFailure: UnavailableReason?
+    }
+
+    private static func probeDirectIdentity(
+        route: AntigravityAccountRoute?,
+        bases: [String],
+        batch: AntigravityRequestBatch,
+        now: Date
+    ) async -> AntigravityAccountRoute? {
+        guard let route else { return nil }
+        return await probeIdentity(route: route, bases: bases, batch: batch, now: now)
+    }
+
+    private static func discoverProxyRoutes(
+        config: CLIProxyConfig?,
+        oldAccounts: [AntigravityAccount],
+        oldBindings: [AntigravityAccountBinding],
+        bases: [String],
+        batch: AntigravityRequestBatch,
+        proxyBudget: TimeInterval,
+        now: Date
+    ) async -> ProxyDiscoveryOutcome {
+        guard let config else {
+            return ProxyDiscoveryOutcome(routes: [], unavailableBindings: [], inventoryFailed: false, inventoryFailure: nil)
+        }
+        let inventoryOutcome: DeadlineOutcome<[CLIProxyAuthFile]> = await withDeadline(seconds: proxyBudget) {
+            try await CLIProxyClient.fetchAuthFiles(config: config, now: now)
+        }
+        switch inventoryOutcome {
+        case .failure(let reason):
+            let activeIDs = Set(oldAccounts.map(\.id))
+            let unavailable = oldBindings.filter {
+                $0.source.hasPrefix(proxySourcePrefix(config)) && activeIDs.contains($0.accountID)
+            }.map { ($0, reason) }
+            return ProxyDiscoveryOutcome(routes: [], unavailableBindings: unavailable, inventoryFailed: true, inventoryFailure: reason)
+        case .success(let files):
+            let prefix = proxySourcePrefix(config)
+            let enabled = files.filter {
+                $0.provider.lowercased() == "antigravity"
+                    && $0.disabled != true
+                    && !$0.authIndex.isEmpty
+            }.sorted { ($0.id ?? $0.authIndex, $0.authIndex) < ($1.id ?? $1.authIndex, $1.authIndex) }
+            let fileIndices = Dictionary(grouping: enabled, by: { $0.id ?? "" })
+                .mapValues { Set($0.map(\.authIndex)) }
+            var seen = Set<String>()
+            var proxyRoutes: [AntigravityAccountRoute] = []
+            for file in enabled where seen.insert(file.authIndex).inserted {
+                let hint = safeAccountHint(file.email).map { " · " + $0 } ?? ""
+                let sourceID: String
+                if let id = file.id, !id.isEmpty, fileIndices[id]?.count == 1 {
+                    sourceID = "file|" + id
+                } else {
+                    sourceID = "index|" + file.authIndex
+                }
+                proxyRoutes.append(AntigravityAccountRoute(
+                    source: prefix + AntigravityAccount.digest(sourceID),
+                    sourceLabel: "CLI Proxy (\(config.url.host ?? "configured host"))" + hint,
+                    isPrimary: false,
+                    accessToken: nil,
+                    proxy: config,
+                    authFile: file,
+                    projectID: nil,
+                    planName: nil,
+                    failure: nil
+                ))
+            }
+            // Bound each proxy route's identity probe independently so one
+            // slow proxy account never discards healthy sibling probes.
+            let probedProxy = await withTaskGroup(of: AntigravityAccountRoute.self, returning: [AntigravityAccountRoute].self) { group in
+                for route in proxyRoutes {
+                    group.addTask {
+                        let outcome = await withDeadline(seconds: proxyBudget) {
+                            await probeIdentity(route: route, bases: bases, batch: batch, now: now)
+                        }
+                        switch outcome {
+                        case .success(let probed): return probed
+                        case .failure(let reason):
+                            return AntigravityAccountRoute(
+                                source: route.source,
+                                sourceLabel: route.sourceLabel,
+                                isPrimary: route.isPrimary,
+                                accessToken: route.accessToken,
+                                proxy: route.proxy,
+                                authFile: route.authFile,
+                                projectID: nil,
+                                planName: nil,
+                                failure: reason
+                            )
+                        }
+                    }
+                }
+                var probed: [AntigravityAccountRoute] = []
+                for await route in group { probed.append(route) }
+                return probed
+            }
+            return ProxyDiscoveryOutcome(routes: probedProxy, unavailableBindings: [], inventoryFailed: false, inventoryFailure: nil)
+        }
     }
 
     private static func probeIdentity(
