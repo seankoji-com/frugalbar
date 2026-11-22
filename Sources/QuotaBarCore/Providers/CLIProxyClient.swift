@@ -1020,6 +1020,67 @@ public enum CLIProxyClient {
         return Data(wrapper.body.utf8)
     }
 
+    /// Relays an Antigravity Cloud Code POST request (`loadCodeAssist` or
+    /// `retrieveUserQuotaSummary`) through CLIProxyAPI's `/v0/management/api-call`
+    /// for one selected auth file. The management key stays on the outer request;
+    /// the proxy substitutes its own account token in the upstream header and
+    /// forwards `data` as the JSON request body. Returns the unwrapped upstream
+    /// body and synthesized HTTP response so the caller's status mapping (including
+    /// Google 403 `VALIDATION_REQUIRED` / `TOS_VIOLATION` and two-host fallback)
+    /// applies identically to direct and relayed paths.
+    static func callAntigravity(
+        config: CLIProxyConfig,
+        account: CLIProxyAuthFile,
+        url: String,
+        body: Data,
+        now: Date = Date()
+    ) async throws -> (Data, HTTPURLResponse) {
+        let bodyString = String(decoding: body, as: UTF8.self)
+        let payload: [String: Any] = [
+            "auth_index": account.authIndex,
+            "method": "POST",
+            "url": url,
+            "header": [
+                "Authorization": "Bearer $TOKEN$",
+                "Content-Type": "application/json",
+                "User-Agent": GeminiQuotaProvider.quotaUserAgent
+            ],
+            "data": bodyString
+        ]
+        let requestBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, http) = try await QuotaHTTP.post(
+            url: managementURL(path: "api-call", base: config.url),
+            body: requestBody,
+            headers: ["Content-Type": "application/json"],
+            auth: .bearer(config.managementKey)
+        )
+        if let reason = QuotaHTTP.failureReason(
+            for: http.statusCode,
+            retryAfter: http.value(forHTTPHeaderField: "Retry-After"),
+            now: now
+        ) {
+            throw ProviderError(reason)
+        }
+        guard let wrapper = try? JSONDecoder().decode(APICallWrapper.self, from: data) else {
+            throw ProviderError.badResponse
+        }
+        let flattenedHeaders: [String: String]? = wrapper.header.map { headers in
+            Dictionary(uniqueKeysWithValues: headers.compactMap { key, value in
+                value.values.first.map { (key, $0) }
+            })
+        }
+        let targetURL = URL(string: url) ?? config.url
+        guard let innerHTTP = HTTPURLResponse(
+            url: targetURL,
+            statusCode: wrapper.statusCode,
+            httpVersion: nil,
+            headerFields: flattenedHeaders
+        ) else {
+            throw ProviderError.badResponse
+        }
+        return (Data(wrapper.body.utf8), innerHTTP)
+    }
+
     public static func fetchCodexUsage(
         config: CLIProxyConfig, now: Date = Date()
     ) async throws -> (OpenAIQuotaProvider.Response, CLIProxyAuthFile) {

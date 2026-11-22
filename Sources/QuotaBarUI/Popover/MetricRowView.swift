@@ -316,7 +316,13 @@ struct MetricRowView: View {
         }
         let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
         let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
-        let accountLabel = snapshot.claudeAccount.map { "Account \($0.badge). Claude Code. \(namedLabel)" } ?? namedLabel
+        let accountLabel: String = if let account = snapshot.claudeAccount {
+            "Account \(account.badge). Claude Code. \(namedLabel)"
+        } else if let account = snapshot.antigravityAccount {
+            "Account \(account.badge), \(account.name). \(namedLabel)"
+        } else {
+            namedLabel
+        }
         return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(accountLabel)" } ?? accountLabel
     }
 
@@ -417,8 +423,8 @@ struct MetricRowView: View {
             .anchorPreference(key: GroupAvatarAnchors.self, value: .bounds) { [snapshot.id: $0] }
             .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(avatar: $0) }
             .overlay(alignment: .bottomTrailing) {
-                if let account = snapshot.claudeAccount {
-                    Text(account.badge)
+                if let badge = snapshot.claudeAccount?.badge ?? snapshot.antigravityAccount?.badge {
+                    Text(badge)
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(Theme.onSurface)
                         .padding(.horizontal, 3)

@@ -124,7 +124,8 @@ extension QuotaHistoryStore {
                 let slots = Array(repeating: "?", count: instanceKeys.count).joined(separator: ",")
                 conditions.append("(instance_id IN (\(slots)) OR instance_id IS NULL)")
             }
-            if instanceID?.hasPrefix(ClaudeAccount.instancePrefix) == true {
+            if instanceID?.hasPrefix(ClaudeAccount.instancePrefix) == true
+                || instanceID?.hasPrefix(AntigravityAccount.instancePrefix) == true {
                 // Old unbound account observations cannot be attributed to a
                 // newly named subscription. Status and community events are
                 // vendor-wide and still belong in every account's timeline.

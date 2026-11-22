@@ -22,6 +22,10 @@ struct PopoverRowGrouping {
             if snapshot.vendorId == .claude, snapshot.claudeAccount != nil {
                 return PopoverRowGrouping.claudeAccountSubtitle(for: snapshot)
             }
+            if header == "Antigravity", snapshot.antigravityAccount != nil,
+               PopoverRowGrouping.hasMultipleAntigravityAccounts(in: snapshots) {
+                return PopoverRowGrouping.antigravityAccountSubtitle(for: snapshot)
+            }
             let plan = snapshot.shortPlanName.trimmingCharacters(in: .whitespacesAndNewlines)
             if snapshot.vendorId == .gemini {
                 if plan == header { return "" }
@@ -110,7 +114,8 @@ struct PopoverRowGrouping {
                 // Named accounts carry their own plan, even when both happen
                 // to publish the same tier. The heading names only the service.
                 let hasClaudeAccounts = run.contains { $0.claudeAccount != nil }
-                let headerPlan = sharedPlan && !hasClaudeAccounts ? plan : nil
+                let hasMultipleAGY = service == "Antigravity" && Self.hasMultipleAntigravityAccounts(in: run)
+                let headerPlan = sharedPlan && !hasClaudeAccounts && !hasMultipleAGY ? plan : nil
                 groups.append(Group(id: run[0].id, header: service, suppressPlan: headerPlan != nil,
                                     snapshots: run, headerPlan: headerPlan))
             } else if grouped {
@@ -158,5 +163,19 @@ struct PopoverRowGrouping {
     private static func claudeAccountSubtitle(for snapshot: QuotaSnapshot) -> String {
         let plan = snapshot.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
         return plan.flatMap { $0.isEmpty ? nil : "Claude Code · \($0)" } ?? "Claude Code"
+    }
+
+    static func hasMultipleAntigravityAccounts(in snapshots: [QuotaSnapshot]) -> Bool {
+        Set(snapshots.compactMap { $0.antigravityAccount?.id }).count > 1
+    }
+
+    static func antigravityAccountSubtitle(for snapshot: QuotaSnapshot) -> String {
+        guard let account = snapshot.antigravityAccount else { return "" }
+        let rawPlan = snapshot.shortPlanName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let plan = rawPlan.hasPrefix("Google AI ") ? String(rawPlan.dropFirst("Google ".count)) : rawPlan
+        if !plan.isEmpty, plan != "Antigravity" {
+            return "\(account.name) · \(plan)"
+        }
+        return account.name
     }
 }

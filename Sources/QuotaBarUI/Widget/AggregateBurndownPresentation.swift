@@ -383,13 +383,18 @@ public enum AggregateBurndownPresentation {
         now: Date,
         instanceName: (String) -> String? = {
             ClaudeAccountStore.displayName(forInstanceKey: $0)
+                ?? AntigravityAccountStore.displayName(forInstanceKey: $0)
                 ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: $0)
         },
         instancePosition: (String) -> Int? = {
             ClaudeAccountStore.position(ofInstanceKey: $0)
+                ?? AntigravityAccountStore.position(ofInstanceKey: $0)
                 ?? OpenCodeGoWorkspaceStore.position(ofInstanceKey: $0)
         },
-        canonicalInstanceKey: (String) -> String = ClaudeAccountStore.canonicalInstanceKey
+        canonicalInstanceKey: (String) -> String = {
+            let claude = ClaudeAccountStore.canonicalInstanceKey($0)
+            return claude == $0 ? AntigravityAccountStore.canonicalInstanceKey($0) : claude
+        }
     ) -> [VendorSeries] {
         let start = filters.range.startDate(from: now)
         let resolved = readings.map { $0.namingInstance(canonicalInstanceKey($0.vendor)) }

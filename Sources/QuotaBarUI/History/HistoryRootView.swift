@@ -440,6 +440,7 @@ public struct HistoryRootView: View {
             HStack {
                 let name = selectedSubject?.name
                     ?? ClaudeAccountStore.displayName(forInstanceKey: pace.vendor)
+                    ?? AntigravityAccountStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.vendor(forInstanceKey: pace.vendor)?.displayName
                     ?? pace.vendor

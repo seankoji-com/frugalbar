@@ -94,7 +94,11 @@ public actor QuotaHistoryStore {
     public init(
         databaseURL: URL? = nil,
         retentionInterval: TimeInterval = defaultRetentionInterval,
-        instanceKeys: @escaping @Sendable (String) -> [String] = { ClaudeAccountStore.historyKeys(forInstanceKey: $0) }
+        instanceKeys: @escaping @Sendable (String) -> [String] = {
+            $0.hasPrefix(AntigravityAccount.instancePrefix)
+                ? AntigravityAccountStore.historyKeys(forInstanceKey: $0)
+                : ClaudeAccountStore.historyKeys(forInstanceKey: $0)
+        }
     ) {
         let url = databaseURL ?? Self.databaseURL(isTestHost: TestHost.isActive)
         self.databaseURL = url
@@ -107,7 +111,11 @@ public actor QuotaHistoryStore {
         databaseURL: URL? = nil,
         retentionInterval: TimeInterval = defaultRetentionInterval,
         isTestHost: Bool,
-        instanceKeys: @escaping @Sendable (String) -> [String] = { ClaudeAccountStore.historyKeys(forInstanceKey: $0) }
+        instanceKeys: @escaping @Sendable (String) -> [String] = {
+            $0.hasPrefix(AntigravityAccount.instancePrefix)
+                ? AntigravityAccountStore.historyKeys(forInstanceKey: $0)
+                : ClaudeAccountStore.historyKeys(forInstanceKey: $0)
+        }
     ) {
         let url = databaseURL ?? Self.databaseURL(isTestHost: isTestHost)
         self.databaseURL = url
@@ -330,19 +338,22 @@ public actor QuotaHistoryStore {
     /// current workspace list — and a removed workspace's history is still
     /// found rather than silently orphaned.
     static func vendorClause(for vendor: VendorIdentifier) -> (sql: String, values: [String]) {
-        let prefix: String
         switch vendor {
-        case .opencode: prefix = OpenCodeGoWorkspaceStore.instancePrefix
-        case .claude: prefix = ClaudeAccount.instancePrefix
-        case .opendesign: prefix = OpenDesignQuotaProvider.instancePrefix
-        default: return ("vendor = ?", [vendor.rawValue])
+        case .opencode:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, OpenCodeGoWorkspaceStore.instancePrefix + "%"])
+        case .claude:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, ClaudeAccount.instancePrefix + "%"])
+        case .opendesign:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, OpenDesignQuotaProvider.instancePrefix + "%"])
+        case .gemini:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, AntigravityAccount.instancePrefix + "%:gemini"])
+        case .antigravityClaude:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, AntigravityAccount.instancePrefix + "%:claude"])
+        case .antigravityArgon:
+            return ("(vendor = ? OR vendor LIKE ?)", [vendor.rawValue, AntigravityAccount.instancePrefix + "%:argon"])
+        default:
+            return ("vendor = ?", [vendor.rawValue])
         }
-        // The instance prefix (`opencode-go:`) carries no `%` or `_`, so a bare
-        // LIKE cannot mis-match; a future prefix containing one needs ESCAPE.
-        return (
-            "(vendor = ? OR vendor LIKE ?)",
-            [vendor.rawValue, prefix + "%"]
-        )
     }
 
     static func instanceClause(keys: [String]) -> (sql: String, values: [String]) {

@@ -51,12 +51,25 @@ public enum HistoryOverviewPresentation {
         order: [VendorIdentifier],
         hidden: Set<VendorIdentifier>,
         workspaces: [OpenCodeGoWorkspace],
-        claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all()
+        claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all(),
+        antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all()
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
                 return claudeAccounts.map { Subject(id: $0.id, vendor: .claude, name: $0.name, keys: $0.historyKeys) }
                     + [Subject(id: vendor.rawValue, vendor: .claude, name: "Claude (unattributed)")]
+            }
+            if let allowance = AntigravityAccount.allowance(for: vendor), !antigravityAccounts.isEmpty {
+                return antigravityAccounts.map { account in
+                    Subject(
+                        id: account.poolInstanceID(for: allowance),
+                        vendor: vendor,
+                        name: antigravityAccounts.count > 1
+                            ? "\(vendor.displayName) · \(account.name)"
+                            : vendor.displayName,
+                        keys: account.poolHistoryKeys(for: allowance)
+                    )
+                }
             }
             if vendor == .opendesign {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName,

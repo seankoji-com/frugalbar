@@ -85,6 +85,9 @@ public enum OpenCodeGoWorkspaceStore {
     /// workspaces apart.
     public static func vendor(forInstanceKey key: String) -> VendorIdentifier? {
         if key.hasPrefix(ClaudeAccount.instancePrefix) { return .claude }
+        if key.hasPrefix(AntigravityAccount.instancePrefix) {
+            return AntigravityAccount.vendor(forInstanceKey: key)
+        }
         if key.hasPrefix(OpenDesignQuotaProvider.instancePrefix) { return .opendesign }
         return key.hasPrefix(instancePrefix) ? .opencode : VendorIdentifier(rawValue: key)
     }
