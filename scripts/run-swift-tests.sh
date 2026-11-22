@@ -52,16 +52,12 @@ swift test "${args[@]}" --filter "$isolated" 2>&1 | tee "$logs/isolated.log" \
 echo "==> parallel: --skip $isolated"
 if ! swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log"; then
   fail "parallel invocation failed"
-  echo "=== DIAG CORE (parallel) ==="
-  if ! swift test "${args[@]}" --parallel --filter QuotaBarCoreTests --skip "$isolated" 2>&1 | tail -n 20; then
-    echo "=== DIAG CORE (serial) ==="
-    swift test "${args[@]}" --no-parallel --filter QuotaBarCoreTests --skip "$isolated" 2>&1 | tail -n 30 || echo "CORE SERIAL FAILED: $?"
-  fi
-  echo "=== DIAG UI (parallel) ==="
-  if ! swift test "${args[@]}" --parallel --filter QuotaBarUITests 2>&1 | tail -n 20; then
-    echo "=== DIAG UI (serial) ==="
-    swift test "${args[@]}" --no-parallel --filter QuotaBarUITests 2>&1 | tail -n 30 || echo "UI SERIAL FAILED: $?"
-  fi
+  echo "=== DIAG SYNC (with coverage) ==="
+  swift test "${args[@]}" --filter SyncSignInTests 2>&1 || echo "SYNC COV FAILED: $?"
+  echo "=== DIAG SYNC (no coverage) ==="
+  swift test -c debug --filter SyncSignInTests 2>&1 || echo "SYNC NOCOV FAILED: $?"
+  echo "=== DIAG REST (skip SyncSignInTests) ==="
+  swift test "${args[@]}" --parallel --skip "$isolated|SyncSignInTests" 2>&1 | tail -n 15 || echo "REST FAILED: $?"
 fi
 
 # Listing builds the test executable when needed. Keep any coverage output out
