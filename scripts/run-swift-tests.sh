@@ -50,20 +50,8 @@ swift test "${args[@]}" --filter "$isolated" 2>&1 | tee "$logs/isolated.log" \
   || fail "isolated invocation failed"
 
 echo "==> parallel: --skip $isolated"
-if ! swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log"; then
-  fail "parallel invocation failed"
-  echo "=== DIAG BACKTRACE loopbackListenerBindsLoopbackOnly ==="
-  SWIFT_BACKTRACE=enable=yes,interactive=no,output-to=stderr swift test "${args[@]}" --skip-build --filter loopbackListenerBindsLoopbackOnly 2>&1 || echo "LOOPBACK1 FAILED: $?"
-  echo "=== DIAG BACKTRACE loopbackListenerIgnoresOtherPathsAndCloses ==="
-  SWIFT_BACKTRACE=enable=yes,interactive=no,output-to=stderr swift test "${args[@]}" --skip-build --filter loopbackListenerIgnoresOtherPathsAndCloses 2>&1 || echo "LOOPBACK2 FAILED: $?"
-  echo "=== DIAG BACKTRACE SyncSignInTests (lldb) ==="
-  HELPER=$(find "$(xcode-select -p)" -name swiftpm-testing-helper -type f 2>/dev/null | head -n 1)
-  BUNDLE=$(find .build -name QuotaBarPackageTests -type f -path '*.xctest/Contents/MacOS/*' 2>/dev/null | head -n 1)
-  echo "HELPER=$HELPER BUNDLE=$BUNDLE"
-  if [ -n "$HELPER" ] && [ -n "$BUNDLE" ]; then
-    lldb --batch -o "run --test-bundle-path $BUNDLE --testing-library swift-testing --filter loopbackListenerBindsLoopbackOnly" -o "bt" -o "quit" -- "$HELPER" 2>&1 || true
-  fi
-fi
+swift test "${args[@]}" --parallel --skip "$isolated" 2>&1 | tee "$logs/parallel.log" \
+  || fail "parallel invocation failed"
 
 # Listing builds the test executable when needed. Keep any coverage output out
 # of the checkout, including when this is the first command after a clean build.

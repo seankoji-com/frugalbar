@@ -85,15 +85,22 @@ public final class SyncLoopbackListener: SyncCallbackListener {
     public func awaitCallback() async throws -> [String: String] {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: String], Error>) in
-                let thread = Thread { [self] in
-                    continuation.resume(with: Result { try self.acceptLoop() })
-                }
-                thread.name = "frugalbar.sync.loopback"
-                thread.start()
+                Self.startAcceptThread(listener: self, continuation: continuation)
             }
         } onCancel: {
             socket.withLock { $0.cancelled = true }
         }
+    }
+
+    private static func startAcceptThread(
+        listener: SyncLoopbackListener,
+        continuation: CheckedContinuation<[String: String], Error>
+    ) {
+        let thread = Thread {
+            continuation.resume(with: Result { try listener.acceptLoop() })
+        }
+        thread.name = "frugalbar.sync.loopback"
+        thread.start()
     }
 
     private func acceptLoop() throws -> [String: String] {
