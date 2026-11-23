@@ -15,12 +15,19 @@ public protocol SyncSecretStore: Sendable {
     func read(_ account: String) throws -> String?
     func write(_ value: String, account: String) throws
     func delete(_ account: String) throws
+    /// Non-interactive delete for background cleanup and token revocation so
+    /// unattended Sync work never presents a macOS Keychain prompt.
+    func deleteNonInteractively(_ account: String) throws
     /// Optional non-interactive refresh before retrying after a recoverable
     /// secret-store failure so Sync recovers once the login Keychain unlocks.
     func refreshNonInteractively() async
 }
 
 public extension SyncSecretStore {
+    func deleteNonInteractively(_ account: String) throws {
+        try delete(account)
+    }
+
     func refreshNonInteractively() async {}
 }
 
@@ -80,6 +87,10 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
 
     public func delete(_ account: String) throws {
         try vault.delete(namespace: .sync, account: account, allowsPrompt: true)
+    }
+
+    public func deleteNonInteractively(_ account: String) throws {
+        try vault.delete(namespace: .sync, account: account, allowsPrompt: false)
     }
 
     public func refreshNonInteractively() async {

@@ -279,7 +279,7 @@ actor SyncAccessTokens {
             // outside the state file, so a relaunch after a lost state write
             // cannot send it again; only a new sign-in stores another.
             if failure.isTerminal, (try? secrets.read(SyncSecretAccount.refreshToken)) == refreshToken {
-                try? secrets.delete(SyncSecretAccount.refreshToken)
+                try? secrets.deleteNonInteractively(SyncSecretAccount.refreshToken)
             }
             throw SyncAuthError.refresh(failure)
         }

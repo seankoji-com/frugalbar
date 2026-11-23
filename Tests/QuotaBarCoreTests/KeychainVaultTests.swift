@@ -805,6 +805,175 @@ struct KeychainVaultTests {
         #expect(fetchCount.current == 3)
         #expect(interactiveResult[VendorIdentifier.muse.rawValue]?.staleReading == nil)
     }
+
+    @Test("R3-03 overlapping flush: v3 queued while v2 is committing advances its baseline and persists")
+    func overlappingFlushAdvancesChainedBaseline() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        let injected = LockedFlag()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !injected.value else { return }
+            injected.set()
+            // While flush 1 holds flock and is committing v2, renewal 2 queues v3.
+            // Its own non-blocking flush hits flock contention and stays queued.
+            let v3Outcome = vault.writeDeferred(
+                "session-v3",
+                namespace: .keys,
+                account: "gemini-oauth",
+                expectedPreviousValue: "session-v2"
+            )
+            #expect(v3Outcome == .deferred)
+        }
+
+        let v2Outcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(v2Outcome == .persisted)
+        #expect(injected.value)
+        // v3 must still be queued in memory with its baseline advanced to v2.
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+
+        hooked.onBeforeWrite = nil
+        #expect(vault.flushDeferredNonBlocking())
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: baseBackend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v3")
+    }
+
+    @Test("R4-01: failed explicit write or delete preserves pending deferred renewal")
+    func failedExplicitMutationPreservesPendingRenewal() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        // Fail non-interactive writes so deferred renewal stays in memory.
+        backend.setFailNonInteractiveWrites(true)
+        let outcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(outcome == .deferred)
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+
+        // Explicit write and delete both fail while Keychain denies vault writes.
+        backend.setFailNonInteractiveWrites(false)
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+        #expect(throws: KeychainError.self) {
+            try vault.write("session-explicit", namespace: .keys, account: "gemini-oauth")
+        }
+        #expect(throws: KeychainError.self) {
+            try vault.delete(namespace: .keys, account: "gemini-oauth")
+        }
+        // Pending renewal must still be intact!
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // Once writes succeed again, Unlock flushes the preserved renewal.
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: nil)
+        _ = vault.warmUpSync(interactive: true)
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+    }
+
+    @Test("R4-02: passive warm-up refreshes cross-process credential deletion")
+    func passiveWarmUpObservesCrossProcessDeletion() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("secret-key", namespace: .keys, account: "openrouter")
+        _ = await vaultB.warmUp(interactive: false)
+        #expect(try vaultB.read(namespace: .keys, account: "openrouter") == "secret-key")
+
+        // Instance A deletes the key.
+        try vaultA.delete(namespace: .keys, account: "openrouter")
+
+        // Instance B's next passive warm-up must observe the deletion without prompting.
+        backend.resetCalls()
+        _ = await vaultB.warmUp(interactive: false)
+        #expect(backend.promptCallCount() == 0)
+        #expect(try vaultB.read(namespace: .keys, account: "openrouter") == nil)
+    }
+
+    @Test("R4-03: background sync delete uses non-interactive vault access and never prompts")
+    func syncDeleteNonInteractivelyNeverPrompts() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let store = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+        try store.write("refresh-tok", account: SyncSecretAccount.refreshToken)
+
+        // When non-interactive writes are blocked, deleteNonInteractively must fail
+        // without prompting.
+        backend.resetCalls()
+        backend.setFailNonInteractiveWrites(true)
+        #expect(throws: KeychainError.self) {
+            try store.deleteNonInteractively(SyncSecretAccount.refreshToken)
+        }
+        #expect(backend.promptCallCount() == 0)
+
+        // When unlocked, deleteNonInteractively removes the token with zero prompts.
+        backend.setFailNonInteractiveWrites(false)
+        try store.deleteNonInteractively(SyncSecretAccount.refreshToken)
+        #expect(backend.promptCallCount() == 0)
+        #expect(try store.read(SyncSecretAccount.refreshToken) == nil)
+    }
+}
+
+private final class HookedKeychainBackend: KeychainBackend, @unchecked Sendable {
+    private let wrapped: InMemoryKeychainBackend
+    private let lock = NSLock()
+    private var _onBeforeWrite: (@Sendable (String) -> Void)?
+
+    var onBeforeWrite: (@Sendable (String) -> Void)? {
+        get { lock.withLock { _onBeforeWrite } }
+        set { lock.withLock { _onBeforeWrite = newValue } }
+    }
+
+    init(wrapping wrapped: InMemoryKeychainBackend) {
+        self.wrapped = wrapped
+    }
+
+    func read(service: String, account: String, allowsPrompt: Bool) throws -> Data? {
+        try wrapped.read(service: service, account: account, allowsPrompt: allowsPrompt)
+    }
+
+    func write(_ data: Data, service: String, account: String, label: String?, allowsPrompt: Bool) throws {
+        onBeforeWrite?(account)
+        try wrapped.write(data, service: service, account: account, label: label, allowsPrompt: allowsPrompt)
+    }
+
+    func delete(service: String, account: String, allowsPrompt: Bool) throws {
+        try wrapped.delete(service: service, account: account, allowsPrompt: allowsPrompt)
+    }
+
+    func listAccounts(service: String) throws -> [String] {
+        try wrapped.listAccounts(service: service)
+    }
 }
 
 private struct InteractiveCredentialProvider: QuotaProvider {

@@ -540,7 +540,9 @@ public actor SyncPublisher {
         do {
             try save(checkpoint)
         } catch {
-            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+            if error is KeychainError {
+                needsSecretRefresh = true
+            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
             }
             failures += 1
@@ -946,8 +948,8 @@ public actor SyncPublisher {
             }
             guard let record = state.cleanup else { return }
             if !record.isDone(.deleteToken) {
-                try secrets.delete(record.refreshTokenAccount)
-                try secrets.delete(SyncSecretAccount.publisherId)
+                try secrets.deleteNonInteractively(record.refreshTokenAccount)
+                try secrets.deleteNonInteractively(SyncSecretAccount.publisherId)
                 try complete(.deleteToken, gap: .afterTokenDelete)
             }
             var next = state
@@ -978,7 +980,9 @@ public actor SyncPublisher {
             retryAt = nil
             persist()
         } catch {
-            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+            if error is KeychainError {
+                needsSecretRefresh = true
+            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
             }
             failures += 1
