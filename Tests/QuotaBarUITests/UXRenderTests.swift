@@ -505,12 +505,13 @@ struct UXRenderTests {
             snapshots: GlanceFixtures.batchWithWallet, serviceOrder: ProviderDisplayPreferences.defaultOrder,
             now: GlanceFixtures.now
         )
-        for vendor in [nil, .deepseek] as [VendorIdentifier?] {
+        for vendor in [nil, .deepseek, .claude] as [VendorIdentifier?] {
             try await save(ProviderGridView(presentation: presentation, expanded: vendor)
                 .padding(Theme.edgeMargin)
                 .frame(width: PopoverRootView.popoverWidth)
                 .background(Theme.surface),
-                name: vendor == nil ? "provider-grid-collapsed" : "provider-grid-expanded", directory: directory)
+                name: vendor == .claude ? "provider-grid-claude" :
+                    vendor == nil ? "provider-grid-collapsed" : "provider-grid-expanded", directory: directory)
         }
     }
 

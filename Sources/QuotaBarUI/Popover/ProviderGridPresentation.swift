@@ -21,6 +21,14 @@ struct ProviderGridPresentation {
         var isUsable: Bool { !isStale && (state == .usable || state == .onBonus) }
         var isSpent: Bool { !isStale && state == .spent }
 
+        var nonstandardPlanBar: DualBarMetrics? {
+            extraBars.first {
+                $0.allowanceRole == .plan && !$0.measuresElapsedTimeOnly
+                    && ($0.primaryFraction != nil || $0.isBlocked)
+                    && WindowColumn.column(forLabel: $0.label) == nil
+            }
+        }
+
         /// A measured exhausted month takes the lane. An exhausted week can
         /// take it if the short window isn't also exhausted and there is no
         /// monthly reading to show.
@@ -55,6 +63,9 @@ struct ProviderGridPresentation {
             } else if snapshot.vendorId == .gemini || snapshot.vendorId == .antigravityArgon {
                 name = snapshot.antigravityAccount?.name ?? snapshot.rowTitle
                 source = "Antigravity"
+            } else if snapshot.vendorId == .opencode {
+                name = snapshot.rowTitle
+                source = snapshot.planName ?? "OpenCode Go"
             } else {
                 name = snapshot.rowTitle
                 source = group == snapshot.vendorId || snapshot.rowTitle == snapshot.vendorId.displayName
@@ -80,7 +91,7 @@ struct ProviderGridPresentation {
     enum Summary: Equatable {
         case window(Window)
         case average(remaining: Double, reported: Int, count: Int)
-        case spent(reset: Date?, allMeasuredExhausted: Bool)
+        case spent(reset: Date?, allMeasuredExhausted: Bool, includesBlocked: Bool)
     }
 
     struct Group: Identifiable {
@@ -109,8 +120,10 @@ struct ProviderGridPresentation {
             if allSpent { return pools.count == 1 ? "1 spent" : "All \(pools.count) spent" }
             let usable = pools.filter(\.isUsable).count
             let spent = pools.filter(\.isSpent).count
-            let unreadable = pools.count - usable - spent
+            let stale = pools.filter(\.isStale).count
+            let unreadable = pools.count - usable - spent - stale
             return ["\(usable) usable", spent > 0 ? "\(spent) spent" : nil,
+                    stale > 0 ? "\(stale) stale" : nil,
                     unreadable > 0 ? "\(unreadable) unreadable" : nil]
                 .compactMap { $0 }.joined(separator: " · ")
         }
@@ -122,7 +135,8 @@ struct ProviderGridPresentation {
             if published.count == pools.count, published.allSatisfy(\.isSpent) {
                 return .spent(
                     reset: published.compactMap(\.bar.resetsAt).min(),
-                    allMeasuredExhausted: published.allSatisfy { WindowGridPresentation.isExhausted($0.bar) }
+                    allMeasuredExhausted: published.allSatisfy { WindowGridPresentation.isExhausted($0.bar) },
+                    includesBlocked: published.contains { $0.bar.isBlocked }
                 )
             }
             let remaining = published.compactMap(\.remaining)

@@ -920,7 +920,7 @@ public struct HistoryRootView: View {
         let card = overviewCards.first { $0.subject.id == subject.id }
         let unread = overviewUnread.first { $0.subject.id == subject.id }
         let isSelected = subject.id == selectedSubject?.id
-        let latest = card?.latest
+        let latest = card?.latestIsCurrent == true ? card?.latest : nil
         let spent = latest.map { $0.isBlocked || ($0.fraction ?? 0) >= QuotaSnapshot.exhaustionThreshold } ?? false
         let figure: String? = latest?.fraction.map { "\(GlancePresentation.percent(1 - $0))%" }
         return Button { select(subject.id) } label: {
@@ -940,6 +940,11 @@ public struct HistoryRootView: View {
                     Text("\(figure) \(label)")
                         .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Theme.onSurfaceVariant)
+                } else if let detail = card?.noFigureText {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 10)).foregroundStyle(Theme.outline)
+                        .help(detail)
+                        .accessibilityLabel(detail)
                 } else if unread != nil {
                     Image(systemName: unread!.symbol).font(.system(size: 10)).foregroundStyle(Theme.outline)
                         .help(unread!.explanation)

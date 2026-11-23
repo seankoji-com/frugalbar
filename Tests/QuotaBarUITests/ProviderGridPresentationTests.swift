@@ -42,7 +42,9 @@ struct ProviderGridPresentationTests {
         let full = try #require(presentation(snapshots).groups.first)
         #expect(full.allSpent)
         #expect(full.nextReturn == now.addingTimeInterval(3600))
-        #expect(full.summary(for: .fiveHour) == .spent(reset: now.addingTimeInterval(3600), allMeasuredExhausted: true))
+        #expect(full.summary(for: .fiveHour) == .spent(
+            reset: now.addingTimeInterval(3600), allMeasuredExhausted: true, includesBlocked: false
+        ))
 
         var partial = snapshots
         partial[0].staleReading = .init(reason: .offline, at: now)
@@ -51,6 +53,7 @@ struct ProviderGridPresentationTests {
         let mixed = try #require(presentation(partial + [missing]).groups.first)
         #expect(!mixed.allSpent)
         #expect(mixed.pools.last?.state == .unreadable)
+        #expect(mixed.subtitle?.contains("1 stale") == true)
         #expect(mixed.summary(for: .fiveHour) == .average(remaining: 0, reported: 3, count: 5))
     }
 
@@ -77,6 +80,29 @@ struct ProviderGridPresentationTests {
         #expect(unreadable.spanningColumn == nil)
         #expect(unreadable.windows[.monthly]?.remaining == nil)
         #expect(unreadable.windows[.monthly]?.isSpent == true)
+    }
+
+    @Test("nonstandard exhausted plans keep their measurement, and blocked rollups retain their status")
+    func exceptionalWindows() throws {
+        let daily = Fixtures.snapshot("grok", .grok, "Grok", [
+            Fixtures.bar("1D", 1, resetsInHours: 2, windowHours: 24)
+        ])
+        let pool = try #require(presentation([daily]).groups.first?.pools.first)
+        #expect(pool.state == .spent)
+        #expect(pool.windows.isEmpty)
+        #expect(pool.nonstandardPlanBar?.label == "1D")
+        #expect(pool.nonstandardPlanBar?.isBlocked == false)
+
+        let blocked = Fixtures.snapshot("opencode-go:a", .opencode, "Blocked", [
+            Fixtures.bar("WK", 1, resetsInHours: 12, windowHours: 168, blocked: true)
+        ])
+        let exhausted = Fixtures.snapshot("opencode-go:b", .opencode, "Spent", [
+            Fixtures.bar("WK", 1, resetsInHours: 18, windowHours: 168)
+        ])
+        let group = try #require(presentation([blocked, exhausted]).groups.first)
+        #expect(group.summary(for: .weekly) == .spent(
+            reset: now.addingTimeInterval(12 * 3600), allMeasuredExhausted: true, includesBlocked: true
+        ))
     }
 
     private func presentation(_ snapshots: [QuotaSnapshot]) -> ProviderGridPresentation {

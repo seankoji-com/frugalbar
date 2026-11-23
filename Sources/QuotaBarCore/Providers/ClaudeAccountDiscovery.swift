@@ -59,6 +59,7 @@ struct ClaudeAccountRoute: Sendable {
 
 actor ClaudeAccountDiscovery {
     static let shared = ClaudeAccountDiscovery()
+    static let lockedVaultReason = UnavailableReason.unsupported("Unlock Keychain in Settings to read Claude.")
     private static let bindingsKey = "QuotaBarClaudeAccountBindings"
     private let defaults: UserDefaults
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
@@ -115,7 +116,7 @@ actor ClaudeAccountDiscovery {
         let config = proxyConfig()
         let directToken = await directCredential().flatMap { $0.isEmpty ? nil : $0 }
         if config == nil, directToken == nil, isVaultLocked() {
-            let reason = UnavailableReason.unsupported("Unlock Keychain in Settings to read Claude.")
+            let reason = Self.lockedVaultReason
             if oldAccounts.isEmpty { return [ClaudeDiscoveryFailureProvider(reason: reason)] }
             return oldAccounts.map { ClaudeDiscoveryFailureProvider(reason: reason, account: $0) }
         }

@@ -14,6 +14,11 @@ struct ProviderStoryView: View {
     @State private var events: [AIEvent] = []
     @State private var loadedAt = Date()
 
+    private struct LoadKey: Equatable {
+        let poolID: String?
+        let lastAttempt: Date?
+    }
+
     private var instant: Date { now ?? loadedAt }
     private var glance: GlancePresentation { GlancePresentation(snapshots: store.snapshots, now: instant) }
 
@@ -44,7 +49,7 @@ struct ProviderStoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: pool?.id) { await load() }
+        .task(id: LoadKey(poolID: pool?.id, lastAttempt: store.summary.lastAttemptAt)) { await load() }
     }
 
     // MARK: Pieces
@@ -158,9 +163,11 @@ struct ProviderStoryView: View {
             + (snapshot.antigravityAccount.flatMap { account in
                 AntigravityAccount.allowance(for: snapshot.vendorId).map { account.poolHistoryAliases(for: $0) }
             } ?? [])
+        let recent = await store.events(for: snapshot.vendorId, instanceId: snapshot.id,
+                                        kinds: QuotaStore.recentEventKinds, since: nil, limit: 3) ?? []
+        guard !Task.isCancelled else { return }
         readings = raw.map { $0.map { aliases.contains($0.vendor) ? $0.namingInstance(snapshot.id) : $0 } }
-        events = await store.events(for: snapshot.vendorId, instanceId: snapshot.id,
-                                    kinds: QuotaStore.recentEventKinds, since: nil, limit: 3) ?? []
+        events = recent
     }
 }
 

@@ -221,6 +221,21 @@ struct GlancePresentationTests {
         #expect(glance.menuTitle.tone == .unknown)
     }
 
+    @Test("unreadable quota pools without bars prevent the all-spent claim")
+    func unreadablePoolDoesNotDisappear() {
+        let exhausted = F.snapshot("codex", .openai, "Codex", [
+            F.bar("WK", 1, resetsInHours: 12, windowHours: 168)
+        ])
+        let offline = F.snapshot("gemini", .gemini, "Gemini", [], status: .unavailable(.offline))
+        let debt = F.balance("deepseek", .deepseek, "DeepSeek", 0)
+        let glance = GlancePresentation(snapshots: [exhausted, offline, debt], now: now)
+        #expect(glance.pools.map(\.snapshot.vendorId) == [.openai, .gemini])
+        #expect(glance.menuTitle.text.hasPrefix("None confirmed usable"))
+
+        let blocked = F.snapshot("commandcode", .commandcode, "Command Code", [], badge: "Blocked")
+        #expect(GlancePresentation(snapshots: [blocked], now: now).backSoon.first?.isBlocked == true)
+    }
+
     @Test("a model-scoped window never ranks or gates a pool")
     func scopedWindowIgnored() {
         var claude = F.snapshot("c", .claude, "Claude", [F.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])

@@ -196,13 +196,13 @@ public struct GlancePresentation: Equatable, Sendable {
         let supplementary = snapshot.quotaBars.filter { $0.allowanceRole != .plan }
         // A failed poll can return a known Claude account without any bars.
         // Keep its row so the user can see why no quota is available.
-        let claudeReadFailed = snapshot.vendorId == .claude
+        let readFailed = snapshot.category == .aiSubscriptions
             && snapshot.status.unavailableReason.map { $0 != .notConfigured } == true
-        guard !plan.isEmpty || isNamedClaudeAccount(snapshot) || claudeReadFailed else { return nil }
+        let accountBlocked = snapshot.badgeText == "Blocked"
+        guard !plan.isEmpty || isNamedClaudeAccount(snapshot) || readFailed || accountBlocked else { return nil }
         let windows = plan.map { window(for: $0, now: now) }
         // The vendor's account-level block (Command Code's `limited`) is
         // carried on the badge, not on a bar; it stops the pool all the same.
-        let accountBlocked = snapshot.badgeText == "Blocked"
         let anySpent = accountBlocked || windows.contains(where: \.isSpent)
         let measured = windows.contains { $0.remaining != nil || $0.bar.isBlocked }
 
@@ -464,7 +464,7 @@ public struct GlancePresentation: Equatable, Sendable {
             return MenuTitle(vendor: nil, text: "No readings", tone: .unknown,
                              spoken: "No provider could be read")
         }
-        let uncertain = pools.contains { $0.state == .unreadable || ($0.isStale && $0.state != .spent) }
+        let uncertain = pools.contains { $0.state == .unreadable || $0.isStale }
         if uncertain {
             let tail = next.map { "next \($0)" } ?? "returns unknown"
             return MenuTitle(vendor: nil, text: "None confirmed usable · \(tail)", tone: .unknown,

@@ -723,6 +723,8 @@ public actor QuotaManager {
                 let withinVendorBackoff = !force
                     && (entry.vendorRetryAfter.map { startNow < $0 } ?? false)
                 switch entry.snapshot.status {
+                case .unavailable(let reason) where force && reason == ClaudeAccountDiscovery.lockedVaultReason:
+                    shouldThrottle = false
                 case .unavailable(.notConfigured), .unavailable(.credentialRejected):
                     // These two are the only reasons a Settings change can
                     // fix instantly — a just-saved or just-corrected API key
@@ -734,7 +736,9 @@ public actor QuotaManager {
                     // with a stale credential failure (e.g. suppressed CLI read
                     // or locked vault), an explicit interactive click must not
                     // be throttled behind that passive miss.
-                    if allowInteractiveUnlock,
+                    if force && entry.snapshot.staleReading?.reason == ClaudeAccountDiscovery.lockedVaultReason {
+                        shouldThrottle = false
+                    } else if allowInteractiveUnlock,
                        let staleReason = entry.snapshot.staleReading?.reason,
                        (staleReason == .notConfigured || staleReason == .credentialRejected) {
                         shouldThrottle = false

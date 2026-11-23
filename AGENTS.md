@@ -466,10 +466,9 @@ pool keeps its service identity and opens its own inspector.
   "None confirmed usable".
 - Bars in the glance show **% left**; the tick is where an even pace would
   leave it (`1 − paceMarker`), drawn only when `paceMarker` is.
-- Every countdown in the glance and the menu-bar title is one unit
-  (`GlancePresentation.countdown`: minutes, hours under two days, then days).
-  Two-unit forms ("1d 13h") beside one-unit ones ("29d") read as different
-  resets; the owner asked for one unit on 23 Nov 2026.
+- Use one unit per countdown. Providers uses `ResetCountdownBadge.compact`
+  so the badge and cell both switch to days at 24 hours. The menu bar and
+  Story use `GlancePresentation.countdown`, which switches at 48 hours.
 - A measured exhausted month fills the quota lane. A measured exhausted week
   can fill it when neither an exhausted 5H window nor a monthly reading
   needs its own column. Simultaneously exhausted 5H and WK windows show their

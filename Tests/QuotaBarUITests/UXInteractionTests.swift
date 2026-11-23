@@ -163,7 +163,7 @@ struct UXInteractionTests {
 
         let (window, host) = try present(
             PopoverRootView(store: store, onOpenSettings: {}, availableHeightProvider: { 900 }))
-        let close = "Close Claude details"
+        let close = "Close Claude Code details"
         #expect(axFind { $0 == close } == false)
 
         // Tab reaches a button only under Full Keyboard Access, a system
@@ -214,8 +214,8 @@ struct UXInteractionTests {
         #expect(axAction(label, kAXIncrementAction))
         let after = axValue(label)
         print("UX-INTERACTION chart adjust: before=\(before ?? "nil") after=\(after ?? "nil")")
-        // The newest poll: 67% used.
-        #expect(after?.contains("67 percent used") == true)
+        // The newest poll has 33% left.
+        #expect(after?.contains("33 percent left") == true)
         #expect(after != before)
         try save(host, name: "interaction-chart-adjust")
 

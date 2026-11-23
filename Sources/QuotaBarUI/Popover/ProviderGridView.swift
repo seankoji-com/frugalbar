@@ -70,6 +70,13 @@ struct ProviderGridView: View {
                 if group.pools.count == 1, let pool = group.pools.first,
                    let column = pool.spanningColumn, let window = pool.windows[column] {
                     windowCell(window, label: column.label, stale: pool.isStale)
+                } else if group.pools.count == 1, let pool = group.pools.first,
+                          pool.windows.isEmpty, let bar = pool.nonstandardPlanBar {
+                    HStack(spacing: 7) {
+                        Text(bar.label).font(.system(size: 10)).foregroundStyle(Theme.outline)
+                        windowCell(GlancePresentation.window(for: bar, now: presentation.now),
+                                   label: bar.label, stale: pool.isStale)
+                    }
                 } else {
                     columns { column in
                         if let summary = group.summary(for: column) {
@@ -105,7 +112,8 @@ struct ProviderGridView: View {
                 } figures: {
                     if let column = pool.spanningColumn, let window = pool.windows[column] {
                         windowCell(window, label: column.label, stale: pool.isStale)
-                    } else if pool.state == .unreadable || (pool.state == .spent && pool.windows.isEmpty) {
+                    } else if pool.state == .unreadable
+                                || (pool.state == .spent && pool.windows.isEmpty && pool.nonstandardPlanBar == nil) {
                         Text(pool.snapshot.status.unavailableReason?.headline
                              ?? (pool.state == .spent ? "Blocked" : "No quota reading"))
                             .font(.system(size: 11))
@@ -245,6 +253,17 @@ struct ProviderGridView: View {
     private func groupAccessibilityLabel(_ group: ProviderGridPresentation.Group) -> String {
         var parts = [group.title, group.subtitle].compactMap { $0 }
         let single = group.pools.count == 1 ? group.pools.first : nil
+        if let single, single.windows.isEmpty, let bar = single.nonstandardPlanBar {
+            let window = GlancePresentation.window(for: bar, now: presentation.now)
+            if window.isSpent {
+                parts.append("\(bar.label), \(spentDescription(window))")
+            } else if let remaining = window.remaining {
+                parts.append("\(bar.label), \(remaining.formatted(.percent)) left")
+            }
+            if let reset = presentation.countdown(bar.resetsAt, stale: single.isStale) {
+                parts.append("resets in \(reset)")
+            }
+        }
         let spokenColumns = single?.spanningColumn.map { [$0] } ?? WindowColumn.allCases
         for column in spokenColumns {
             guard let summary = group.summary(for: column) else { continue }
@@ -254,12 +273,12 @@ struct ProviderGridView: View {
             case .average(let fraction, let reported, let count):
                 result = "\(fraction.formatted(.percent)) left across \(reported) of \(count) pools"
                 reset = nil
-            case .spent(let next, let exhausted):
-                result = exhausted ? "all spent" : "all blocked or spent"
+            case .spent(let next, let exhausted, let blocked):
+                result = exhausted && !blocked ? "all spent" : "all blocked or spent"
                 reset = next
             case .window(let window):
                 if window.isSpent {
-                    result = WindowGridPresentation.isExhausted(window.bar) ? "100 percent used" : "blocked"
+                    result = spentDescription(window)
                 } else if let remaining = window.remaining {
                     result = "\(remaining.formatted(.percent)) left"
                 } else {
@@ -279,9 +298,10 @@ struct ProviderGridView: View {
         switch summary {
         case .window(let window):
             windowCell(window, label: column.label, stale: stale)
-        case .spent(let reset, let allMeasuredExhausted):
+        case .spent(let reset, let allMeasuredExhausted, let includesBlocked):
             spentCell(allMeasuredExhausted ? "100%" : "Blocked", reset: presentation.countdown(reset),
-                      spoken: "\(column.spokenName), \(allMeasuredExhausted ? "all spent" : "all blocked or spent")")
+                      spoken: "\(column.spokenName), \(includesBlocked ? "all blocked or spent" : "all spent")",
+                      showsBlockedGlyph: allMeasuredExhausted && includesBlocked)
         case .average(let remaining, let reported, let count):
             VStack(alignment: .trailing, spacing: 2) {
                 Text(remaining, format: .percent.precision(.fractionLength(0...1)))
@@ -305,7 +325,9 @@ struct ProviderGridView: View {
         if window.isSpent {
             let exhausted = WindowGridPresentation.isExhausted(window.bar)
             let title = exhausted ? (showSpentPercent ? "100%" : label) : "Blocked"
-            spentCell(title, reset: reset, spoken: "\(label), \(exhausted ? "100 percent used" : "blocked")")
+            spentCell(title, reset: reset, spoken: "\(label), \(spentDescription(window))",
+                      showsBlockedGlyph: exhausted && window.bar.isBlocked)
+                .opacity(stale ? 0.65 : 1)
         } else if let remaining = window.remaining {
             VStack(alignment: .leading, spacing: 3) {
                 RemainingBar(window: window, height: trackHeight)
@@ -319,21 +341,31 @@ struct ProviderGridView: View {
         }
     }
 
-    private func spentCell(_ title: String, reset: String?, spoken: String) -> some View {
+    private func spentDescription(_ window: ProviderGridPresentation.Window) -> String {
+        if WindowGridPresentation.isExhausted(window.bar) {
+            return window.bar.isBlocked ? "100 percent used, blocked" : "100 percent used"
+        }
+        return "blocked"
+    }
+
+    private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Capsule()
                 .fill(Theme.errorBold.opacity(0.6))
                 .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
                 .frame(height: trackHeight)
                 .accessibilityHidden(true)
-            meterCaption(title, reset: reset, color: Theme.error)
+            meterCaption(title, reset: reset, color: Theme.error, showsBlockedGlyph: showsBlockedGlyph)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken + (reset.map { ", resets in \($0)" } ?? ""))
     }
 
-    private func meterCaption(_ label: String?, reset: String?, color: Color) -> some View {
+    private func meterCaption(_ label: String?, reset: String?, color: Color, showsBlockedGlyph: Bool = false) -> some View {
         HStack(spacing: 3) {
+            if showsBlockedGlyph {
+                BlockedGlyph(color: color, size: 8)
+            }
             if let label {
                 Text(label).fontWeight(.semibold).foregroundStyle(color)
             }
