@@ -433,14 +433,15 @@ only go in alongside a signed, entitled `.app`.
 ## UI constraints
 
 **The glance.** The popover answers "which pool do I use now, and when do the
-spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows Providers,
-Wallet and a footer. Providers expands one group at a time. Claude combines
+spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows
+Subscriptions (the provider grid, titled so on 24 Nov 2026), Wallet and a
+footer. Subscriptions expands one group at a time. Claude combines
 Claude Code with Antigravity Claude/GPT. Gemini holds Gemini and Argon, and
 each Antigravity row names its model and the route that read it ("AGY" for
 this Mac's Google sign-in, "CLI Proxy"), from the reading's `cliSource` before
 the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
 OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
-entries only, never Providers rows (owner, 24 Nov 2026). The Wallet
+entries only, never Subscriptions rows (owner, 24 Nov 2026). The Wallet
 (`WalletPresentation`) is a flat list, one line per credit with no group
 headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
 and the account when the reading carries a named one ("ChatGPT API",
@@ -449,11 +450,11 @@ CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
 text beside the title. ChatGPT has two lines: the monthly API credit grant and
 the bonus credit count. The Gemini AI Studio key's configured credit is one
 "Gemini API" line of its own, never an Antigravity account's. A model's reset
-tickets (Fable) sit beside that model's line in its Claude account's Providers
+tickets (Fable) sit beside that model's line in its Claude account's Subscriptions
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
 model line to sit beside, are Wallet lines. Every meter sits in one fixed
 column so the bars line up. A credit that expires and publishes what was used
-draws the Providers bar (`Meter.credit`, through `UsageBar`): % used and the
+draws the Subscriptions bar (`Meter.credit`, through `UsageBar`): % used and the
 countdown beneath, the same colours, and the even-use tick only where the
 credit's period is known. The ChatGPT API credit and Claude usage credits pass
 the promo's own `barMetrics`. ChatGPT bonus credits publish an expiry but no
@@ -498,7 +499,7 @@ pool keeps its service identity and opens its own inspector.
   is where an even pace would be (`paceMarker`), drawn only when `paceMarker`
   is. Text that names its direction ("12% WK left" in a pick reason, the
   widget's story, History's "% left over time") is unchanged.
-- Use one unit per countdown. Providers uses `ResetCountdownBadge.compact`
+- Use one unit per countdown. Subscriptions uses `ResetCountdownBadge.compact`
   so the badge and cell both switch to days at 24 hours. The menu bar and
   Story use `GlancePresentation.countdown`, which switches at 48 hours.
 - A measured exhausted month fills the quota lane. A measured exhausted week

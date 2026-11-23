@@ -12,7 +12,7 @@ struct ProviderGridView: View {
     var body: some View {
         if !presentation.groups.isEmpty {
             GlanceCard {
-                GlanceSectionHeader(title: "Providers")
+                GlanceSectionHeader(title: "Subscriptions")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 9)
                 Divider()

@@ -77,7 +77,7 @@ struct WalletPresentationTests {
         }
     }
 
-    @Test("a Fable ticket is not in the Wallet: it sits beside the Fable line in Providers")
+    @Test("a Fable ticket is not in the Wallet: it sits beside the Fable line in Subscriptions")
     func modelTicketsLeaveTheWallet() throws {
         // No ticket line at all: the fixture's only ticket is Fable's, and a
         // leak could carry any label, so count ticket lines rather than names.
@@ -139,7 +139,7 @@ struct WalletPresentationTests {
         #expect(WalletPresentation(snapshots: [unconfigured], now: now).rows.isEmpty)
     }
 
-    @Test("OpenRouter and DeepSeek's own credit are Wallet lines, never Providers rows, overdrawn or empty")
+    @Test("OpenRouter and DeepSeek's own credit are Wallet lines, never Subscriptions rows, overdrawn or empty")
     func directBalancesLiveInTheWallet() throws {
         // The figures from the owner's popover on 24 Nov 2026: DeepSeek's
         // API credit overdrawn by a cent, OpenRouter at zero.
