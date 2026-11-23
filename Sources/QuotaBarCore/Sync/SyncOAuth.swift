@@ -278,8 +278,8 @@ actor SyncAccessTokens {
             // Google rejected this token for good. Deleting it records that
             // outside the state file, so a relaunch after a lost state write
             // cannot send it again; only a new sign-in stores another.
-            if failure.isTerminal, (try? secrets.read(SyncSecretAccount.refreshToken)) == refreshToken {
-                try? secrets.deleteNonInteractively(SyncSecretAccount.refreshToken)
+            if failure.isTerminal {
+                try? secrets.deleteNonInteractivelyIfMatching(refreshToken, account: SyncSecretAccount.refreshToken)
             }
             throw SyncAuthError.refresh(failure)
         }

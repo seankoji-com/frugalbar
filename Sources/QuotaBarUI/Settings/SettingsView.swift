@@ -1447,7 +1447,9 @@ public struct SettingsView: View {
         loadKeysFromCache()
         refreshWorkspaceHasKey()
         await refreshSources()
-        sync?.vaultDidUnlock()
+        if vaultStatus.state == .loaded || vaultStatus.state == .empty {
+            sync?.vaultDidUnlock()
+        }
         Task { await store?.forceRefresh(allowInteractiveUnlock: false) }
     }
 

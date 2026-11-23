@@ -717,11 +717,15 @@ public actor SyncPublisher {
     }
 
     /// Clears transient Keychain backoff after the user unlocks the vault so
-    /// paused publishing or an unfinished Stop can resume immediately.
+    /// paused publishing or an unfinished Stop can resume immediately without
+    /// clearing unrelated backoff (such as a Google rate limit).
     public func vaultDidUnlock() {
+        let keyError = Self.describe(SyncAuthError.secretsUnavailable)
+        guard needsSecretRefresh || state.lastError == keyError else { return }
+        needsSecretRefresh = false
         retryAt = nil
         failures = 0
-        if state.lastError == Self.describe(SyncAuthError.secretsUnavailable) {
+        if state.lastError == keyError {
             state.lastError = nil
         }
     }

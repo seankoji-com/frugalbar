@@ -429,6 +429,7 @@ public final class KeychainVault: @unchecked Sendable {
     private var legacyScanSucceeded = false
     private var nextSeq: UInt64 = 0
     private var explicitSeq: [VaultKey: UInt64] = [:]
+    private var staleDeferredSeq: [VaultKey: UInt64] = [:]
     private var deferredWrites: [VaultKey: DeferredWrite] = [:]
 
     /// Coalesced warm-up tasks so startup fetch and sync share one vault read.
@@ -721,6 +722,80 @@ public final class KeychainVault: @unchecked Sendable {
         }
     }
 
+    /// Compare-and-delete under `flock`: deletes `account` ONLY if the durable
+    /// vault value still equals `expectedValue`. Prevents a stale background
+    /// revocation (e.g. a rejected refresh token from an earlier sign-in) from
+    /// deleting a newer credential saved by another process.
+    @discardableResult
+    public func deleteIfMatching(
+        _ expectedValue: String,
+        namespace: VaultNamespace,
+        account: String,
+        allowsPrompt: Bool = false
+    ) throws -> Bool {
+        let key = VaultKey(namespace: namespace, account: account)
+        return try fileLock.withLock(blocking: true) {
+            let rawVault = try backend.read(
+                service: keysService,
+                account: Self.vaultAccount,
+                allowsPrompt: allowsPrompt
+            )
+            var doc: VaultDocument
+            if let rawVault {
+                guard let decoded = try? JSONDecoder().decode(VaultDocument.self, from: rawVault) else {
+                    stateLock.withLock { internalState = .corrupt }
+                    throw KeychainError.vaultUnavailable(.corrupt)
+                }
+                doc = decoded
+            } else {
+                doc = VaultDocument()
+            }
+
+            let durableCurrent = namespace == .keys ? doc.keys[account] : doc.sync[account]
+            guard durableCurrent == expectedValue else {
+                stateLock.withLock {
+                    internalState = (rawVault != nil || !doc.isEmpty) ? .loaded(doc) : .empty
+                }
+                return false
+            }
+
+            switch namespace {
+            case .keys:
+                doc.keys.removeValue(forKey: account)
+                doc.deletedLegacyKeys.insert(account)
+            case .sync:
+                doc.sync.removeValue(forKey: account)
+                doc.deletedLegacySyncKeys.insert(account)
+            }
+
+            let encoded = try JSONEncoder().encode(doc)
+            try backend.write(
+                encoded,
+                service: keysService,
+                account: Self.vaultAccount,
+                label: "FrugalBar credential vault",
+                allowsPrompt: allowsPrompt
+            )
+
+            stateLock.withLock {
+                nextSeq += 1
+                explicitSeq[key] = nextSeq
+                deferredWrites.removeValue(forKey: key)
+                if namespace == .keys {
+                    pendingLegacyKeys.remove(account)
+                } else {
+                    pendingLegacySyncKeys.remove(account)
+                }
+                internalState = .loaded(doc)
+            }
+
+            try afterCommitBeforeLegacyDelete?()
+            let svc = namespace == .keys ? keysService : syncService
+            try? backend.delete(service: svc, account: account, allowsPrompt: allowsPrompt)
+            return true
+        }
+    }
+
     /// Clears only the `sync` namespace (and records tombstones for any sync
     /// accounts), leaving provider `keys` untouched.
     ///
@@ -868,8 +943,8 @@ public final class KeychainVault: @unchecked Sendable {
         let snapshot: [VaultKey: DeferredWrite] = stateLock.withLock { deferredWrites }
         if snapshot.isEmpty {
             if let (trackedKey, trackedSeq) = tracking {
-                let supersededByExplicit = stateLock.withLock { (explicitSeq[trackedKey] ?? 0) >= trackedSeq }
-                return supersededByExplicit ? .superseded : .persisted
+                let superseded = stateLock.withLock { isTrackedSeqSupersededLocked(trackedKey, seq: trackedSeq) }
+                return superseded ? .superseded : .persisted
             }
             return .persisted
         }
@@ -901,8 +976,8 @@ public final class KeychainVault: @unchecked Sendable {
                 }
                 if eligible.isEmpty {
                     if let (trackedKey, trackedSeq) = tracking {
-                        let supersededByExplicit = stateLock.withLock { (explicitSeq[trackedKey] ?? 0) >= trackedSeq }
-                        return supersededByExplicit ? .superseded : .persisted
+                        let superseded = stateLock.withLock { isTrackedSeqSupersededLocked(trackedKey, seq: trackedSeq) }
+                        return superseded ? .superseded : .persisted
                     }
                     return .persisted
                 }
@@ -940,6 +1015,7 @@ public final class KeychainVault: @unchecked Sendable {
                 stateLock.withLock {
                     reconcileCommittedDeferredWritesLocked(appliedDeferred)
                     for (k, seq) in staleKeys {
+                        staleDeferredSeq[k] = max(staleDeferredSeq[k] ?? 0, seq)
                         if deferredWrites[k]?.seq == seq {
                             deferredWrites.removeValue(forKey: k)
                         }
@@ -956,10 +1032,10 @@ public final class KeychainVault: @unchecked Sendable {
                     if staleKeys[trackedKey] == trackedSeq {
                         return .superseded
                     }
-                    let supersededByExplicit = stateLock.withLock {
-                        (explicitSeq[trackedKey] ?? 0) >= trackedSeq
+                    let superseded = stateLock.withLock {
+                        isTrackedSeqSupersededLocked(trackedKey, seq: trackedSeq)
                     }
-                    if supersededByExplicit {
+                    if superseded {
                         return .superseded
                     }
                 }
@@ -967,18 +1043,24 @@ public final class KeychainVault: @unchecked Sendable {
             }
         } catch {
             // Contended lock (wouldBlock) or locked Keychain (errSecInteractionNotAllowed):
-            // recheck whether an explicit write or delete already superseded this entry;
-            // otherwise keep deferred writes in memory for explicit Unlock or Save.
+            // recheck whether an explicit write, delete, or stale rejection already
+            // superseded this entry; otherwise keep deferred writes in memory.
             if let (trackedKey, trackedSeq) = tracking {
-                let supersededByExplicit = stateLock.withLock {
-                    (explicitSeq[trackedKey] ?? 0) >= trackedSeq
+                let superseded = stateLock.withLock {
+                    isTrackedSeqSupersededLocked(trackedKey, seq: trackedSeq)
                 }
-                if supersededByExplicit {
+                if superseded {
                     return .superseded
                 }
             }
             return .deferred
         }
+    }
+
+    /// Returns true if `seq` for `key` was superseded by an explicit mutation
+    /// or rejected as stale by any flush path. Caller must hold `stateLock`.
+    private func isTrackedSeqSupersededLocked(_ key: VaultKey, seq: UInt64) -> Bool {
+        (explicitSeq[key] ?? 0) >= seq || (staleDeferredSeq[key] ?? 0) >= seq
     }
 
     /// Reconciles `deferredWrites` after `applied` entries have been durably
@@ -1018,7 +1100,19 @@ public final class KeychainVault: @unchecked Sendable {
                         allowsPrompt: interactive
                     )
                 } catch let KeychainError.unknown(status) {
-                    stateLock.withLock { internalState = .lockedOrDenied(status) }
+                    stateLock.withLock {
+                        // On a passive refresh after the user already loaded the
+                        // vault (e.g. via "Allow" once in SecurityAgent), an
+                        // errSecInteractionNotAllowed denial means macOS requires
+                        // another prompt to re-read — keep the loaded in-memory
+                        // credentials instead of wiping them out.
+                        if !interactive,
+                           status == errSecInteractionNotAllowed,
+                           case .loaded = internalState {
+                            return
+                        }
+                        internalState = .lockedOrDenied(status)
+                    }
                     return statusSnapshot()
                 } catch {
                     stateLock.withLock { internalState = .lockedOrDenied(errSecAuthFailed) }
@@ -1195,6 +1289,7 @@ public final class KeychainVault: @unchecked Sendable {
 
                 stateLock.withLock {
                     for (k, seq) in staleDeferred {
+                        staleDeferredSeq[k] = max(staleDeferredSeq[k] ?? 0, seq)
                         if deferredWrites[k]?.seq == seq {
                             deferredWrites.removeValue(forKey: k)
                         }
@@ -1287,6 +1382,7 @@ public final class KeychainVault: @unchecked Sendable {
             // Update in-memory state and supersede deferred writes ONLY AFTER commit succeeds
             stateLock.withLock {
                 for (k, seq) in staleDeferred {
+                    staleDeferredSeq[k] = max(staleDeferredSeq[k] ?? 0, seq)
                     if deferredWrites[k]?.seq == seq {
                         deferredWrites.removeValue(forKey: k)
                     }

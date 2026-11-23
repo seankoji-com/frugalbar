@@ -18,6 +18,9 @@ public protocol SyncSecretStore: Sendable {
     /// Non-interactive delete for background cleanup and token revocation so
     /// unattended Sync work never presents a macOS Keychain prompt.
     func deleteNonInteractively(_ account: String) throws
+    /// Atomic compare-and-delete (non-interactive): deletes `account` only if
+    /// the durable value still matches `expectedValue`.
+    func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws
     /// Optional non-interactive refresh before retrying after a recoverable
     /// secret-store failure so Sync recovers once the login Keychain unlocks.
     func refreshNonInteractively() async
@@ -26,6 +29,12 @@ public protocol SyncSecretStore: Sendable {
 public extension SyncSecretStore {
     func deleteNonInteractively(_ account: String) throws {
         try delete(account)
+    }
+
+    func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws {
+        if (try read(account)) == expectedValue {
+            try deleteNonInteractively(account)
+        }
     }
 
     func refreshNonInteractively() async {}
@@ -91,6 +100,10 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
 
     public func deleteNonInteractively(_ account: String) throws {
         try vault.delete(namespace: .sync, account: account, allowsPrompt: false)
+    }
+
+    public func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws {
+        _ = try vault.deleteIfMatching(expectedValue, namespace: .sync, account: account, allowsPrompt: false)
     }
 
     public func refreshNonInteractively() async {
