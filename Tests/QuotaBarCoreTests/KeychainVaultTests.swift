@@ -1293,6 +1293,32 @@ struct KeychainVaultR12Tests {
         #expect(usable.map { $0.storedClientID == nil } == true)
     }
 
+    @Test("R13-01: a client switch committed between the override and session reads rejects the session")
+    func clientSwitchDuringSessionReadRejectsSession() throws {
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+        let session = GeminiOAuthSession(
+            accessToken: "a", refreshToken: "r",
+            expiry: Date(timeIntervalSince1970: 4_000_000_000), clientID: "client-A")
+        let sessionText = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: GeminiOAuthSession.keychainLabel, value: sessionText),
+            (namespace: .keys, account: clientLabel, value: "client-A"),
+        ])
+        let manager = KeychainManager(vault: vault)
+
+        #expect(GeminiOAuthSession.readUsableSession(manager: manager, environment: [:])?.session.clientID == "client-A")
+        let raced = GeminiOAuthSession.readUsableSession(manager: manager, environment: [:]) {
+            // Settings saves client B and leaves the session record untouched.
+            try? vault.write("client-B", namespace: .keys, account: clientLabel)
+        }
+        #expect(raced == nil)
+    }
+
     @Test("R12-03: cachedSnapshot pairs the status with the values read in the same vault state")
     func cachedSnapshotIsCoherent() throws {
         let backend = InMemoryKeychainBackend()

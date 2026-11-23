@@ -702,14 +702,22 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// An override the vault cannot read (locked, or a legacy item pending
     /// migration) is not "absent": falling back to the environment client
     /// then would poll with a session the configured client may not own.
+    ///
+    /// The override is read on both sides of the session read and must agree:
+    /// a client switch committed in between (Settings leaves the session
+    /// record untouched) would otherwise approve the old client's session
+    /// against the baseline read before the switch.
     static func readUsableSession(
         manager: KeychainManager = .shared,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        afterSessionRead: () -> Void = {}
     ) -> (raw: String, session: GeminiOAuthSession, storedClientID: String?)? {
         guard let storedClient = storedClientIDBaseline(manager: manager),
               let raw = try? manager.get(label: keychainLabel, allowsAuthenticationPrompt: false),
               let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8))
         else { return nil }
+        afterSessionRead()
+        guard let confirmed = storedClientIDBaseline(manager: manager), confirmed == storedClient else { return nil }
         let fromEnvironment = environment[clientIDEnvVar].flatMap { $0.isEmpty ? nil : $0 }
         let effectiveClient = storedClient.flatMap { $0.isEmpty ? nil : $0 } ?? fromEnvironment
         guard isUsable(session, forClientID: effectiveClient) else { return nil }
