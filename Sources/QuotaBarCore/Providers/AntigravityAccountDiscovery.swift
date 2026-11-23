@@ -275,9 +275,9 @@ actor AntigravityAccountDiscovery {
             return lhs.source < rhs.source
         }
         let thisMacRoute = discovered.first { $0.isPrimary }
-        var groupingIdentity: [String: String] = [:]
+        var identityBySource: [String: String] = [:]
         for route in discovered {
-            groupingIdentity[route.source] = route.groupingIdentity(
+            identityBySource[route.source] = route.groupingIdentity(
                 directRoute: thisMacRoute, directAccountKey: directAccountKey)
         }
         let unavailableBindings = proxyOutcome.unavailableBindings
@@ -293,8 +293,8 @@ actor AntigravityAccountDiscovery {
         }
 
         let verifiedGroups = Dictionary(
-            grouping: discovered.filter { groupingIdentity[$0.source] != nil },
-            by: { groupingIdentity[$0.source]! }
+            grouping: discovered.filter { identityBySource[$0.source] != nil },
+            by: { identityBySource[$0.source]! }
         )
         let badges = defaults.dictionary(forKey: AntigravityAccountStore.badgesKey) as? [String: String] ?? [:]
         // A newly verified identity may adopt a route's earlier unverified ID,
@@ -329,12 +329,12 @@ actor AntigravityAccountDiscovery {
         }
 
         let verifiedAccountIDs = Set(discovered.compactMap { route in
-            groupingIdentity[route.source].map { identities[$0] ?? $0 }
+            identityBySource[route.source].map { identities[$0] ?? $0 }
         })
         var aliases: [String: Set<String>] = [:]
         for route in discovered {
             let previous = oldBindings.first { $0.source == route.source }
-            let identity = groupingIdentity[route.source]
+            let identity = identityBySource[route.source]
             // Never merge a currently unverified route into a verified account
             // ID — even if that verified account previously adopted this
             // route's source-scoped ID during promotion.
