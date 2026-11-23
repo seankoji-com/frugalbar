@@ -132,6 +132,7 @@ public struct SettingsView: View {
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
     @State private var isVerifying = false
+    @State private var busyWorkspaceIDs: Set<String> = []
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
@@ -470,7 +471,7 @@ public struct SettingsView: View {
             Section("Google (Gemini, AGY Claude/GPT and Argon)") {
                 HStack {
                     Button("Connect Google account") { Task { await connectGemini() } }
-                        .disabled(isSigningInToGemini)
+                        .disabled(isSigningInToGemini || isVerifying)
                     if isSigningInToGemini { ProgressView().controlSize(.small) }
                 }
                 Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
@@ -563,7 +564,7 @@ public struct SettingsView: View {
             Spacer()
             Button("Save & verify") { Task { await saveAndVerify() } }
                 .keyboardShortcut(.defaultAction)
-                .disabled(isVerifying || !hasChanges)
+                .disabled(isVerifying || isSigningInToGemini || !hasChanges)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -734,6 +735,7 @@ public struct SettingsView: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .disabled(busyWorkspaceIDs.contains(workspace.id))
                 .accessibilityLabel("Remove \(workspace.name)")
             }
 
@@ -748,8 +750,9 @@ public struct SettingsView: View {
                 .textFieldStyle(.roundedBorder)
 
                 Button("Save") { Task { await saveWorkspaceKey(workspace) } }
-                    .disabled((workspaceKeys[instanceID] ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(busyWorkspaceIDs.contains(workspace.id)
+                        || (workspaceKeys[instanceID] ?? "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             // Credential ownership follows the workspace, not its position:
@@ -869,7 +872,11 @@ public struct SettingsView: View {
     }
 
     private func removeWorkspace(_ id: String) async {
-        guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
+        guard !busyWorkspaceIDs.contains(id),
+              let workspace = workspaces.first(where: { $0.id == id })
+        else { return }
+        busyWorkspaceIDs.insert(id)
+        defer { busyWorkspaceIDs.remove(id) }
         let instanceID = workspace.instanceID
         // A removed workspace must not leave its key behind in the Keychain.
         // If it cannot be deleted, keep the row: dropping it here would orphan
@@ -900,11 +907,16 @@ public struct SettingsView: View {
     /// Stores one workspace's key and exercises it, so a truncated paste fails
     /// here rather than as an unexplained blank row later.
     private func saveWorkspaceKey(_ workspace: OpenCodeGoWorkspace) async {
+        guard !busyWorkspaceIDs.contains(workspace.id) else { return }
         let instanceID = workspace.instanceID
         let key = (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        busyWorkspaceIDs.insert(workspace.id)
         isVerifying = true
-        defer { isVerifying = false }
+        defer {
+            isVerifying = false
+            busyWorkspaceIDs.remove(workspace.id)
+        }
         do {
             try await Self.runKeychainOffMainActor {
                 try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
@@ -1467,23 +1479,30 @@ public struct SettingsView: View {
     }
 
     private func connectGemini() async {
+        guard !isSigningInToGemini && !isVerifying else { return }
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
 
         // Persist any unsaved client configuration edits before signing in:
         // the flow reads from the Keychain, so a secret typed but not yet saved
-        // would fail the exchange. Skip writing when the user has not edited
-        // the fields so clicking Connect before the vault finishes loading
+        // would fail the exchange. Skip writing untouched fields so clicking
+        // Connect (or typing only a secret) before the vault finishes loading
         // cannot overwrite or delete an already-stored client ID.
         if hasGeminiClientEdits {
+            let clientChanged = geminiClientID != loadedGeminiClientID
             let clientIDToSave = geminiClientID
             let clientSecretToSave = geminiClientSecret
             do {
                 try await Self.runKeychainOffMainActor {
                     try GeminiOAuthLogin.saveClientConfiguration(
-                        clientID: clientIDToSave, clientSecret: clientSecretToSave)
+                        clientID: clientIDToSave,
+                        clientSecret: clientSecretToSave,
+                        updateClientID: clientChanged
+                    )
                 }
-                loadedGeminiClientID = clientIDToSave
+                if clientChanged {
+                    loadedGeminiClientID = clientIDToSave
+                }
                 if geminiClientSecret == clientSecretToSave {
                     geminiClientSecret = ""
                 }
@@ -1514,6 +1533,7 @@ public struct SettingsView: View {
     /// as an unexplained blank row later. Vendors with no such endpoint report
     /// "Saved — cannot be verified" rather than implying a check happened.
     private func saveAndVerify() async {
+        guard !isVerifying && !isSigningInToGemini else { return }
         isVerifying = true
         defer { isVerifying = false }
 
@@ -1531,9 +1551,14 @@ public struct SettingsView: View {
             do {
                 try await Self.runKeychainOffMainActor {
                     try GeminiOAuthLogin.saveClientConfiguration(
-                        clientID: clientIDToSave, clientSecret: clientSecretToSave)
+                        clientID: clientIDToSave,
+                        clientSecret: clientSecretToSave,
+                        updateClientID: clientChanged
+                    )
                 }
-                loadedGeminiClientID = clientIDToSave
+                if clientChanged {
+                    loadedGeminiClientID = clientIDToSave
+                }
                 if geminiClientSecret == clientSecretToSave {
                     geminiClientSecret = ""
                 }

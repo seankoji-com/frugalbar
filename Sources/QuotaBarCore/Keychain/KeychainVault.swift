@@ -686,19 +686,44 @@ public final class KeychainVault: @unchecked Sendable {
         account: String,
         allowsPrompt: Bool = true
     ) throws {
-        let key = VaultKey(namespace: namespace, account: account)
-        try mutateVaultBlocking(allowsPrompt: allowsPrompt, supersedingKeys: [key]) { doc, pendingKeys, pendingSync in
-            switch namespace {
-            case .keys:
-                doc.keys[account] = value
-                doc.deletedLegacyKeys.remove(account)
-                pendingKeys.remove(account)
-            case .sync:
-                doc.sync[account] = value
-                doc.deletedLegacySyncKeys.remove(account)
-                pendingSync.remove(account)
+        try applyBatch([(namespace, account, value)], allowsPrompt: allowsPrompt)
+    }
+
+    /// Atomically applies multiple writes and/or deletes in one `flock` +
+    /// `vault.v1` commit (e.g. saving an OAuth client ID and secret pair).
+    /// A `nil` value deletes the account and records its legacy tombstone.
+    public func applyBatch(
+        _ updates: [(namespace: VaultNamespace, account: String, value: String?)],
+        allowsPrompt: Bool = true
+    ) throws {
+        guard !updates.isEmpty else { return }
+        let keys = Set(updates.map { VaultKey(namespace: $0.namespace, account: $0.account) })
+        try mutateVaultBlocking(allowsPrompt: allowsPrompt, supersedingKeys: keys) { doc, pendingKeys, pendingSync in
+            var legacyToDelete: [(VaultNamespace, String)] = []
+            for update in updates {
+                switch update.namespace {
+                case .keys:
+                    if let value = update.value {
+                        doc.keys[update.account] = value
+                        doc.deletedLegacyKeys.remove(update.account)
+                    } else {
+                        doc.keys.removeValue(forKey: update.account)
+                        doc.deletedLegacyKeys.insert(update.account)
+                    }
+                    pendingKeys.remove(update.account)
+                case .sync:
+                    if let value = update.value {
+                        doc.sync[update.account] = value
+                        doc.deletedLegacySyncKeys.remove(update.account)
+                    } else {
+                        doc.sync.removeValue(forKey: update.account)
+                        doc.deletedLegacySyncKeys.insert(update.account)
+                    }
+                    pendingSync.remove(update.account)
+                }
+                legacyToDelete.append((update.namespace, update.account))
             }
-            return [(namespace, account)]
+            return legacyToDelete
         }
     }
 

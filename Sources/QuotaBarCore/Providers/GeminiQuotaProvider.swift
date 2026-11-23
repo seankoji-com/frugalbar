@@ -741,7 +741,8 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// noticed and signed in by hand.
     static func loadRefreshed() async -> GeminiOAuthSession? {
         guard let raw = try? KeychainManager.shared.get(label: keychainLabel, allowsAuthenticationPrompt: false),
-              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8))
+              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8)),
+              isUsable(session, forClientID: clientID)
         else { return nil }
         if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
         guard !session.refreshToken.isEmpty else { return nil }
