@@ -112,15 +112,19 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
 
     @discardableResult
     public func refreshNonInteractively() async -> Bool {
-        let status = await vault.warmUp(interactive: false)
-        switch status.state {
-        case .loaded, .empty:
-            // Only the Sync side matters here. A provider-key scan failure
-            // would otherwise keep this false while both Sync secrets read
-            // fine, re-running the warm-up on every heartbeat; an unconfirmed
-            // Sync absence still throws on read and re-arms the refresh.
-            return status.pendingLegacySyncKeys.isEmpty
-        default:
+        _ = await vault.warmUp(interactive: false)
+        // Ready means the Sync secrets themselves can be answered for: each
+        // read returns a value or confirmed absence without throwing. Vault
+        // health alone is the wrong test either way: a provider-key scan
+        // failure says nothing about Sync, while a failed Sync scan can leave
+        // no pending items yet still make an unmigrated token unreadable.
+        // `read` is non-interactive here and answers from the loaded cache.
+        do {
+            for account in [SyncSecretAccount.refreshToken, SyncSecretAccount.publisherId] {
+                _ = try vault.read(namespace: .sync, account: account, allowsPrompt: false)
+            }
+            return true
+        } catch {
             return false
         }
     }

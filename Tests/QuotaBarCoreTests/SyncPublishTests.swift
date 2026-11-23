@@ -96,6 +96,29 @@ struct SyncSecretRefreshReadinessTests {
         #expect(!fresh.statusSnapshot().legacyScanSucceeded)
         #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-live")
     }
+
+    @Test("R16-01: a failed Sync scan reports the secrets not ready, even with no pending Sync items")
+    func syncScanFailureReportsNotReady() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("frugalbar-vault-test-\(UUID().uuidString).lock")
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        // The refresh token exists only as a legacy item, and enumerating the
+        // Sync service fails, so it is never found or marked pending.
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-legacy")
+        backend.setListFailure(service: "test.sync", status: errSecAuthFailed)
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+
+        #expect(!(await secrets.refreshNonInteractively()))
+        #expect(vault.statusSnapshot().pendingLegacySyncKeys.isEmpty)
+        #expect(throws: (any Error).self) { try secrets.read(SyncSecretAccount.refreshToken) }
+
+        // Once enumeration works, the token migrates and the refresh reports ready.
+        backend.setListFailure(service: "test.sync", status: nil)
+        #expect(await secrets.refreshNonInteractively())
+        #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-legacy")
+    }
 }
 
 private func gaps(_ times: [Date]) -> [TimeInterval] {
