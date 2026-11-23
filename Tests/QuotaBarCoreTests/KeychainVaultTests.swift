@@ -637,33 +637,25 @@ struct KeychainVaultTests {
             return nil
         }
 
-        // Enable CLI discovery so both branches actually reach the CLI discovery path.
-        let prevDiscovery = CredentialStore.preferences.object(forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        CredentialStore.preferences.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-        defer {
-            if let prevDiscovery {
-                CredentialStore.preferences.set(prevDiscovery, forKey: CredentialStore.cliDiscoveryDefaultsKey)
-            } else {
-                CredentialStore.preferences.removeObject(forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        // Enable CLI discovery via task-local override so parallel suites never race UserDefaults.
+        await CredentialStore.$cliDiscoveryOverride.withValue(true) {
+            // Across credentialQueue.async, allowsSecurityCLI == false must suppress the subprocess hook.
+            await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+                await CredentialStore.$allowsSecurityCLI.withValue(false) {
+                    _ = await CredentialStore.apiKeyAsync(for: .muse)
+                    _ = await CredentialStore.claudePlanNameAsync()
+                }
             }
-        }
+            #expect(invoked.values.isEmpty)
 
-        // Across credentialQueue.async, allowsSecurityCLI == false must suppress the subprocess hook.
-        await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
-            await CredentialStore.$allowsSecurityCLI.withValue(false) {
-                _ = await CredentialStore.apiKeyAsync(for: .muse)
-                _ = await CredentialStore.claudePlanNameAsync()
+            // When allowsSecurityCLI == true (and CLI discovery enabled), the hook is reachable across the GCD hop.
+            await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+                await CredentialStore.$allowsSecurityCLI.withValue(true) {
+                    _ = await CredentialStore.apiKeyAsync(for: .muse)
+                }
             }
+            #expect(invoked.values.contains("ai.meta.dev.credentials"))
         }
-        #expect(invoked.values.isEmpty)
-
-        // When allowsSecurityCLI == true (and CLI discovery enabled), the hook is reachable across the GCD hop.
-        await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
-            await CredentialStore.$allowsSecurityCLI.withValue(true) {
-                _ = await CredentialStore.apiKeyAsync(for: .muse)
-            }
-        }
-        #expect(invoked.values.contains("ai.meta.dev.credentials"))
     }
 
     @Test("R2-02: superseded deferred write returns .superseded and refreshes in-memory cache from durable vault")
@@ -704,9 +696,11 @@ struct KeychainVaultTests {
         #expect(vaultA.cachedValue(namespace: .keys, account: "gemini-oauth") == nil)
     }
 
-    @Test("R2-03: interactive refresh arriving during a queued passive follow-up runs before activeTask releases")
+    @Test("R2-03 & R3-05: interactive refresh arriving during a queued passive follow-up runs before activeTask releases")
     func interactiveEscalationDuringPassiveFollowUpDrainsBeforeRelease() async {
         let warmUps = RecordedBools()
+        let pass1Started = CoreAsyncSignal()
+        let releasePass1 = CoreAsyncSignal()
         let passiveStarted = CoreAsyncSignal()
         let releasePassive = CoreAsyncSignal()
         let passCounter = AtomicCounter()
@@ -718,10 +712,9 @@ struct KeychainVaultTests {
                 let n = passCounter.increment()
                 warmUps.append(interactive)
                 if n == 1 {
-                    // Initial automatic pass: brief delay so passive follow-up can queue.
-                    try? await Task.sleep(for: .milliseconds(30))
+                    pass1Started.signal()
+                    await releasePass1.wait()
                 } else if n == 2 {
-                    // Queued passive follow-up: pause while interactive click arrives!
                     passiveStarted.signal()
                     await releasePassive.wait()
                 }
@@ -729,25 +722,123 @@ struct KeychainVaultTests {
         )
 
         let autoTask = Task { await manager.refresh() }
-        // Queue a passive follow-up while the automatic pass is running.
-        try? await Task.sleep(for: .milliseconds(10))
+        // Deterministically wait for pass 1 to start, queue passive follow-up, then release pass 1.
+        await pass1Started.wait()
         let queuedPassive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: false)
         #expect(queuedPassive)
+        releasePass1.signal()
 
-        // Wait until the passive follow-up is actively suspended, then click ⟳ (interactive).
+        // Deterministically wait for passive follow-up to start, escalate with interactive click, then release.
         await passiveStarted.wait()
         let queuedInteractive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: true)
         #expect(queuedInteractive)
         releasePassive.signal()
 
         _ = await autoTask.value
-        // All three passes (automatic false, passive follow-up false, interactive escalation true)
-        // must have drained inside the active task.
         #expect(warmUps.values == [false, false, true])
 
         // A subsequent unrelated automatic refresh must stay non-interactive.
         _ = await manager.refresh()
         #expect(warmUps.values == [false, false, true, false])
+    }
+
+    @Test("R3-03: chained renewal of a deferred token succeeds once contention clears")
+    func chainedDeferredRenewalPreservesDurableBaseline() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        // Hold flock externally so renewal 1 (v1 -> v2) is deferred.
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX) == 0)
+        let firstOutcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(firstOutcome == .deferred)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // Release flock; renewal 2 starts from the pending v2 and writes v3.
+        _ = flock(fd, LOCK_UN)
+        close(fd)
+        let secondOutcome = vault.writeDeferred(
+            "session-v3",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v2"
+        )
+        #expect(secondOutcome == .persisted)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v3")
+    }
+
+    @Test("R3-04: passive credential miss retaining a measured snapshot does not throttle an interactive retry")
+    func passiveCredentialMissDoesNotThrottleInteractiveRetry() async {
+        let fetchCount = AtomicCounter()
+        let provider = InteractiveCredentialProvider(onFetch: { _ = fetchCount.increment() })
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 5, minPollInterval: 30),
+            providerFactory: { [provider] },
+            vaultWarmUp: { _ in }
+        )
+
+        // 1. Initial refresh succeeds (measured).
+        _ = await manager.refresh()
+        #expect(fetchCount.current == 1)
+
+        // 2. Passive forceRefresh misses credential (allowsSecurityCLI == false -> .notConfigured),
+        //    retaining the measured snapshot with staleReading.reason == .notConfigured.
+        let passiveResult = await manager.forceRefresh(allowInteractiveUnlock: false)
+        #expect(fetchCount.current == 2)
+        #expect(passiveResult[VendorIdentifier.muse.rawValue]?.staleReading?.reason == .notConfigured)
+
+        // 3. Interactive forceRefresh within minPollInterval=30s MUST bypass the floor and re-fetch!
+        let interactiveResult = await manager.forceRefresh(allowInteractiveUnlock: true)
+        #expect(fetchCount.current == 3)
+        #expect(interactiveResult[VendorIdentifier.muse.rawValue]?.staleReading == nil)
+    }
+}
+
+private struct InteractiveCredentialProvider: QuotaProvider {
+    let vendorId: VendorIdentifier = .muse
+    var displayName: String { "Muse" }
+    var category: MetricCategory { .aiSubscriptions }
+    let onFetch: @Sendable () -> Void
+
+    func fetchSnapshot() async -> QuotaSnapshot {
+        onFetch()
+        if !CredentialStore.allowsSecurityCLI {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .percentage(usedFraction: 0, displayDetails: nil),
+                status: .unavailable(.notConfigured),
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: nil
+            )
+        }
+        return QuotaSnapshot(
+            id: vendorId.rawValue,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.4, displayDetails: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
     }
 }
 
@@ -761,6 +852,7 @@ private final class RecordedStrings: @unchecked Sendable {
 private final class AtomicCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    var current: Int { lock.withLock { count } }
     func increment() -> Int {
         lock.withLock {
             count += 1

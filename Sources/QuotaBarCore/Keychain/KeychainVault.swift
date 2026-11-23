@@ -325,6 +325,35 @@ final class VaultFileLock: @unchecked Sendable {
     }
 }
 
+/// In-memory Keychain backend used solely by `KeychainVault.shared` when
+/// `TestHost.isActive` is true, so tests that read through `.shared` can never
+/// migrate or mutate the host Mac's live login Keychain.
+private final class EphemeralTestKeychainBackend: KeychainBackend, @unchecked Sendable {
+    private struct ItemKey: Hashable {
+        let service: String
+        let account: String
+    }
+
+    private let lock = NSLock()
+    private var storage: [ItemKey: Data] = [:]
+
+    func read(service: String, account: String, allowsPrompt: Bool) throws -> Data? {
+        lock.withLock { storage[ItemKey(service: service, account: account)] }
+    }
+
+    func write(_ data: Data, service: String, account: String, label: String?, allowsPrompt: Bool) throws {
+        lock.withLock { storage[ItemKey(service: service, account: account)] = data }
+    }
+
+    func delete(service: String, account: String, allowsPrompt: Bool) throws {
+        lock.withLock { _ = storage.removeValue(forKey: ItemKey(service: service, account: account)) }
+    }
+
+    func listAccounts(service: String) throws -> [String] {
+        lock.withLock { storage.keys.filter { $0.service == service }.map(\.account) }
+    }
+}
+
 // MARK: - KeychainVault
 
 /// Encrypted single-item JSON vault cached in memory, with legacy item migration,
@@ -337,7 +366,18 @@ public final class KeychainVault: @unchecked Sendable {
     public static let defaultSyncService = "com.quotabar.sync"
     public static let doctorProbeAccount = "com.quotabar.doctor.probe"
 
-    public static let shared = KeychainVault()
+    public static let shared: KeychainVault = {
+        if TestHost.isActive {
+            return KeychainVault(
+                keysService: "\(defaultKeysService).testhost",
+                syncService: "\(defaultSyncService).testhost",
+                backend: EphemeralTestKeychainBackend(),
+                lockFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("quotabar-testhost-vault-\(ProcessInfo.processInfo.processIdentifier).lock")
+            )
+        }
+        return KeychainVault()
+    }()
 
     public let keysService: String
     public let syncService: String
@@ -802,18 +842,30 @@ public final class KeychainVault: @unchecked Sendable {
     ) -> DeferredWriteOutcome {
         let key = VaultKey(namespace: namespace, account: account)
         let queuedSeq: UInt64? = stateLock.withLock {
-            if let expected = expectedPreviousValue, case .loaded(let doc) = internalState {
-                let current = namespace == .keys ? doc.keys[account] : doc.sync[account]
+            let existingDeferred = deferredWrites[key]
+            if let expected = expectedPreviousValue {
+                let current: String?
+                if let existingDeferred {
+                    current = existingDeferred.value
+                } else if case .loaded(let doc) = internalState {
+                    current = namespace == .keys ? doc.keys[account] : doc.sync[account]
+                } else {
+                    current = nil
+                }
                 if current != expected {
                     return nil
                 }
             }
             nextSeq += 1
             let seq = nextSeq
+            // Preserve the original durable baseline across chained deferred
+            // renewals (e.g. durable v1 -> deferred v2 -> deferred v3) so the
+            // eventual flock CAS compares against v1, not v2.
+            let durableBaseline = existingDeferred?.expectedPreviousValue ?? expectedPreviousValue
             deferredWrites[key] = DeferredWrite(
                 value: value,
                 seq: seq,
-                expectedPreviousValue: expectedPreviousValue
+                expectedPreviousValue: durableBaseline
             )
             return seq
         }
@@ -832,7 +884,13 @@ public final class KeychainVault: @unchecked Sendable {
         tracking: (VaultKey, UInt64)?
     ) -> DeferredWriteOutcome {
         let snapshot: [VaultKey: DeferredWrite] = stateLock.withLock { deferredWrites }
-        guard !snapshot.isEmpty else { return .persisted }
+        if snapshot.isEmpty {
+            if let (trackedKey, trackedSeq) = tracking {
+                let supersededByExplicit = stateLock.withLock { (explicitSeq[trackedKey] ?? 0) >= trackedSeq }
+                return supersededByExplicit ? .superseded : .persisted
+            }
+            return .persisted
+        }
 
         do {
             return try fileLock.withLock(blocking: false) {

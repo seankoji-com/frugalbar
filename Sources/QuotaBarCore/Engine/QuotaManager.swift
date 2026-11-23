@@ -556,12 +556,17 @@ public actor QuotaManager {
         // Settings Save) must never trigger `/usr/bin/security` prompts either.
         let allowSecurityCLI = allowInteractiveUnlock || !force
         return await CredentialStore.$allowsSecurityCLI.withValue(allowSecurityCLI) {
-            await self.executeParallelFetch(force: force, excluding: excluding)
+            await self.executeParallelFetch(
+                force: force,
+                allowInteractiveUnlock: allowInteractiveUnlock,
+                excluding: excluding
+            )
         }
     }
 
     private func executeParallelFetch(
         force: Bool = false,
+        allowInteractiveUnlock: Bool = false,
         excluding: Set<String> = []
     ) async -> [String: QuotaSnapshot] {
         // Read once, so a preference change mid-fetch cannot split the pass.
@@ -711,13 +716,23 @@ public actor QuotaManager {
                     // they never sit under the floor.
                     shouldThrottle = false
                 case .measured, .unavailable:
-                    // Every other outcome — a real reading, or a vendor-side
-                    // signal like rateLimited/offline/timedOut/badResponse —
-                    // is exactly what the floor exists to protect: mashing
-                    // refresh must not re-hit a throttling or ailing vendor
-                    // every cycle just because its last result wasn't a
-                    // successful measurement.
-                    shouldThrottle = withinFloor || withinVendorBackoff
+                    // If a prior passive refresh retained a measured snapshot
+                    // with a stale credential failure (e.g. suppressed CLI read
+                    // or locked vault), an explicit interactive click must not
+                    // be throttled behind that passive miss.
+                    if allowInteractiveUnlock,
+                       let staleReason = entry.snapshot.staleReading?.reason,
+                       (staleReason == .notConfigured || staleReason == .credentialRejected) {
+                        shouldThrottle = false
+                    } else {
+                        // Every other outcome — a real reading, or a vendor-side
+                        // signal like rateLimited/offline/timedOut/badResponse —
+                        // is exactly what the floor exists to protect: mashing
+                        // refresh must not re-hit a throttling or ailing vendor
+                        // every cycle just because its last result wasn't a
+                        // successful measurement.
+                        shouldThrottle = withinFloor || withinVendorBackoff
+                    }
                 }
             } else {
                 shouldThrottle = false

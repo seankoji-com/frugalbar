@@ -182,8 +182,12 @@ public enum CredentialStore {
         values.isEmpty ? nil : values.contains(true)
     }
 
+    /// Test-only task-local override for `isCLIDiscoveryEnabled` so parallel
+    /// tests can exercise CLI discovery without mutating shared `UserDefaults`.
+    @TaskLocal static var cliDiscoveryOverride: Bool? = nil
+
     public static var isCLIDiscoveryEnabled: Bool {
-        preferences.bool(forKey: cliDiscoveryDefaultsKey)
+        cliDiscoveryOverride ?? preferences.bool(forKey: cliDiscoveryDefaultsKey)
     }
 
     public static var isNotificationsEnabled: Bool {
@@ -849,11 +853,14 @@ extension CredentialStore {
     static func apiKeyAsync(for vendor: VendorIdentifier) async -> String? {
         let allowSecurityCLI = Self.allowsSecurityCLI
         let hook = Self.securityCLISubprocessHook
+        let discovery = Self.cliDiscoveryOverride
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
                 let result = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
                     Self.$securityCLISubprocessHook.withValue(hook) {
-                        apiKey(for: vendor)
+                        Self.$cliDiscoveryOverride.withValue(discovery) {
+                            apiKey(for: vendor)
+                        }
                     }
                 }
                 continuation.resume(returning: result)
