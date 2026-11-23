@@ -4,14 +4,18 @@ import QuotaBarCore
 
 /// The History window's top-level tabs.
 public enum HistoryTab: String, CaseIterable, Identifiable, Sendable {
+    /// One pool's "% left" over time, chosen from the pool list.
     case timeline
+    /// Locally recorded token activity for the selected pool.
+    case tokens
     case events
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .timeline: "Timeline"
+        case .timeline: "Pools"
+        case .tokens: "Tokens"
         case .events: "Events"
         }
     }

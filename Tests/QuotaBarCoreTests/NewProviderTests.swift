@@ -203,6 +203,9 @@ struct KiroQuotaProviderTests {
         let bonus = try #require(snapshot.row2)
 
         #expect(bonus.label == "BN")
+        // A bonus pool outlives the plan; it must never read as the plan.
+        #expect(bonus.allowanceRole == .bonus)
+        #expect(snapshot.row1?.allowanceRole == .plan)
         #expect(abs(try #require(bonus.primaryFraction) - 0.59188) < 0.0001)
         #expect(bonus.resetsAt == Date(timeIntervalSince1970: 1_790_776_800))
     }
@@ -223,6 +226,8 @@ struct KiroQuotaProviderTests {
         let overage = try #require(try kiroSnapshot(body).row3)
 
         #expect(overage.label == "OV")
+        // Paid overage spends money, so it is never a recommendation's headroom.
+        #expect(overage.allowanceRole == .paidOverage)
         #expect(abs(try #require(overage.primaryFraction) - 0.0025) < 0.00001)
     }
 
@@ -587,6 +592,7 @@ struct GrokQuotaProviderTests {
             #expect(snapshot.row1?.usedText == "Usage not published")
             #expect(snapshot.resetsAt == GrokQuotaProvider.parseISO8601("2026-09-06T13:06:43.146982+00:00"))
             #expect(snapshot.row2?.label == "OD")
+            #expect(snapshot.row2?.allowanceRole == .paidOverage)
             #expect(snapshot.row2?.primaryFraction == 0.2)
             #expect(snapshot.planName == (fromProxy ? "SuperGrok Lite" : "SuperGrok"))
             #expect(snapshot.cliSource == (fromProxy ? "CLI Proxy (grok-proxy.example.invalid)" : "grok CLI"))

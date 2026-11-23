@@ -253,6 +253,19 @@ public enum MetricCategory: String, Sendable, CaseIterable, Codable {
 
 // MARK: - Dual-bar burndown metrics
 
+/// A window's relation to the plan it sits beside. See
+/// `DualBarMetrics.allowanceRole`.
+public enum AllowanceRole: Sendable, Equatable {
+    /// The plan's own allowance (5H, WK, MO, a daily or unnamed plan window,
+    /// or a key's only cap). Spending it stops the pool.
+    case plan
+    /// A free pool that outlives the plan window (Kiro's bonus credits).
+    case bonus
+    /// A paid allowance billed on top of the plan (Kiro overage, Grok
+    /// on-demand). Never recommended, because using it spends money.
+    case paidOverage
+}
+
 public struct DualBarMetrics: Sendable, Equatable {
     /// 0.0 to 1.0 (actual quota consumed). `nil` when the vendor declared the
     /// window blocked/critical (see `isBlocked`) but gave no percentage to
@@ -289,6 +302,15 @@ public struct DualBarMetrics: Sendable, Equatable {
     /// as consumption made the popover advise "DevPass has 97% remaining" from
     /// a plan whose credits were entirely untouched.
     public var measuresElapsedTimeOnly: Bool = false
+    /// What this window's allowance is to the plan: the plan itself, or a
+    /// pool beside it that work can continue on once the plan is spent.
+    ///
+    /// Explicit rather than read from `label`, because labels are open-ended
+    /// (OpenAI emits `nM`/`nH`/`nD`/`PLAN`, Gemini any token). Defaulted to
+    /// `.plan`, so a new provider can never become supplementary by accident:
+    /// a supplementary pool never makes a pool spent, and is never a
+    /// recommendation's headroom.
+    public var allowanceRole: AllowanceRole = .plan
     public var usedText: String?
     public var resetText: String?
     /// When this window resets, and how long it runs — the same two figures
@@ -331,6 +353,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         blockedColor: String? = nil,
         isBlocked: Bool = false,
         measuresElapsedTimeOnly: Bool = false,
+        allowanceRole: AllowanceRole = .plan,
         usedText: String? = nil,
         resetText: String? = nil,
         resetsAt: Date? = nil,
@@ -348,6 +371,7 @@ public struct DualBarMetrics: Sendable, Equatable {
         self.blockedColor = blockedColor
         self.isBlocked = isBlocked
         self.measuresElapsedTimeOnly = measuresElapsedTimeOnly
+        self.allowanceRole = allowanceRole
         self.usedText = usedText
         self.resetText = resetText
         self.resetsAt = resetsAt

@@ -4,15 +4,14 @@ A small panel that shows how much you are using your AI tools. Open it from the 
 
 ## Layouts
 
-The segmented **Tokens | Chart | Overview** control in the filter bar picks the body. The choice is stored with the filters.
+The segmented **Story | Tokens** control in the filter bar picks the body. The choice is stored with the filters. Chart and Overview were retired on 23 November 2026; a stored choice of either now opens as Story.
 
 | Layout | Shows |
 |---|---|
-| **Tokens** (default) | Raw token consumption across providers as a stacked area, described under [Tokens layout](#tokens-layout) |
-| **Chart** | Burndown lines, the average and the headroom strip, described under [Chart layout](#what-it-shows-chart-layout) |
-| **Overview** | One tile per provider with each of its windows: a bar, the figure in the chosen metric and a reset tooltip. Tiles follow the popover's provider order and visibility. A configured provider that cannot be read keeps its tile and says why; one that is not configured has none. A hand-entered billing cycle is labelled elapsed time, never usage. Window and range filters are chart-only and hidden here |
+| **Story** (default) | One pool, told in sentences: how much is left of the window the story follows, how much has gone and how fast against an even pace, when it would run out (labelled with its basis, recent rate or the window's average), when it resets, its other windows, and recent events, above the chart of that window. It follows the popover's top Use-now pick; the pool menu pins any other pool |
+| **Tokens** | Raw token consumption across providers as a stacked area, described under [Tokens layout](#tokens-layout) |
 
-The Overview has **no total, average or combined figure**: each number belongs to one provider's own window. Its tiles are read as, for example, "Claude, Max (5x). weekly 60 percent remaining, resets in 3 days. 5-hour blocked".
+The story makes no claim that was not measured or published. A spent or blocked pool says when it comes back; a stale one leads with the failed poll and makes no projection. Figures are "% left" and times use one unit (`39h`, `5d`), as in the popover.
 
 ## Tokens layout
 

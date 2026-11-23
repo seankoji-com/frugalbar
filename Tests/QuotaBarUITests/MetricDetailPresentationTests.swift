@@ -135,9 +135,11 @@ struct MetricDetailPresentationTests {
 
     @Test("a blocked window is never given a projected run-out time")
     func noExhaustionForecastWhenBlocked() throws {
-        // Twice an even pace: an unblocked window would run out before reset.
+        // A window line never projects (23 Nov 2026): the verdict's single,
+        // labelled run-out does (`InspectorRunOut`, which also refuses a
+        // blocked window — see InspectorRunOutTests).
         let open = MetricDetailPresentation.windowLine(weekly(used: 0.6, elapsed: 0.3), now: now)
-        #expect(open.detail.contains("runs out"))
+        #expect(!open.detail.contains("runs out"))
         let blocked = MetricDetailPresentation.windowLine(weekly(used: 0.6, elapsed: 0.3, isBlocked: true), now: now)
         #expect(blocked.detail.contains("Blocked by the vendor"))
         #expect(!blocked.detail.contains("runs out"))

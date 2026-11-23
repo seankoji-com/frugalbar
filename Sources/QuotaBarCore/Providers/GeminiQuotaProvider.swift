@@ -654,7 +654,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// Those values are deliberately absent from this repository. They are
     /// another product's credentials, GitHub's push protection rejects them,
     /// and committing them would bake one vendor's identity into the source.
-    /// Set them once in Settings → Keys → Gemini, or via
+    /// Set them once in Settings → Antigravity, or via
     /// `FRUGALBAR_GEMINI_CLIENT_ID` / `FRUGALBAR_GEMINI_CLIENT_SECRET`.
     static let clientIDEnvVar = "FRUGALBAR_GEMINI_CLIENT_ID"
 

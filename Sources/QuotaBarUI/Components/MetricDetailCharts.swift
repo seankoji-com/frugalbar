@@ -185,7 +185,7 @@ struct BurndownChartView: View {
     }
 }
 
-/// Used share over time for every consumable window of one vendor. Windows
+/// "% left" over time (the glance's unit) for every consumable window of one vendor. Windows
 /// are told apart by dash pattern (and the legend), not by colour, which
 /// stays the per-reading urgency.
 struct UsageHistoryChartView: View {
@@ -243,7 +243,7 @@ struct UsageHistoryChartView: View {
                 ForEach(s.points) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
-                        y: .value("Used %", point.usedFraction * 100),
+                        y: .value("Left %", (1 - point.usedFraction) * 100),
                         series: .value("Segment", s.id)
                     )
                     .interpolationMethod(.monotone)
@@ -252,7 +252,7 @@ struct UsageHistoryChartView: View {
 
                     PointMark(
                         x: .value("Time", point.timestamp),
-                        y: .value("Used %", point.usedFraction * 100)
+                        y: .value("Left %", (1 - point.usedFraction) * 100)
                     )
                     .foregroundStyle(DetailChartStyle.color(for: point))
                     .symbol(DetailChartStyle.symbol(for: point))

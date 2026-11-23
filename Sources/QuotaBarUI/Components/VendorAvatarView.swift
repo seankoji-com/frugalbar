@@ -354,7 +354,8 @@ public struct VendorAvatarView: View {
                         .fixedSize()
                         // `offset` moves the drawing without moving layout, so
                         // the tag hangs off the corner and the frame stays 28pt.
-                        .offset(ExhaustedStyle.badgeOffset)
+                        .offset(x: ExhaustedStyle.badgeOffset.width * min(1, size / 28),
+                                y: ExhaustedStyle.badgeOffset.height * min(1, size / 28))
                 }
             }
 

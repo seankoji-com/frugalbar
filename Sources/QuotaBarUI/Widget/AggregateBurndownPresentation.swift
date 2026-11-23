@@ -22,6 +22,10 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
 
     /// Which body the panel draws.
     public enum Layout: String, Codable, CaseIterable, Sendable {
+        /// The story of one pool: what it has left, how fast it is going,
+        /// when it comes back (owner, 23 Nov 2026). The default. `chart` and
+        /// `overview` remain decodable but are drawn as this.
+        case story
         /// Raw token consumption across providers as a stacked area. Tokens
         /// share one unit, so stacking them is meaningful, unlike quota
         /// windows. See `TokenUsagePresentation`. First, as the default view.
@@ -34,12 +38,22 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
 
         public var title: String {
             switch self {
+            case .story: "Story"
             case .chart: "Chart"
             case .overview: "Overview"
             case .tokens: "Tokens"
             }
         }
+
+        /// What the panel draws for a stored choice: the retired layouts are
+        /// drawn as the story.
+        public var drawn: Layout { self == .tokens ? .tokens : .story }
+        /// The layouts the picker offers.
+        public static let offered: [Layout] = [.story, .tokens]
     }
+
+    /// The pool the story follows; nil follows the Use-now top pick.
+    public var storyPoolID: String? = nil
 
     /// Empty means every vendor with a consumable window.
     public var vendors: Set<VendorIdentifier>
@@ -54,7 +68,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         windowLabel: String? = nil,
         range: HistoryPresentation.TimeRange = .last24Hours,
         metric: Metric = .remaining,
-        layout: Layout = .tokens
+        layout: Layout = .story
     ) {
         self.vendors = vendors
         self.windowLabel = windowLabel
@@ -64,7 +78,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case vendors, windowLabel, range, metric, layout
+        case vendors, windowLabel, range, metric, layout, storyPoolID
     }
 
     /// Tolerant decoding: a vendor removed in a later release is dropped rather
@@ -77,7 +91,8 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         windowLabel = (try? c.decodeIfPresent(String.self, forKey: .windowLabel)) ?? nil
         range = ((try? c.decodeIfPresent(HistoryPresentation.TimeRange.self, forKey: .range)) ?? nil) ?? .last24Hours
         metric = ((try? c.decodeIfPresent(Metric.self, forKey: .metric)) ?? nil) ?? .remaining
-        layout = ((try? c.decodeIfPresent(Layout.self, forKey: .layout)) ?? nil) ?? .tokens
+        layout = ((try? c.decodeIfPresent(Layout.self, forKey: .layout)) ?? nil) ?? .story
+        storyPoolID = (try? c.decodeIfPresent(String.self, forKey: .storyPoolID)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -87,6 +102,7 @@ public struct WidgetFilters: Codable, Equatable, Sendable {
         try c.encode(range, forKey: .range)
         try c.encode(metric, forKey: .metric)
         try c.encode(layout, forKey: .layout)
+        try c.encodeIfPresent(storyPoolID, forKey: .storyPoolID)
     }
 
     /// Reads persisted filters; anything undecodable yields the defaults.
@@ -708,6 +724,8 @@ public enum AggregateBurndownPresentation {
         default: parts.append("\(filters.vendors.count) subscriptions")
         }
         switch filters.layout {
+        case .story:
+            parts = ["Story"]
         case .overview:
             // Window and range are chart concerns; the overview shows each
             // provider's current windows.

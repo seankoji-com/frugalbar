@@ -244,7 +244,7 @@ public struct DualBarProgressView: View {
 
 /// Stationary hatching distinguishes a spent allowance without introducing
 /// another status colour or an animated loading treatment.
-private struct ExhaustionStripes: Shape {
+struct ExhaustionStripes: Shape {
     func path(in rect: CGRect) -> Path {
         Path { path in
             let stripeWidth: CGFloat = 2

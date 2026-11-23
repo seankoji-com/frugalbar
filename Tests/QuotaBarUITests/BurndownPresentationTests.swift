@@ -291,7 +291,7 @@ struct BurndownPresentationTests {
         // No pace clause: the inspector states pace once, from the bar's own
         // pace marker, so a second verdict on a different margin cannot
         // contradict it.
-        #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · out in 1h 45m")
+        #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · at recent rate, out in 1h 45m")
     }
 
     @Test("summary line omits every clause whose input is missing")

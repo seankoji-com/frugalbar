@@ -404,6 +404,52 @@ struct ClaudeAccountTests {
         }
     }
 
+    @Test("a discovery failure on launch returns unreadable rows for the known Claude accounts")
+    func managerPreservesKnownAccountsBeforeFirstReading() async {
+        let accounts = [
+            ClaudeAccount(id: ClaudeAccountFixture.id(ClaudeAccountFixture.accountA),
+                          badge: "1", sourceLabel: "Fixture", fallbackName: "Primary"),
+            ClaudeAccount(id: ClaudeAccountFixture.id(ClaudeAccountFixture.accountB),
+                          badge: "2", sourceLabel: "Fixture", fallbackName: "Secondary"),
+        ]
+        let manager = QuotaManager(
+            providerFactory: { [] },
+            claudeProviderFactory: { throw ProviderError(.timedOut) },
+            knownClaudeAccounts: { accounts }
+        )
+
+        let result = await manager.refresh()
+
+        #expect(Set(result.keys) == Set(accounts.map(\.id)))
+        #expect(await manager.sortedSnapshots().map(\.displayName) == ["Primary", "Secondary"])
+        for account in accounts {
+            let snapshot = result[account.id]
+            #expect(snapshot?.claudeAccount == account)
+            #expect(snapshot?.status.unavailableReason == .timedOut)
+            #expect(snapshot?.row1 == nil && snapshot?.row2 == nil)
+        }
+    }
+
+    @Test("a locked vault preserves named Claude accounts when neither credential source can be read")
+    func lockedVaultKeepsAccountNames() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = ClaudeAccount(
+            id: "claude-account:example", badge: "1", sourceLabel: "Fixture", fallbackName: "Account 1"
+        )
+        _ = ClaudeAccountStore.saveDiscovered([account], in: defaults)
+        let discovery = ClaudeAccountDiscovery(
+            defaultsSuiteName: suite, proxyConfig: { nil }, directCredential: { nil }, isVaultLocked: { true }
+        )
+        let providers = await discovery.providers(now: now)
+        let provider = try #require(providers.first)
+        let reading = try await provider.fetchSnapshot()
+        #expect(reading.id == account.id)
+        #expect(reading.status.unavailableReason == .unsupported("Unlock Keychain in Settings to read Claude."))
+        #expect(reading.row1 == nil && reading.row2 == nil)
+        #expect(ClaudeAccountStore.all(in: defaults).map(\.id) == [account.id])
+    }
+
     @Test("an identity outage never republishes a previous account's quota as a fresh reading")
     func identityFailureIsUnavailable() async throws {
         let (defaults, suite) = isolatedDefaults(); defer { defaults.removePersistentDomain(forName: suite) }

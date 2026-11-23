@@ -20,6 +20,7 @@ public actor QuotaManager {
         displayPreferences: { CredentialStore.providerDisplayPreferences },
         geminiCreditLookup: { GeminiAPICreditStore.load() },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
+        knownClaudeAccounts: { ClaudeAccountStore.all() },
         antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
         monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } },
@@ -46,7 +47,8 @@ public actor QuotaManager {
     private let cachePolicy: CachePolicy
     private let clock: @Sendable () -> Date
     private let providerFactory: @Sendable () -> [any QuotaProvider]
-    private let claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])?
+    private let claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])?
+    private let knownClaudeAccounts: @Sendable () -> [ClaudeAccount]
     private let antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
@@ -119,7 +121,8 @@ public actor QuotaManager {
         geminiCreditLookup: @escaping @Sendable () -> GeminiAPICredit? = { nil },
         // Only the live manager opts into account discovery. Test factories
         // retain full control and never read ambient credentials or preferences.
-        claudeProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
+        claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])? = nil,
+        knownClaudeAccounts: @escaping @Sendable () -> [ClaudeAccount] = { [] },
         antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
@@ -141,6 +144,7 @@ public actor QuotaManager {
         self.clock = clock
         self.providerFactory = providerFactory
         self.claudeProviderFactory = claudeProviderFactory
+        self.knownClaudeAccounts = knownClaudeAccounts
         self.antigravityProviderFactory = antigravityProviderFactory
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
@@ -578,16 +582,26 @@ public actor QuotaManager {
         var allProviders: [any QuotaProvider] = providerFactory()
         if !hidden.contains(.claude), let discover = claudeProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
-                await QuotaFetchContext.$isUserInitiated.withValue(force) { await discover() }
+                try await QuotaFetchContext.$isUserInitiated.withValue(force) { try await discover() }
             }
             let accounts: [any QuotaProvider]
             switch discovery {
             case .success(let found): accounts = found
             case .failure(let reason):
-                let previous = cache.values.map(\.snapshot).filter { $0.vendorId == .claude }
-                accounts = previous.isEmpty
-                    ? [UnavailableClaudeInstance(id: "claude", name: "Claude", reason: reason)]
-                    : previous.map { UnavailableClaudeInstance(id: $0.id, name: $0.displayName, reason: reason) }
+                let known = knownClaudeAccounts()
+                if !known.isEmpty {
+                    accounts = known.map {
+                        UnavailableClaudeInstance(id: $0.id, name: $0.name, reason: reason, account: $0)
+                    }
+                } else {
+                    let previous = instanceOrder.compactMap { cache[$0]?.snapshot }.filter { $0.vendorId == .claude }
+                    accounts = previous.isEmpty
+                        ? [UnavailableClaudeInstance(id: "claude", name: "Claude", reason: reason)]
+                        : previous.map {
+                            UnavailableClaudeInstance(id: $0.id, name: $0.displayName, reason: reason,
+                                                      account: $0.claudeAccount)
+                        }
+                }
             }
             let insertion = allProviders.firstIndex { $0.vendorId == .claude } ?? 0
             allProviders.removeAll { $0.vendorId == .claude }
@@ -709,6 +723,8 @@ public actor QuotaManager {
                 let withinVendorBackoff = !force
                     && (entry.vendorRetryAfter.map { startNow < $0 } ?? false)
                 switch entry.snapshot.status {
+                case .unavailable(let reason) where force && reason == ClaudeAccountDiscovery.lockedVaultReason:
+                    shouldThrottle = false
                 case .unavailable(.notConfigured), .unavailable(.credentialRejected):
                     // These two are the only reasons a Settings change can
                     // fix instantly — a just-saved or just-corrected API key
@@ -720,7 +736,9 @@ public actor QuotaManager {
                     // with a stale credential failure (e.g. suppressed CLI read
                     // or locked vault), an explicit interactive click must not
                     // be throttled behind that passive miss.
-                    if allowInteractiveUnlock,
+                    if force && entry.snapshot.staleReading?.reason == ClaudeAccountDiscovery.lockedVaultReason {
+                        shouldThrottle = false
+                    } else if allowInteractiveUnlock,
                        let staleReason = entry.snapshot.staleReading?.reason,
                        (staleReason == .notConfigured || staleReason == .credentialRejected) {
                         shouldThrottle = false
@@ -1177,17 +1195,23 @@ private struct UnavailableAntigravityInstance: QuotaProvider {
     }
 }
 
-/// Discovery's own deadline preserves each known row's cache identity so the
-/// normal stale-retention path can keep its last reading without relabelling it.
+/// A failed discovery keeps known account names, including before the first
+/// successful poll since launch. A cached reading can still be retained by ID.
 private struct UnavailableClaudeInstance: QuotaProvider {
     let id: String
     let name: String
     let reason: UnavailableReason
+    var account: ClaudeAccount? = nil
     var vendorId: VendorIdentifier { .claude }
     var category: MetricCategory { .aiSubscriptions }
     var displayName: String { name }
     var instanceID: String { id }
-    func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        var snapshot = unavailable(reason)
+        snapshot.claudeAccount = account
+        snapshot.planName = account?.planName
+        return snapshot
+    }
 }
 
 // MARK: - System health summary

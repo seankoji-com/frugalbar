@@ -173,6 +173,7 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
             snapshot.row2 = DualBarMetrics(
                 primaryFraction: bonusFraction,
                 label: "BN",
+                allowanceRole: .bonus,
                 usedText: "\(format(bonusUsed))/\(format(bonusLimit)) bonus credits used",
                 resetText: expiry.map {
                     "Expires \(RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: now))"
@@ -199,6 +200,7 @@ public final class KiroQuotaProvider: QuotaProvider, Sendable {
             snapshot.row3 = DualBarMetrics(
                 primaryFraction: overageFraction,
                 label: "OV",
+                allowanceRole: .paidOverage,
                 usedText: "\(format(overageUsed))/\(format(cap)) overage credits\(rateText)",
                 resetText: credit.overageCharges.map {
                     "\(SubscriptionCycle.formatCost(Decimal($0), currencyCode: credit.currency ?? "USD")) charged"

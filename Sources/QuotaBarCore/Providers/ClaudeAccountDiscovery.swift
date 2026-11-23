@@ -59,11 +59,13 @@ struct ClaudeAccountRoute: Sendable {
 
 actor ClaudeAccountDiscovery {
     static let shared = ClaudeAccountDiscovery()
+    static let lockedVaultReason = UnavailableReason.unsupported("Unlock Keychain in Settings to read Claude.")
     private static let bindingsKey = "QuotaBarClaudeAccountBindings"
     private let defaults: UserDefaults
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
     private let directCredential: @Sendable () async -> String?
     private let directPlan: @Sendable () async -> String?
+    private let isVaultLocked: @Sendable () -> Bool
     private let backoff: ClaudeProxyBackoff
     private let grants: ClaudeGrantSchedule
     private let monthlyCredit: @Sendable (Date) async -> ClaudeMonthlyCredit?
@@ -84,6 +86,9 @@ actor ClaudeAccountDiscovery {
                 directPlan: @escaping @Sendable () async -> String? = {
                     TestHost.isActive ? nil : await CredentialStore.claudePlanNameAsync()
                 },
+                isVaultLocked: @escaping @Sendable () -> Bool = {
+                    !TestHost.isActive && KeychainVault.shared.statusSnapshot().isLockedOrDenied
+                },
                 backoff: ClaudeProxyBackoff? = nil, grants: ClaudeGrantSchedule? = nil,
                 monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil,
                 lastMonthlyCredit: (@Sendable () async -> ClaudeMonthlyCredit?)? = nil) {
@@ -98,6 +103,7 @@ actor ClaudeAccountDiscovery {
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
         self.directCredential = directCredential; self.directPlan = directPlan
+        self.isVaultLocked = isVaultLocked
         self.backoff = backoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
         self.grants = grants ?? (TestHost.isActive ? ClaudeGrantSchedule() : .shared)
     }
@@ -109,6 +115,11 @@ actor ClaudeAccountDiscovery {
         } ?? []
         let config = proxyConfig()
         let directToken = await directCredential().flatMap { $0.isEmpty ? nil : $0 }
+        if config == nil, directToken == nil, isVaultLocked() {
+            let reason = Self.lockedVaultReason
+            if oldAccounts.isEmpty { return [ClaudeDiscoveryFailureProvider(reason: reason)] }
+            return oldAccounts.map { ClaudeDiscoveryFailureProvider(reason: reason, account: $0) }
+        }
         let names = defaults.dictionary(forKey: ClaudeAccountStore.nicknamesKey) as? [String: String] ?? [:]
         let signature = ClaudeAccount.digest((config?.url.absoluteString ?? "") + "|"
             + (config?.managementKey ?? "") + "|" + (directToken ?? "") + "|"
@@ -347,10 +358,17 @@ actor ClaudeAccountDiscovery {
 
 private struct ClaudeDiscoveryFailureProvider: QuotaProvider {
     let reason: UnavailableReason
+    var account: ClaudeAccount? = nil
     var vendorId: VendorIdentifier { .claude }
-    var displayName: String { "Claude" }
+    var displayName: String { account?.name ?? "Claude" }
     var category: MetricCategory { .aiSubscriptions }
-    func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
+    var instanceID: String { account?.id ?? vendorId.rawValue }
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        var snapshot = unavailable(reason)
+        snapshot.claudeAccount = account
+        snapshot.planName = account?.planName
+        return snapshot
+    }
 }
 
 /// Fallback is permitted only between routes whose published account and

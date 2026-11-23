@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyStatusItemPresentation()
         DesktopWidgetWindow.configure(store: store)
 
-        // A change in Preferences → Providers takes effect now rather than on
+        // A change in Settings → Services takes effect now rather than on
         // the next two-minute poll. Captures `store`, not `self`.
         providerPreferencesObserver = NotificationCenter.default.addObserver(
             forName: .frugalbarProviderPreferencesDidChange, object: nil, queue: .main
@@ -344,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // poll made of it.
         let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store, sync: sync)))
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.title = "FrugalBar Preferences"
+        window.title = "FrugalBar Settings"
         window.center()
         window.isReleasedWhenClosed = false
         self.settingsWindow = window
@@ -354,17 +354,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyStatusItemPresentation() {
         guard let button = statusItem?.button else { return }
-        let summary = store.summary
         let snapshots = store.snapshots
 
-        let rec = MenuBarPresentation.limitingDetails(
-            snapshots: snapshots,
-            forecasts: store.forecasts,
-            now: Date()
-        )
-
-        // Show the vendor whose quota needs attention, or the fallback gauge.
-        if let vendorId = rec.vendorId, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
+        // The title is the top Use-now pick, from the same presentation the
+        // popover's strip is drawn from, so the two can never disagree.
+        let glance = MenuBarGlance.presentation(snapshots: snapshots, now: Date())
+        if let vendorId = glance.vendor, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
             let icon = NSImage(size: NSSize(width: 18, height: 18))
             icon.isTemplate = false
             icon.lockFocus()
@@ -374,15 +369,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = icon
             button.imagePosition = .imageLeft
         } else {
-            let symbol = MenuBarPresentation.symbolName(for: summary)
-            let description = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: rec)
+            let symbol = glance.symbolName ?? "gauge.with.dots.needle.67percent"
             let image: NSImage?
-            if let tint = MenuBarPresentation.tint(for: summary) {
-                let config = NSImage.SymbolConfiguration(paletteColors: [tint])
-                image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+            if glance.tone == .critical {
+                let config = NSImage.SymbolConfiguration(paletteColors: [MenuBarGlance.color(for: .critical)])
+                image = NSImage(systemSymbolName: symbol, accessibilityDescription: glance.accessibilityLabel)?
                     .withSymbolConfiguration(config)
             } else {
-                let img = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+                let img = NSImage(systemSymbolName: symbol, accessibilityDescription: glance.accessibilityLabel)
                 img?.isTemplate = true
                 image = img
             }
@@ -390,34 +384,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageLeft
         }
 
-
-        // 2. Set Attributed Title with remaining lowest quota, coloured by
-        // urgency instead of always red. Deliberately the *same*
-        // `MenuBarPresentation.tint` the glyph above uses: a title in a
-        // different colour from the icon beside it reads as two conflicting
-        // readings. nil tint means "no quota pressure" — follow the menu bar's
-        // own label colour rather than forcing one.
-        if let displayText = rec.displayText, !displayText.isEmpty {
-            // Recommended-vendor path: colour the *recommended vendor's own*
-            // reading, not the whole-summary worst urgency. A healthy
-            // recommendation must stay untinted (`.labelColor`) even when some
-            // other vendor is critical.
-            let titleColor = rec.recommendedTint ?? .labelColor
-            let attr = NSAttributedString(
-                string: " " + displayText,
-                attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold),
-                    .foregroundColor: titleColor
-                ]
-            )
-            button.attributedTitle = attr
-        } else {
-            button.attributedTitle = NSAttributedString(string: "")
-        }
-
-        let description = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: rec)
-        button.toolTip = description
-        button.setAccessibilityLabel(description)
+        // The title's colour describes the pick (normal, amber, red only when
+        // nothing is usable), and the glyph beside it carries the same state.
+        button.attributedTitle = NSAttributedString(
+            string: " " + glance.text,
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .bold),
+                .foregroundColor: MenuBarGlance.color(for: glance.tone)
+            ]
+        )
+        button.toolTip = glance.accessibilityLabel
+        button.setAccessibilityLabel(glance.accessibilityLabel)
     }
 
 

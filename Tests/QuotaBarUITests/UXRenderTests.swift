@@ -440,6 +440,129 @@ struct UXRenderTests {
         }.padding(12).background(Theme.surface), name: "agy-claude-icons", directory: directory)
     }
 
+    /// The redesigned popover (A2 + B1-F2 hero) with a synthetic mixed-provider batch,
+    /// and the menu-bar title in each tone.
+    @Test func renderGlancePopover() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = GlanceFixtures.now
+        let glance = GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now)
+        try await save(VStack(spacing: 0) {
+            GlanceSectionsView(glance: glance).padding(Theme.edgeMargin)
+            FooterActionsView(summary: .compute(from: GlanceFixtures.batch), isRefreshing: false,
+                              onOpenSettings: {}, onQuit: {}, onRefresh: {}, eventCount: 1)
+        }.frame(width: PopoverRootView.popoverWidth).background(Theme.surface), name: "glance-popover", directory: directory)
+
+        func spent(_ hours: Double?) -> QuotaSnapshot {
+            GlanceFixtures.snapshot("s\(hours ?? -1)", .opencode, "Spent",
+                                    [GlanceFixtures.bar("WK", 1.0, resetsInHours: hours, windowHours: 168)])
+        }
+        let weak = GlanceFixtures.snapshot("w", .opencode, "Low",
+                                           [GlanceFixtures.bar("WK", 0.88, resetsInHours: 100, windowHours: 168)])
+        var stale = GlanceFixtures.snapshot("st", .claude, "Stale",
+                                            [GlanceFixtures.bar("WK", 0.1, resetsInHours: 100, windowHours: 168)])
+        stale.staleReading = StaleReading(reason: .rateLimited(retryAfter: nil), at: now)
+        let states: [(String, [QuotaSnapshot])] = [
+            ("pick", GlanceFixtures.batch), ("weak pick", [weak]),
+            ("all spent", [spent(38)]), ("none confirmed", [spent(38), stale]),
+        ]
+        try await save(VStack(alignment: .leading, spacing: 8) {
+            ForEach(states, id: \.0) { label, snaps in
+                let title = MenuBarGlance.presentation(snapshots: snaps, now: now)
+                HStack(spacing: 6) {
+                    Text(label).font(.caption).foregroundStyle(Theme.outline).frame(width: 100, alignment: .leading)
+                    if let vendor = title.vendor {
+                        VendorAvatarView(vendorId: vendor, status: .measured(.none), size: 16)
+                    } else if let symbol = title.symbolName {
+                        Image(systemName: symbol).foregroundStyle(Color(nsColor: MenuBarGlance.color(for: title.tone)))
+                    }
+                    Text(title.text).font(.system(size: 11.5, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color(nsColor: MenuBarGlance.color(for: title.tone)))
+                }
+            }
+            GlanceSectionsView(glance: GlancePresentation(snapshots: [stale, weak], now: now))
+        }.padding(12).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "glance-states", directory: directory)
+
+        let unreadableClaude = [
+            GlanceFixtures.snapshot("claude-account:primary", .claude, "Primary", [],
+                                    status: .unavailable(.rateLimited(retryAfter: nil))),
+            GlanceFixtures.snapshot("claude-account:secondary", .claude, "Secondary", [],
+                                    status: .unavailable(.timedOut)),
+        ]
+        try await save(
+            GlanceSectionsView(glance: GlancePresentation(snapshots: unreadableClaude + [weak], now: now))
+                .padding(Theme.edgeMargin)
+                .frame(width: PopoverRootView.popoverWidth)
+                .background(Theme.surface),
+            name: "popover-claude-unreadable", directory: directory)
+    }
+
+    @Test func renderProviderGrid() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let presentation = ProviderGridPresentation(
+            snapshots: GlanceFixtures.batchWithWallet, serviceOrder: ProviderDisplayPreferences.defaultOrder,
+            now: GlanceFixtures.now
+        )
+        for vendor in [nil, .deepseek, .claude] as [VendorIdentifier?] {
+            try await save(ProviderGridView(presentation: presentation, expanded: vendor)
+                .padding(Theme.edgeMargin)
+                .frame(width: PopoverRootView.popoverWidth)
+                .background(Theme.surface),
+                name: vendor == .claude ? "provider-grid-claude" :
+                    vendor == nil ? "provider-grid-collapsed" : "provider-grid-expanded", directory: directory)
+        }
+    }
+
+    /// The rebuilt detail view for a synthetic Gemini account, with a
+    /// recorded climb in its weekly window so the recent-pace line shows.
+    @Test func renderGlanceInspector() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = GlanceFixtures.now
+        var gemini = try #require(GlanceFixtures.batchWithWallet.first {
+            $0.vendorId == .gemini && $0.antigravityAccount?.id == GlanceFixtures.burner.id })
+        gemini.auxiliaryInfo = "Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen, Gemini 3.8 Flash"
+        let wk = try #require(gemini.quotaBars.first { $0.label == "WK" })
+        let readings = (0..<24).map { i in
+            QuotaHistoryStore.ReadingRecord(vendor: gemini.id, barLabel: "WK",
+                measuredAt: now.addingTimeInterval(-Double(23 - i) * 1800), fraction: 0.60 + Double(i) * 0.0048,
+                isBlocked: false, confidence: .measured, urgency: .warning,
+                resetsAt: wk.resetsAt, windowLength: wk.windowLength, elapsedOnly: false)
+        }
+        var inspector = MetricDetailModalView(snapshot: gemini, readingsLoader: { _, _ in readings },
+            eventsLoader: { _, _, _, _, _ in [] }, onClose: {})
+        inspector.maxBody = 1_200
+        try await save(inspector.frame(width: PopoverRootView.popoverWidth, height: 1_000).background(Theme.surface),
+                       name: "glance-inspector", directory: directory)
+    }
+
+    /// The widget's Story layout for Gemini · Burner and for a blocked pool.
+    @Test func renderWidgetStory() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = GlanceFixtures.now
+        let providers = GlanceFixtures.batch.map { FixtureProvider(snapshot: $0) }
+        let store = QuotaStore(manager: QuotaManager(providerFactory: { providers }, displayPreferences: { .default }))
+        await store.load()
+        let burner = try #require(GlanceFixtures.batch.first {
+            $0.vendorId == .gemini && $0.antigravityAccount?.id == GlanceFixtures.burner.id })
+        let wk = try #require(burner.quotaBars.first { $0.label == "WK" })
+        let readings = (0..<24).map { i in
+            QuotaHistoryStore.ReadingRecord(vendor: burner.id, barLabel: "WK",
+                measuredAt: now.addingTimeInterval(-Double(23 - i) * 1800), fraction: 0.60 + Double(i) * 0.0048,
+                isBlocked: false, confidence: .measured, urgency: .warning,
+                resetsAt: wk.resetsAt, windowLength: wk.windowLength, elapsedOnly: false)
+        }
+        for (name, id) in [("widget-story", burner.id), ("widget-story-blocked", "opencode-go:delta")] {
+            try await save(ProviderStoryView(store: store, poolID: .constant(id),
+                                             preloaded: (readings, []), now: now)
+                .padding(14).frame(width: 360, height: 620).background(Theme.surface),
+                name: name, directory: directory)
+        }
+    }
+
     @Test func renderPopoverRegressionStates() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1154,16 +1277,16 @@ struct UXRenderTests {
         #expect(CredentialStore.preferences !== UserDefaults.standard)
         OpenCodeGoWorkspaceStore.set([beta, alpha])
         CredentialStore.hiddenProviders = [.kiro]
-        for pane in [SettingsView.Pane.providers, .workspaces, .notifications, .display, .data] {
+        for (pane, name) in [
+            (SettingsView.Pane.services, "services"), (.service(.opencode), "opencode"),
+            (.service(.claude), "claude"), (.service(.gemini), "antigravity"), (.service(.openai), "codex"),
+            (.connections, "connections"), (.notifications, "notifications"), (.display, "display"),
+            (.guide, "guide"), (.data, "data"),
+        ] {
             try await save(
                 SettingsView(store: store, initialPane: pane, readsCredentials: false),
-                name: "settings-\(pane.rawValue)", directory: directory)
+                name: "settings-\(name)", directory: directory)
         }
-        // The whole Display pane, so the popover, usage-details and
-        // window-bar legends are all on one image.
-        try await save(
-            SettingsView(store: store, initialPane: .display, readsCredentials: false, height: 1900),
-            name: "settings-display-full", directory: directory)
         _ = snapshots
     }
 

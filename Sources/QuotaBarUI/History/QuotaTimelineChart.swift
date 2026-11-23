@@ -233,7 +233,8 @@ public struct QuotaTimelineChart: View {
     private func accessibilityDescription(for segment: HistoryPresentation.TimelineSegment) -> String {
         let worst = segment.points.max { $0.fraction < $1.fraction }
         guard let worst else { return "\(segment.barLabel) window, no readings" }
-        let percent = Int((worst.fraction * 100).rounded())
+        // Spoken as the chart is drawn: the lowest "% left" in the window.
+        let percent = GlancePresentation.percent(1 - worst.fraction)
         let state: String
         if worst.isBlocked {
             state = "blocked"
@@ -244,7 +245,7 @@ public struct QuotaTimelineChart: View {
         } else {
             state = "healthy"
         }
-        return "\(segment.barLabel) window, peak \(percent) percent used, \(state), \(segment.points.count) readings"
+        return "\(segment.barLabel) window, lowest \(percent) percent left, \(state), \(segment.points.count) readings"
     }
 
     private var chart: some View {
@@ -254,7 +255,7 @@ public struct QuotaTimelineChart: View {
                 ForEach(segment.points) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
-                        y: .value("Used %", point.fraction * 100),
+                        y: .value("Left %", (1 - point.fraction) * 100),
                         series: .value("Segment", segment.id)
                     )
                     .interpolationMethod(.monotone)
@@ -269,7 +270,7 @@ public struct QuotaTimelineChart: View {
                     if marksState {
                         PointMark(
                             x: .value("Time", point.timestamp),
-                            y: .value("Used %", point.fraction * 100)
+                            y: .value("Left %", (1 - point.fraction) * 100)
                         )
                         .foregroundStyle(colorForPoint(point))
                         .symbol(symbol(for: point))
@@ -284,7 +285,7 @@ public struct QuotaTimelineChart: View {
                         // the shape is drawn.
                         PointMark(
                             x: .value("Time", point.timestamp),
-                            y: .value("Used %", point.fraction * 100)
+                            y: .value("Left %", (1 - point.fraction) * 100)
                         )
                         .foregroundStyle(colorForPoint(point))
                         .symbol(.circle)

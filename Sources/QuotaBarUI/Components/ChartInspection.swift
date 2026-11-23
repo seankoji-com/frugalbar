@@ -52,7 +52,7 @@ struct ReadingReadout: View {
                     Image(systemName: Self.figureSymbol(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Self.color(isBlocked: row.point.isBlocked, urgency: row.point.urgency))
-                    Text("\(row.barLabel) \(Self.exactPercentText(row.point.fraction)) used\(row.point.isBlocked ? ", blocked" : "")")
+                    Text("\(row.barLabel) \(Self.exactPercentText(1 - row.point.fraction)) left\(row.point.isBlocked ? ", blocked" : "")")
                         .font(.system(size: 10, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.onSurfaceVariant)
@@ -96,7 +96,7 @@ struct ReadingReadout: View {
     nonisolated static func spoken(_ poll: HistoryOverviewPresentation.InspectedPoll) -> String {
         let figures = poll.rows.map { row -> String in
             "\(WindowColumn.column(forLabel: row.barLabel)?.spokenName ?? row.barLabel) "
-                + "\(exactPercentText(row.point.fraction).dropLast()) percent used"
+                + "\(exactPercentText(1 - row.point.fraction).dropLast()) percent left"
                 + (row.point.isBlocked ? ", blocked" : "")
         }
         return (["Reading at \(exactTimestampText(poll.timestamp))"] + figures).joined(separator: ", ")

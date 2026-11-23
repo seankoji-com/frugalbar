@@ -81,9 +81,9 @@ struct UXInteractionTests {
         Self.launched
     }
 
-    // MARK: - Settings: the real workspace move buttons
+    // MARK: - Settings: service navigation and saved order
 
-    @Test("pressing the real move buttons reorders the workspaces, and a separate process reads the new order",
+    @Test("Settings saves service order and opens the workspace page, where ordering persists across processes",
           .enabled(if: selectedInteraction == "settings"))
     func settingsMoveButtonsPersist() async throws {
         try requireAccessibilityClient()
@@ -91,10 +91,14 @@ struct UXInteractionTests {
         let defaults = CredentialStore.preferences
         #expect(defaults !== UserDefaults.standard)
         let key = OpenCodeGoWorkspaceStore.defaultsKey
+        let orderKey = CredentialStore.providerOrderDefaultsKey
         let saved = defaults.data(forKey: key)
+        let savedOrder = defaults.stringArray(forKey: orderKey)
         defer {
             if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+            if let savedOrder { defaults.set(savedOrder, forKey: orderKey) } else { defaults.removeObject(forKey: orderKey) }
         }
+        CredentialStore.providerOrder = ProviderDisplayPreferences.defaultOrder
 
         let alpha = OpenCodeGoWorkspace(id: "ix-alpha", name: "Go Alpha")
         let beta = OpenCodeGoWorkspace(id: "ix-beta", name: "Go Beta")
@@ -102,8 +106,12 @@ struct UXInteractionTests {
         OpenCodeGoWorkspaceStore.set([alpha, beta, gamma])
 
         let (window, host) = try present(
-            SettingsView(store: nil, initialPane: .workspaces, readsCredentials: false)
+            SettingsView(store: nil, initialPane: .services, readsCredentials: false)
                 .frame(width: 760, height: 620))
+
+        try #require(axPress("Move Codex up"))
+        #expect(CredentialStore.providerOrder.prefix(2) == [.openai, .claude])
+        try #require(axPress("Open OpenCode Go settings"))
 
         #expect(axPress("Move Go Gamma up"))
         #expect(axPress("Move Go Alpha down"))
@@ -155,7 +163,7 @@ struct UXInteractionTests {
 
         let (window, host) = try present(
             PopoverRootView(store: store, onOpenSettings: {}, availableHeightProvider: { 900 }))
-        let close = "Close Claude details"
+        let close = "Close Claude Code details"
         #expect(axFind { $0 == close } == false)
 
         // Tab reaches a button only under Full Keyboard Access, a system
@@ -163,7 +171,8 @@ struct UXInteractionTests {
         // the footer's Quit button and end the run. So the row is pressed as
         // VoiceOver presses it, and the setting is recorded.
         print("UX-INTERACTION full keyboard access: \(NSApp.isFullKeyboardAccessEnabled)")
-        #expect(axPress { $0.hasPrefix("Claude") }, "the row is a pressable button")
+        #expect(axPress { $0.hasPrefix("Claude,") }, "the provider row expands")
+        #expect(axPress { $0.hasPrefix("Claude Code") }, "the account row opens details")
         #expect(axFind { $0 == close }, "the detail opened")
         try save(host, name: "interaction-popover-detail-open")
 
@@ -205,8 +214,8 @@ struct UXInteractionTests {
         #expect(axAction(label, kAXIncrementAction))
         let after = axValue(label)
         print("UX-INTERACTION chart adjust: before=\(before ?? "nil") after=\(after ?? "nil")")
-        // The newest poll: 67% used.
-        #expect(after?.contains("67 percent used") == true)
+        // The newest poll has 33% left.
+        #expect(after?.contains("33 percent left") == true)
         #expect(after != before)
         try save(host, name: "interaction-chart-adjust")
 
