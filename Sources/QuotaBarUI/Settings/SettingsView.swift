@@ -1464,10 +1464,15 @@ public struct SettingsView: View {
 
         // Persist the client configuration before signing in: the flow reads
         // it from the Keychain, so a secret typed but not yet saved would fail
-        // the exchange and look like a rejected sign-in.
+        // the exchange and look like a rejected sign-in. Run off MainActor so
+        // an unanswered startup Keychain prompt never freezes Settings.
+        let clientIDToSave = geminiClientID
+        let clientSecretToSave = geminiClientSecret
         do {
-            try GeminiOAuthLogin.saveClientConfiguration(
-                clientID: geminiClientID, clientSecret: geminiClientSecret)
+            try await Self.runKeychainOffMainActor {
+                try GeminiOAuthLogin.saveClientConfiguration(
+                    clientID: clientIDToSave, clientSecret: clientSecretToSave)
+            }
         } catch {
             geminiSignInStatus = "Could not save the client configuration to the Keychain"
             return
@@ -1505,10 +1510,14 @@ public struct SettingsView: View {
         // "Not configured" afterwards.
         let clientChanged = geminiClientID != loadedGeminiClientID
         if hasGeminiClientEdits {
+            let clientIDToSave = geminiClientID
+            let clientSecretToSave = geminiClientSecret
             do {
-                try GeminiOAuthLogin.saveClientConfiguration(
-                    clientID: geminiClientID, clientSecret: geminiClientSecret)
-                loadedGeminiClientID = geminiClientID
+                try await Self.runKeychainOffMainActor {
+                    try GeminiOAuthLogin.saveClientConfiguration(
+                        clientID: clientIDToSave, clientSecret: clientSecretToSave)
+                }
+                loadedGeminiClientID = clientIDToSave
                 geminiClientSecret = ""
                 geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
                 geminiSignInStatus = clientChanged
@@ -1528,13 +1537,18 @@ public struct SettingsView: View {
             
             if slot.id == .githubRest { githubPatChanged = true }
 
+            let label = slot.id.rawValue
             do {
                 if new.isEmpty {
                     // Clearing a field means "forget this", not "store empty".
-                    try KeychainManager.shared.delete(label: slot.id.rawValue)
+                    try await Self.runKeychainOffMainActor {
+                        try KeychainManager.shared.delete(label: label)
+                    }
                     perKeyStatus[slot.id] = "Removed"
                 } else {
-                    try KeychainManager.shared.set(key: new, label: slot.id.rawValue)
+                    try await Self.runKeychainOffMainActor {
+                        try KeychainManager.shared.set(key: new, label: label)
+                    }
                     perKeyStatus[slot.id] = await verify(slot.id, key: new)
                 }
                 loaded[slot.id] = new
@@ -1547,7 +1561,7 @@ public struct SettingsView: View {
         // sync must be reported — otherwise the GraphQL and Copilot rows keep
         // serving a revoked token with no field to fix it in.
         if githubPatChanged, let pat = loaded[.githubRest] {
-            let failures = applyGitHubTokenToLinkedVendors(pat)
+            let failures = await applyGitHubTokenToLinkedVendors(pat)
             if !failures.isEmpty {
                 perKeyStatus[.githubRest] = "Saved, but could not sync to \(failures.joined(separator: ", "))"
             }
@@ -1557,15 +1571,28 @@ public struct SettingsView: View {
         await refreshSources()
     }
 
+    /// Runs a blocking Keychain mutation off MainActor so an in-flight startup
+    /// SecurityAgent prompt holding the vault lock never freezes Settings.
+    private static func runKeychainOffMainActor<T: Sendable>(
+        _ operation: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try operation()
+        }.value
+    }
+
     /// Returns the display names of any linked vendors that could not be synced.
-    private func applyGitHubTokenToLinkedVendors(_ pat: String) -> [String] {
+    private func applyGitHubTokenToLinkedVendors(_ pat: String) async -> [String] {
         var failed: [String] = []
         for vendor in [VendorIdentifier.githubGraphql, .copilot] {
+            let label = vendor.rawValue
             do {
-                if pat.isEmpty {
-                    try KeychainManager.shared.delete(label: vendor.rawValue)
-                } else {
-                    try KeychainManager.shared.set(key: pat, label: vendor.rawValue)
+                try await Self.runKeychainOffMainActor {
+                    if pat.isEmpty {
+                        try KeychainManager.shared.delete(label: label)
+                    } else {
+                        try KeychainManager.shared.set(key: pat, label: label)
+                    }
                 }
             } catch {
                 failed.append(vendor.displayName)   // continue; don't abort the rest

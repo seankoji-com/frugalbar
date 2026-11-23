@@ -544,6 +544,8 @@ public actor SyncPublisher {
                 needsSecretRefresh = true
             } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
+            } else {
+                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
@@ -852,6 +854,7 @@ public actor SyncPublisher {
                 return
             }
             let now = clock.now()
+            needsSecretRefresh = false
             var next = state
             next.phase = .stopping
             next.ownership = nil
@@ -988,6 +991,8 @@ public actor SyncPublisher {
                 needsSecretRefresh = true
             } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
+            } else {
+                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))

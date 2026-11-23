@@ -970,36 +970,34 @@ struct KeychainVaultTests {
 
     @Test("R5-02: warm-up rejecting a stale deferred renewal causes writeDeferred to return .superseded")
     func warmUpRejectingStaleDeferredReportsSuperseded() throws {
-        let baseBackend = InMemoryKeychainBackend()
-        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let backend = InMemoryKeychainBackend()
         let lockURL = makeTempLockURL()
         defer { try? FileManager.default.removeItem(at: lockURL) }
 
-        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
-        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: baseBackend, lockFileURL: lockURL)
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
 
         try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
         // Another process replaces the session with v2.
         try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
 
-        // On vaultA's writeDeferred flush read, first run a warm-up on vaultA
-        // (simulating a concurrent warm-up rejecting the queued entry as stale)
-        // — test via HookedKeychainBackend on read or directly:
-        // Lock flock externally so v1->stale writeDeferred queues & returns .deferred,
-        // then warmUpSync rejects it as stale, then verify durable is v2 and cache is v2.
-        // Even better: trigger warmUpSync from inside writeDeferred's flush before eligible!
-        let triggered = LockedFlag()
-        hooked.onAfterRead = { account in
-            guard account == KeychainVault.vaultAccount, !triggered.value else { return }
-            triggered.set()
+        // Right after writeDeferred queues session-stale and before its own
+        // flush reads deferredWrites, warmUpSync runs, sees durable v2, rejects
+        // session-stale as stale, and empties deferredWrites.
+        let warmUpRan = LockedFlag()
+        vaultA.beforeDeferredFlushHook = {
+            guard !warmUpRan.value else { return }
+            warmUpRan.set()
+            _ = vaultA.warmUpSync(interactive: false)
         }
-        // Directly verify the stale rejection path returns .superseded and refreshes cache to v2:
+
         let outcome = vaultA.writeDeferred(
             "session-stale",
             namespace: .keys,
             account: "gemini-oauth",
             expectedPreviousValue: "session-v1"
         )
+        #expect(warmUpRan.value)
         #expect(outcome == .superseded)
         #expect(try vaultA.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
     }

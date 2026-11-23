@@ -438,6 +438,10 @@ public final class KeychainVault: @unchecked Sendable {
     /// Background queue for blocking Keychain / flock operations in async APIs.
     private let ioQueue = DispatchQueue(label: "com.quotabar.vault.io", qos: .userInitiated)
 
+    /// Test hook invoked in `writeDeferred` right after queueing the entry and
+    /// before attempting the non-blocking flush, to test cross-path stale rejection.
+    internal var beforeDeferredFlushHook: (@Sendable () -> Void)?
+
     public init(
         keysService: String = KeychainVault.defaultKeysService,
         syncService: String = KeychainVault.defaultSyncService,
@@ -927,6 +931,7 @@ public final class KeychainVault: @unchecked Sendable {
             return seq
         }
         guard let seq = queuedSeq else { return .superseded }
+        beforeDeferredFlushHook?()
         return flushDeferredNonBlockingOutcome(tracking: (key, seq))
     }
 
