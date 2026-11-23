@@ -730,7 +730,7 @@ public struct SettingsView: View {
                 .disabled(workspaces.last?.id == workspace.id)
                 .accessibilityLabel("Move \(workspace.name) down")
 
-                Button(role: .destructive) { removeWorkspace(workspace.id) } label: {
+                Button(role: .destructive) { Task { await removeWorkspace(workspace.id) } } label: {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
@@ -868,15 +868,18 @@ public struct SettingsView: View {
         persistWorkspaces()
     }
 
-    private func removeWorkspace(_ id: String) {
+    private func removeWorkspace(_ id: String) async {
         guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
         let instanceID = workspace.instanceID
         // A removed workspace must not leave its key behind in the Keychain.
         // If it cannot be deleted, keep the row: dropping it here would orphan
         // the secret with no way left to retry from the UI, and it would hide
-        // the failure a moment after it happened.
+        // the failure a moment after it happened. Run off MainActor so an
+        // unanswered startup Keychain prompt never freezes Settings.
         do {
-            try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
+            try await Self.runKeychainOffMainActor {
+                try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
+            }
         } catch {
             workspaceStatus[instanceID] = "Could not remove: its key could not be deleted from the Keychain"
             return
@@ -885,6 +888,7 @@ public struct SettingsView: View {
         workspaceKeys[instanceID] = nil
         workspaceHasKey[instanceID] = nil
         workspaceStatus[instanceID] = nil
+        vaultStatus = KeychainVault.shared.statusSnapshot()
         persistWorkspaces()
     }
 
@@ -902,8 +906,12 @@ public struct SettingsView: View {
         isVerifying = true
         defer { isVerifying = false }
         do {
-            try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
-            workspaceKeys[instanceID] = ""
+            try await Self.runKeychainOffMainActor {
+                try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
+            }
+            if (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == key {
+                workspaceKeys[instanceID] = ""
+            }
             workspaceHasKey[instanceID] = true
             vaultStatus = KeychainVault.shared.statusSnapshot()
             workspaceStatus[instanceID] = await verify(.opencode, key: key)
@@ -1462,20 +1470,28 @@ public struct SettingsView: View {
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
 
-        // Persist the client configuration before signing in: the flow reads
-        // it from the Keychain, so a secret typed but not yet saved would fail
-        // the exchange and look like a rejected sign-in. Run off MainActor so
-        // an unanswered startup Keychain prompt never freezes Settings.
-        let clientIDToSave = geminiClientID
-        let clientSecretToSave = geminiClientSecret
-        do {
-            try await Self.runKeychainOffMainActor {
-                try GeminiOAuthLogin.saveClientConfiguration(
-                    clientID: clientIDToSave, clientSecret: clientSecretToSave)
+        // Persist any unsaved client configuration edits before signing in:
+        // the flow reads from the Keychain, so a secret typed but not yet saved
+        // would fail the exchange. Skip writing when the user has not edited
+        // the fields so clicking Connect before the vault finishes loading
+        // cannot overwrite or delete an already-stored client ID.
+        if hasGeminiClientEdits {
+            let clientIDToSave = geminiClientID
+            let clientSecretToSave = geminiClientSecret
+            do {
+                try await Self.runKeychainOffMainActor {
+                    try GeminiOAuthLogin.saveClientConfiguration(
+                        clientID: clientIDToSave, clientSecret: clientSecretToSave)
+                }
+                loadedGeminiClientID = clientIDToSave
+                if geminiClientSecret == clientSecretToSave {
+                    geminiClientSecret = ""
+                }
+                geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+            } catch {
+                geminiSignInStatus = "Could not save the client configuration to the Keychain"
+                return
             }
-        } catch {
-            geminiSignInStatus = "Could not save the client configuration to the Keychain"
-            return
         }
 
         do {
@@ -1518,7 +1534,9 @@ public struct SettingsView: View {
                         clientID: clientIDToSave, clientSecret: clientSecretToSave)
                 }
                 loadedGeminiClientID = clientIDToSave
-                geminiClientSecret = ""
+                if geminiClientSecret == clientSecretToSave {
+                    geminiClientSecret = ""
+                }
                 geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
                 geminiSignInStatus = clientChanged
                     ? "Client saved. Connect Google account again to sign in with it."

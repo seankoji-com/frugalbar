@@ -703,8 +703,12 @@ public actor SyncPublisher {
             // The gate closed (Stop pending, a lost write, a cancelled
             // attempt): not Google's failure, so no backoff and no message.
         } else {
-            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+            if error is KeychainError {
                 needsSecretRefresh = true
+            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+                needsSecretRefresh = true
+            } else {
+                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
