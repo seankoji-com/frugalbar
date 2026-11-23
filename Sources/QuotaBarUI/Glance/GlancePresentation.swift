@@ -50,6 +50,9 @@ public struct GlancePresentation: Equatable, Sendable {
         public let headroomAtRisk: Double?
         public let isAheadOfPace: Bool
         public let isSpent: Bool
+        /// The share used, as the bars draw it: 1 − `remaining`, nil when no
+        /// fraction was published.
+        public var used: Double? { remaining.map { 1 - $0 } }
     }
 
     public struct Pool: Identifiable, Equatable, Sendable {

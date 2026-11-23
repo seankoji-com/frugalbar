@@ -453,7 +453,7 @@ tickets (Fable) sit beside that model's line in its Claude account's Providers
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
 model line to sit beside, are Wallet lines. Every meter sits in one fixed
 column so the bars line up. A credit that expires and publishes what was used
-draws the Providers bar (`Meter.credit`, through `RemainingBar`): % left and the
+draws the Providers bar (`Meter.credit`, through `UsageBar`): % used and the
 countdown beneath, the same colours, and the even-use tick only where the
 credit's period is known. The ChatGPT API credit and Claude usage credits pass
 the promo's own `barMetrics`. ChatGPT bonus credits publish an expiry but no
@@ -490,8 +490,14 @@ pool keeps its service identity and opens its own inspector.
   pick, red only when no pool is usable, each with a glyph. "All spent" is
   claimed only when every pool is confirmed spent; spent plus unreadable reads
   "None confirmed usable".
-- Bars in the glance show **% left**; the tick is where an even pace would
-  leave it (`1 − paceMarker`), drawn only when `paceMarker` is.
+- Bars show **% used** (`UsageBar`, owner, 24 Nov 2026): empty when nothing
+  is used, full when spent, so the fill reads the way vendors' consoles and the
+  red spent "100%" read. A full bar for an unused window was read as
+  exhausted. The figure under the bar is always printed, 0% included, and the
+  header, group averages, inspector and spoken labels say "used" too. The tick
+  is where an even pace would be (`paceMarker`), drawn only when `paceMarker`
+  is. Text that names its direction ("12% WK left" in a pick reason, the
+  widget's story, History's "% left over time") is unchanged.
 - Use one unit per countdown. Providers uses `ResetCountdownBadge.compact`
   so the badge and cell both switch to days at 24 hours. The menu bar and
   Story use `GlancePresentation.countdown`, which switches at 48 hours.

@@ -64,10 +64,11 @@ struct GlanceCard<Content: View>: View {
     }
 }
 
-/// A "% left" meter. The fill is what remains; the tick, when the vendor
-/// published the window's reset and length, is where an even pace would
-/// leave it (`1 − paceMarker`). Nothing is drawn for a figure not received.
-struct RemainingBar: View {
+/// A "% used" meter (owner, 24 Nov 2026): empty when nothing is used, full
+/// when the window is spent. The tick, when the vendor published the window's
+/// reset and length, is where an even pace would have used it (`paceMarker`).
+/// Nothing is drawn for a figure not received.
+struct UsageBar: View {
     let window: GlancePresentation.Window
     var height: CGFloat = 4
 
@@ -75,14 +76,14 @@ struct RemainingBar: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
-                if let remaining = window.remaining {
+                if let used = window.used, used > 0 {
                     Capsule().fill(GlanceColors.fill(for: window))
-                        .frame(width: max(0, proxy.size.width * remaining), height: height)
+                        .frame(width: max(height, proxy.size.width * used), height: height)
                 }
                 if let pace = window.bar.paceMarker {
                     Rectangle().fill(Theme.onSurface)
                         .frame(width: 1.5, height: height + 4)
-                        .offset(x: proxy.size.width * (1 - pace) - 0.75)
+                        .offset(x: proxy.size.width * pace - 0.75)
                 }
             }
         }
@@ -207,7 +208,7 @@ private struct HeroPickView: View {
                 Text(heroCaption(reset: reset))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.onSurfaceVariant)
-                RemainingBar(window: pick.binding, height: 6)
+                UsageBar(window: pick.binding, height: 6)
             }
             .padding(14)
             .background(tint.opacity(0.07))
@@ -383,7 +384,7 @@ private struct ServicesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            GlanceSectionHeader(title: "Services", meta: "bar = % left · tick = even pace")
+            GlanceSectionHeader(title: "Services", meta: "bar = % used · tick = even pace")
             GlanceCard {
                 // One shared column header, so each block's own header row can
                 // carry its counts in full.
@@ -542,7 +543,7 @@ private struct ServicePoolRow: View {
     @ViewBuilder private func cell(_ window: GlancePresentation.Window?) -> some View {
         if let window {
             VStack(alignment: .leading, spacing: 2) {
-                RemainingBar(window: window)
+                UsageBar(window: window)
                 HStack(spacing: 3) {
                     if window.isSpent {
                         Image(systemName: "nosign").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.errorBold)
@@ -615,7 +616,7 @@ struct WalletSection: View {
 }
 
 /// A Wallet line's meter, in the provider rows' anatomy: the bar, then "% left"
-/// and the countdown under it. A credit's bar is `RemainingBar`, so its fill,
+/// and the countdown under it. A credit's bar is `UsageBar`, so its fill,
 /// colour and even-use tick follow the same rules as a quota window; a
 /// time-only meter is drawn in the informational colour and says "MO 63%".
 private struct WalletMeterCell: View {
@@ -636,10 +637,10 @@ private struct WalletMeterCell: View {
                         .frame(height: trackHeight)
                     caption("100%", reset: reset, color: Theme.error)
                 }
-            } else if let remaining = window.remaining {
+            } else if let used = window.used {
                 VStack(alignment: .leading, spacing: 3) {
-                    RemainingBar(window: window, height: trackHeight)
-                    caption(remaining.formatted(.percent.precision(.fractionLength(0))),
+                    UsageBar(window: window, height: trackHeight)
+                    caption(used.formatted(.percent.precision(.fractionLength(0))),
                             reset: reset, color: GlanceColors.text(for: window))
                 }
             }

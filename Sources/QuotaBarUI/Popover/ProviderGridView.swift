@@ -17,7 +17,7 @@ struct ProviderGridView: View {
                     .padding(.vertical, 9)
                 Divider()
                 line {
-                    Text("% left").foregroundStyle(Theme.outline)
+                    Text("% used").foregroundStyle(Theme.outline)
                 } figures: {
                     columns { column in
                         Text(column.label)
@@ -46,7 +46,7 @@ struct ProviderGridView: View {
                     }
                 }
                 Divider()
-                Text("Averages use reported windows. Red percentages show % used. Ticks mark even pace.")
+                Text("Averages use reported windows. Ticks mark even pace.")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.outline)
                     .fixedSize(horizontal: false, vertical: true)
@@ -294,8 +294,8 @@ struct ProviderGridView: View {
             let window = GlancePresentation.window(for: bar, now: presentation.now)
             if window.isSpent {
                 parts.append("\(bar.label), \(spentDescription(window))")
-            } else if let remaining = window.remaining {
-                parts.append("\(bar.label), \(remaining.formatted(.percent)) left")
+            } else if let used = window.used {
+                parts.append("\(bar.label), \(used.formatted(.percent)) used")
             }
             if let reset = presentation.countdown(bar.resetsAt, stale: single.isStale) {
                 parts.append("resets in \(reset)")
@@ -307,8 +307,8 @@ struct ProviderGridView: View {
             let result: String
             let reset: Date?
             switch summary {
-            case .average(let fraction, let reported, let count):
-                result = "\(fraction.formatted(.percent)) left across \(reported) of \(count) pools"
+            case .average(let remaining, let reported, let count):
+                result = "\((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools"
                 reset = nil
             case .spent(let next, let exhausted, let blocked):
                 result = exhausted && !blocked ? "all spent" : "all blocked or spent"
@@ -316,8 +316,8 @@ struct ProviderGridView: View {
             case .window(let window):
                 if window.isSpent {
                     result = spentDescription(window)
-                } else if let remaining = window.remaining {
-                    result = "\(remaining.formatted(.percent)) left"
+                } else if let used = window.used {
+                    result = "\(used.formatted(.percent)) used"
                 } else {
                     continue
                 }
@@ -341,7 +341,7 @@ struct ProviderGridView: View {
                       showsBlockedGlyph: allMeasuredExhausted && includesBlocked)
         case .average(let remaining, let reported, let count):
             VStack(alignment: .trailing, spacing: 2) {
-                Text(remaining, format: .percent.precision(.fractionLength(0...1)))
+                Text(1 - remaining, format: .percent.precision(.fractionLength(0...1)))
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
                 Text(reported == 1 ? "\(reported)/\(count)" : "avg · \(reported)/\(count)")
@@ -350,7 +350,7 @@ struct ProviderGridView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(column.spokenName): \(remaining.formatted(.percent)) left across \(reported) of \(count) pools")
+            .accessibilityLabel("\(column.spokenName): \((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools")
         }
     }
 
@@ -365,15 +365,17 @@ struct ProviderGridView: View {
             spentCell(title, reset: reset, spoken: "\(label), \(spentDescription(window))",
                       showsBlockedGlyph: exhausted && window.bar.isBlocked)
                 .opacity(stale ? 0.65 : 1)
-        } else if let remaining = window.remaining {
+        } else if let used = window.used {
             VStack(alignment: .leading, spacing: 3) {
-                RemainingBar(window: window, height: trackHeight)
-                meterCaption(remaining == 1 ? nil : remaining.formatted(.percent.precision(.fractionLength(0))),
+                UsageBar(window: window, height: trackHeight)
+                // Always printed, 0% included: an empty bar with no figure
+                // reads as "no reading".
+                meterCaption(used.formatted(.percent.precision(.fractionLength(0))),
                              reset: reset, color: GlanceColors.text(for: window))
             }
             .opacity(stale ? 0.65 : 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel([ "\(label), \(remaining.formatted(.percent)) left",
+            .accessibilityLabel([ "\(label), \(used.formatted(.percent)) used",
                                  reset.map { "resets in \($0)" } ].compactMap { $0 }.joined(separator: ", "))
         }
     }

@@ -443,19 +443,19 @@ public struct MetricDetailModalView: View {
                         .font(Theme.Typography.cardBody.weight(.semibold))
                         .foregroundStyle(summaryColor)
                     Spacer(minLength: 4)
-                    if let focus = focusWindow, let remaining = focus.remaining, let label = summary.focusLabel {
+                    if let focus = focusWindow, let used = focus.used, let label = summary.focusLabel {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             // A blocked window's figure is not headroom: the
                             // glyph sits beside it here as on every bar.
                             if summary.focusIsBlocked {
                                 BlockedGlyph(color: summaryColor, size: 14)
                             }
-                            // "% left", as the popover says it: one unit across
-                            // the glance and the detail.
-                            Text("\(GlancePresentation.percent(remaining))%")
+                            // "% used", as the popover's bars say it: one unit
+                            // across the glance and the detail.
+                            Text("\(GlancePresentation.percent(used))%")
                                 .font(.system(size: 24, weight: .semibold).monospacedDigit())
                                 .foregroundStyle(Theme.onSurface)
-                            Text("\(label) left")
+                            Text("\(label) used")
                                 .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                         }
@@ -540,7 +540,7 @@ public struct MetricDetailModalView: View {
                 let window = GlancePresentation.window(for: line.metrics, now: now)
                 let leftText: String? = line.metrics.measuresElapsedTimeOnly
                     ? line.percentText.map { "\($0) elapsed" }
-                    : window.remaining.map { "\(GlancePresentation.percent($0))% left" }
+                    : window.used.map { "\(GlancePresentation.percent($0))% used" }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(line.label)
@@ -550,14 +550,14 @@ public struct MetricDetailModalView: View {
                             .frame(width: 44, alignment: .leading)
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
-                        // "% left", the popover's bar: fill is what remains,
-                        // the tick where an even pace would leave it. A billing
+                        // "% used", the popover's bar: fill is what was used,
+                        // the tick where an even pace would be. A billing
                         // cycle keeps its elapsed-time bar.
                         Group {
                             if line.metrics.measuresElapsedTimeOnly {
                                 DualBarProgressView(metrics: line.metrics, showsLabel: false)
                             } else {
-                                RemainingBar(window: window, height: 6)
+                                UsageBar(window: window, height: 6)
                             }
                         }
                         // Carried-over figures: the bar recedes, the words
