@@ -74,6 +74,13 @@ struct SyncSecretRefreshRetryTests {
 
         await harness.publisher.vaultDidUnlock()
         #expect(await harness.publisher.nextWakeup() == backedOffUntil)
+
+        // R17-01: the Unlock did not prove the Sync secrets readable, so the
+        // next due attempt still refreshes before it reads them.
+        #expect(harness.secrets.refreshCount == 1)
+        harness.clock.set(try #require(backedOffUntil))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
     }
 }
 

@@ -729,7 +729,10 @@ public actor SyncPublisher {
     /// clearing unrelated backoff (such as a Google rate limit).
     public func vaultDidUnlock() {
         let keyError = Self.describe(SyncAuthError.secretsUnavailable)
-        needsSecretRefresh = false
+        // `needsSecretRefresh` is left armed: an Unlock can report a loaded
+        // vault while Sync's own items are still unreadable (a failed Sync
+        // scan), so only the next refresh, which reads both Sync secrets,
+        // may clear it. That costs one non-interactive warm-up.
         // The refresh flag can stay armed across a later Google failure, so
         // it no longer says whose backoff this is; `backoffFromSecrets` does.
         guard backoffFromSecrets || state.lastError == keyError else { return }
