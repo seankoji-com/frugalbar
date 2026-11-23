@@ -150,7 +150,9 @@ struct ProviderGridView: View {
                                 .padding(.horizontal, 14)
                         }
                     } else {
-                        HStack(spacing: 7) {
+                        // The shared `line`, so this bar keeps the trailing
+                        // slot every row reserves and ends where theirs do.
+                        line {
                             // A model's reset tickets sit beside that model's
                             // line, in the account they reset (owner, 24 Nov 2026).
                             HStack(spacing: 4) {
@@ -162,10 +164,9 @@ struct ProviderGridView: View {
                                     ModelTicketsBadge(credits: tickets)
                                 }
                             }
-                            .frame(width: nameWidth, alignment: .leading)
+                        } figures: {
                             windowCell(window, label: bar.label, stale: pool.isStale, showSpentPercent: true)
                         }
-                        .padding(.horizontal, 14)
                     }
                 }
             }
