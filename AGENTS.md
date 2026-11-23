@@ -450,7 +450,13 @@ the bonus credit count. The Gemini AI Studio key's configured credit is one
 "Gemini API" line of its own, never an Antigravity account's. A model's reset
 tickets (Fable) sit beside that model's line in its Claude account's Providers
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
-model line to sit beside, are Wallet lines. The group
+model line to sit beside, are Wallet lines. A credit that expires and
+publishes what was used draws a small usage bar on its line (`Usage`). Its
+even-use tick appears only when the credit's period is known: the ChatGPT API
+credit and Claude usage credits use the promo's own `paceMarker`. ChatGPT
+bonus credits publish an expiry but no start, so they draw a bar with no
+tick. Time-only credits (Claude Console, configured Gemini) draw no usage bar.
+The group
 averages use only fresh figures in the same window and report coverage. Each
 pool keeps its service identity and opens its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window

@@ -609,6 +609,32 @@ struct WalletSection: View {
     }
 }
 
+/// A credit's used share on one line: the fill is what was used (it is a
+/// credit, not a quota window, so "% used" as its own console reads), and the
+/// tick is where an even spend over its published period would be by now.
+private struct WalletUsageBar: View {
+    let usage: WalletPresentation.Usage
+
+    private var fill: Color {
+        usage.exhausted ? Theme.errorBold : (usage.aheadOfPace ? Theme.tertiary : Theme.primary)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.surfaceContainerHighest)
+                Capsule().fill(fill).frame(width: proxy.size.width * min(max(usage.used, 0), 1))
+                if let pace = usage.evenPace, pace > 0, pace < 1, !usage.exhausted {
+                    Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: 8)
+                        .offset(x: proxy.size.width * pace - 0.75)
+                }
+            }
+        }
+        .frame(width: 40, height: 4)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct WalletRowView: View {
     let row: WalletPresentation.Row
 
@@ -633,6 +659,9 @@ private struct WalletRowView: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 6)
+            if let usage = row.usage {
+                WalletUsageBar(usage: usage)
+            }
             if let figure = row.figure {
                 Text(figure)
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())

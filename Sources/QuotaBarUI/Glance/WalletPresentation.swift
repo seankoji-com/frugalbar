@@ -30,7 +30,21 @@ struct WalletPresentation: Equatable, Sendable {
         let figure: String?
         var tone: Tone = .normal
         var symbol: String? = nil
+        /// A credit that expires and publishes what was used draws a small
+        /// usage bar (owner, 24 Nov 2026).
+        var usage: Usage? = nil
         let spoken: String
+    }
+
+    /// The share of a credit used, and where an even spend over its period
+    /// would be by now. The tick is drawn only when the credit published the
+    /// period it spans (start and end); a credit that publishes only its
+    /// expiry has no even pace to show, and none is invented.
+    struct Usage: Equatable, Sendable {
+        let used: Double
+        let evenPace: Double?
+        var exhausted: Bool { used >= QuotaSnapshot.exhaustionThreshold }
+        var aheadOfPace: Bool { evenPace.map { used - $0 > DualBarMetrics.aheadOfPaceMargin } ?? false }
     }
 
     let rows: [Row]
@@ -77,9 +91,11 @@ struct WalletPresentation: Equatable, Sendable {
                 let expiry = entry.creditGrant?.expiresAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
                 rows.append(Row(
                     id: snapshot.id + "#bonus", vendor: snapshot.vendorId, title: "\(provider) bonus",
-                    context: context(usage.percentText, expiry.map { "expires \($0)" }),
+                    context: context(usage.percentText, expiry),
                     figure: APICreditEntryPresentation(entry: entry).figure,
                     tone: usage.fraction >= QuotaSnapshot.exhaustionThreshold ? .exhausted : .normal,
+                    // An expiry but no published start: a bar, no even-use tick.
+                    usage: entry.creditGrant?.expiresAt == nil ? nil : Usage(used: usage.fraction, evenPace: nil),
                     spoken: usage.spoken))
             }
             for (index, e) in p.subscriptionCredits.enumerated() {
@@ -94,10 +110,12 @@ struct WalletPresentation: Equatable, Sendable {
                 rows.append(Row(
                     id: snapshot.id + "#promo", vendor: snapshot.vendorId,
                     title: "\(provider) \(promo.title.lowercased().hasPrefix("api") ? "API" : promo.title.lowercased())",
-                    context: context(promo.percentText.map { "\($0) used" },
-                                     promo.dayCountdown.map { "resets \($0)" }),
+                    context: context(promo.percentText.map { "\($0) used" }, promo.dayCountdown),
                     figure: promo.amountText.map { "\($0)/mo" },
                     tone: promo.isExhausted ? .exhausted : .normal,
+                    // The period it spans is published, so the even-use tick is
+                    // the promo's own `paceMarker`.
+                    usage: promo.fraction.map { Usage(used: $0, evenPace: promo.paceMarker) },
                     spoken: promo.spoken))
             }
             if let credit = p.monthlyCredit {

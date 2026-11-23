@@ -31,6 +31,27 @@ struct WalletPresentationTests {
         #expect(api.context?.contains("96% used") == true)
     }
 
+    @Test("a credit with an expiry draws a usage bar; the even-use tick only where its period is published")
+    func usageBars() throws {
+        // ChatGPT's monthly API credit publishes its period: bar and tick.
+        let api = try #require(wallet.rows.first { $0.title == "ChatGPT API" }?.usage)
+        #expect(abs(api.used - 0.96) < 0.001)
+        let pace = try #require(api.evenPace)
+        // Even use over the calendar month ending at the cycle end (OpenAI
+        // publishes no cycle start; `OpenAIMonthlyCredit.entry`).
+        let end = now.addingTimeInterval(26 * 86_400)
+        let month = try #require(DualBarMetrics.monthWindowLength(endingAt: end))
+        #expect(abs(pace - (1 - end.timeIntervalSince(now) / month)) < 0.001)
+        #expect(api.aheadOfPace)
+        // The bonus credits publish an expiry but no start: a bar, no tick.
+        let bonus = try #require(wallet.rows.first { $0.title == "ChatGPT bonus" }?.usage)
+        #expect(abs(bonus.used - (75_000 - 60_085) / 75_000) < 0.001)
+        #expect(bonus.evenPace == nil)
+        // Time-only credits (Console, configured Gemini) have no usage bar.
+        #expect(wallet.rows.first { $0.title == "Claude Console" }?.usage == nil)
+        #expect(wallet.rows.first { $0.title == "Gemini API" }?.usage == nil)
+    }
+
     @Test("a Fable ticket is not in the Wallet: it sits beside the Fable line in Providers")
     func modelTicketsLeaveTheWallet() throws {
         // No ticket line at all: the fixture's only ticket is Fable's, and a
