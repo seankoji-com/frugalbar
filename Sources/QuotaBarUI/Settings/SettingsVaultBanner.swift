@@ -42,6 +42,23 @@ enum SettingsCredentialMerge {
     }
 }
 
+/// Whether a vault status change reported while Settings is open should also
+/// reload the credential fields, sources and workspace key indicators, not
+/// just the banner. A background unlock (a popover refresh) or a migrated
+/// legacy item changes what the fields should show; a deferred session write
+/// alone does not, and reloading sources for it would re-run discovery on
+/// every Gemini renewal.
+enum SettingsVaultReload {
+    static func shouldReloadCredentials(
+        previous: VaultStatusSnapshot,
+        current: VaultStatusSnapshot
+    ) -> Bool {
+        previous.state != current.state
+            || previous.pendingLegacyKeys != current.pendingLegacyKeys
+            || previous.pendingLegacySyncKeys != current.pendingLegacySyncKeys
+    }
+}
+
 /// Presentation model for the inline Keychain vault banner in Settings.
 struct SettingsVaultBannerPresentation: Equatable {
     enum Kind: Equatable {

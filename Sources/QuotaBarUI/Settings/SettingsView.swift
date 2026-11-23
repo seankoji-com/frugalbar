@@ -297,8 +297,18 @@ public struct SettingsView: View {
             if old == .workspaces { commitWorkspaceRenames() }
         }
         .onReceive(NotificationCenter.default.publisher(for: KeychainVault.statusDidChangeNotification)) { _ in
-            if readsCredentials {
-                vaultStatus = KeychainVault.shared.statusSnapshot()
+            guard readsCredentials else { return }
+            let previous = vaultStatus
+            let current = KeychainVault.shared.statusSnapshot()
+            vaultStatus = current
+            // A vault unlocked elsewhere (e.g. a popover refresh) must also
+            // reload the fields, sources and key indicators, or the banner
+            // clears while the controls still show the locked vault. The
+            // merge keeps any edits the user has typed.
+            if SettingsVaultReload.shouldReloadCredentials(previous: previous, current: current) {
+                loadKeysFromCache()
+                refreshWorkspaceHasKey()
+                Task { await refreshSources() }
             }
         }
     }

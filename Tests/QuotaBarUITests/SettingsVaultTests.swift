@@ -59,6 +59,23 @@ struct SettingsVaultTests {
         #expect(SettingsVaultBannerPresentation.make(from: corrupt)?.kind == .corrupt)
     }
 
+    @Test("R10-03: a background unlock or migrated legacy item reloads credential controls; a deferred write alone does not")
+    func vaultReloadRule() {
+        let locked = VaultStatusSnapshot(state: .lockedOrDenied(errSecInteractionNotAllowed))
+        let loaded = VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: true, deferredWriteCount: 0)
+        let loadedWithPendingWrite = VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: true, deferredWriteCount: 1)
+        let pendingLegacy = VaultStatusSnapshot(
+            state: .loaded,
+            pendingLegacyKeys: ["openai"],
+            legacyScanSucceeded: true
+        )
+
+        #expect(SettingsVaultReload.shouldReloadCredentials(previous: locked, current: loaded))
+        #expect(SettingsVaultReload.shouldReloadCredentials(previous: pendingLegacy, current: loaded))
+        #expect(!SettingsVaultReload.shouldReloadCredentials(previous: loaded, current: loadedWithPendingWrite))
+        #expect(!SettingsVaultReload.shouldReloadCredentials(previous: loaded, current: loaded))
+    }
+
     @Test("FB-R3-02: SyncController.start() awaits shared vault warm-up before resuming unfinished Stop")
     @MainActor
     func syncControllerWaitsForWarmUpBeforeResume() async throws {

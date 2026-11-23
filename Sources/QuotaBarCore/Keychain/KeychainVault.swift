@@ -402,6 +402,33 @@ public final class KeychainVault: @unchecked Sendable {
         /// this exact value for the account; otherwise a newer explicit edit,
         /// deletion, or cross-process update wins and the stale write is dropped.
         let expectedPreviousValue: String?
+        /// Other accounts whose durable value (nil = absent) must still equal
+        /// what the caller saw when it started the async work. Gemini renewal
+        /// pins the OAuth client ID here: the session record alone can match
+        /// while another process has switched clients, and the renewed token
+        /// belongs to the old client.
+        let coExpectations: [VaultKey: String?]
+    }
+
+    /// Whether a deferred write's compare-and-swap baseline still holds against
+    /// the durable document it is about to be merged into. A co-expected key
+    /// that the same commit explicitly rewrites (`supersedingKeys`) counts as
+    /// changed: the explicit value lands after the merge, so comparing against
+    /// the pre-mutation document would admit the stale write.
+    private static func deferredBaselineHolds(
+        _ key: VaultKey,
+        _ write: DeferredWrite,
+        in doc: VaultDocument,
+        supersedingKeys: Set<VaultKey> = []
+    ) -> Bool {
+        func durable(_ k: VaultKey) -> String? {
+            k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
+        }
+        if let expected = write.expectedPreviousValue, durable(key) != expected { return false }
+        for (coKey, coValue) in write.coExpectations {
+            if supersedingKeys.contains(coKey) || durable(coKey) != coValue { return false }
+        }
+        return true
     }
 
     private enum InternalState {
@@ -445,7 +472,7 @@ public final class KeychainVault: @unchecked Sendable {
 
     private func notifyStatusChanged() {
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: Self.statusDidChangeNotification, object: nil)
+            NotificationCenter.default.post(name: Self.statusDidChangeNotification, object: self)
         }
     }
 
@@ -935,10 +962,28 @@ public final class KeychainVault: @unchecked Sendable {
         _ value: String,
         namespace: VaultNamespace,
         account: String,
-        expectedPreviousValue: String? = nil
+        expectedPreviousValue: String? = nil,
+        alsoExpecting: [(namespace: VaultNamespace, account: String, value: String?)] = []
     ) -> DeferredWriteOutcome {
         let key = VaultKey(namespace: namespace, account: account)
+        var coExpectations: [VaultKey: String?] = [:]
+        for co in alsoExpecting {
+            coExpectations[VaultKey(namespace: co.namespace, account: co.account)] = .some(co.value)
+        }
         let queuedSeq: UInt64? = stateLock.withLock {
+            // A co-expected account already changed in this process (cached
+            // document or a pending deferred value) supersedes the write now.
+            for (coKey, coValue) in coExpectations {
+                let current: String?
+                if let pending = deferredWrites[coKey] {
+                    current = pending.value
+                } else if case .loaded(let doc) = internalState {
+                    current = coKey.namespace == .keys ? doc.keys[coKey.account] : doc.sync[coKey.account]
+                } else {
+                    current = nil
+                }
+                if current != coValue { return nil }
+            }
             let existingDeferred = deferredWrites[key]
             if let expected = expectedPreviousValue {
                 let current: String?
@@ -962,7 +1007,8 @@ public final class KeychainVault: @unchecked Sendable {
             deferredWrites[key] = DeferredWrite(
                 value: value,
                 seq: seq,
-                expectedPreviousValue: durableBaseline
+                expectedPreviousValue: durableBaseline,
+                coExpectations: coExpectations
             )
             return seq
         }
@@ -1028,8 +1074,7 @@ public final class KeychainVault: @unchecked Sendable {
                 var appliedDeferred: [VaultKey: DeferredWrite] = [:]
                 var staleKeys: [VaultKey: UInt64] = [:]
                 for (k, dw) in eligible {
-                    let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
-                    if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                    if !Self.deferredBaselineHolds(k, dw, in: doc) {
                         staleKeys[k] = dw.seq
                         continue
                     }
@@ -1123,7 +1168,8 @@ public final class KeychainVault: @unchecked Sendable {
                 deferredWrites[k] = DeferredWrite(
                     value: current.value,
                     seq: current.seq,
-                    expectedPreviousValue: flushed.value
+                    expectedPreviousValue: flushed.value,
+                    coExpectations: current.coExpectations
                 )
             }
         }
@@ -1132,6 +1178,9 @@ public final class KeychainVault: @unchecked Sendable {
     // MARK: - Internal Read-Merge-Commit
 
     private func performWarmUpSync(interactive: Bool) -> VaultStatusSnapshot {
+        // Every exit can change the state an open Settings window shows,
+        // including a read denial or a corrupt document that returns early.
+        defer { notifyStatusChanged() }
         do {
             return try fileLock.withLock(blocking: true) {
                 // 1. Read vault.v1
@@ -1273,8 +1322,7 @@ public final class KeychainVault: @unchecked Sendable {
                 var appliedDeferred: [VaultKey: DeferredWrite] = [:]
                 var staleDeferred: [VaultKey: UInt64] = [:]
                 for (k, dw) in eligibleDeferred {
-                    let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
-                    if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                    if !Self.deferredBaselineHolds(k, dw, in: doc) {
                         staleDeferred[k] = dw.seq
                         continue
                     }
@@ -1350,7 +1398,6 @@ public final class KeychainVault: @unchecked Sendable {
                     }
                 }
 
-                notifyStatusChanged()
                 return statusSnapshot()
             }
         } catch {
@@ -1393,8 +1440,7 @@ public final class KeychainVault: @unchecked Sendable {
             var appliedDeferred: [VaultKey: DeferredWrite] = [:]
             var staleDeferred: [VaultKey: UInt64] = [:]
             for (k, dw) in eligibleDeferred {
-                let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
-                if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                if !Self.deferredBaselineHolds(k, dw, in: doc, supersedingKeys: supersedingKeys) {
                     staleDeferred[k] = dw.seq
                     continue
                 }

@@ -52,14 +52,22 @@ public final class KeychainManager: Sendable {
 
     /// Background write (e.g. Gemini OAuth renewal): stores in memory immediately
     /// and attempts a non-blocking, non-interactive persist without blocking
-    /// provider deadlines or prompting.
+    /// provider deadlines or prompting. `alsoExpecting` maps other labels to
+    /// the value (nil = absent) they must still hold when the write lands.
     @discardableResult
     public func setDeferred(
         key: String,
         label: String,
-        expectedPreviousValue: String? = nil
+        expectedPreviousValue: String? = nil,
+        alsoExpecting: [String: String?] = [:]
     ) -> DeferredWriteOutcome {
-        vault.writeDeferred(key, namespace: .keys, account: label, expectedPreviousValue: expectedPreviousValue)
+        vault.writeDeferred(
+            key,
+            namespace: .keys,
+            account: label,
+            expectedPreviousValue: expectedPreviousValue,
+            alsoExpecting: alsoExpecting.map { (namespace: .keys, account: $0.key, value: $0.value) }
+        )
     }
 
     public func get(label: String, allowsAuthenticationPrompt: Bool = true) throws -> String {

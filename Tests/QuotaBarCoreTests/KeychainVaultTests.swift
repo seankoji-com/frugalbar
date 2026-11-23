@@ -1019,6 +1019,136 @@ struct KeychainVaultTests {
         #expect(status.state == .loaded)
         #expect(try vault.read(namespace: .keys, account: "openrouter") == "secret-key")
     }
+
+    @Test("R10-01: deferred renewal is dropped when another process switched the co-expected client ID")
+    func deferredRenewalYieldsToCrossProcessClientChange() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vaultA.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+        _ = vaultB.warmUpSync(interactive: false)
+
+        // Process B switches clients and leaves the session record untouched.
+        try vaultB.write("client-B", namespace: .keys, account: "gemini-client")
+
+        // Process A still caches client-A; its renewal under client-A must not land.
+        let outcome = vaultA.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        #expect(outcome == .superseded)
+        #expect(try vaultA.read(namespace: .keys, account: "gemini-client") == "client-B")
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R10-01: a pending renewal is not merged into the commit that rewrites its co-expected client ID")
+    func pendingRenewalYieldsToClientRewriteInSameCommit() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        // Keychain refuses the background persist, so the renewal stays pending.
+        backend.setFailNonInteractiveWrites(true)
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        #expect(outcome == .deferred)
+
+        // The explicit client save would otherwise flush the pending renewal
+        // alongside the new client ID in one commit.
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        backend.setFailNonInteractiveWrites(false)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+        #expect(try verifier.read(namespace: .keys, account: "gemini-client") == "client-B")
+    }
+
+    @Test("R10-01: an in-process client change supersedes the renewal before it is queued")
+    func deferredRenewalYieldsToInProcessClientChange() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        // The renewal started with no stored client (built-in client); the user then set one.
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        // Keychain refuses the background read, so the flush never sees the
+        // durable document and only the in-memory check can stop this poll
+        // from using the old client's session.
+        backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecInteractionNotAllowed)
+
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-builtin",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: nil)]
+        )
+        #expect(outcome == .superseded)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R10-02: a warm-up that hits a Keychain denial or corrupt vault still posts a status change")
+    func failedWarmUpPostsStatusChange() async throws {
+        for corrupt in [false, true] {
+            let backend = InMemoryKeychainBackend()
+            let lockURL = makeTempLockURL()
+            defer { try? FileManager.default.removeItem(at: lockURL) }
+            if corrupt {
+                backend.seedRaw(service: "test.keys", account: KeychainVault.vaultAccount, data: Data("not json".utf8))
+            } else {
+                backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+            }
+            let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+            let posted = PostedFlag()
+            let token = NotificationCenter.default.addObserver(
+                forName: KeychainVault.statusDidChangeNotification,
+                object: vault,
+                queue: nil
+            ) { _ in posted.set() }
+            defer { NotificationCenter.default.removeObserver(token) }
+
+            let status = await vault.warmUp(interactive: false)
+            #expect(corrupt ? status.isCorrupt : status.isLockedOrDenied)
+            // The post is enqueued on the main queue before warmUp returns, so
+            // one hop to the main actor runs after it.
+            await MainActor.run {}
+            #expect(posted.value, "corrupt: \(corrupt)")
+        }
+    }
+}
+
+private final class PostedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = false
+    var value: Bool { lock.withLock { _value } }
+    func set() { lock.withLock { _value = true } }
 }
 
 private final class HookedKeychainBackend: KeychainBackend, @unchecked Sendable {

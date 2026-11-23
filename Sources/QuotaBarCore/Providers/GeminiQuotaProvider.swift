@@ -724,13 +724,19 @@ public struct GeminiOAuthSession: Codable, Sendable {
     static func saveDeferred(
         _ session: GeminiOAuthSession,
         expectedPreviousValue: String? = nil,
+        expectedStoredClientID: String?? = nil,
         manager: KeychainManager = .shared
     ) -> DeferredWriteOutcome {
         guard let encoded = try? JSONEncoder().encode(session) else { return .deferred }
+        var alsoExpecting: [String: String?] = [:]
+        if let expectedStoredClientID {
+            alsoExpecting[clientIDKeychainLabel] = expectedStoredClientID
+        }
         return manager.setDeferred(
             key: String(decoding: encoded, as: UTF8.self),
             label: keychainLabel,
-            expectedPreviousValue: expectedPreviousValue
+            expectedPreviousValue: expectedPreviousValue,
+            alsoExpecting: alsoExpecting
         )
     }
 
@@ -746,6 +752,15 @@ public struct GeminiOAuthSession: Codable, Sendable {
         else { return nil }
         if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
         guard !session.refreshToken.isEmpty else { return nil }
+        // The stored client override as it stood when the renewal started
+        // (nil = absent, so the built-in or environment client was in use).
+        // The deferred write is compared against it under `flock`, so another
+        // process switching clients mid-renewal drops this session even when
+        // the session record itself is unchanged.
+        let storedClientAtStart = try? KeychainManager.shared.get(
+            label: clientIDKeychainLabel,
+            allowsAuthenticationPrompt: false
+        )
         guard let renewed = try? await requestToken(
             fields: [
                 "refresh_token": session.refreshToken,
@@ -756,7 +771,11 @@ public struct GeminiOAuthSession: Codable, Sendable {
         // If the configured OAuth client changed while Google was replying,
         // discard the old client's renewed session rather than saving it.
         guard isUsable(renewed, forClientID: clientID) else { return load() }
-        let outcome = saveDeferred(renewed, expectedPreviousValue: raw)
+        let outcome = saveDeferred(
+            renewed,
+            expectedPreviousValue: raw,
+            expectedStoredClientID: .some(storedClientAtStart)
+        )
         if outcome == .superseded {
             // Another sign-in, deletion, or cross-process edit replaced the
             // session while Google was refreshing the old token: return the
