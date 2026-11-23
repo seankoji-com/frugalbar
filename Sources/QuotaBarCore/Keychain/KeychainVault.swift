@@ -438,6 +438,17 @@ public final class KeychainVault: @unchecked Sendable {
     /// Background queue for blocking Keychain / flock operations in async APIs.
     private let ioQueue = DispatchQueue(label: "com.quotabar.vault.io", qos: .userInitiated)
 
+    /// Posted asynchronously on the main queue whenever `statusSnapshot()` may
+    /// have changed (e.g. a background renewal deferred a write or flushed), so
+    /// an already-open Settings window refreshes its vault banner live.
+    public static let statusDidChangeNotification = Notification.Name("com.quotabar.keychainVault.statusDidChange")
+
+    private func notifyStatusChanged() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.statusDidChangeNotification, object: nil)
+        }
+    }
+
     /// Test hook invoked in `writeDeferred` right after queueing the entry and
     /// before attempting the non-blocking flush, to test cross-path stale rejection.
     internal var beforeDeferredFlushHook: (@Sendable () -> Void)?
@@ -957,7 +968,9 @@ public final class KeychainVault: @unchecked Sendable {
         }
         guard let seq = queuedSeq else { return .superseded }
         beforeDeferredFlushHook?()
-        return flushDeferredNonBlockingOutcome(tracking: (key, seq))
+        let outcome = flushDeferredNonBlockingOutcome(tracking: (key, seq))
+        notifyStatusChanged()
+        return outcome
     }
 
     /// Attempts to flush pending deferred writes without blocking (`LOCK_EX | LOCK_NB`)
@@ -1337,6 +1350,7 @@ public final class KeychainVault: @unchecked Sendable {
                     }
                 }
 
+                notifyStatusChanged()
                 return statusSnapshot()
             }
         } catch {

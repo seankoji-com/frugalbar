@@ -296,6 +296,11 @@ public struct SettingsView: View {
         .onChange(of: selection) { old, _ in
             if old == .workspaces { commitWorkspaceRenames() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: KeychainVault.statusDidChangeNotification)) { _ in
+            if readsCredentials {
+                vaultStatus = KeychainVault.shared.statusSnapshot()
+            }
+        }
     }
 
     private func paneHeader(_ pane: Pane) -> some View {
@@ -912,11 +917,7 @@ public struct SettingsView: View {
         let key = (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         busyWorkspaceIDs.insert(workspace.id)
-        isVerifying = true
-        defer {
-            isVerifying = false
-            busyWorkspaceIDs.remove(workspace.id)
-        }
+        defer { busyWorkspaceIDs.remove(workspace.id) }
         do {
             try await Self.runKeychainOffMainActor {
                 try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)

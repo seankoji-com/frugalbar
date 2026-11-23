@@ -753,6 +753,9 @@ public struct GeminiOAuthSession: Codable, Sendable {
             ],
             existingRefreshToken: session.refreshToken
         ) else { return nil }
+        // If the configured OAuth client changed while Google was replying,
+        // discard the old client's renewed session rather than saving it.
+        guard isUsable(renewed, forClientID: clientID) else { return load() }
         let outcome = saveDeferred(renewed, expectedPreviousValue: raw)
         if outcome == .superseded {
             // Another sign-in, deletion, or cross-process edit replaced the
@@ -805,7 +808,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
             accessToken: token.access_token,
             refreshToken: token.refresh_token ?? existingRefreshToken ?? "",
             expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600)),
-            clientID: clientID
+            clientID: id
         )
     }
 

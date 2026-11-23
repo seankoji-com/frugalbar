@@ -443,6 +443,20 @@ public enum CredentialStore {
             return token
         }
 
+        func peekClaudeBlob(now: Date) -> Data? {
+            lock.withLock {
+                guard let cached = claudeBlobCache, cached.expires > now else { return nil }
+                return cached.data
+            }
+        }
+
+        func peekMuseBlob(now: Date) -> Data? {
+            lock.withLock {
+                guard let cached = museBlobCache, cached.expires > now else { return nil }
+                return cached.data
+            }
+        }
+
         func claudeBlob(now: Date, resolve: () -> Data?) -> Data? {
             lock.lock()
             if let cached = claudeBlobCache, cached.expires > now {
@@ -570,6 +584,9 @@ public enum CredentialStore {
     static func cachedClaudeBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
         let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
         if !effectiveSecurityCLI {
+            if let cached = CredentialCache.shared.peekClaudeBlob(now: now) {
+                return cached
+            }
             return discoverClaudeBlob(allowsSecurityCLI: false)
         }
         return CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob(allowsSecurityCLI: true) }
@@ -633,6 +650,9 @@ public enum CredentialStore {
     static func cachedMuseBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
         let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
         if !effectiveSecurityCLI {
+            if let cached = CredentialCache.shared.peekMuseBlob(now: now) {
+                return cached
+            }
             return discoverMuseBlob(allowsSecurityCLI: false)
         }
         return CredentialCache.shared.museBlob(now: now) { discoverMuseBlob(allowsSecurityCLI: true) }
