@@ -43,8 +43,11 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
     private var _directEmail: String? = nil
     /// Proxy auth files publish no email, as an older or stripped inventory.
     private var _hideProxyEmails = false
+    /// `userinfo`'s `email_verified`; nil omits the field.
+    private var _directEmailVerified: Bool? = true
 
     var directEmail: String? { get { lock.withLock { _directEmail } } set { lock.withLock { _directEmail = newValue } } }
+    var directEmailVerified: Bool? { get { lock.withLock { _directEmailVerified } } set { lock.withLock { _directEmailVerified = newValue } } }
     var hideProxyEmails: Bool { get { lock.withLock { _hideProxyEmails } } set { lock.withLock { _hideProxyEmails = newValue } } }
 
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
@@ -140,8 +143,9 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
                 _calls.append(RecordedCall(authIndex: "direct", method: request.httpMethod ?? "GET",
                     url: urlString, dataField: nil, authorization: authHeader))
                 guard let email = _directEmail else { return (401, [:], Data()) }
-                return (200, ["Content-Type": "application/json"],
-                        json(["email": email, "email_verified": true]))
+                var body: [String: Any] = ["email": email]
+                if let verified = _directEmailVerified { body["email_verified"] = verified }
+                return (200, ["Content-Type": "application/json"], json(body))
             }
 
             // Direct Google OAuth request
@@ -355,7 +359,7 @@ struct AntigravityAccountTests {
     private func discoverAccounts(
         _ session: URLSession, suite: String, defaults: UserDefaults,
         signIn: String? = "sign-in-A", proxy: Bool = true, accessToken: String? = nil,
-        recordedAccount: String? = nil
+        recordedAccount: String? = nil, thisMac: Bool = true
     ) async -> [AntigravityAccount] {
         let token = accessToken ?? directToken
         let config = proxyConfig
@@ -365,7 +369,9 @@ struct AntigravityAccountTests {
             let discovery = AntigravityAccountDiscovery(
                 defaultsSuiteName: suite,
                 proxyConfig: { proxy ? config : nil },
-                directSession: { AntigravityDirectSession(accessToken: token, sessionKey: signIn, accountKey: key) },
+                directSession: {
+                    thisMac ? AntigravityDirectSession(accessToken: token, sessionKey: signIn, accountKey: key) : nil
+                },
                 environment: [:]
             )
             _ = await discovery.providers(now: at)
@@ -455,6 +461,57 @@ struct AntigravityAccountTests {
         // A different sign-in never reuses that answer: it is asked for itself.
         _ = await discoverAccounts(session, suite: suiteName, defaults: defaults, signIn: "sign-in-B", accessToken: "ya29.B")
         #expect(userinfoCalls(fixture) == 2)
+    }
+
+    @Test("R1: a proxy account never adopts an ID this Mac's row already holds")
+    func proxyNeverAdoptsThisMacsID() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.hideProxyEmails = true
+        let session = makeSession(fixture: fixture)
+
+        // 1. Proxy only, probe failing: the proxy holds a source-scoped ID.
+        fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+        _ = await discoverAccounts(session, suite: suiteName, defaults: defaults, thisMac: false)
+        // 2. Both verify on one project: that project's row adopts the proxy's ID.
+        fixture.secondaryErrorReason = nil
+        let merged = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        #expect(merged.count == 1)
+        let thisMacID = try #require(merged.first?.id)
+        // 3. This Mac absent and the proxy failing: the proxy reclaims that ID, unverified.
+        fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+        _ = await discoverAccounts(session, suite: suiteName, defaults: defaults, thisMac: false)
+        // 4. Both recover, and are different Google accounts: two rows, two IDs.
+        fixture.secondaryErrorReason = nil
+        fixture.hideProxyEmails = false
+        fixture.directEmail = "primary@example.test"
+        let split = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        #expect(split.count == 2)
+        #expect(Set(split.map(\.id)).count == 2)
+        #expect(split.first(where: { $0.isPrimary })?.id == thisMacID)
+        #expect(split.first(where: { !$0.isPrimary }).map { !$0.historyAliases.contains(thisMacID) } == true)
+    }
+
+    @Test("R2/R4: a sign-in without a refresh token has no cache key; an unverified email establishes nothing")
+    func noKeyWithoutRefreshTokenOrVerifiedEmail() async throws {
+        #expect(AntigravityDirectSession.sessionKey(refreshToken: "") == nil)
+        #expect(AntigravityDirectSession.sessionKey(refreshToken: "  ") == nil)
+        #expect(AntigravityDirectSession.sessionKey(refreshToken: "1//rt") != nil)
+
+        // userinfo names the proxy's own account but does not mark it verified:
+        // not proof that they are one account, so they are not merged.
+        for verified in [Bool?.none, false] {
+            let (suiteName, defaults) = freshSuite()
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            let fixture = AntigravityAccountFixture()
+            fixture.duplicateDirect = true
+            fixture.directEmail = "secondary@example.test"
+            fixture.directEmailVerified = verified
+            let accounts = await discoverAccounts(makeSession(fixture: fixture), suite: suiteName, defaults: defaults)
+            #expect(accounts.count == 2)
+        }
     }
 
     @Test("an antigravity-usage session's recorded account is used without asking userinfo")

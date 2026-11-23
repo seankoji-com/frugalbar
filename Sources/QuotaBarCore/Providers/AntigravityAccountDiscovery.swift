@@ -7,6 +7,15 @@ struct AntigravityDirectSession: Sendable {
     let accessToken: String
     let sessionKey: String?
     var accountKey: String? = nil
+
+    /// The key for a sign-in: a digest of its refresh token, which survives
+    /// access-token renewal. A sign-in saved without a refresh token has no
+    /// key: every such sign-in would otherwise share one and reuse another
+    /// account's cached answer.
+    static func sessionKey(refreshToken: String) -> String? {
+        let refresh = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return refresh.isEmpty ? nil : AntigravityAccount.digest("google-sign-in|" + refresh)
+    }
 }
 
 private struct AntigravityAccountBinding: Codable, Sendable {
@@ -122,9 +131,12 @@ actor AntigravityAccountDiscovery {
         directSession: @escaping @Sendable () async -> AntigravityDirectSession? = {
             guard !TestHost.isActive else { return nil }
             if let session = await GeminiOAuthSession.loadRefreshed() {
+                // A session saved without a refresh token has nothing stable
+                // to key on: every such sign-in would share one key and reuse
+                // another account's answer, so its account is never cached.
                 return AntigravityDirectSession(
                     accessToken: session.accessToken,
-                    sessionKey: AntigravityAccount.digest("google-sign-in|" + session.refreshToken))
+                    sessionKey: AntigravityDirectSession.sessionKey(refreshToken: session.refreshToken))
             }
             // The antigravity-usage session records its own Google account,
             // so it is known without `userinfo` (whose scope it may lack).
@@ -285,14 +297,32 @@ actor AntigravityAccountDiscovery {
             by: { groupingIdentity[$0.source]! }
         )
         let badges = defaults.dictionary(forKey: AntigravityAccountStore.badgesKey) as? [String: String] ?? [:]
-        for (identity, matchingRoutes) in verifiedGroups where identities[identity] == nil {
+        // A newly verified identity may adopt a route's earlier unverified ID,
+        // but never an ID another identity already holds: since a proxy
+        // account and this Mac can now be different identities on one
+        // project, two of them adopting the same source-scoped ID would build
+        // one row from two accounts' credentials. This Mac's identity is
+        // settled first, then the rest in a stable order.
+        var claimedIDs = Set(identities.values)
+        let unassigned = verifiedGroups.filter { identities[$0.key] == nil }.sorted { lhs, rhs in
+            let lhsPrimary = lhs.value.contains(where: \.isPrimary)
+            let rhsPrimary = rhs.value.contains(where: \.isPrimary)
+            if lhsPrimary != rhsPrimary { return lhsPrimary }
+            return lhs.key < rhs.key
+        }
+        for (identity, matchingRoutes) in unassigned {
             let candidates = matchingRoutes.compactMap { route in
                 oldBindings.first { $0.source == route.source && !$0.verified }?.accountID
-            }
+            }.filter { !claimedIDs.contains($0) }
             let previousID = candidates.min {
                 (Int(badges[$0] ?? "") ?? Int.max, $0) < (Int(badges[$1] ?? "") ?? Int.max, $1)
             }
-            identities[identity] = previousID ?? identity
+            let fallback = claimedIDs.contains(identity)
+                ? AntigravityAccount.instanceID(identity: "reassigned|" + identity)
+                : identity
+            let assigned = previousID ?? fallback
+            identities[identity] = assigned
+            claimedIDs.insert(assigned)
         }
 
         let verifiedAccountIDs = Set(discovered.compactMap { route in
@@ -324,8 +354,11 @@ actor AntigravityAccountDiscovery {
                 verified: verified,
                 identity: identity
             ))
+            // An ID another identity holds is that account's history, never
+            // an alias of this one.
             if let identity, let previous, previous.accountID != id,
-               !previous.verified || previous.identity == identity {
+               !previous.verified || previous.identity == identity,
+               !identities.contains(where: { $0.value == previous.accountID && $0.key != identity }) {
                 aliases[id, default: []].insert(previous.accountID)
                 if let old = oldAccounts.first(where: { $0.id == previous.accountID }) {
                     aliases[id, default: []].formUnion(old.historyAliases)
@@ -613,13 +646,21 @@ actor AntigravityAccountDiscovery {
         )
     }
 
+    /// `fetchAccountKey` bounded by `seconds`, as structured child tasks so
+    /// cancelling the caller cancels the request too (an unawaited lookup
+    /// must not keep a `userinfo` call running for the whole budget).
     static func boundedAccountKey(token: String?, seconds: TimeInterval) async -> String? {
         guard let token else { return nil }
-        let outcome = await withDeadline(seconds: seconds) {
-            await fetchAccountKey(token: token)
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask { await fetchAccountKey(token: token) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
-        if case .success(let key) = outcome { return key }
-        return nil
     }
 
     /// The account key for the Google account a direct token signs in as,
@@ -635,7 +676,7 @@ actor AntigravityAccountDiscovery {
         ), http.statusCode == 200,
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let email = body["email"] as? String,
-              body["email_verified"] as? Bool != false
+              body["email_verified"] as? Bool == true
         else { return nil }
         return AntigravityAccountRoute.accountKey(forEmail: email)
     }
