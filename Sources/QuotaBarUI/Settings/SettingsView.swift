@@ -1433,10 +1433,25 @@ public struct SettingsView: View {
     /// Populates credential fields from the in-memory vault cache only.
     /// Never blocks the main thread or prompts macOS Keychain.
     private func loadKeysFromCache() {
+        let status = KeychainVault.shared.statusSnapshot()
         var current: [VendorIdentifier: String] = [:]
+        var unreadable: Set<VendorIdentifier> = []
         for slot in Self.slots {
-            current[slot.id] = KeychainManager.shared.cachedValue(label: slot.id.rawValue) ?? ""
+            if let fresh = SettingsVaultReload.freshValue(
+                label: slot.id.rawValue,
+                cached: KeychainManager.shared.cachedValue(label: slot.id.rawValue),
+                in: status
+            ) {
+                current[slot.id] = fresh
+            } else {
+                unreadable.insert(slot.id)
+            }
         }
+        let freshGeminiClientID = SettingsVaultReload.freshValue(
+            label: GeminiOAuthSession.clientIDKeychainLabel,
+            cached: GeminiOAuthLogin.storedClientID(),
+            in: status
+        )
         let merged = SettingsCredentialMerge.merge(
             slots: Self.slots.map(\.id),
             currentLoaded: loaded,
@@ -1444,14 +1459,16 @@ public struct SettingsView: View {
             freshLoaded: current,
             currentLoadedGeminiClientID: loadedGeminiClientID,
             currentEnteredGeminiClientID: geminiClientID,
-            freshGeminiClientID: GeminiOAuthLogin.storedClientID() ?? ""
+            freshGeminiClientID: freshGeminiClientID ?? "",
+            unreadableSlots: unreadable,
+            geminiClientIDUnreadable: freshGeminiClientID == nil
         )
         loaded = merged.loaded
         entered = merged.entered
         loadedGeminiClientID = merged.loadedGeminiClientID
         geminiClientID = merged.enteredGeminiClientID
         geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
-        vaultStatus = KeychainVault.shared.statusSnapshot()
+        vaultStatus = status
     }
 
     /// Runs a non-interactive vault warm-up off the main thread when the vault

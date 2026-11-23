@@ -458,6 +458,9 @@ public final class KeychainVault: @unchecked Sendable {
     private var explicitSeq: [VaultKey: UInt64] = [:]
     private var staleDeferredSeq: [VaultKey: UInt64] = [:]
     private var deferredWrites: [VaultKey: DeferredWrite] = [:]
+    /// Keys an explicit commit in this process is about to rewrite, counted
+    /// so overlapping saves of the same key stay announced until both finish.
+    private var explicitCommitsInFlight: [VaultKey: Int] = [:]
 
     /// Coalesced warm-up tasks so startup fetch and sync share one vault read.
     private var nextWarmUpID: UInt64 = 0
@@ -974,6 +977,9 @@ public final class KeychainVault: @unchecked Sendable {
             // A co-expected account already changed in this process (cached
             // document or a pending deferred value) supersedes the write now.
             for (coKey, coValue) in coExpectations {
+                // An explicit save of the co-expected key is committing now;
+                // its value is about to replace whatever the cache shows.
+                if explicitCommitsInFlight[coKey] != nil { return nil }
                 let current: String?
                 if let pending = deferredWrites[coKey] {
                     current = pending.value
@@ -1410,6 +1416,21 @@ public final class KeychainVault: @unchecked Sendable {
         supersedingKeys: Set<VaultKey> = [],
         mutate: (inout VaultDocument, inout Set<String>, inout Set<String>) -> [(VaultNamespace, String)]
     ) throws {
+        // Announce the keys this commit rewrites before it snapshots the
+        // deferred buffer: a renewal co-expecting one of them that queues
+        // while the commit holds `flock` would otherwise pass the in-memory
+        // check, miss the snapshot, and hand its token to the current pass.
+        stateLock.withLock {
+            for k in supersedingKeys { explicitCommitsInFlight[k, default: 0] += 1 }
+        }
+        defer {
+            stateLock.withLock {
+                for k in supersedingKeys {
+                    let remaining = (explicitCommitsInFlight[k] ?? 1) - 1
+                    explicitCommitsInFlight[k] = remaining > 0 ? remaining : nil
+                }
+            }
+        }
         try fileLock.withLock(blocking: true) {
             let rawVault = try backend.read(
                 service: keysService,

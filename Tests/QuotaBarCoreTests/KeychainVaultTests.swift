@@ -1144,6 +1144,80 @@ struct KeychainVaultTests {
     }
 }
 
+@Suite("KeychainVault R11")
+struct KeychainVaultR11Tests {
+    @Test("R11-01: the Gemini client baseline is nil (unknown) when the override is pending legacy migration, never confirmed absence")
+    func clientBaselineDistinguishesUnreadableFromAbsent() throws {
+        let label = GeminiOAuthSession.clientIDKeychainLabel
+
+        // Override exists only as a legacy item Keychain refuses to read.
+        let pendingBackend = InMemoryKeychainBackend()
+        let pendingLock = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: pendingLock) }
+        pendingBackend.seed(service: "test.keys", account: label, value: "client-legacy")
+        pendingBackend.setReadDenied(service: "test.keys", account: label, status: errSecInteractionNotAllowed)
+        let pendingVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: pendingBackend, lockFileURL: pendingLock)
+        _ = pendingVault.warmUpSync(interactive: false)
+        #expect(pendingVault.statusSnapshot().pendingLegacyKeys.contains(label))
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: pendingVault)) == nil)
+
+        // No override anywhere: confirmed absence.
+        let absentBackend = InMemoryKeychainBackend()
+        let absentLock = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: absentLock) }
+        let absentVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: absentBackend, lockFileURL: absentLock)
+        _ = absentVault.warmUpSync(interactive: false)
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: absentVault)) == .some(nil))
+
+        try absentVault.write("client-A", namespace: .keys, account: label)
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: absentVault)) == .some("client-A"))
+    }
+
+    @Test("R11-02: a renewal queued while an explicit client save holds flock is superseded, not deferred")
+    func renewalQueuedDuringClientCommitIsSuperseded() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        let injected = LockedFlag()
+        let lateOutcome = LockedOutcome()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !injected.value else { return }
+            injected.set()
+            // The save of client-B has snapshotted the deferred buffer and is
+            // committing; the cache still says client-A.
+            lateOutcome.set(vault.writeDeferred(
+                "session-renewed-under-A",
+                namespace: .keys,
+                account: "gemini-oauth",
+                expectedPreviousValue: "session-v1",
+                alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+            ))
+        }
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        hooked.onBeforeWrite = nil
+
+        #expect(injected.value)
+        #expect(lateOutcome.value == .superseded)
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+}
+
+private final class LockedOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: DeferredWriteOutcome?
+    var value: DeferredWriteOutcome? { lock.withLock { _value } }
+    func set(_ outcome: DeferredWriteOutcome) { lock.withLock { _value = outcome } }
+}
+
 private final class PostedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var _value = false

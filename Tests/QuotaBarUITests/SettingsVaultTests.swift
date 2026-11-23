@@ -76,6 +76,46 @@ struct SettingsVaultTests {
         #expect(!SettingsVaultReload.shouldReloadCredentials(previous: loaded, current: loaded))
     }
 
+    @Test("R11-03: a cleared but unsaved key survives a background denial followed by unlock")
+    func clearedKeySurvivesDenialThenUnlock() {
+        let denied = VaultStatusSnapshot(state: .lockedOrDenied(errSecAuthFailed))
+        let scanFailed = VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: false)
+        let pending = VaultStatusSnapshot(state: .loaded, pendingLegacyKeys: ["openai"], legacyScanSucceeded: true)
+        let healthy = VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: true)
+        #expect(SettingsVaultReload.freshValue(label: "openai", cached: nil, in: denied) == nil)
+        #expect(SettingsVaultReload.freshValue(label: "openai", cached: nil, in: scanFailed) == nil)
+        #expect(SettingsVaultReload.freshValue(label: "openai", cached: "sk", in: scanFailed) == "sk")
+        #expect(SettingsVaultReload.freshValue(label: "openai", cached: nil, in: pending) == nil)
+        #expect(SettingsVaultReload.freshValue(label: "openai", cached: nil, in: healthy) == "")
+
+        // The user cleared the saved OpenAI key and the Gemini client ID without saving.
+        let slots: [VendorIdentifier] = [.openai]
+        let duringDenial = SettingsCredentialMerge.merge(
+            slots: slots,
+            currentLoaded: [.openai: "sk-saved"],
+            currentEntered: [.openai: ""],
+            freshLoaded: [:],
+            currentLoadedGeminiClientID: "client-saved",
+            currentEnteredGeminiClientID: "",
+            freshGeminiClientID: "",
+            unreadableSlots: [.openai],
+            geminiClientIDUnreadable: true
+        )
+        let afterUnlock = SettingsCredentialMerge.merge(
+            slots: slots,
+            currentLoaded: duringDenial.loaded,
+            currentEntered: duringDenial.entered,
+            freshLoaded: [.openai: "sk-saved"],
+            currentLoadedGeminiClientID: duringDenial.loadedGeminiClientID,
+            currentEnteredGeminiClientID: duringDenial.enteredGeminiClientID,
+            freshGeminiClientID: "client-saved"
+        )
+        #expect(afterUnlock.entered[.openai] == "")
+        #expect(afterUnlock.loaded[.openai] == "sk-saved")
+        #expect(afterUnlock.enteredGeminiClientID == "")
+        #expect(afterUnlock.loadedGeminiClientID == "client-saved")
+    }
+
     @Test("FB-R3-02: SyncController.start() awaits shared vault warm-up before resuming unfinished Stop")
     @MainActor
     func syncControllerWaitsForWarmUpBeforeResume() async throws {

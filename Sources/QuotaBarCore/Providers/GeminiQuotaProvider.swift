@@ -637,7 +637,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     public let clientID: String?
 
     static let keychainLabel = "gemini.oauth.session"
-    static let clientIDKeychainLabel = "gemini.oauth.client_id"
+    public static let clientIDKeychainLabel = "gemini.oauth.client_id"
     static let clientSecretKeychainLabel = "gemini.oauth.client_secret"
     static let clientSecretEnvVar = "FRUGALBAR_GEMINI_CLIENT_SECRET"
 
@@ -745,6 +745,20 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// Google's access tokens last an hour. Without this the app read a live
     /// quota once and then reported "credential rejected" until the user
     /// noticed and signed in by hand.
+    /// The stored client-ID override as a compare-and-swap baseline:
+    /// `.some(value)` when stored, `.some(nil)` only on *confirmed* absence,
+    /// and `nil` when the vault cannot say (locked, corrupt, or the override
+    /// is a legacy item still pending migration).
+    static func storedClientIDBaseline(manager: KeychainManager = .shared) -> String?? {
+        do {
+            return .some(try manager.get(label: clientIDKeychainLabel, allowsAuthenticationPrompt: false))
+        } catch KeychainError.itemNotFound {
+            return .some(nil)
+        } catch {
+            return nil
+        }
+    }
+
     static func loadRefreshed() async -> GeminiOAuthSession? {
         guard let raw = try? KeychainManager.shared.get(label: keychainLabel, allowsAuthenticationPrompt: false),
               let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8)),
@@ -756,11 +770,11 @@ public struct GeminiOAuthSession: Codable, Sendable {
         // (nil = absent, so the built-in or environment client was in use).
         // The deferred write is compared against it under `flock`, so another
         // process switching clients mid-renewal drops this session even when
-        // the session record itself is unchanged.
-        let storedClientAtStart = try? KeychainManager.shared.get(
-            label: clientIDKeychainLabel,
-            allowsAuthenticationPrompt: false
-        )
+        // the session record itself is unchanged. An override the vault cannot
+        // read (locked, pending legacy migration) is not "absent": renewing
+        // then would exchange the token under a client that may not be the
+        // configured one, so the renewal waits for a readable vault.
+        guard let storedClientAtStart = storedClientIDBaseline() else { return nil }
         guard let renewed = try? await requestToken(
             fields: [
                 "refresh_token": session.refreshToken,
@@ -774,7 +788,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
         let outcome = saveDeferred(
             renewed,
             expectedPreviousValue: raw,
-            expectedStoredClientID: .some(storedClientAtStart)
+            expectedStoredClientID: storedClientAtStart
         )
         if outcome == .superseded {
             // Another sign-in, deletion, or cross-process edit replaced the

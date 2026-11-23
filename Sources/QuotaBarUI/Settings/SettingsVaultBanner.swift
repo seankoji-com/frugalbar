@@ -18,11 +18,16 @@ enum SettingsCredentialMerge {
         freshLoaded: [VendorIdentifier: String],
         currentLoadedGeminiClientID: String,
         currentEnteredGeminiClientID: String,
-        freshGeminiClientID: String
+        freshGeminiClientID: String,
+        unreadableSlots: Set<VendorIdentifier> = [],
+        geminiClientIDUnreadable: Bool = false
     ) -> Result {
         var nextLoaded = currentLoaded
         var nextEntered = currentEntered
-        for id in slots {
+        // A slot the vault cannot read has no fresh value, not an empty one.
+        // Taking "" as its saved baseline made a field the user had cleared
+        // look untouched, so unlocking later restored the old secret.
+        for id in slots where !unreadableSlots.contains(id) {
             let previousLoaded = currentLoaded[id] ?? ""
             let previousEntered = currentEntered[id] ?? ""
             let isDirty = previousEntered != previousLoaded
@@ -33,6 +38,14 @@ enum SettingsCredentialMerge {
             }
         }
         let geminiDirty = currentEnteredGeminiClientID != currentLoadedGeminiClientID
+        if geminiClientIDUnreadable {
+            return Result(
+                loaded: nextLoaded,
+                entered: nextEntered,
+                loadedGeminiClientID: currentLoadedGeminiClientID,
+                enteredGeminiClientID: currentEnteredGeminiClientID
+            )
+        }
         return Result(
             loaded: nextLoaded,
             entered: nextEntered,
@@ -56,6 +69,22 @@ enum SettingsVaultReload {
         previous.state != current.state
             || previous.pendingLegacyKeys != current.pendingLegacyKeys
             || previous.pendingLegacySyncKeys != current.pendingLegacySyncKeys
+    }
+
+    /// The saved value Settings should show for `label`: the cached value,
+    /// "" on confirmed absence, or nil when the vault cannot say. Outside a
+    /// readable state, for a legacy item still pending migration, or after a
+    /// failed legacy scan, a missing cache entry means "unknown", never "no
+    /// saved value".
+    static func freshValue(label: String, cached: String?, in status: VaultStatusSnapshot) -> String? {
+        switch status.state {
+        case .loaded, .empty:
+            if status.pendingLegacyKeys.contains(label) { return nil }
+            if let cached { return cached }
+            return status.legacyScanSucceeded ? "" : nil
+        default:
+            return nil
+        }
     }
 }
 
