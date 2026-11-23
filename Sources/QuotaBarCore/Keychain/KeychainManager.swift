@@ -1156,15 +1156,36 @@ extension CredentialStore {
     }
 
     static func antigravityAccessToken(now: Date = Date()) -> String? {
+        antigravityAccessToken(fromTokens: antigravityActiveTokens(), now: now)
+    }
+
+    /// The active antigravity-usage session: its live access token and the
+    /// Google account its tokens.json records, read from one file so the two
+    /// always describe the same session. The email is used only to tell this
+    /// Mac's account apart from a proxy's; it is never displayed from here.
+    static func antigravitySessionAsync(now: Date = Date()) async -> (accessToken: String, email: String?)? {
+        guard isCLIDiscoveryEnabled else { return nil }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                continuation.resume(returning: antigravitySession(fromTokens: antigravityActiveTokens(), now: now))
+            }
+        }
+    }
+
+    static func antigravitySession(fromTokens data: Data?, now: Date) -> (accessToken: String, email: String?)? {
+        guard let token = antigravityAccessToken(fromTokens: data, now: now) else { return nil }
+        let tokens = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        return (token, tokens?["email"] as? String)
+    }
+
+    private static func antigravityActiveTokens() -> Data? {
         let root = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/antigravity-usage")
         guard let configData = try? Data(contentsOf: root.appendingPathComponent("config.json")),
               let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
               let account = config["activeAccount"] as? String, !account.isEmpty
         else { return nil }
-        let tokenData = try? Data(contentsOf: root
-            .appendingPathComponent("accounts/\(account)/tokens.json"))
-        return antigravityAccessToken(fromTokens: tokenData, now: now)
+        return try? Data(contentsOf: root.appendingPathComponent("accounts/\(account)/tokens.json"))
     }
 
     /// Parsing half of the above, separated so it can be exercised without

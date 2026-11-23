@@ -39,6 +39,13 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
     private var _primaryUnverified = false
     private var _disableSecondary = false
     private var _extraDisabledAndOtherProviders = true
+    /// The Google account `userinfo` reports for the direct token; nil → 401.
+    private var _directEmail: String? = nil
+    /// Proxy auth files publish no email, as an older or stripped inventory.
+    private var _hideProxyEmails = false
+
+    var directEmail: String? { get { lock.withLock { _directEmail } } set { lock.withLock { _directEmail = newValue } } }
+    var hideProxyEmails: Bool { get { lock.withLock { _hideProxyEmails } } set { lock.withLock { _hideProxyEmails = newValue } } }
 
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
     var duplicateDirect: Bool { get { lock.withLock { _duplicateDirect } } set { lock.withLock { _duplicateDirect = newValue } } }
@@ -80,7 +87,7 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
                         "id": "agy-secondary-file",
                         "auth_index": "agy-sec",
                         "provider": "antigravity",
-                        "email": "secondary@example.test",
+                        "email": _hideProxyEmails ? "" : "secondary@example.test",
                         "disabled": _disableSecondary
                     ]
                 ]
@@ -127,6 +134,14 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
                     "header": ["Content-Type": ["application/json"]],
                     "body": String(data: innerBody, encoding: .utf8)!
                 ]))
+            }
+
+            if urlString.contains("oauth2/v3/userinfo") {
+                _calls.append(RecordedCall(authIndex: "direct", method: request.httpMethod ?? "GET",
+                    url: urlString, dataField: nil, authorization: authHeader))
+                guard let email = _directEmail else { return (401, [:], Data()) }
+                return (200, ["Content-Type": "application/json"],
+                        json(["email": email, "email_verified": true]))
             }
 
             // Direct Google OAuth request
@@ -287,22 +302,25 @@ struct AntigravityAccountTests {
         }
     }
 
-    @Test("deduplicates direct and proxy sources only when verified project identity matches")
+    @Test("deduplicates direct and proxy sources only when they are the same verified account")
     func deduplicationVerifiedVsUnverified() async throws {
         let (suiteName, defaults) = freshSuite()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let fixture = AntigravityAccountFixture()
         fixture.duplicateDirect = true
+        // The proxy holds a copy of this Mac's own Google account.
+        fixture.directEmail = "secondary@example.test"
         let session = makeSession(fixture: fixture)
 
         await QuotaHTTP.$session.withValue(session) {
             let discovery = AntigravityAccountDiscovery(
                 defaultsSuiteName: suiteName,
                 proxyConfig: { proxyConfig },
-                directCredential: { directToken }
+                directCredential: { directToken },
+                environment: [:]
             )
             let mergedProviders = await discovery.providers(now: now)
-            // Same verified cloudaicompanionProject → merged into 1 account (3 pool providers).
+            // Same verified project and the same Google account → 1 account (3 pool providers).
             #expect(mergedProviders.count == 3)
             let accounts = AntigravityAccountStore.all(in: defaults)
             #expect(accounts.count == 1)
@@ -330,6 +348,137 @@ struct AntigravityAccountTests {
             #expect(accounts.count == 2)
             #expect(Set(accounts.map(\.id)).count == 2)
         }
+    }
+
+    /// One discovery pass with this Mac signed in as `signIn` (nil: a bare
+    /// token with no sign-in key), returning the stored accounts.
+    private func discoverAccounts(
+        _ session: URLSession, suite: String, defaults: UserDefaults,
+        signIn: String? = "sign-in-A", proxy: Bool = true, accessToken: String? = nil,
+        recordedAccount: String? = nil
+    ) async -> [AntigravityAccount] {
+        let token = accessToken ?? directToken
+        let config = proxyConfig
+        let at = now
+        let key = AntigravityAccountRoute.accountKey(forEmail: recordedAccount)
+        return await QuotaHTTP.$session.withValue(session) {
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suite,
+                proxyConfig: { proxy ? config : nil },
+                directSession: { AntigravityDirectSession(accessToken: token, sessionKey: signIn, accountKey: key) },
+                environment: [:]
+            )
+            _ = await discovery.providers(now: at)
+            return AntigravityAccountStore.all(in: defaults)
+        }
+    }
+
+    private func userinfoCalls(_ fixture: AntigravityAccountFixture) -> Int {
+        fixture.calls().filter { $0.url.contains("oauth2/v3/userinfo") }.count
+    }
+
+    @Test("a proxy account that is a different Google account on this Mac's project gets its own row")
+    func differentAccountOnSharedProjectGetsItsOwnRow() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.hideProxyEmails = true
+        let session = makeSession(fixture: fixture)
+
+        // Before the proxy names its account (as before this fix): one row.
+        let before = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        #expect(before.count == 1)
+        let thisMacID = try #require(before.first?.id)
+
+        // The reported case: the proxy names a different Google account than
+        // this Mac's sign-in, on the same project. Two rows, and this Mac's
+        // row is untouched (same ID, so its nickname, badge and history).
+        fixture.hideProxyEmails = false
+        fixture.directEmail = "primary@example.test"
+        let after = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        #expect(after.count == 2)
+        #expect(after.first(where: { $0.isPrimary })?.id == thisMacID)
+        #expect(after.first(where: { !$0.isPrimary })?.id != thisMacID)
+        #expect(fixture.calls().contains {
+            $0.url.contains("oauth2/v3/userinfo") && $0.authorization == "Bearer \(directToken)"
+        })
+    }
+
+    @Test("the same Google account still merges; an unknown one stays a separate row")
+    func sameAccountMergesUnknownStaysSeparate() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.directEmail = " Secondary@Example.test "
+        #expect(await discoverAccounts(makeSession(fixture: fixture), suite: suiteName, defaults: defaults).count == 1)
+
+        // userinfo cannot say who this Mac is: never assumed to be the proxy's
+        // account (that hid a second account), so a duplicate row at worst.
+        let (suite2, defaults2) = freshSuite()
+        defer { defaults2.removePersistentDomain(forName: suite2) }
+        let fixture2 = AntigravityAccountFixture()
+        fixture2.duplicateDirect = true
+        #expect(await discoverAccounts(makeSession(fixture: fixture2), suite: suite2, defaults: defaults2).count == 2)
+
+        // A proxy account that names no account groups by project, as before.
+        let (suite3, defaults3) = freshSuite()
+        defer { defaults3.removePersistentDomain(forName: suite3) }
+        let fixture3 = AntigravityAccountFixture()
+        fixture3.duplicateDirect = true
+        fixture3.hideProxyEmails = true
+        #expect(await discoverAccounts(makeSession(fixture: fixture3), suite: suite3, defaults: defaults3).count == 1)
+    }
+
+    @Test("userinfo is asked once per sign-in, again for a new sign-in, and never without a proxy")
+    func userinfoOncePerSignIn() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.directEmail = "primary@example.test"
+        let session = makeSession(fixture: fixture)
+
+        #expect(await discoverAccounts(session, suite: suiteName, defaults: defaults, proxy: false).count == 1)
+        #expect(userinfoCalls(fixture) == 0)
+
+        #expect(await discoverAccounts(session, suite: suiteName, defaults: defaults).count == 2)
+        #expect(userinfoCalls(fixture) == 1)
+
+        // The same sign-in with a renewed access token: remembered, not asked, still split.
+        fixture.directEmail = nil
+        let renewed = await discoverAccounts(session, suite: suiteName, defaults: defaults, accessToken: "ya29.renewed")
+        #expect(userinfoCalls(fixture) == 1)
+        #expect(renewed.count == 2)
+
+        // A different sign-in never reuses that answer: it is asked for itself.
+        _ = await discoverAccounts(session, suite: suiteName, defaults: defaults, signIn: "sign-in-B", accessToken: "ya29.B")
+        #expect(userinfoCalls(fixture) == 2)
+    }
+
+    @Test("an antigravity-usage session's recorded account is used without asking userinfo")
+    func antigravityUsageSessionRecordsItsAccount() async throws {
+        let live = try JSONSerialization.data(withJSONObject: [
+            "accessToken": "ya29.local", "expiresAt": (now.timeIntervalSince1970 + 3600) * 1000,
+            "email": "Primary@Example.test",
+        ])
+        let parsed = try #require(CredentialStore.antigravitySession(fromTokens: live, now: now))
+        #expect(parsed.accessToken == "ya29.local")
+        #expect(parsed.email == "Primary@Example.test")
+        let expired = try JSONSerialization.data(withJSONObject: [
+            "accessToken": "ya29.local", "expiresAt": (now.timeIntervalSince1970 - 1) * 1000, "email": "a@b.test",
+        ])
+        #expect(CredentialStore.antigravitySession(fromTokens: expired, now: now) == nil)
+
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        let accounts = await discoverAccounts(makeSession(fixture: fixture), suite: suiteName, defaults: defaults,
+                                              signIn: nil, recordedAccount: parsed.email)
+        #expect(accounts.count == 2)
+        #expect(userinfoCalls(fixture) == 0)
     }
 
     @Test("relayed api-call POST falls back from daily host to plain host")
@@ -565,15 +714,18 @@ struct AntigravityAccountTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let fixture = AntigravityAccountFixture()
         fixture.duplicateDirect = true
+        // The proxy holds a copy of this Mac's own Google account.
+        fixture.directEmail = "secondary@example.test"
         let session = makeSession(fixture: fixture)
 
         await QuotaHTTP.$session.withValue(session) {
             let discovery = AntigravityAccountDiscovery(
                 defaultsSuiteName: suiteName,
                 proxyConfig: { proxyConfig },
-                directCredential: { directToken }
+                directCredential: { directToken },
+                environment: [:]
             )
-            // Pass 1: direct and proxy verify the same project → merged into 1 account.
+            // Pass 1: direct and proxy are the same account → merged into 1 account.
             let pass1 = await discovery.providers(now: now)
             #expect(pass1.count == 3)
 

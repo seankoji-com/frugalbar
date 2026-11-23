@@ -1,5 +1,14 @@
 import Foundation
 
+/// This Mac's direct credential: the access token, a stable key for the
+/// Google sign-in it came from when there is one, and the account key when
+/// the credential itself records its account.
+struct AntigravityDirectSession: Sendable {
+    let accessToken: String
+    let sessionKey: String?
+    var accountKey: String? = nil
+}
+
 private struct AntigravityAccountBinding: Codable, Sendable {
     let source: String
     let accountID: String
@@ -19,10 +28,49 @@ struct AntigravityAccountRoute: Sendable {
     let projectID: String?
     let planName: String?
     let failure: UnavailableReason?
+    /// An opaque key for the Google account this route signs in as, when
+    /// known: a digest of the normalised email. Only equality is needed.
+    var accountKey: String? = nil
 
     var verifiedIdentity: String? {
         guard let projectID, !projectID.isEmpty else { return nil }
         return AntigravityAccount.instanceID(identity: "project|\(projectID)")
+    }
+
+    func withAccountKey(_ key: String?) -> AntigravityAccountRoute {
+        var copy = self
+        copy.accountKey = key
+        return copy
+    }
+
+    /// The account key for an email, or nil for anything that is not one.
+    static func accountKey(forEmail email: String?) -> String? {
+        guard let email = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              email.count <= 254, email.contains("@"),
+              !email.contains(where: { $0.isWhitespace || $0.isNewline }),
+              !email.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return nil }
+        return AntigravityAccount.digest("google-account|" + email)
+    }
+
+    /// The identity a verified route is grouped under, given this Mac's
+    /// route and the Google account it signs in as (nil when unknown).
+    ///
+    /// This Mac's route, and a proxy route whose account is not published,
+    /// group by Cloud Code project exactly as before. A proxy route that
+    /// names its Google account is keyed by that account and joins this
+    /// Mac's row only when it is the same account: Google can attach two
+    /// different accounts to one project, and grouping them by project hid
+    /// the second account entirely. With this Mac's account unknown the
+    /// proxy account keeps its own row, so the worst case is a duplicate row
+    /// for one pass, never a hidden account.
+    func groupingIdentity(directRoute: AntigravityAccountRoute?, directAccountKey: String?) -> String? {
+        guard let project = verifiedIdentity else { return nil }
+        guard !isPrimary, let accountKey else { return project }
+        if accountKey == directAccountKey, let directIdentity = directRoute?.verifiedIdentity {
+            return directIdentity
+        }
+        return AntigravityAccount.instanceID(identity: "account|\(accountKey)")
     }
 
     var transport: GeminiQuotaProvider.Transport? {
@@ -39,10 +87,15 @@ struct AntigravityAccountRoute: Sendable {
 actor AntigravityAccountDiscovery {
     static let shared = AntigravityAccountDiscovery()
     private static let bindingsKey = "QuotaBarAntigravityAccountBindings"
+    /// This Mac's Google sign-in → the account key `userinfo` gave for it,
+    /// keyed by the sign-in (a digest of its refresh token, which survives
+    /// access-token renewal) so another sign-in can never reuse it. One
+    /// entry, digests only.
+    static let directAccountKeysKey = "QuotaBarAntigravityDirectAccountKeys"
 
     private let defaults: UserDefaults
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
-    private let directCredential: @Sendable () async -> String?
+    private let directSession: @Sendable () async -> AntigravityDirectSession?
     private let environment: [String: String]
     private let apiBaseOverride: [String]?
     private let proxyBudgetSeconds: TimeInterval
@@ -65,10 +118,21 @@ actor AntigravityAccountDiscovery {
         proxyConfig: @escaping @Sendable () -> CLIProxyConfig? = {
             TestHost.isActive ? nil : CLIProxyClient.discoverConfig()
         },
-        directCredential: @escaping @Sendable () async -> String? = {
+        directCredential: (@Sendable () async -> String?)? = nil,
+        directSession: @escaping @Sendable () async -> AntigravityDirectSession? = {
             guard !TestHost.isActive else { return nil }
-            if let session = await GeminiOAuthSession.loadRefreshed() { return session.accessToken }
-            return await CredentialStore.antigravityAccessTokenAsync()
+            if let session = await GeminiOAuthSession.loadRefreshed() {
+                return AntigravityDirectSession(
+                    accessToken: session.accessToken,
+                    sessionKey: AntigravityAccount.digest("google-sign-in|" + session.refreshToken))
+            }
+            // The antigravity-usage session records its own Google account,
+            // so it is known without `userinfo` (whose scope it may lack).
+            return await CredentialStore.antigravitySessionAsync().map {
+                AntigravityDirectSession(
+                    accessToken: $0.accessToken, sessionKey: nil,
+                    accountKey: AntigravityAccountRoute.accountKey(forEmail: $0.email))
+            }
         },
         environment: [String: String] = ProcessInfo.processInfo.environment,
         apiBases: [String]? = nil,
@@ -76,7 +140,15 @@ actor AntigravityAccountDiscovery {
     ) {
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
-        self.directCredential = directCredential
+        // A bare token (tests, callers without a sign-in key) is a session
+        // with no key, so its account is never cached.
+        if let directCredential {
+            self.directSession = {
+                await directCredential().map { AntigravityDirectSession(accessToken: $0, sessionKey: nil) }
+            }
+        } else {
+            self.directSession = directSession
+        }
         self.environment = environment
         self.apiBaseOverride = apiBases
         self.proxyBudgetSeconds = proxyBudgetSeconds
@@ -88,7 +160,8 @@ actor AntigravityAccountDiscovery {
             try? JSONDecoder().decode([AntigravityAccountBinding].self, from: $0)
         } ?? []
         let config = proxyConfig()
-        let directToken = await directCredential().flatMap { $0.isEmpty ? nil : $0 }
+        let session = await directSession()
+        let directToken = session.map(\.accessToken).flatMap { $0.isEmpty ? nil : $0 }
         let names = defaults.dictionary(forKey: AntigravityAccountStore.nicknamesKey) as? [String: String] ?? [:]
         let signature = AntigravityAccount.digest(
             (config?.url.absoluteString ?? "") + "|"
@@ -142,6 +215,24 @@ actor AntigravityAccountDiscovery {
         let proxyBudget = self.proxyBudgetSeconds
         async let probedDirect = Self.probeDirectIdentity(
             route: directRoute, bases: bases, batch: batch, now: now)
+
+        // Which Google account this Mac's sign-in is, needed only to tell it
+        // apart from proxy accounts: recorded by the credential, remembered for
+        // this sign-in, or asked of `userinfo`. The lookup starts alongside
+        // proxy discovery and is cancelled, not awaited, when no proxy account
+        // names an account to compare with, so it never lengthens a pass that
+        // cannot use it. It is a production Google call, made only when
+        // discovery uses the production hosts.
+        let cached = (defaults.dictionary(forKey: Self.directAccountKeysKey) as? [String: String])
+            .flatMap { cache in session?.sessionKey.flatMap { cache[$0] } }
+        let knownDirectKey = session?.accountKey ?? cached
+        let usesProductionHosts = apiBaseOverride == nil
+            && !configuredBase.invalid && configuredBase.value == nil
+        let lookup: Task<String?, Never>? = (directToken != nil && knownDirectKey == nil
+            && config != nil && usesProductionHosts)
+            ? Task { [directToken] in await Self.boundedAccountKey(token: directToken, seconds: proxyBudget) }
+            : nil
+
         let proxyOutcome = await Self.discoverProxyRoutes(
             config: config,
             oldAccounts: oldAccounts,
@@ -152,12 +243,30 @@ actor AntigravityAccountDiscovery {
             now: now
         )
 
+        var directAccountKey = knownDirectKey
+        if let lookup {
+            if proxyOutcome.routes.contains(where: { $0.accountKey != nil }) {
+                directAccountKey = await lookup.value
+                if let key = directAccountKey, let sessionKey = session?.sessionKey {
+                    defaults.set([sessionKey: key], forKey: Self.directAccountKeysKey)
+                }
+            } else {
+                lookup.cancel()
+            }
+        }
+
         var discovered: [AntigravityAccountRoute] = []
-        if let local = await probedDirect { discovered.append(local) }
+        if let local = await probedDirect { discovered.append(local.withAccountKey(directAccountKey)) }
         discovered.append(contentsOf: proxyOutcome.routes)
         discovered.sort { lhs, rhs in
             if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
             return lhs.source < rhs.source
+        }
+        let thisMacRoute = discovered.first { $0.isPrimary }
+        var groupingIdentity: [String: String] = [:]
+        for route in discovered {
+            groupingIdentity[route.source] = route.groupingIdentity(
+                directRoute: thisMacRoute, directAccountKey: directAccountKey)
         }
         let unavailableBindings = proxyOutcome.unavailableBindings
         let proxyInventoryFailed = proxyOutcome.inventoryFailed
@@ -172,8 +281,8 @@ actor AntigravityAccountDiscovery {
         }
 
         let verifiedGroups = Dictionary(
-            grouping: discovered.filter { $0.verifiedIdentity != nil },
-            by: { $0.verifiedIdentity! }
+            grouping: discovered.filter { groupingIdentity[$0.source] != nil },
+            by: { groupingIdentity[$0.source]! }
         )
         let badges = defaults.dictionary(forKey: AntigravityAccountStore.badgesKey) as? [String: String] ?? [:]
         for (identity, matchingRoutes) in verifiedGroups where identities[identity] == nil {
@@ -187,12 +296,12 @@ actor AntigravityAccountDiscovery {
         }
 
         let verifiedAccountIDs = Set(discovered.compactMap { route in
-            route.verifiedIdentity.map { identities[$0] ?? $0 }
+            groupingIdentity[route.source].map { identities[$0] ?? $0 }
         })
         var aliases: [String: Set<String>] = [:]
         for route in discovered {
             let previous = oldBindings.first { $0.source == route.source }
-            let identity = route.verifiedIdentity
+            let identity = groupingIdentity[route.source]
             // Never merge a currently unverified route into a verified account
             // ID — even if that verified account previously adopted this
             // route's source-scoped ID during promotion.
@@ -403,7 +512,8 @@ actor AntigravityAccountDiscovery {
                     authFile: file,
                     projectID: nil,
                     planName: nil,
-                    failure: nil
+                    failure: nil,
+                    accountKey: AntigravityAccountRoute.accountKey(forEmail: file.email)
                 ))
             }
             // Bound each proxy route's identity probe independently so one
@@ -426,7 +536,8 @@ actor AntigravityAccountDiscovery {
                                 authFile: route.authFile,
                                 projectID: nil,
                                 planName: nil,
-                                failure: reason
+                                failure: reason,
+                                accountKey: route.accountKey
                             )
                         }
                     }
@@ -497,8 +608,36 @@ actor AntigravityAccountDiscovery {
             authFile: route.authFile,
             projectID: resolvedProject,
             planName: resolvedPlan,
-            failure: terminalFailure
+            failure: terminalFailure,
+            accountKey: route.accountKey
         )
+    }
+
+    static func boundedAccountKey(token: String?, seconds: TimeInterval) async -> String? {
+        guard let token else { return nil }
+        let outcome = await withDeadline(seconds: seconds) {
+            await fetchAccountKey(token: token)
+        }
+        if case .success(let key) = outcome { return key }
+        return nil
+    }
+
+    /// The account key for the Google account a direct token signs in as,
+    /// from `userinfo`. FrugalBar's own Google sign-in requests
+    /// `userinfo.email`; a token without that scope, an unverified email, or
+    /// any failure yields nil (unknown, never a guess). The token is sent only
+    /// in the Authorization header.
+    static func fetchAccountKey(token: String) async -> String? {
+        guard let (data, http) = try? await QuotaHTTP.get(
+            url: "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers: ["Accept": "application/json"],
+            auth: .bearer(token)
+        ), http.statusCode == 200,
+              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let email = body["email"] as? String,
+              body["email_verified"] as? Bool != false
+        else { return nil }
+        return AntigravityAccountRoute.accountKey(forEmail: email)
     }
 
     private static func proxySourcePrefix(_ config: CLIProxyConfig) -> String {
