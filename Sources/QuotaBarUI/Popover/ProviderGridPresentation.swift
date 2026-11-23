@@ -53,7 +53,7 @@ struct ProviderGridPresentation {
 
             if snapshot.vendorId == .antigravityClaude {
                 name = snapshot.antigravityAccount?.name ?? snapshot.displayName
-                source = "Antigravity · Claude/GPT"
+                source = snapshot.vendorId.displayName
             } else if snapshot.vendorId == .claude {
                 name = pool?.name ?? snapshot.displayName
                 source = name == "Claude Code" ? nil : "Claude Code"

@@ -75,7 +75,7 @@ struct ProviderGridView: View {
                     HStack(spacing: 7) {
                         Text(bar.label).font(.system(size: 10)).foregroundStyle(Theme.outline)
                         windowCell(GlancePresentation.window(for: bar, now: presentation.now),
-                                   label: bar.label, stale: pool.isStale)
+                                   label: bar.label, stale: pool.isStale, showSpentPercent: true)
                     }
                 } else {
                     columns { column in
@@ -155,7 +155,7 @@ struct ProviderGridView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.outline)
                                 .frame(width: nameWidth, alignment: .leading)
-                            windowCell(window, label: bar.label, stale: pool.isStale)
+                            windowCell(window, label: bar.label, stale: pool.isStale, showSpentPercent: true)
                         }
                         .padding(.horizontal, 14)
                     }

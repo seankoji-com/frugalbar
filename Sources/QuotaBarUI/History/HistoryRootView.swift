@@ -961,7 +961,7 @@ public struct HistoryRootView: View {
         .accessibilityLabel([subject.name,
                              spent ? (latest?.isBlocked == true ? "blocked" : "spent")
                                    : figure.map { "\($0) left in \(card?.barLabel ?? "")" },
-                             unread?.explanation].compactMap { $0 }.joined(separator: ", "))
+                             card?.noFigureText ?? unread?.explanation].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
