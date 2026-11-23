@@ -77,6 +77,19 @@ public enum VaultHealthState: Sendable, Equatable {
     case corrupt
 }
 
+/// Outcome of a non-blocking deferred background write (such as Gemini OAuth
+/// token renewal).
+public enum DeferredWriteOutcome: Sendable, Equatable {
+    /// Persisted to `vault.v1` immediately without blocking or prompting.
+    case persisted
+    /// Kept in memory because the lockfile was contended or Keychain was locked;
+    /// will flush on explicit Unlock or Save unless superseded.
+    case deferred
+    /// Dropped because a newer explicit edit, deletion, or cross-process change
+    /// already replaced the expected baseline value.
+    case superseded
+}
+
 public struct VaultStatusSnapshot: Sendable, Equatable {
     public let state: VaultHealthState
     public let pendingLegacyKeys: Set<String>
@@ -786,33 +799,40 @@ public final class KeychainVault: @unchecked Sendable {
         namespace: VaultNamespace,
         account: String,
         expectedPreviousValue: String? = nil
-    ) -> Bool {
+    ) -> DeferredWriteOutcome {
         let key = VaultKey(namespace: namespace, account: account)
-        let shouldPersist: Bool = stateLock.withLock {
+        let queuedSeq: UInt64? = stateLock.withLock {
             if let expected = expectedPreviousValue, case .loaded(let doc) = internalState {
                 let current = namespace == .keys ? doc.keys[account] : doc.sync[account]
                 if current != expected {
-                    return false
+                    return nil
                 }
             }
             nextSeq += 1
+            let seq = nextSeq
             deferredWrites[key] = DeferredWrite(
                 value: value,
-                seq: nextSeq,
+                seq: seq,
                 expectedPreviousValue: expectedPreviousValue
             )
-            return true
+            return seq
         }
-        guard shouldPersist else { return false }
-        return flushDeferredNonBlocking()
+        guard let seq = queuedSeq else { return .superseded }
+        return flushDeferredNonBlockingOutcome(tracking: (key, seq))
     }
 
     /// Attempts to flush pending deferred writes without blocking (`LOCK_EX | LOCK_NB`)
     /// and without prompting (`allowsPrompt: false`). Returns `true` if flushed.
     @discardableResult
     public func flushDeferredNonBlocking() -> Bool {
+        flushDeferredNonBlockingOutcome(tracking: nil) != .deferred
+    }
+
+    private func flushDeferredNonBlockingOutcome(
+        tracking: (VaultKey, UInt64)?
+    ) -> DeferredWriteOutcome {
         let snapshot: [VaultKey: DeferredWrite] = stateLock.withLock { deferredWrites }
-        guard !snapshot.isEmpty else { return true }
+        guard !snapshot.isEmpty else { return .persisted }
 
         do {
             return try fileLock.withLock(blocking: false) {
@@ -821,7 +841,7 @@ public final class KeychainVault: @unchecked Sendable {
                 if let raw {
                     guard let decoded = try? JSONDecoder().decode(VaultDocument.self, from: raw) else {
                         stateLock.withLock { internalState = .corrupt }
-                        return false
+                        return .deferred
                     }
                     doc = decoded
                 } else {
@@ -839,7 +859,13 @@ public final class KeychainVault: @unchecked Sendable {
                     }
                     return out
                 }
-                guard !eligible.isEmpty else { return true }
+                if eligible.isEmpty {
+                    if let (trackedKey, trackedSeq) = tracking {
+                        let supersededByExplicit = stateLock.withLock { (explicitSeq[trackedKey] ?? 0) >= trackedSeq }
+                        return supersededByExplicit ? .superseded : .persisted
+                    }
+                    return .persisted
+                }
 
                 var appliedAny = false
                 var staleKeys: [VaultKey: UInt64] = [:]
@@ -882,16 +908,23 @@ public final class KeychainVault: @unchecked Sendable {
                             deferredWrites.removeValue(forKey: k)
                         }
                     }
-                    if appliedAny {
-                        internalState = .loaded(doc)
+                    // Always refresh the in-memory document from the durable read
+                    // whenever any write applied OR any deferred write was rejected
+                    // as stale, so another process's winning edit or deletion is
+                    // reflected immediately on subsequent reads.
+                    if appliedAny || !staleKeys.isEmpty {
+                        internalState = (raw != nil || !doc.isEmpty) ? .loaded(doc) : .empty
                     }
                 }
-                return true
+                if let (trackedKey, trackedSeq) = tracking, staleKeys[trackedKey] == trackedSeq {
+                    return .superseded
+                }
+                return .persisted
             }
         } catch {
             // Contended lock (wouldBlock) or locked Keychain (errSecInteractionNotAllowed):
             // keep deferred writes in memory for explicit Unlock or Save.
-            return false
+            return .deferred
         }
     }
 

@@ -237,7 +237,7 @@ struct KeychainVaultTests {
         #expect(fd >= 0)
         #expect(flock(fd, LOCK_EX) == 0)
         let flushedWhileLocked = vault.writeDeferred("renewed-token", namespace: .keys, account: "gemini.oauth.session")
-        #expect(!flushedWhileLocked)
+        #expect(flushedWhileLocked == .deferred)
         #expect(vault.cachedValue(namespace: .keys, account: "gemini.oauth.session") == "renewed-token")
         #expect(vault.statusSnapshot().hasPendingWrites)
         _ = flock(fd, LOCK_UN)
@@ -252,7 +252,7 @@ struct KeychainVaultTests {
 
         // Now test non-interactive write denial + explicit replacement/deletion superseding deferred write.
         backend.setFailNonInteractiveWrites(true)
-        #expect(!vault.writeDeferred("stale-renewal", namespace: .keys, account: "gemini.oauth.session"))
+        #expect(vault.writeDeferred("stale-renewal", namespace: .keys, account: "gemini.oauth.session") == .deferred)
         #expect(vault.statusSnapshot().hasPendingWrites)
 
         // Explicit replacement supersedes deferred write.
@@ -261,7 +261,7 @@ struct KeychainVaultTests {
         #expect(try vault.read(namespace: .keys, account: "gemini.oauth.session") == "explicit-new")
 
         // Deferred write followed by explicit delete: delete wins even after Unlock.
-        #expect(!vault.writeDeferred("stale-renewal-2", namespace: .keys, account: "gemini.oauth.session"))
+        #expect(vault.writeDeferred("stale-renewal-2", namespace: .keys, account: "gemini.oauth.session") == .deferred)
         try vault.delete(namespace: .keys, account: "gemini.oauth.session", allowsPrompt: true)
         backend.setFailNonInteractiveWrites(false)
         _ = vault.warmUpSync(interactive: true)
@@ -627,6 +627,173 @@ struct KeychainVaultTests {
         // Explicit interactive forceRefresh sets allowsSecurityCLI = true.
         _ = await manager.forceRefresh(allowInteractiveUnlock: true)
         #expect(securityCLIFlags.values == [false, true])
+    }
+
+    @Test("R2-01: passive refresh suppresses /usr/bin/security across credentialQueue GCD hop")
+    func passiveRefreshSuppressesSecurityCLIAcrossGCDHop() async {
+        let invoked = RecordedStrings()
+        let hook: @Sendable (String) -> Data? = { service in
+            invoked.append(service)
+            return nil
+        }
+
+        // Enable CLI discovery so both branches actually reach the CLI discovery path.
+        let prevDiscovery = CredentialStore.preferences.object(forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        CredentialStore.preferences.set(true, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+        defer {
+            if let prevDiscovery {
+                CredentialStore.preferences.set(prevDiscovery, forKey: CredentialStore.cliDiscoveryDefaultsKey)
+            } else {
+                CredentialStore.preferences.removeObject(forKey: CredentialStore.cliDiscoveryDefaultsKey)
+            }
+        }
+
+        // Across credentialQueue.async, allowsSecurityCLI == false must suppress the subprocess hook.
+        await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+            await CredentialStore.$allowsSecurityCLI.withValue(false) {
+                _ = await CredentialStore.apiKeyAsync(for: .muse)
+                _ = await CredentialStore.claudePlanNameAsync()
+            }
+        }
+        #expect(invoked.values.isEmpty)
+
+        // When allowsSecurityCLI == true (and CLI discovery enabled), the hook is reachable across the GCD hop.
+        await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+            await CredentialStore.$allowsSecurityCLI.withValue(true) {
+                _ = await CredentialStore.apiKeyAsync(for: .muse)
+            }
+        }
+        #expect(invoked.values.contains("ai.meta.dev.credentials"))
+    }
+
+    @Test("R2-02: superseded deferred write returns .superseded and refreshes in-memory cache from durable vault")
+    func supersededDeferredWriteRefreshesCacheAndReportsOutcome() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        _ = vaultB.warmUpSync(interactive: false)
+        // Another process replaces the session with session-v2.
+        try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
+
+        // vaultA's stale cache still holds session-v1 until its deferred write runs under flock.
+        let outcome = vaultA.writeDeferred(
+            "session-renewed-from-v1",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(outcome == .superseded)
+        // vaultA's in-memory cache must immediately reflect the winning session-v2!
+        #expect(vaultA.cachedValue(namespace: .keys, account: "gemini-oauth") == "session-v2")
+        #expect(try vaultA.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // And when another process deletes the key, a stale renewal also reports .superseded and clears cache.
+        try vaultB.delete(namespace: .keys, account: "gemini-oauth")
+        let deletedOutcome = vaultA.writeDeferred(
+            "session-renewed-from-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v2"
+        )
+        #expect(deletedOutcome == .superseded)
+        #expect(vaultA.cachedValue(namespace: .keys, account: "gemini-oauth") == nil)
+    }
+
+    @Test("R2-03: interactive refresh arriving during a queued passive follow-up runs before activeTask releases")
+    func interactiveEscalationDuringPassiveFollowUpDrainsBeforeRelease() async {
+        let warmUps = RecordedBools()
+        let passiveStarted = CoreAsyncSignal()
+        let releasePassive = CoreAsyncSignal()
+        let passCounter = AtomicCounter()
+
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 5, minPollInterval: 0),
+            providerFactory: { [] },
+            vaultWarmUp: { interactive in
+                let n = passCounter.increment()
+                warmUps.append(interactive)
+                if n == 1 {
+                    // Initial automatic pass: brief delay so passive follow-up can queue.
+                    try? await Task.sleep(for: .milliseconds(30))
+                } else if n == 2 {
+                    // Queued passive follow-up: pause while interactive click arrives!
+                    passiveStarted.signal()
+                    await releasePassive.wait()
+                }
+            }
+        )
+
+        let autoTask = Task { await manager.refresh() }
+        // Queue a passive follow-up while the automatic pass is running.
+        try? await Task.sleep(for: .milliseconds(10))
+        let queuedPassive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: false)
+        #expect(queuedPassive)
+
+        // Wait until the passive follow-up is actively suspended, then click ⟳ (interactive).
+        await passiveStarted.wait()
+        let queuedInteractive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: true)
+        #expect(queuedInteractive)
+        releasePassive.signal()
+
+        _ = await autoTask.value
+        // All three passes (automatic false, passive follow-up false, interactive escalation true)
+        // must have drained inside the active task.
+        #expect(warmUps.values == [false, false, true])
+
+        // A subsequent unrelated automatic refresh must stay non-interactive.
+        _ = await manager.refresh()
+        #expect(warmUps.values == [false, false, true, false])
+    }
+}
+
+private final class RecordedStrings: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    var values: [String] { lock.withLock { items } }
+    func append(_ v: String) { lock.withLock { items.append(v) } }
+}
+
+private final class AtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
+}
+
+private final class CoreAsyncSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var signaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        let list: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !signaled else { return [] }
+            signaled = true
+            let copy = waiters
+            waiters.removeAll()
+            return copy
+        }
+        for c in list { c.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { cont in
+            let done: Bool = lock.withLock {
+                if signaled { return true }
+                waiters.append(cont)
+                return false
+            }
+            if done { cont.resume() }
+        }
     }
 }
 

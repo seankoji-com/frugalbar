@@ -54,7 +54,11 @@ public final class KeychainManager: Sendable {
     /// and attempts a non-blocking, non-interactive persist without blocking
     /// provider deadlines or prompting.
     @discardableResult
-    public func setDeferred(key: String, label: String, expectedPreviousValue: String? = nil) -> Bool {
+    public func setDeferred(
+        key: String,
+        label: String,
+        expectedPreviousValue: String? = nil
+    ) -> DeferredWriteOutcome {
         vault.writeDeferred(key, namespace: .keys, account: label, expectedPreviousValue: expectedPreviousValue)
     }
 
@@ -534,6 +538,11 @@ public enum CredentialStore {
     /// connection-sheet dismissal never trigger SecurityAgent prompts.
     @TaskLocal static var allowsSecurityCLI: Bool = true
 
+    /// Test-only hook invoked when a credential lookup reaches the
+    /// `/usr/bin/security` subprocess path, allowing tests to verify across
+    /// GCD queue hops whether subprocess invocation is suppressed.
+    @TaskLocal static var securityCLISubprocessHook: (@Sendable (_ service: String) -> Data?)? = nil
+
     private static func discoverClaudeBlob(allowsSecurityCLI: Bool = true) -> Data? {
         let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
         let fileURL = CLIConfigLocations.liveClaudeRoot(containing: ".credentials.json")
@@ -541,8 +550,14 @@ public enum CredentialStore {
         if let fileData = try? Data(contentsOf: fileURL), !fileData.isEmpty {
             return fileData
         }
-        if effectiveSecurityCLI, let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
-            return secData
+        if effectiveSecurityCLI {
+            if let hook = securityCLISubprocessHook {
+                if let hooked = hook("Claude Code-credentials"), !hooked.isEmpty {
+                    return hooked
+                }
+            } else if let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
+                return secData
+            }
         }
         guard !TestHost.isActive else { return nil }
         return claudeCodeKeychainBlob()
@@ -598,8 +613,14 @@ public enum CredentialStore {
 
     private static func discoverMuseBlob(allowsSecurityCLI: Bool = true) -> Data? {
         let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
-        if effectiveSecurityCLI, let secData = runSecurityMuseCredential(), !secData.isEmpty {
-            return secData
+        if effectiveSecurityCLI {
+            if let hook = securityCLISubprocessHook {
+                if let hooked = hook("ai.meta.dev.credentials"), !hooked.isEmpty {
+                    return hooked
+                }
+            } else if let secData = runSecurityMuseCredential(), !secData.isEmpty {
+                return secData
+            }
         }
         guard !TestHost.isActive else { return nil }
         return museKeychainBlob()
@@ -826,9 +847,16 @@ extension CredentialStore {
     /// fetching concurrently that can starve the pool. This hops to a
     /// dedicated background queue instead.
     static func apiKeyAsync(for vendor: VendorIdentifier) async -> String? {
-        await withCheckedContinuation { continuation in
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                continuation.resume(returning: apiKey(for: vendor))
+                let result = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        apiKey(for: vendor)
+                    }
+                }
+                continuation.resume(returning: result)
             }
         }
     }
@@ -841,17 +869,22 @@ extension CredentialStore {
     /// the user opted into CLI discovery — so a workspace that never had one
     /// cannot silently read another workspace's CLI credential.
     static func apiKeyAsync(label: String, cliVendorFallback: VendorIdentifier? = nil) async -> String? {
-        await withCheckedContinuation { continuation in
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                if let stored = try? KeychainManager.shared.get(label: label, allowsAuthenticationPrompt: false), !stored.isEmpty {
-                    continuation.resume(returning: stored)
-                    return
+                let result: String? = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        if let stored = try? KeychainManager.shared.get(label: label, allowsAuthenticationPrompt: false), !stored.isEmpty {
+                            return stored
+                        }
+                        guard isCLIDiscoveryEnabled, let vendor = cliVendorFallback else {
+                            return nil
+                        }
+                        return discoverFromCLI(vendor: vendor)
+                    }
                 }
-                guard isCLIDiscoveryEnabled, let vendor = cliVendorFallback else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: discoverFromCLI(vendor: vendor))
+                continuation.resume(returning: result)
             }
         }
     }
@@ -1034,9 +1067,15 @@ extension CredentialStore {
             }
             return nil
         }
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                let name = claudePlanName(from: cachedClaudeBlob())
+                let name = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        claudePlanName(from: cachedClaudeBlob())
+                    }
+                }
                 continuation.resume(returning: name)
             }
         }

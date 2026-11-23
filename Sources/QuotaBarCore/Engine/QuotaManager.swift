@@ -493,7 +493,7 @@ public actor QuotaManager {
                 force: force,
                 allowInteractiveUnlock: allowInteractiveUnlock
             )
-            if self.forcedPassPending {
+            while self.forcedPassPending {
                 let followUpInteractive = self.forcedPassAllowInteractiveUnlock
                 self.forcedPassPending = false
                 self.forcedPassAllowInteractiveUnlock = false

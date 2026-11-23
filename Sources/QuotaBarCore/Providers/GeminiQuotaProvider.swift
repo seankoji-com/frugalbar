@@ -720,13 +720,14 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// or prompting the user. If the vault lock is contended or Keychain is
     /// locked, the renewed session stays in memory and flushes on explicit
     /// Unlock or Save unless superseded by a newer explicit edit or delete.
+    @discardableResult
     static func saveDeferred(
         _ session: GeminiOAuthSession,
         expectedPreviousValue: String? = nil,
         manager: KeychainManager = .shared
-    ) {
-        guard let encoded = try? JSONEncoder().encode(session) else { return }
-        _ = manager.setDeferred(
+    ) -> DeferredWriteOutcome {
+        guard let encoded = try? JSONEncoder().encode(session) else { return .deferred }
+        return manager.setDeferred(
             key: String(decoding: encoded, as: UTF8.self),
             label: keychainLabel,
             expectedPreviousValue: expectedPreviousValue
@@ -751,7 +752,13 @@ public struct GeminiOAuthSession: Codable, Sendable {
             ],
             existingRefreshToken: session.refreshToken
         ) else { return nil }
-        saveDeferred(renewed, expectedPreviousValue: raw)
+        let outcome = saveDeferred(renewed, expectedPreviousValue: raw)
+        if outcome == .superseded {
+            // Another sign-in, deletion, or cross-process edit replaced the
+            // session while Google was refreshing the old token: return the
+            // winning session (or nil if deleted) rather than the stale one.
+            return load()
+        }
         return renewed
     }
 
