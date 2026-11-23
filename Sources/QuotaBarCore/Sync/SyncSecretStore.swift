@@ -17,25 +17,31 @@ public protocol SyncSecretStore: Sendable {
     func delete(_ account: String) throws
 }
 
-/// Generic-password items under their own service, so a sync reset can never
-/// touch a provider credential.
+/// Sync secret storage backed by `KeychainVault`'s `sync` namespace.
 ///
-/// Every item is non-synchronizable and written with
-/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. A bare, unsigned binary
-/// writes to the legacy file keychain, which neither records nor enforces
-/// that attribute; it is set for when FrugalBar ships as a signed `.app`
-/// (D§2.2.B, D§2.2.N). `kSecUseDataProtectionKeychain` is deliberately absent:
-/// without an entitlement it fails every write with -34018 (see
-/// `KeychainManager`).
+/// Legacy items under `com.quotabar.sync` are migrated automatically into
+/// `vault.v1`'s `sync` dictionary on warm-up, while `delete` and `clearSync`
+/// modify only the `sync` namespace and never touch provider credentials.
 public struct KeychainSyncSecretStore: SyncSecretStore {
-    public static let defaultService = "com.quotabar.sync"
+    public static let defaultService = KeychainVault.defaultSyncService
     public let service: String
+    public let vault: KeychainVault
 
-    public init(service: String = KeychainSyncSecretStore.defaultService) {
+    public init(
+        service: String = KeychainSyncSecretStore.defaultService,
+        vault: KeychainVault? = nil
+    ) {
         self.service = service
+        if let vault {
+            self.vault = vault
+        } else if service == Self.defaultService {
+            self.vault = .shared
+        } else {
+            self.vault = KeychainVault(keysService: service, syncService: service)
+        }
     }
 
-    /// The identity of one item: also the query that finds it.
+    /// The identity of one legacy item: also the query that finds it.
     static func itemQuery(service: String, account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -45,9 +51,8 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
         ]
     }
 
-    /// Everything `write` adds: the item's identity, its value and its
-    /// accessibility. Pure, so the attributes are asserted without trusting
-    /// what the legacy keychain chooses to report back.
+    /// Everything a legacy `write` added: kept for compatibility with existing
+    /// attribute unit tests.
     static func addAttributes(service: String, account: String, value: String) -> [String: Any] {
         var attributes = itemQuery(service: service, account: account)
         attributes[kSecValueData as String] = Data(value.utf8)
@@ -57,29 +62,14 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
     }
 
     public func read(_ account: String) throws -> String? {
-        var query = Self.itemQuery(service: service, account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw KeychainError.unknown(status) }
-        guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
-        }
-        return value
+        try vault.read(namespace: .sync, account: account, allowsPrompt: false)
     }
 
-    /// Delete, then add: an update would keep whatever accessibility an older
-    /// item was written with.
     public func write(_ value: String, account: String) throws {
-        try delete(account)
-        let status = SecItemAdd(Self.addAttributes(service: service, account: account, value: value) as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unknown(status) }
+        try vault.write(value, namespace: .sync, account: account, allowsPrompt: true)
     }
 
     public func delete(_ account: String) throws {
-        let status = SecItemDelete(Self.itemQuery(service: service, account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unknown(status) }
+        try vault.delete(namespace: .sync, account: account, allowsPrompt: true)
     }
 }

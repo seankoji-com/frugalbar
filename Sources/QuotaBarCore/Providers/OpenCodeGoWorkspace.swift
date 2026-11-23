@@ -215,10 +215,10 @@ public enum OpenCodeGoWorkspaceStore {
         try KeychainManager.shared.delete(label: workspace.credentialLabel)
     }
 
-    /// Whether the Keychain already holds a key for this workspace. Never reads
-    /// the value out.
+    /// Whether the in-memory vault cache already holds a key for this workspace.
+    /// Cache-only: never blocks the main thread or prompts macOS Keychain.
     public static func hasCredential(for workspace: OpenCodeGoWorkspace) -> Bool {
-        (try? KeychainManager.shared.get(label: workspace.credentialLabel))?.isEmpty == false
+        KeychainManager.shared.cachedValue(label: workspace.credentialLabel)?.isEmpty == false
     }
 
     /// Moves a workspace to a new position, preserving order for every other

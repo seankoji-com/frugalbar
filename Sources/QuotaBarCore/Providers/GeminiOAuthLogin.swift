@@ -57,18 +57,20 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         try KeychainManager.shared.delete(label: GeminiOAuthSession.clientSecretKeychainLabel)
     }
 
-    /// The stored client ID, or nil when the built-in one is in use. The
-    /// secret is deliberately never read back out for display.
+    /// The stored client ID from the in-memory vault cache, or nil when the
+    /// built-in one is in use or the vault is not yet loaded. Never touches
+    /// Keychain synchronously on the main thread.
     public static func storedClientID() -> String? {
-        guard let stored = try? KeychainManager.shared.get(label: GeminiOAuthSession.clientIDKeychainLabel),
+        guard let stored = KeychainManager.shared.cachedValue(label: GeminiOAuthSession.clientIDKeychainLabel),
               !stored.isEmpty
         else { return nil }
         return stored
     }
 
-    /// Whether a *user-supplied* secret overrides the vendored default.
+    /// Whether a *user-supplied* secret overrides the vendored default, read
+    /// from the in-memory vault cache without touching Keychain.
     public static func hasClientSecretOverride() -> Bool {
-        (try? KeychainManager.shared.get(label: GeminiOAuthSession.clientSecretKeychainLabel))
+        KeychainManager.shared.cachedValue(label: GeminiOAuthSession.clientSecretKeychainLabel)
             .map { !$0.isEmpty } ?? false
     }
 

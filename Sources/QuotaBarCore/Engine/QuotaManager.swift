@@ -22,7 +22,14 @@ public actor QuotaManager {
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
-        monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } })
+        monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } },
+        vaultWarmUp: { interactive in
+            if interactive {
+                _ = await KeychainVault.shared.unlock()
+            } else {
+                _ = await KeychainVault.shared.warmUpForStartup()
+            }
+        })
 
     // --- State ---
     /// Keyed by each provider's stable `instanceID`, not by vendor: one vendor
@@ -48,10 +55,13 @@ public actor QuotaManager {
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
     private let monthlyCreditConnection: @Sendable () async -> String?
     private let monthlyCreditIdentities: (@Sendable () async -> Set<String>?)?
+    private let vaultWarmUp: (@Sendable (_ interactive: Bool) async -> Void)?
     private var monthlyCreditInvalidation = 0
     private var openAIMonthlyCreditInvalidation = 0
     private var activeTaskIsForced = false
+    private var activeTaskAllowInteractiveUnlock = false
     private var forcedPassPending = false
+    private var forcedPassAllowInteractiveUnlock = false
 
     private struct CacheEntry: Sendable {
         let snapshot: QuotaSnapshot
@@ -112,6 +122,9 @@ public actor QuotaManager {
         // The billing session's current attribution, checked at commit. Nil
         // (isolated managers) skips the check; tests that need it inject one.
         monthlyCreditIdentities: (@Sendable () async -> Set<String>?)? = nil,
+        // Coalesced vault warm-up executed before any discovery or provider
+        // deadline starts. Nil in isolated tests unless injected.
+        vaultWarmUp: (@Sendable (_ interactive: Bool) async -> Void)? = nil,
         // Cache policy time is injectable independently of vendor observations
         // and real elapsed deadlines, so tests never race the scheduler.
         clock: @escaping @Sendable () -> Date = { Date() }
@@ -126,6 +139,7 @@ public actor QuotaManager {
         self.geminiCreditLookup = geminiCreditLookup
         self.monthlyCreditConnection = monthlyCreditConnection
         self.monthlyCreditIdentities = monthlyCreditIdentities
+        self.vaultWarmUp = vaultWarmUp
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -425,41 +439,65 @@ public actor QuotaManager {
 
     /// Requests a user pass. Concurrent manual callers share it; an automatic
     /// pass already in flight is followed by one user pass.
-    public func forceRefresh() async -> [String: QuotaSnapshot] {
+    ///
+    /// `allowInteractiveUnlock` is deliberately separate from `force`: only
+    /// explicit user refresh/unlock clicks carry interactive Keychain unlock
+    /// intent, while workspace edits and connection-sheet dismissals stay
+    /// non-interactive.
+    public func forceRefresh(allowInteractiveUnlock: Bool = false) async -> [String: QuotaSnapshot] {
         lastCompleteFetch = nil
-        return await fetchDeduplicated(force: true)
+        return await fetchDeduplicated(force: true, allowInteractiveUnlock: allowInteractiveUnlock)
     }
 
     /// Lets a UI already awaiting this pass register a click without waiting
     /// for the same task twice. Its original caller receives the final result.
-    public func queueUserRefreshIfActive() -> Bool {
+    public func queueUserRefreshIfActive(allowInteractiveUnlock: Bool = false) -> Bool {
         guard activeTask != nil else { return false }
-        if !activeTaskIsForced { forcedPassPending = true }
+        if !activeTaskIsForced || (allowInteractiveUnlock && !activeTaskAllowInteractiveUnlock) {
+            forcedPassPending = true
+            if allowInteractiveUnlock { forcedPassAllowInteractiveUnlock = true }
+        }
         return true
     }
 
     // MARK: Private
 
-    private func fetchDeduplicated(force: Bool = false) async -> [String: QuotaSnapshot] {
+    private func fetchDeduplicated(
+        force: Bool = false,
+        allowInteractiveUnlock: Bool = false
+    ) async -> [String: QuotaSnapshot] {
         // A forced refresh must join too. Keep one owner of the in-flight
-        // pass, but queue a user-initiated pass if this one is automatic.
-        // Automatic selection may have skipped a vendor under Retry-After or
-        // the automatic floor, and cannot satisfy the person's click.
+        // pass, but queue a user-initiated pass if this one is automatic or
+        // lacks interactive unlock intent.
         if let existing = activeTask {
-            if force && !activeTaskIsForced { forcedPassPending = true }
+            if force && (!activeTaskIsForced || (allowInteractiveUnlock && !activeTaskAllowInteractiveUnlock)) {
+                forcedPassPending = true
+                if allowInteractiveUnlock { forcedPassAllowInteractiveUnlock = true }
+            }
             return await existing.value
         }
 
         activeTaskIsForced = force
+        activeTaskAllowInteractiveUnlock = allowInteractiveUnlock
         let task = Task {
-            var result = await self.parallelFetch(force: force)
+            var result = await self.parallelFetch(
+                force: force,
+                allowInteractiveUnlock: allowInteractiveUnlock
+            )
             if self.forcedPassPending {
+                let followUpInteractive = self.forcedPassAllowInteractiveUnlock
                 self.forcedPassPending = false
+                self.forcedPassAllowInteractiveUnlock = false
                 self.activeTaskIsForced = true
+                self.activeTaskAllowInteractiveUnlock = followUpInteractive
                 // A successful in-flight read already satisfies the click.
                 // Retry only skipped providers and unavailable outcomes.
                 let satisfied = self.successfulPassIDs
-                result = await self.parallelFetch(force: true, excluding: satisfied)
+                result = await self.parallelFetch(
+                    force: true,
+                    allowInteractiveUnlock: followUpInteractive,
+                    excluding: satisfied
+                )
                 // Arm the user floor only once the follow-up has settled.
                 // Bumping `lastUserFetchAt` before it made the floor, not the
                 // exclusion above, the thing that stopped a satisfied provider
@@ -479,6 +517,7 @@ public actor QuotaManager {
             // A caller arriving after completion must start a new pass rather
             // than queue onto a task whose follow-up decision already ran.
             self.activeTask = nil
+            self.activeTaskAllowInteractiveUnlock = false
             return result
         }
         activeTask = task
@@ -487,7 +526,17 @@ public actor QuotaManager {
 
     private var successfulPassIDs: Set<String> = []
 
-    private func parallelFetch(force: Bool = false, excluding: Set<String> = []) async -> [String: QuotaSnapshot] {
+    private func parallelFetch(
+        force: Bool = false,
+        allowInteractiveUnlock: Bool = false,
+        excluding: Set<String> = []
+    ) async -> [String: QuotaSnapshot] {
+        // Warm up (or explicitly unlock) the Keychain vault BEFORE starting
+        // any discovery or provider deadline timer, so time spent answering a
+        // macOS Keychain prompt never times out initial quota requests.
+        if let vaultWarmUp {
+            await vaultWarmUp(allowInteractiveUnlock)
+        }
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at

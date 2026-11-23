@@ -219,12 +219,16 @@ struct SyncTokenEndpoint: Sendable {
 /// Why Drive could not be given an access token.
 public enum SyncAuthError: Error, Equatable, Sendable {
     case notSignedIn
+    /// Keychain vault is locked, denied, corrupt, or still has pending/unscanned
+    /// legacy items. Recoverable: sync pauses and retries once unlocked.
+    case secretsUnavailable
     case refresh(SyncRefreshFailure)
 
     /// No token is left to send: only a new sign-in can continue.
     var endsSession: Bool {
         switch self {
         case .notSignedIn: return true
+        case .secretsUnavailable: return false
         case .refresh(let failure): return failure.isTerminal
         }
     }
@@ -254,8 +258,16 @@ actor SyncAccessTokens {
 
     func accessToken() async throws -> String {
         if let cached, cached.expiry > clock.now().addingTimeInterval(60) { return cached.token }
-        guard let refreshToken = try? secrets.read(SyncSecretAccount.refreshToken) else {
-            throw SyncAuthError.notSignedIn
+        let refreshToken: String
+        do {
+            guard let stored = try secrets.read(SyncSecretAccount.refreshToken), !stored.isEmpty else {
+                throw SyncAuthError.notSignedIn
+            }
+            refreshToken = stored
+        } catch let error as SyncAuthError {
+            throw error
+        } catch {
+            throw SyncAuthError.secretsUnavailable
         }
         switch await endpoint.refresh(refreshToken: refreshToken) {
         case .success(let response):

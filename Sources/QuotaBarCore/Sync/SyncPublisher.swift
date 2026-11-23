@@ -690,9 +690,21 @@ public actor SyncPublisher {
         min(backoffBase * pow(2, Double(max(failures, 1) - 1)), backoffCap)
     }
 
+    /// Clears transient Keychain backoff after the user unlocks the vault so
+    /// paused publishing or an unfinished Stop can resume immediately.
+    public func vaultDidUnlock() {
+        retryAt = nil
+        failures = 0
+        if state.lastError == Self.describe(SyncAuthError.secretsUnavailable) {
+            state.lastError = nil
+        }
+    }
+
     /// A line for Settings. Never a URL, a token or raw error text.
     static func describe(_ error: Error) -> String {
         switch error {
+        case SyncAuthError.secretsUnavailable:
+            return "Keychain is locked; unlock to resume sync"
         case SyncAuthError.refresh(.transient(.rateLimited)):
             return "Google is rate-limiting sign-in; retrying"
         case SyncAuthError.refresh(.transient):
@@ -732,11 +744,17 @@ public actor SyncPublisher {
 
     private func sessionPublisherId() throws -> String {
         if let publisherIdCache { return publisherIdCache }
-        guard let stored = try secrets.read(SyncSecretAccount.publisherId), !stored.isEmpty else {
-            throw SyncAuthError.notSignedIn
+        do {
+            guard let stored = try secrets.read(SyncSecretAccount.publisherId), !stored.isEmpty else {
+                throw SyncAuthError.notSignedIn
+            }
+            publisherIdCache = stored
+            return stored
+        } catch let error as SyncAuthError {
+            throw error
+        } catch {
+            throw SyncAuthError.secretsUnavailable
         }
-        publisherIdCache = stored
-        return stored
     }
 
     private func exportInput(_ source: SyncExportSource, publishedAt: Date) -> SnapshotExportInput {

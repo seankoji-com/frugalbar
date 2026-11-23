@@ -660,7 +660,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
 
 
     static var clientID: String? {
-        if let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel),
+        if let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel, allowsAuthenticationPrompt: false),
            !stored.isEmpty {
             return stored
         }
@@ -673,7 +673,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// before the user ever saw a token.
     ///
     static var clientSecret: String? {
-        if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel),
+        if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel, allowsAuthenticationPrompt: false),
            !stored.isEmpty {
             return stored
         }
@@ -689,7 +689,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     private static let renewalMargin: TimeInterval = 120
 
     static func load() -> GeminiOAuthSession? {
-        guard let text = try? KeychainManager.shared.get(label: keychainLabel),
+        guard let text = try? KeychainManager.shared.get(label: keychainLabel, allowsAuthenticationPrompt: false),
               let data = text.data(using: .utf8),
               let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
         else { return nil }
@@ -716,6 +716,15 @@ public struct GeminiOAuthSession: Codable, Sendable {
                                        label: keychainLabel)
     }
 
+    /// Persists a background token renewal without blocking provider deadlines
+    /// or prompting the user. If the vault lock is contended or Keychain is
+    /// locked, the renewed session stays in memory and flushes on explicit
+    /// Unlock or Save unless superseded by a newer explicit edit or delete.
+    static func saveDeferred(_ session: GeminiOAuthSession, manager: KeychainManager = .shared) {
+        guard let encoded = try? JSONEncoder().encode(session) else { return }
+        _ = manager.setDeferred(key: String(decoding: encoded, as: UTF8.self), label: keychainLabel)
+    }
+
     /// The stored session, renewed first if its access token is spent.
     ///
     /// Google's access tokens last an hour. Without this the app read a live
@@ -732,7 +741,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
             ],
             existingRefreshToken: session.refreshToken
         ) else { return nil }
-        try? save(renewed)
+        saveDeferred(renewed)
         return renewed
     }
 

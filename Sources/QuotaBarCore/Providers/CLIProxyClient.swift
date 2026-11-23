@@ -754,7 +754,7 @@ public enum CLIProxyClient {
         // 2. Preferences / Keychain
         if let prefUrl = CredentialStore.preferences.string(forKey: "QuotaBarCLIProxyURL"),
            let url = URL(string: prefUrl) {
-            let key = (try? KeychainManager.shared.get(label: "cliproxy")) ?? CredentialStore.preferences.string(forKey: "QuotaBarCLIProxyKey")
+            let key = (try? KeychainManager.shared.get(label: "cliproxy", allowsAuthenticationPrompt: false)) ?? CredentialStore.preferences.string(forKey: "QuotaBarCLIProxyKey")
             if let key, !key.isEmpty {
                 return CLIProxyConfig(url: url, managementKey: key, label: "Preferences")
             }

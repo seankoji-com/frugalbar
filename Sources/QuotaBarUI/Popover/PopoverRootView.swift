@@ -97,7 +97,7 @@ public struct PopoverRootView: View {
                     }
                 },
                 onQuit: { NSApp.terminate(nil) },
-                onRefresh: { Task { await store.forceRefresh() } }
+                onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } }
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 footerHeight = $0

@@ -132,12 +132,16 @@ public enum CLIArguments {
     /// (`errSecInteractionNotAllowed`) points at a different fix than a
     /// genuinely broken build. The probe never prompts for authentication:
     /// a doctor run must be non-interactive end to end.
-    static func keychainRoundTripResult(label: String = "com.quotabar.doctor.probe") -> Result<Void, Error> {
-        let probe = "frugalbar-doctor-probe"
+    static func keychainRoundTripResult(
+        label: String = KeychainVault.doctorProbeAccount,
+        service: String = KeychainVault.defaultKeysService,
+        backend: any KeychainBackend = SystemKeychainBackend.shared
+    ) -> Result<Void, Error> {
+        let probe = Data("frugalbar-doctor-probe".utf8)
         do {
-            try KeychainManager.shared.set(key: probe, label: label, allowsAuthenticationPrompt: false)
-            defer { try? KeychainManager.shared.delete(label: label) }
-            guard try KeychainManager.shared.get(label: label, allowsAuthenticationPrompt: false) == probe else {
+            try backend.write(probe, service: service, account: label, label: nil, allowsPrompt: false)
+            defer { try? backend.delete(service: service, account: label, allowsPrompt: false) }
+            guard try backend.read(service: service, account: label, allowsPrompt: false) == probe else {
                 return .failure(KeychainError.invalidData)
             }
             return .success(())

@@ -208,6 +208,8 @@ public struct SettingsView: View {
     private let readsCredentials: Bool
     /// Taller only in the render harness, so one image shows a whole pane.
     private let height: CGFloat
+    @State private var vaultStatus: VaultStatusSnapshot = VaultStatusSnapshot(state: .unloaded)
+    @State private var isUnlockingVault = false
 
     public init(store: QuotaStore? = nil, sync: SyncController? = nil, initialPane: Pane = .providers) {
         self.init(store: store, sync: sync, initialPane: initialPane, readsCredentials: true)
@@ -263,16 +265,27 @@ public struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 paneHeader(selection ?? .providers)
+                if readsCredentials, let banner = SettingsVaultBannerPresentation.make(from: vaultStatus) {
+                    SettingsVaultBannerView(
+                        presentation: banner,
+                        isBusy: isUnlockingVault,
+                        onAction: { Task { await unlockVault() } }
+                    )
+                }
                 pane(selection ?? .providers)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: 780, height: height)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { if readsCredentials { loadKeys() } }
+        .onAppear { if readsCredentials { loadKeysFromCache() } }
         .onAppear(perform: loadWorkspaces)
         .onAppear { cycles = SubscriptionCycleStore.all() }
-        .task { if readsCredentials { await refreshSources() } }
+        .task {
+            if readsCredentials {
+                await loadVaultAsyncAndRefreshSources()
+            }
+        }
         // Turning discovery off can strip a row back to "Not configured";
         // saving a key can flip one to "Stored in Keychain". Both have to be
         // reflected, or the status line becomes a lie the moment it matters.
@@ -892,6 +905,7 @@ public struct SettingsView: View {
             try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
             workspaceKeys[instanceID] = ""
             workspaceHasKey[instanceID] = true
+            vaultStatus = KeychainVault.shared.statusSnapshot()
             workspaceStatus[instanceID] = await verify(.opencode, key: key)
         } catch {
             workspaceStatus[instanceID] = Self.keychainAdvice(for: error)
@@ -1385,18 +1399,56 @@ public struct SettingsView: View {
 
     // MARK: - Actions
 
-    private func loadKeys() {
+    /// Populates credential fields from the in-memory vault cache only.
+    /// Never blocks the main thread or prompts macOS Keychain.
+    private func loadKeysFromCache() {
         var current: [VendorIdentifier: String] = [:]
         for slot in Self.slots {
-            current[slot.id] = (try? KeychainManager.shared.get(label: slot.id.rawValue)) ?? ""
+            current[slot.id] = KeychainManager.shared.cachedValue(label: slot.id.rawValue) ?? ""
         }
-        loaded = current
-        entered = current
-
-        geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
-        loadedGeminiClientID = geminiClientID
+        let merged = SettingsCredentialMerge.merge(
+            slots: Self.slots.map(\.id),
+            currentLoaded: loaded,
+            currentEntered: entered,
+            freshLoaded: current,
+            currentLoadedGeminiClientID: loadedGeminiClientID,
+            currentEnteredGeminiClientID: geminiClientID,
+            freshGeminiClientID: GeminiOAuthLogin.storedClientID() ?? ""
+        )
+        loaded = merged.loaded
+        entered = merged.entered
+        loadedGeminiClientID = merged.loadedGeminiClientID
+        geminiClientID = merged.enteredGeminiClientID
         geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+        vaultStatus = KeychainVault.shared.statusSnapshot()
+    }
 
+    /// Runs a non-interactive vault warm-up off the main thread when the vault
+    /// is still unloaded, merges freshly cached values while preserving dirty
+    /// user edits, and refreshes non-interactive credential provenance.
+    private func loadVaultAsyncAndRefreshSources() async {
+        let current = KeychainVault.shared.statusSnapshot()
+        if current.state == .unloaded {
+            vaultStatus = await KeychainVault.shared.warmUp(interactive: false)
+        } else {
+            vaultStatus = current
+        }
+        loadKeysFromCache()
+        refreshWorkspaceHasKey()
+        await refreshSources()
+    }
+
+    /// Explicit interactive Unlock / Save pending changes / Retry action from
+    /// the inline Settings banner.
+    private func unlockVault() async {
+        isUnlockingVault = true
+        defer { isUnlockingVault = false }
+        vaultStatus = await KeychainVault.shared.unlock()
+        loadKeysFromCache()
+        refreshWorkspaceHasKey()
+        await refreshSources()
+        sync?.vaultDidUnlock()
+        Task { await store?.forceRefresh(allowInteractiveUnlock: false) }
     }
 
     private var hasGeminiClientEdits: Bool {
@@ -1499,6 +1551,7 @@ public struct SettingsView: View {
             }
         }
 
+        vaultStatus = KeychainVault.shared.statusSnapshot()
         await refreshSources()
     }
 
