@@ -1,0 +1,182 @@
+import Foundation
+import QuotaBarCore
+
+/// Groups the routes the owner uses for the same model family. Each route
+/// retains its own snapshot and inspector identity.
+struct ProviderGridPresentation {
+    typealias Window = GlancePresentation.Window
+    typealias PoolState = GlancePresentation.PoolState
+
+    struct Pool: Identifiable {
+        let snapshot: QuotaSnapshot
+        let name: String
+        let source: String?
+        let windows: [WindowColumn: Window]
+        let extraBars: [DualBarMetrics]
+        let state: PoolState
+        let returnsAt: Date?
+
+        var id: String { snapshot.id }
+        var isStale: Bool { snapshot.staleReading != nil }
+        var isUsable: Bool { !isStale && (state == .usable || state == .onBonus) }
+        var isSpent: Bool { !isStale && state == .spent }
+
+        /// A measured exhausted month takes the lane. An exhausted week can
+        /// take it if the short window isn't also exhausted and there is no
+        /// monthly reading to show.
+        var spanningColumn: WindowColumn? {
+            if let month = windows[.monthly], WindowGridPresentation.isExhausted(month.bar) { return .monthly }
+            if let week = windows[.weekly], WindowGridPresentation.isExhausted(week.bar),
+               windows[.monthly] == nil, windows[.fiveHour]?.isSpent != true { return .weekly }
+            return nil
+        }
+
+        var displayWindows: [WindowColumn: Window] {
+            guard let week = windows[.weekly], WindowGridPresentation.isExhausted(week.bar),
+                  windows[.fiveHour]?.isSpent != true else { return windows }
+            return windows.filter { $0.key != .fiveHour }
+        }
+
+        init(snapshot: QuotaSnapshot, group: VendorIdentifier, now: Date) {
+            self.snapshot = snapshot
+            let pool = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false)
+            state = pool?.state ?? .unreadable
+            returnsAt = pool?.returnsAt
+
+            if snapshot.vendorId == .antigravityClaude {
+                name = snapshot.antigravityAccount?.name ?? snapshot.displayName
+                source = "Antigravity · Claude/GPT"
+            } else if snapshot.vendorId == .claude {
+                name = pool?.name ?? snapshot.displayName
+                source = name == "Claude Code" ? nil : "Claude Code"
+            } else if snapshot.vendorId == .openai {
+                name = snapshot.planName ?? "ChatGPT"
+                source = snapshot.planName == nil ? nil : "ChatGPT"
+            } else if snapshot.vendorId == .gemini || snapshot.vendorId == .antigravityArgon {
+                name = snapshot.antigravityAccount?.name ?? snapshot.rowTitle
+                source = "Antigravity"
+            } else {
+                name = snapshot.rowTitle
+                source = group == snapshot.vendorId || snapshot.rowTitle == snapshot.vendorId.displayName
+                    ? nil : GlancePresentation.serviceName(for: snapshot.vendorId)
+            }
+
+            var columns: [WindowColumn: Window] = [:]
+            for window in pool?.windows ?? [] {
+                guard window.remaining != nil || window.bar.isBlocked,
+                      let column = WindowColumn.column(forLabel: window.bar.label),
+                      columns[column] == nil else { continue }
+                columns[column] = window
+            }
+            windows = columns
+            let supplements = snapshot.displayBars.filter {
+                $0.allowanceRole != .plan || $0.measuresElapsedTimeOnly
+                    || WindowColumn.column(forLabel: $0.label) == nil
+            }
+            extraBars = supplements + (state == .usable ? snapshot.scopedBars : [])
+        }
+    }
+
+    enum Summary: Equatable {
+        case window(Window)
+        case average(remaining: Double, reported: Int, count: Int)
+        case spent(reset: Date?, allMeasuredExhausted: Bool)
+    }
+
+    struct Group: Identifiable {
+        let id: VendorIdentifier
+        let pools: [Pool]
+        let balances: [QuotaSnapshot]
+
+        var title: String {
+            switch id {
+            case .claude: "Claude"
+            case .gemini: "Gemini"
+            case .antigravityArgon: "Argon"
+            default: GlancePresentation.serviceName(for: id)
+            }
+        }
+
+        var allSpent: Bool { !pools.isEmpty && pools.allSatisfy(\.isSpent) }
+        var nextReturn: Date? { allSpent ? pools.compactMap(\.returnsAt).min() : nil }
+
+        var subtitle: String? {
+            if pools.isEmpty {
+                guard let balance = balances.first else { return nil }
+                if balance.staleReading != nil { return "Last balance · " + MetricRowPresentation.value(for: balance.metric) }
+                return balance.status.unavailableReason?.headline ?? MetricRowPresentation.value(for: balance.metric)
+            }
+            if allSpent { return pools.count == 1 ? "1 spent" : "All \(pools.count) spent" }
+            let usable = pools.filter(\.isUsable).count
+            let spent = pools.filter(\.isSpent).count
+            let unreadable = pools.count - usable - spent
+            return ["\(usable) usable", spent > 0 ? "\(spent) spent" : nil,
+                    unreadable > 0 ? "\(unreadable) unreadable" : nil]
+                .compactMap { $0 }.joined(separator: " · ")
+        }
+
+        func summary(for column: WindowColumn) -> Summary? {
+            if pools.count == 1 { return pools[0].windows[column].map(Summary.window) }
+            let published = pools.filter { !$0.isStale }.compactMap { $0.windows[column] }
+            guard !published.isEmpty else { return nil }
+            if published.count == pools.count, published.allSatisfy(\.isSpent) {
+                return .spent(
+                    reset: published.compactMap(\.bar.resetsAt).min(),
+                    allMeasuredExhausted: published.allSatisfy { WindowGridPresentation.isExhausted($0.bar) }
+                )
+            }
+            let remaining = published.compactMap(\.remaining)
+            guard !remaining.isEmpty else { return nil }
+            return .average(remaining: remaining.reduce(0, +) / Double(remaining.count),
+                            reported: remaining.count, count: pools.count)
+        }
+    }
+
+    let groups: [Group]
+    let now: Date
+
+    init(snapshots: [QuotaSnapshot], serviceOrder: [VendorIdentifier], now: Date) {
+        self.now = now
+        let visible = snapshots.filter(Self.isVisible)
+        let grouped = Dictionary(grouping: visible, by: { Self.groupID(for: $0.vendorId) })
+        var seen: Set<VendorIdentifier> = []
+        let order = (serviceOrder + visible.map(\.vendorId)).map(Self.groupID(for:)).filter { seen.insert($0).inserted }
+        groups = order.compactMap { id in
+            guard let snapshots = grouped[id] else { return nil }
+            return Group(id: id,
+                         pools: snapshots.filter { !Self.isDirectBalance($0) }
+                             .map { Pool(snapshot: $0, group: id, now: now) },
+                         balances: snapshots.filter(Self.isDirectBalance))
+        }
+    }
+
+    static func groupID(for vendor: VendorIdentifier) -> VendorIdentifier {
+        switch vendor {
+        case .antigravityClaude: .claude
+        case .opencode, .commandcode, .opendesign: .deepseek
+        default: vendor
+        }
+    }
+
+    static func isDirectBalance(_ snapshot: QuotaSnapshot) -> Bool {
+        if snapshot.vendorId == .deepseek { return true }
+        guard !snapshot.quotaBars.contains(where: { $0.allowanceRole == .plan }) else { return false }
+        switch snapshot.metric {
+        case .currency, .credits: return true
+        default: return snapshot.category == .apiSpendAndCredits
+        }
+    }
+
+    private static func isVisible(_ snapshot: QuotaSnapshot) -> Bool {
+        guard snapshot.category != .developerLimits else { return false }
+        guard snapshot.status.unavailableReason == .notConfigured else { return true }
+        return snapshot.claudeAccount != nil || snapshot.id.hasPrefix(ClaudeAccount.instancePrefix)
+            || snapshot.antigravityAccount != nil
+    }
+
+    func countdown(_ date: Date?, stale: Bool = false) -> String? {
+        guard let date else { return nil }
+        if stale && date <= now { return nil }
+        return ResetCountdownBadge.compact(date, now: now)
+    }
+}

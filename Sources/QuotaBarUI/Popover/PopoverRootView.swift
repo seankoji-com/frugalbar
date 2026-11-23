@@ -50,8 +50,9 @@ public struct PopoverRootView: View {
     private let availableHeightProvider: @MainActor () -> CGFloat?
     private let onOpenSettings: (@MainActor () -> Void)?
 
-    /// Wide enough for the row budget in `MetricRowView` (324pt of content).
-    public static let popoverWidth: CGFloat = Theme.popoverWidth
+    /// The provider accordion uses 420pt for the account name and three
+    /// quota columns. `Theme.popoverWidth` is the inspector's row budget.
+    public static let popoverWidth: CGFloat = 420
     public static let popoverHeight: CGFloat = 640
     /// Only engaged when content cannot fit, e.g. accessibility sizes.
     public static let maxContentHeight: CGFloat = 760
@@ -97,7 +98,8 @@ public struct PopoverRootView: View {
                     }
                 },
                 onQuit: { NSApp.terminate(nil) },
-                onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } }
+                onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } },
+                eventCount: EventsPresentation.popoverEvents(store.recentEvents).count
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 footerHeight = $0
@@ -169,73 +171,47 @@ public struct PopoverRootView: View {
     }
 
     private var sections: some View {
-        VStack(spacing: Theme.sectionGap) {
-            let popoverEvents = EventsPresentation.popoverEvents(store.recentEvents)
-            if !popoverEvents.isEmpty {
-                EventsSectionView(events: popoverEvents)
-            }
-
-            ForEach(MetricCategory.allCases, id: \.self) { category in
-                let items = store.snapshots.filter {
-                    if category == .developerLimits {
-                        return $0.vendorId == .githubRest
-                    } else {
-                        return $0.category == category
+        let now = Date()
+        let order = CredentialStore.providerOrder
+        let grid = ProviderGridPresentation(snapshots: store.snapshots, serviceOrder: order, now: now)
+        let wallet = GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order).walletSnapshots
+            .filter { !ProviderGridPresentation.isDirectBalance($0) || !$0.apiCredits.isEmpty }
+        return VStack(spacing: Theme.sectionGap) {
+            ProviderGridView(
+                presentation: grid,
+                onSelect: { snap in
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        selectedSnapshot = snap
                     }
                 }
-
-                // Suppress developerLimits UNLESS at least one limit is in danger of being exceeded (>= 70% or warning/critical)
-                let shouldShowSection: Bool = {
-                    guard !items.isEmpty else { return false }
-                    if category == .developerLimits {
-                        return items.contains { snap in
-                            if snap.status.urgency >= .warning { return true }
-                            // A limit we could not read is not an elevated one.
-                            // Coercing its missing fraction to 0 happened to be
-                            // right here, but it is the same `?? 0.0` that read
-                            // as "plenty left" elsewhere — so it is spelled out.
-                            let measured = snap.quotaBars.compactMap(\.primaryFraction)
-                                + [snap.consumptionFraction].compactMap { $0 }
-                            return measured.contains { $0 >= 0.70 }
-                        }
-                    }
-                    return true
-                }()
-
-                if shouldShowSection {
-                    MetricSectionView(
-                        category: category,
-                        snapshots: items,
-                        ordering: CredentialStore.providerOrdering,
-                        forecasts: store.forecasts,
-                        balanceSeries: store.balanceSeries,
-                        onSelect: { snap in
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                selectedSnapshot = snap
-                            }
-                        }
-                    )
-                }
+            )
+            if !wallet.isEmpty {
+                WalletSection(snapshots: wallet, now: now)
             }
 
-            // Credit pools with a separate card. Codex usage credits are
-            // already drawn with the subscription they extend. All balances
-            // stay outside quota maths regardless of where they are drawn.
-            let creditEntries = store.snapshots.flatMap(\.apiCredits).filter { !$0.extendsSubscription }
-            if !creditEntries.isEmpty {
-                APICreditSectionView(
-                    entries: creditEntries,
-                    // A vendor whose newest poll failed kept its figures, so the
-                    // balances in this card for it are carried over. Named by
-                    // vendor, not by snapshot, because that is what the failure
-                    // belongs to.
-                    staleVendors: Set(
-                        store.snapshots.filter { $0.staleReading != nil }.map(\.id)
-                    ),
-                    balanceSeries: store.balanceSeries
+            // Developer limits are not coding pools: they never enter the
+            // glance, and appear only while one is in danger of running out.
+            let limits = store.snapshots.filter { $0.category == .developerLimits && $0.vendorId == .githubRest }
+            if limits.contains(where: { snap in
+                if snap.status.urgency >= .warning { return true }
+                // A limit we could not read is not an elevated one: no `?? 0`.
+                let measured = snap.quotaBars.compactMap(\.primaryFraction)
+                    + [snap.consumptionFraction].compactMap { $0 }
+                return measured.contains { $0 >= 0.70 }
+            }) {
+                MetricSectionView(
+                    category: .developerLimits,
+                    snapshots: limits,
+                    ordering: CredentialStore.providerOrdering,
+                    forecasts: store.forecasts,
+                    balanceSeries: store.balanceSeries,
+                    onSelect: { snap in
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                            selectedSnapshot = snap
+                        }
+                    }
                 )
             }
-
 
 
             if store.snapshots.isEmpty {
@@ -246,7 +222,7 @@ public struct PopoverRootView: View {
                         Text("Nothing to show")
                             .font(Theme.Typography.title)
                             .foregroundStyle(Theme.onSurface)
-                        Text("Every provider is hidden. Choose which to show in Preferences → Providers.")
+                        Text("Every provider is hidden. Open Settings → Services to turn monitoring on.")
                             .font(Theme.Typography.subtitle)
                             .foregroundStyle(Theme.onSurfaceVariant)
                             .multilineTextAlignment(.center)

@@ -37,8 +37,6 @@ struct ClaudeAccountSettingsView: View {
         } footer: {
             Text("Accounts come from CLI discovery and your configured CLI Proxy hub. Each account keeps its own usage, reset credits and model limits. Nicknames change labels only; account numbers stay the same. Clear a nickname to use its fallback name.")
                 .font(.caption).foregroundStyle(Theme.systemSecondaryText)
-            Text("Linked Console monthly credit is not attached to named accounts because its billing session does not identify the Claude OAuth account.")
-                .font(.caption).foregroundStyle(Theme.systemSecondaryText)
         }
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in reload() }
     }

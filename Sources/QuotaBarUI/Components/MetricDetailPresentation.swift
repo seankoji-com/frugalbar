@@ -292,17 +292,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         } else if let text = bar.resetText {
             parts.append(text)
         }
-        if isCurrent, !bar.measuresElapsedTimeOnly, !bar.isBlocked,
-           (bar.primaryFraction ?? 0) < QuotaSnapshot.exhaustionThreshold,
-           bar.paceMarker != nil, let rate = bar.burnRateMultiplier {
-            parts.append("burning \(String(format: "%.1f", rate))× even pace")
-        }
-        // Never for a blocked window: "runs out in 4h" beside "blocked" reads
-        // as headroom the vendor has already withdrawn.
-        if isCurrent, !bar.measuresElapsedTimeOnly, !bar.isBlocked, bar.paceMarker != nil,
-           let date = bar.projectedExhaustionDate, date > now {
-            parts.append("runs out \(ResetCountdownBadge.description(date, now: now).replacingOccurrences(of: "Resets ", with: ""))")
-        }
+        // No burn rate or run-out here: the inspector states one run-out, in
+        // its verdict, with its basis named (`InspectorRunOut`). A second,
+        // unlabelled average-pace figure on each line contradicted it.
+        _ = isCurrent
         if bar.isBlocked, percent != nil { parts.insert("Blocked by the vendor", at: 0) }
 
         let name = WindowColumn.column(forLabel: bar.label)?.spokenName ?? bar.label

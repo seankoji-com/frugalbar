@@ -32,12 +32,14 @@ private final class QuantityStub: URLProtocol {
 @Suite("Provider quantity fields", .serialized)
 struct ProviderQuantityFillTests {
 
-    @Test("DualBarMetrics gains only the four quantity fields")
+    /// `allowanceRole` (23 Nov 2026) is the glance's bar classification. It is
+    /// not exported, so the sync contract above is unchanged by it.
+    @Test("DualBarMetrics gains only the four quantity fields and the allowance role")
     func dualBarMetricsGainsOnlyTheFourQuantityFields() {
         let labels = Mirror(reflecting: DualBarMetrics(primaryFraction: nil, label: "x")).children.compactMap(\.label)
         #expect(labels == [
             "primaryFraction", "expectedPaceFraction", "secondaryFraction", "label", "blockedColor", "isBlocked",
-            "measuresElapsedTimeOnly", "usedText", "resetText", "resetsAt", "windowLength",
+            "measuresElapsedTimeOnly", "allowanceRole", "usedText", "resetText", "resetsAt", "windowLength",
             "quantityUsed", "quantityRemaining", "quantityLimit", "quantityUnit", "balanceText",
         ])
     }

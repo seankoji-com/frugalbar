@@ -392,7 +392,7 @@ public enum BurndownPresentation {
             parts.append("\(BurnRateForecast.formatDuration(resetsAt.timeIntervalSince(now))) to reset")
         }
         if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("out in \(BurnRateForecast.formatDuration(exhaustion.timeIntervalSince(now)))")
+            parts.append("at recent rate, out in \(BurnRateForecast.formatDuration(exhaustion.timeIntervalSince(now)))")
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
     }

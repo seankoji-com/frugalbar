@@ -276,6 +276,7 @@ public final class GrokQuotaProvider: QuotaProvider, Sendable {
             return DualBarMetrics(
                 primaryFraction: min(max(used / cap, 0), 1),
                 label: "OD",
+                allowanceRole: .paidOverage,
                 usedText: "\(SubscriptionCycle.formatCost(Decimal(used), currencyCode: "USD"))"
                     + " of \(SubscriptionCycle.formatCost(Decimal(cap), currencyCode: "USD")) cap used",
                 resetText: resetText,

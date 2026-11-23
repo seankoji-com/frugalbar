@@ -259,7 +259,8 @@ struct HistoryOverviewPresentationTests {
                                                confidence: .measured, urgency: .warning)),
         ])
         let spoken = ReadingReadout.spoken(poll)
-        #expect(spoken.contains("62.34 percent used"))
+        // Spoken in the charts' unit, "% left" (23 Nov 2026): 62.34% used is 37.66% left.
+        #expect(spoken.contains("37.66 percent left"))
         #expect(spoken.contains("blocked"))
         #expect(spoken.contains("14:05:32"))
     }

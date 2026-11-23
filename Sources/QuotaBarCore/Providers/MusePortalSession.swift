@@ -96,7 +96,7 @@ public final class MusePortalSession: ObservableObject {
     func read(email: String, plan: String, now: Date) async -> MusePortalRead {
         guard isEnabled else { return .unavailable(MuseQuotaProvider.missingUsageMessage) }
         guard MusePortalTeam.validID(selectedTeamID) else {
-            return .unavailable("Muse omitted its usage window. Choose a team in Settings → API Keys → Muse portal quota.")
+            return .unavailable("Muse omitted its usage window. Choose a team in Settings → Muse → Muse portal quota.")
         }
         let teamID = selectedTeamID
         switch await evaluate(email: email, plan: plan, teamID: teamID, now: now) {
@@ -159,7 +159,7 @@ public final class MusePortalSession: ObservableObject {
             ? "Could not read the portal response. Refresh to try again."
             : payload.failure == "http" && (payload.httpStatus == 401 || payload.httpStatus == 403)
                 && retryNotBefore == nil
-            ? "Sign in again to the Muse portal in Settings → API Keys → Muse portal quota."
+            ? "Sign in again to the Muse portal in Settings → Muse → Muse portal quota."
             : payload.failure == "http"
             ? "The Muse portal request failed. Retry after the portal's cooldown, if supplied."
             : payload.failure == nil
@@ -418,7 +418,7 @@ struct MusePortalPayload: Decodable, Sendable {
             let retry = QuotaHTTP.retryAfterDate(secondsHeader: retryAfter, now: now)
             if retry != nil || httpStatus == 429 { return .failure(.rateLimited(retryAfter: retry)) }
             if httpStatus == 401 || httpStatus == 403 {
-                return .unavailable("Sign in again to the Muse portal in Settings → API Keys → Muse portal quota.")
+                return .unavailable("Sign in again to the Muse portal in Settings → Muse → Muse portal quota.")
             }
             return .failure(httpStatus.flatMap { QuotaHTTP.failureReason(for: $0, retryAfter: nil, now: now) } ?? .badResponse)
         }

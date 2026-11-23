@@ -48,7 +48,7 @@ thing `AGENTS.md` forbids.
 ## What FrugalBar does instead
 
 `GeminiAPICredit` records the figures the account holder reads from AI Studio's
-Billing tab and enters in **Settings → API Keys → Google**. It holds:
+Billing tab and enters in **Settings → Antigravity → Gemini API prepaid credit**. It holds:
 
 | Field | Meaning | Where it comes from |
 |---|---|---|

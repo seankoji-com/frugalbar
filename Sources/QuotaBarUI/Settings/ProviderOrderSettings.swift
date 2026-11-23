@@ -1,9 +1,41 @@
 import SwiftUI
 import QuotaBarCore
 
-/// Pure list edits behind the Providers tab, kept out of the view so they can
-/// be tested.
+/// Maps saved vendor positions to the service pages and edits their order.
 enum ProviderOrderEditing {
+
+    static func service(for vendor: VendorIdentifier) -> VendorIdentifier {
+        switch vendor {
+        case .antigravityClaude, .antigravityArgon: .gemini
+        case .githubGraphql: .githubRest
+        default: vendor
+        }
+    }
+
+    static func services(in order: [VendorIdentifier]) -> [VendorIdentifier] {
+        var seen: Set<VendorIdentifier> = []
+        return order.map(service(for:)).filter { seen.insert($0).inserted }
+    }
+
+    static func members(of serviceID: VendorIdentifier, in order: [VendorIdentifier]) -> [VendorIdentifier] {
+        order.filter { service(for: $0) == serviceID }
+    }
+
+    static func moveService(_ serviceID: VendorIdentifier, by offset: Int,
+                            in order: [VendorIdentifier]) -> [VendorIdentifier] {
+        let current = services(in: order)
+        let moved = move(serviceID, by: offset, in: current)
+        guard moved != current else { return order }
+        return moved.flatMap { members(of: $0, in: order) }
+    }
+
+    static func moveMember(_ vendor: VendorIdentifier, by offset: Int,
+                           in order: [VendorIdentifier]) -> [VendorIdentifier] {
+        let current = members(of: service(for: vendor), in: order)
+        let moved = move(vendor, by: offset, in: current)
+        var members = moved.makeIterator()
+        return order.map { service(for: $0) == service(for: vendor) ? (members.next() ?? $0) : $0 }
+    }
 
     /// Moves `vendor` one place up or down. A move past either end, or of a
     /// vendor not in the list, changes nothing.
@@ -24,59 +56,19 @@ enum ProviderOrderEditing {
     }
 }
 
-/// Preferences → Providers: each provider's connection, which providers
-/// appear, and in what order — OpenCode Go workspaces included.
-///
-/// Every change is written at once, as on the Cycles tab. Writing posts
-/// `frugalbarProviderPreferencesDidChange`, which the app uses to drop a
-/// hidden provider and fetch a newly shown one without waiting for a poll.
+/// Settings → Services. Service order is stored using the existing vendor list.
 struct ProviderOrderSettings: View {
-
-    /// The running app's store, for each provider's connection state. nil in
-    /// the standalone Settings scene, which then says only what it knows.
     let store: QuotaStore?
-    var onManageWorkspaces: () -> Void = {}
-
-    @State private var ordering = CredentialStore.providerOrdering
-    @State private var order = CredentialStore.providerOrder
-    @State private var hidden = CredentialStore.hiddenProviders
-    @State private var workspaces = OpenCodeGoWorkspaceStore.resolved()
+    @Binding var order: [VendorIdentifier]
+    let hidden: Set<VendorIdentifier>
+    let onManage: (VendorIdentifier) -> Void
 
     var body: some View {
+        let services = ProviderOrderEditing.services(in: order)
         Form {
             Section {
-                Picker("Order", selection: $ordering) {
-                    Text("Soonest deadline first").tag(ProviderOrdering.automatic)
-                    Text("Custom order").tag(ProviderOrdering.custom)
-                }
-                .onChange(of: ordering) { CredentialStore.providerOrdering = ordering }
-                Text(ordering == .automatic
-                     ? """
-                       Service blocks are placed by the soonest longest-window \
-                       reset among their usable members. The list below breaks \
-                       ties and sets the order inside Antigravity and OpenCode Go \
-                       blocks. A block moves last only when every member has a spent or blocked window.
-                       """
-                     : """
-                       Antigravity pools and OpenCode Go workspaces each stay \
-                       together in their saved order. The first visible member \
-                       places its block in the list below. A block moves last \
-                       only when every member has a spent or blocked window.
-                       """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            } header: {
-                Text("Order")
-            }
-
-            Section {
-                ForEach(order, id: \.self) { vendor in
-                    row(vendor)
-                    if vendor == .opencode, !hidden.contains(.opencode) {
-                        ForEach(workspaces) { workspace in
-                            workspaceRow(workspace)
-                        }
-                    }
+                ForEach(Array(services.enumerated()), id: \.element) { index, service in
+                    row(service, at: index, count: services.count)
                 }
                 Button("Reset to default order") {
                     CredentialStore.resetProviderOrder()
@@ -84,119 +76,70 @@ struct ProviderOrderSettings: View {
                 }
                 .disabled(order == ProviderDisplayPreferences.defaultOrder)
             } header: {
-                Text("Providers")
-            } footer: {
-                Text("""
-                     A hidden provider is not polled, and does not appear in the \
-                     popover, menu bar, advice, desktop widget or notifications. \
-                     Its key stays where it is, so showing it again is instant.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-                    .padding(.top, 4)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Service order")
+                    Text("The arrows set the order here and in the popover's provider list and Wallet.")
+                        .font(.callout)
+                        .foregroundStyle(Theme.systemSecondaryText)
+                }
             }
         }
         .formStyle(.grouped)
-        .onAppear { workspaces = OpenCodeGoWorkspaceStore.resolved() }
     }
 
-    private var now: Date { Date() }
-
-    private func snapshots(for vendor: VendorIdentifier) -> [QuotaSnapshot] {
-        store?.snapshots.filter { $0.vendorId == vendor } ?? []
-    }
-
-    private func row(_ vendor: VendorIdentifier) -> some View {
-        let isShown = !hidden.contains(vendor)
-        let index = order.firstIndex(of: vendor) ?? 0
+    private func row(_ service: VendorIdentifier, at index: Int, count: Int) -> some View {
+        let title = GlancePresentation.serviceName(for: service)
+        let visible = ProviderOrderEditing.members(of: service, in: order).filter { !hidden.contains($0) }
         let status = ProviderConnectionPresentation.status(
-            vendorSnapshots: snapshots(for: vendor), isHidden: !isShown,
-            hasPolled: store?.hasLoaded ?? false, now: now)
-        return HStack(spacing: 8) {
-            VendorAvatarView(vendorId: vendor, status: .healthy, size: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(vendor.displayName)
-                    .foregroundStyle(isShown ? .primary : .secondary)
-                ConnectionStatusLine(status: status)
-            }
-            Spacer()
-            Button { move(vendor, by: -1) } label: { Image(systemName: "chevron.up") }
-                .disabled(index == 0)
-                .accessibilityLabel("Move \(vendor.displayName) up")
-            Button { move(vendor, by: 1) } label: { Image(systemName: "chevron.down") }
-                .disabled(index == order.count - 1)
-                .accessibilityLabel("Move \(vendor.displayName) down")
-            Toggle("Shown", isOn: Binding(
-                get: { isShown },
-                set: { on in
-                    hidden = ProviderOrderEditing.setShown(on, vendor, hidden: hidden)
-                    CredentialStore.hiddenProviders = hidden
+            vendorSnapshots: store?.snapshots.filter { visible.contains($0.vendorId) } ?? [],
+            isHidden: visible.isEmpty, hasPolled: store?.hasLoaded ?? false, now: Date())
+        return HStack(spacing: 10) {
+            Button { onManage(service) } label: {
+                HStack(spacing: 10) {
+                    VendorAvatarView(vendorId: service, status: .healthy, size: 24)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).fontWeight(.medium)
+                        ConnectionStatusLine(status: status)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
-            ))
-            .labelsHidden()
-            .accessibilityLabel("Show \(vendor.displayName)")
-        }
-        .buttonStyle(.borderless)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "\(vendor.displayName), \(isShown ? "shown" : "hidden"), position \(index + 1) of \(order.count), \(status.accessibilityText)")
-    }
-
-    /// One OpenCode Go workspace, indented under its vendor. Its arrows move
-    /// it among the workspaces only; the vendor's own arrows move the block.
-    private func workspaceRow(_ workspace: OpenCodeGoWorkspace) -> some View {
-        let index = workspaces.firstIndex { $0.id == workspace.id } ?? 0
-        let snapshot = snapshots(for: .opencode).first { $0.id == workspace.instanceID }
-        let status: ProviderConnectionPresentation.Status = if !workspace.isEnabled {
-            .init(symbol: "pause.circle", title: "Not monitored", detail: nil, tone: .inactive)
-        } else if let snapshot {
-            ProviderConnectionPresentation.status(for: snapshot, now: now)
-        } else {
-            ProviderConnectionPresentation.status(
-                vendorSnapshots: [], isHidden: false, hasPolled: store?.hasLoaded ?? false, now: now)
-        }
-        return HStack(spacing: 8) {
-            Image(systemName: "arrow.turn.down.right")
-                .font(.caption)
-                .foregroundStyle(Theme.systemSecondaryText)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(workspace.name)
-                    .foregroundStyle(workspace.isEnabled ? .primary : .secondary)
-                ConnectionStatusLine(status: status)
+                .contentShape(Rectangle())
             }
-            Spacer()
-            Button("Manage…", action: onManageWorkspaces)
-                .font(.caption)
-            Button { moveWorkspace(workspace.id, by: -1) } label: { Image(systemName: "chevron.up") }
-                .disabled(index == 0)
-                .accessibilityLabel("Move workspace \(workspace.name) up")
-            Button { moveWorkspace(workspace.id, by: 1) } label: { Image(systemName: "chevron.down") }
-                .disabled(index == workspaces.count - 1)
-                .accessibilityLabel("Move workspace \(workspace.name) down")
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(title) settings")
+            .accessibilityValue(status.accessibilityText)
+
+            ServiceOrderButtons(title: title, canMoveUp: index > 0, canMoveDown: index < count - 1) { offset in
+                order = ProviderOrderEditing.moveService(service, by: offset, in: order)
+                CredentialStore.providerOrder = order
+            }
         }
-        .padding(.leading, 18)
-        .buttonStyle(.borderless)
+        .padding(.vertical, 3)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "OpenCode Go workspace \(workspace.name), position \(index + 1) of \(workspaces.count), \(status.accessibilityText)")
     }
+}
 
-    private func move(_ vendor: VendorIdentifier, by offset: Int) {
-        order = ProviderOrderEditing.move(vendor, by: offset, in: order)
-        CredentialStore.providerOrder = order
-        // Arranging the list is a request for that order.
-        if ordering != .custom {
-            ordering = .custom
-            CredentialStore.providerOrdering = .custom
+struct ServiceOrderButtons: View {
+    let title: String
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let move: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Button { move(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(!canMoveUp)
+                .accessibilityLabel("Move \(title) up")
+            Button { move(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(!canMoveDown)
+                .accessibilityLabel("Move \(title) down")
         }
-    }
-
-    /// Workspace order holds in either ordering mode, so moving one does not
-    /// switch the provider list to a custom order.
-    private func moveWorkspace(_ id: String, by offset: Int) {
-        workspaces = OpenCodeGoWorkspaceStore.moved(workspaces, id: id, by: offset)
-        OpenCodeGoWorkspaceStore.set(workspaces)
+        .buttonStyle(.borderless)
     }
 }
 

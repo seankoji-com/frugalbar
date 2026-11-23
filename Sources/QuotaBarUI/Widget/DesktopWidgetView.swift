@@ -43,18 +43,14 @@ struct DesktopWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
-            switch filters.layout {
+            switch filters.layout.drawn {
             case .tokens:
+                header
                 tokensArea
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .overview:
-                overviewArea
+            default:
+                ProviderStoryView(store: store, poolID: $filters.storyPoolID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .chart:
-                chartArea
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                headroomStrip
             }
             filterBar
         }
@@ -80,8 +76,8 @@ struct DesktopWidgetView: View {
         // The overview reads live snapshots only: no history query, no
         // segmenting or averaging. Switching layout changes the load key and
         // loads then.
-        switch filters.layout {
-        case .overview: return
+        switch filters.layout.drawn {
+        case .story, .overview: return
         case .tokens:
             // While the first ingestion runs the table fills in behind us, so
             // look again every few seconds instead of waiting for the next
@@ -709,8 +705,8 @@ struct DesktopWidgetView: View {
     }
 
     private var layoutPicker: some View {
-        Picker("Layout", selection: $filters.layout) {
-            ForEach(WidgetFilters.Layout.allCases, id: \.self) { layout in
+        Picker("Layout", selection: Binding(get: { filters.layout.drawn }, set: { filters.layout = $0 })) {
+            ForEach(WidgetFilters.Layout.offered, id: \.self) { layout in
                 Text(layout.title).tag(layout)
             }
         }
@@ -724,10 +720,21 @@ struct DesktopWidgetView: View {
         // Which controls mean something for the layout: a window is a chart
         // concern; a range is for charts over time; used/remaining is for
         // quota, and token counts are neither.
+        // The story has one control: which pool it follows.
+        if filters.layout.drawn == .story {
+            return AnyView(HStack(spacing: 8) {
+                layoutPicker
+                StoryPoolMenu(glance: GlancePresentation(snapshots: store.snapshots, now: Date()),
+                              poolID: $filters.storyPoolID)
+                Spacer(minLength: 0)
+            }
+            .controlSize(.small)
+            .font(.system(size: 11)))
+        }
         let chart = filters.layout == .chart
         let overTime = filters.layout != .overview
         let quota = filters.layout != .tokens
-        return ViewThatFits(in: .horizontal) {
+        return AnyView(ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 layoutPicker
                 vendorMenu
@@ -751,6 +758,6 @@ struct DesktopWidgetView: View {
             }
         }
         .controlSize(.small)
-        .font(.system(size: 11))
+        .font(.system(size: 11)))
     }
 }

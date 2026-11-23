@@ -132,7 +132,8 @@ public struct MetricDetailModalView: View {
     @State private var now = Date()
     @State private var bodyHeight: CGFloat = 0
     @State private var headerHeight: CGFloat = 70
-    @State private var footerHeight: CGFloat = 48
+    /// No footer: Copy JSON sits in the header and the close button is there.
+    @State private var footerHeight: CGFloat = 0
 
     enum ChartMode: String, CaseIterable, Identifiable {
         case burndown = "Burndown"
@@ -207,8 +208,6 @@ public struct MetricDetailModalView: View {
                         availableHeight: geometry.size.height, headerHeight: headerHeight, footerHeight: footerHeight,
                         maxBody: maxBody))
                     .scrollBounceBehavior(.basedOnSize)
-                    footer
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
                 }
                 .frame(width: 348)
                 .background(Theme.card)
@@ -311,35 +310,37 @@ public struct MetricDetailModalView: View {
             // badges, so it was every one of them. The name stays wrappable,
             // because "OpenCode Go · Gamma workspace" is wider than the row and
             // must still take two lines.
+            // Which pool this is, named as the popover names it: the pool and
+            // account first, then its service and plan. The badge and the
+            // category ("AI Subscriptions") repeated the verdict below or
+            // said nothing.
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(snapshot.displayName)
-                        .font(Theme.Typography.title)
-                        .tracking(Theme.Tracking.title)
-                        .foregroundStyle(Theme.onSurface)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let badge = snapshot.badgeText {
-                        Text(badge)
-                            .font(Theme.Typography.token)
-                            .tracking(Theme.Tracking.token)
-                            .foregroundStyle(Theme.primary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Theme.primary.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
-                    }
-                }
-
-                Text(snapshot.category.rawValue)
+                Text(headerNames.name)
+                    .font(Theme.Typography.title)
+                    .tracking(Theme.Tracking.title)
+                    .foregroundStyle(Theme.onSurface)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(headerSubtitle)
                     .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                    .lineLimit(1)
             }
             // The column takes the row's remaining width, so the close button is
             // pinned right and the name is not starved by a flexible `Spacer`
             // competing with it for space.
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: copyJson) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(copied ? Theme.secondary : Theme.onSurfaceVariant)
+                    .padding(7)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(copied ? "Copied details as JSON" : "Copy details as JSON")
+            .help("Copy these details as JSON")
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -350,7 +351,7 @@ public struct MetricDetailModalView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close \(snapshot.displayName) details")
+            .accessibilityLabel("Close \(headerNames.name) details")
             .help("Close details (Esc)")
         }
         .padding(.horizontal, Theme.cardPadding)
@@ -359,6 +360,17 @@ public struct MetricDetailModalView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.outlineVariant.opacity(0.5)).frame(height: 0.5)
         }
+    }
+
+    private var headerNames: (service: String, name: String) {
+        GlancePresentation.names(for: snapshot)
+    }
+
+    /// "Antigravity · Google AI Pro", "Claude Code · Max (20x)".
+    private var headerSubtitle: String {
+        let plan = snapshot.claudeAccount != nil ? (snapshot.planName ?? "") : snapshot.shortPlanName
+        return ([headerNames.service == headerNames.name ? snapshot.category.rawValue : headerNames.service]
+                + [plan.isEmpty ? nil : plan].compactMap { $0 }).joined(separator: " · ")
     }
 
     // MARK: - Content
@@ -431,17 +443,19 @@ public struct MetricDetailModalView: View {
                         .font(Theme.Typography.cardBody.weight(.semibold))
                         .foregroundStyle(summaryColor)
                     Spacer(minLength: 4)
-                    if let percent = summary.percentUsed, let label = summary.focusLabel {
+                    if let focus = focusWindow, let remaining = focus.remaining, let label = summary.focusLabel {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             // A blocked window's figure is not headroom: the
                             // glyph sits beside it here as on every bar.
                             if summary.focusIsBlocked {
                                 BlockedGlyph(color: summaryColor, size: 14)
                             }
-                            Text("\(percent)%")
+                            // "% left", as the popover says it: one unit across
+                            // the glance and the detail.
+                            Text("\(GlancePresentation.percent(remaining))%")
                                 .font(.system(size: 24, weight: .semibold).monospacedDigit())
                                 .foregroundStyle(Theme.onSurface)
-                            Text("\(label) used")
+                            Text("\(label) left")
                                 .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                         }
@@ -460,10 +474,15 @@ public struct MetricDetailModalView: View {
                 if let reset = summary.resetText {
                     Label(reset, systemImage: "clock")
                         .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.primary.opacity(0.9))
+                        .foregroundStyle(Theme.onSurfaceVariant)
                 }
-                if let pace = summary.paceVerdict {
-                    Label(pace, systemImage: "gauge.with.needle")
+                if focusWindow?.isAheadOfPace == true {
+                    Label("Ahead of even pace", systemImage: "arrowtriangle.up.fill")
+                        .font(Theme.Typography.subtitle.weight(.semibold))
+                        .foregroundStyle(Theme.tertiary)
+                }
+                if let runOut = runOutText {
+                    Label(runOut, systemImage: "hourglass")
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
@@ -472,12 +491,6 @@ public struct MetricDetailModalView: View {
                     Text(remedy)
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.onSurfaceVariant)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let note = snapshot.auxiliaryInfo {
-                    Text(note)
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -491,7 +504,23 @@ public struct MetricDetailModalView: View {
                 .stroke(summaryColor.opacity(0.3), lineWidth: 0.5)
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(summary.accessibilityLabel)
+        .accessibilityLabel(([summary.accessibilityLabel]
+            + [focusWindow?.isAheadOfPace == true ? "Ahead of even pace" : nil, runOutText].compactMap { $0 })
+            .joined(separator: ". "))
+    }
+
+    /// The verdict's window, read the way the popover reads it.
+    private var focusWindow: GlancePresentation.Window? {
+        guard let label = presentation.summary.focusLabel,
+              let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
+        return GlancePresentation.window(for: bar, now: now)
+    }
+
+    private var runOutText: String? {
+        guard let label = presentation.summary.focusLabel, snapshot.staleReading == nil,
+              let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
+        return InspectorRunOut.text(for: bar, snapshotID: snapshot.id,
+                                    readings: isLoading || readingsFailed ? nil : readings, now: now)
     }
 
     // MARK: Windows
@@ -508,6 +537,10 @@ public struct MetricDetailModalView: View {
                 "Windows at \(MetricDetailPresentation.clockText($0, now: now)), before the failed poll"
             } ?? "Windows")
             ForEach(presentation.windows) { line in
+                let window = GlancePresentation.window(for: line.metrics, now: now)
+                let leftText: String? = line.metrics.measuresElapsedTimeOnly
+                    ? line.percentText.map { "\($0) elapsed" }
+                    : window.remaining.map { "\(GlancePresentation.percent($0))% left" }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(line.label)
@@ -517,37 +550,51 @@ public struct MetricDetailModalView: View {
                             .frame(width: 44, alignment: .leading)
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
-                        DualBarProgressView(metrics: line.metrics, showsLabel: false)
-                            // Carried-over figures: the bar recedes, the words
-                            // do not. Dimming the whole line took its reset
-                            // caption to 3.0:1 (design-loop sol-15); the title
-                            // above already says these predate the failed poll.
-                            .opacity(asOf == nil ? 1 : 0.55)
-                        HStack(spacing: 3) {
-                            if line.metrics.isBlocked, line.percentText != nil {
-                                BlockedGlyph(color: DualBarProgressView.stateColor(for: line.metrics))
+                        // "% left", the popover's bar: fill is what remains,
+                        // the tick where an even pace would leave it. A billing
+                        // cycle keeps its elapsed-time bar.
+                        Group {
+                            if line.metrics.measuresElapsedTimeOnly {
+                                DualBarProgressView(metrics: line.metrics, showsLabel: false)
+                            } else {
+                                RemainingBar(window: window, height: 6)
                             }
-                            Text(line.percentText ?? line.noFigureText ?? "")
+                        }
+                        // Carried-over figures: the bar recedes, the words
+                        // do not. Dimming the whole line took its reset
+                        // caption to 3.0:1 (design-loop sol-15); the title
+                        // above already says these predate the failed poll.
+                        .opacity(asOf == nil ? 1 : 0.55)
+                        HStack(spacing: 3) {
+                            if window.isSpent {
+                                BlockedGlyph(color: Theme.errorBold)
+                            }
+                            Text(window.isSpent && !line.metrics.isBlocked ? "spent"
+                                 : (leftText ?? line.noFigureText ?? ""))
                                 .font(Theme.Typography.gridPercent)
-                                .foregroundStyle(line.percentText == nil
-                                                 ? Theme.outline : DualBarProgressView.stateColor(for: line.metrics))
+                                .foregroundStyle(leftText == nil ? Theme.outline
+                                                 : (window.isSpent ? Theme.errorBold : GlanceColors.text(for: window)))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.6)
                         }
                         .frame(minWidth: 62, alignment: .trailing)
                     }
-                    if !line.detail.isEmpty {
-                        Text(line.detail)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-                            .padding(.leading, 52)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if !line.detail.isEmpty || window.isAheadOfPace {
+                        HStack(spacing: 6) {
+                            if !line.detail.isEmpty { Text(line.detail) }
+                            if window.isAheadOfPace {
+                                Label("ahead of pace", systemImage: "arrowtriangle.up.fill")
+                                    .foregroundStyle(Theme.tertiary)
+                            }
+                        }
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
+                        .padding(.leading, 52)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(asOf.map {
-                    "\(line.accessibilityLabel), as of \(MetricDetailPresentation.clockText($0, now: now))"
-                } ?? line.accessibilityLabel)
+                .accessibilityLabel(windowSpoken(line: line, left: leftText, window: window, asOf: asOf))
             }
         }
         .padding(10)
@@ -558,6 +605,20 @@ public struct MetricDetailModalView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Theme.outlineVariant.opacity(0.3), lineWidth: 0.5)
         )
+    }
+
+    /// Spoken in the unit drawn: "% left", or elapsed for a billing cycle.
+    private func windowSpoken(line: MetricDetailPresentation.WindowLine, left: String?,
+                              window: GlancePresentation.Window, asOf: Date?) -> String {
+        let name = WindowColumn.column(forLabel: line.label)?.spokenName ?? line.label
+        var parts = ["\(name) window"]
+        if window.isSpent { parts.append(line.metrics.isBlocked ? "blocked" : "spent") }
+        else if let left { parts.append(left.replacingOccurrences(of: "%", with: " percent")) }
+        else if let noFigure = line.noFigureText { parts.append(noFigure.lowercased()) }
+        if !line.detail.isEmpty { parts.append(line.detail) }
+        if window.isAheadOfPace { parts.append("ahead of pace") }
+        if let asOf { parts.append("as of \(MetricDetailPresentation.clockText(asOf, now: now))") }
+        return parts.joined(separator: ", ")
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -657,7 +718,9 @@ public struct MetricDetailModalView: View {
            let burndown = BurndownPresentation.burndown(
                readings: readings, instanceID: snapshot.id, barLabel: label, now: now
            ) {
-            VStack(alignment: .leading, spacing: 4) {
+            // Room above the plot: its "now" annotation sits at the top edge
+            // and overprinted the caption.
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if burndown.isBlocked {
                         BlockedGlyph(color: Theme.onSurfaceVariant, size: 10)
@@ -871,11 +934,20 @@ public struct MetricDetailModalView: View {
     /// as fact.
     private var provenanceCard: some View {
         VStack(alignment: .leading, spacing: 5) {
-            sectionTitle("Source")
+            sectionTitle("Details")
+            // The vendor's own note (e.g. which models share this allowance).
+            if let note = snapshot.auxiliaryInfo {
+                Text(note)
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 2)
+            }
             ForEach(presentation.provenance) { row in
                 diagRow(label: row.label, value: row.value)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Theme.surfaceContainerLowest.opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -901,42 +973,6 @@ public struct MetricDetailModalView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label): \(value ?? "not reported")")
-    }
-
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack {
-            Button(action: copyJson) {
-                HStack(spacing: 5) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 12))
-                    Text(copied ? "Copied" : "Copy JSON")
-                        .font(Theme.Typography.footer)
-                }
-                .foregroundStyle(copied ? Theme.secondary : Theme.onSurfaceVariant)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(copied ? "Copied details as JSON" : "Copy details as JSON")
-
-            Spacer()
-
-            Button("Done", action: onClose)
-                .font(Theme.Typography.footer)
-                .foregroundStyle(Theme.onSurface)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.12))
-                .clipShape(Capsule())
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close details")
-        }
-        .padding(.horizontal, Theme.cardPadding)
-        .padding(.vertical, 10)
-        .background(Theme.surfaceContainerLowest)
-        .overlay(alignment: .top) {
-            Rectangle().fill(Theme.outlineVariant.opacity(0.5)).frame(height: 0.5)
-        }
     }
 
     private func copyJson() {

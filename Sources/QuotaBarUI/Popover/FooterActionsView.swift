@@ -9,6 +9,10 @@ struct FooterActionsView: View {
     let onOpenSettings: () -> Void
     let onQuit: () -> Void
     let onRefresh: () -> Void
+    /// Recent surfaced events. Events no longer take the popover's top slot;
+    /// a labelled pill here opens the list. Nil hides the pill.
+    var eventCount: Int? = nil
+    var onOpenEvents: () -> Void = { HistoryWindow.show(tab: .events) }
 
     @State private var isGearHovered = false
     @State private var isRefreshHovered = false
@@ -69,6 +73,27 @@ struct FooterActionsView: View {
             .accessibilityLabel(footerAccessibilityLabel(now: now))
 
             Spacer()
+
+            if let eventCount {
+                Button(action: onOpenEvents) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bell.fill").font(.system(size: 10))
+                        // "recent", not "new": nothing records which events
+                        // have been seen, so "new" would claim a fact we lack.
+                        Text(eventCount == 0 ? "Events" : "\(eventCount) recent")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(eventCount > 0 ? Theme.primary : Theme.onSurfaceVariant)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.primary.opacity(eventCount > 0 ? 0.14 : 0.06)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(eventCount == 1 ? "1 recent event. Open the events list"
+                                    : "\(eventCount) recent events. Open the events list")
+                .help("Open the events list in the History window")
+            }
 
             // Manual Refresh Button
             Button(action: onRefresh) {

@@ -210,7 +210,7 @@ struct DoctorReport {
         }
 
         // Gemini OAuth is opt-in, and the env vars are only one of two ways to
-        // supply it (Settings → Keys → Gemini writes the same client to the
+        // supply it (Settings → Antigravity writes the same client to the
         // Keychain). So an unset var reports as skipped, never as a failure: a
         // doctor that prints [FAIL] on a correctly configured machine trains
         // people to ignore it. Optional checks never affect the exit code.

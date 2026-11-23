@@ -138,10 +138,12 @@ popover. `percent` is a percentage, so it is
 divided by 100 directly — running it through the flat windows'
 fraction-or-percentage heuristic would turn 1% into 100%.
 
-**Urgency and confidence are separate axes.** `Urgency` (quota pressure) drives
-the menu bar icon. `Confidence` (did we get a reading) is a decoration. An
-unreadable provider must never outrank a critical quota — that inversion made
-the icon a permanent grey error triangle for every user.
+**Urgency and confidence are separate axes.** `Urgency` is quota pressure;
+`Confidence` (did we get a reading) is a decoration. An unreadable provider
+must never outrank a critical quota — that inversion made the icon a permanent
+grey error triangle for every user. The menu-bar title no longer shows worst
+pressure. It shows the suggested pool (see *The glance* below). The popover
+shows the individual pools and their reset times.
 
 Beware: the UI switches on `Urgency`/`Confidence`, **not** on `ProviderStatus`.
 So adding a `ProviderStatus` case compiles everywhere and silently maps to an
@@ -266,8 +268,8 @@ that the figure arrives in a response the snapshot already made (OpenAI's
 provider of its own would duplicate the request and a second cache key would
 split one reading in two. An entry yields no fraction: `MetricType.credits`
 returns nil from `consumptionFraction`, because a count of credits has no cap to
-be a fraction *of*. The popover draws the entries in one card of their own
-(`APICreditSectionView`); the card is absent when nobody published one.
+be a fraction *of*. The popover draws the entries in the Wallet; the Wallet is
+absent when nobody published a credit or balance.
 
 **A configured credit is not a measurement, and Google's AI Studio credit
 cannot be measured.** The Prepay balance and monthly Google Developer Program
@@ -277,9 +279,9 @@ by every project and key on it. The Gemini API
 (`generativelanguage.googleapis.com`) has no billing operation and
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
-It is drawn under the Gemini row inside the Antigravity block as the **API
-credit** line, in the anatomy of Codex's separate API credit: name column,
-one bar, and a percentage and countdown beneath. The prepaid balance and
+It is drawn in the Wallet as the **API credit** line, under a "Gemini API ·
+<account>" caption tagged CONFIGURED: name column, one bar, and a percentage and
+countdown beneath. The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
 calendar time**, never spend: no documented API returns an API key's spend, and
@@ -296,8 +298,8 @@ whole number only (`GeminiAPICredit.amount(from:)`): `Decimal(string:)` reads a
 prefix, so "1,234.50" and "30abc" would have saved 1 and 30. It lives in its own
 snapshot field, attached on read from `GeminiAPICreditStore` rather than stored
 in the poll cache — so a failed Antigravity poll neither erases nor stales it,
-a change takes effect without a poll, and only the Gemini row ever hosts it
-(Argon and the shared Claude/GPT pool are separate allowances). Read it on read:
+a change takes effect without a poll, and only a Gemini snapshot ever carries
+it (Argon and the shared Claude/GPT pool are separate allowances). Read it on read:
 `QuotaManager.attachingGeminiCredit` is applied in `visibleCache` and
 `sortedSnapshots`, not in the fetch path. Saving from Settings replaces the
 snapshot list (`QuotaStore.reloadConfiguredCredit`): it never force-repolls a
@@ -431,7 +433,56 @@ only go in alongside a signed, entitled `.app`.
 
 ## UI constraints
 
-Popover is 384pt wide; with the 12pt edge margin and 14pt card padding a row
+**The glance.** The popover answers "which pool do I use now, and when do the
+spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows Providers,
+Wallet and a footer. Providers expands one group at a time. Claude combines
+Claude Code with Antigravity Claude/GPT. DeepSeek groups OpenCode Go, Command
+Code and OpenDesign, with direct API credit listed separately. The group
+averages use only fresh figures in the same window and report coverage. Each
+pool keeps its service identity and opens its own inspector.
+- Use now ranks by **headroom at risk**: remaining share ÷ share of the window
+  still to run, on long windows (≥ 7 days, or WK/MO) only. Soonest-reset
+  ranking was tried on real data and picked a nearly drained pool over a full
+  one a day later. A long window under 20% left vetoes a pick; a 5H window sets
+  no floor and only gates when spent or blocked.
+- A pool is one `QuotaSnapshot`. It is spent when a plan window is spent or
+  blocked, or the vendor blocked the account on its badge (Command Code's
+  `limited`). A spent pool's badge uses the latest reset among its spent
+  windows if they all publish one. A group window turns red only if every
+  pool reports that window spent. Its countdown uses the earliest published
+  reset for that window.
+- `DualBarMetrics.allowanceRole` defaults to `.plan`. Kiro `BN` is `.bonus`;
+  Kiro `OV` and Grok `OD` are `.paidOverage`. Supplementary pools never make a
+  pool spent and are never a pick's headroom; paid overage is never a pick,
+  because using it spends money. Classify by role, never by label: labels are
+  open-ended (OpenAI emits `nM`/`nH`/`nD`/`PLAN`, Gemini any token).
+- Never a pick: stale readings, Fable and other `scopedBars` (excluded
+  totally: not a candidate, not a veto, not a note), billing cycles,
+  balance-only vendors, developer limits. When nothing qualifies, the best
+  usable pool is shown as a caveat pick in amber.
+- The menu-bar title's colour describes the pick: normal, amber for a caveat
+  pick, red only when no pool is usable, each with a glyph. "All spent" is
+  claimed only when every pool is confirmed spent; spent plus unreadable reads
+  "None confirmed usable".
+- Bars in the glance show **% left**; the tick is where an even pace would
+  leave it (`1 − paceMarker`), drawn only when `paceMarker` is.
+- Every countdown in the glance and the menu-bar title is one unit
+  (`GlancePresentation.countdown`: minutes, hours under two days, then days).
+  Two-unit forms ("1d 13h") beside one-unit ones ("29d") read as different
+  resets; the owner asked for one unit on 23 Nov 2026.
+- A measured exhausted month fills the quota lane. A measured exhausted week
+  can fill it when neither an exhausted 5H window nor a monthly reading
+  needs its own column. Simultaneously exhausted 5H and WK windows show their
+  own red used percentages. Unpublished cells stay blank.
+- The Wallet hosts the existing credit views (`MonthlyCreditBarView`,
+  `GeminiAPICreditView`, `MonthlyPromoCreditView`, `OpenAIUsageCreditView`,
+  `APICreditEntryPresentation`), so every credit rule below still governs its
+  line; it only moves them out from under quota rows.
+
+The legacy provider row (`MetricRowView`, still used by the developer-limits
+card and the inspector) keeps the constraints below.
+
+Legacy rows are 384pt wide (`Theme.popoverWidth`); with the 12pt edge margin and 14pt card padding a row
 has **332pt**: avatar 28 + 8 + name 112 + 8 + a 176pt grid of three window
 columns (5H / WK / MO, 8pt apart). Use flexible widths inside the grid, not
 fixed ones — an earlier layout summed past its budget and clipped on launch.

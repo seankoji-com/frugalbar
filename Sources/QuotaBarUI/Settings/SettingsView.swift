@@ -2,20 +2,25 @@ import AppKit
 import SwiftUI
 import QuotaBarCore
 
-/// Preferences, as a sidebar of sections: what each provider is doing and in
-/// what order, where its credential comes from, OpenCode Go workspaces,
-/// display, notifications, billing cycles, history and data, and about.
-///
-/// Every control still writes the moment it changes and posts the same change
-/// notifications as before; only API keys wait for "Save & verify", because a
-/// half-typed key must not be stored.
+/// Settings for individual services and for FrugalBar as a whole.
 public struct SettingsView: View {
 
-    /// The sidebar's sections, in reading order.
-    public enum Pane: String, CaseIterable, Identifiable, Sendable {
-        case providers, credentials, workspaces, display, notifications, cycles, sync, data, about
+    public enum Pane: CaseIterable, Identifiable, Sendable, Hashable {
+        case services, service(VendorIdentifier), connections, display, notifications, sync, data, guide, about
 
-        public var id: String { rawValue }
+        public var id: Self { self }
+
+        private static let appPanes: [Pane] = [
+            .services, .connections, .display, .notifications, .sync, .data, .guide, .about,
+        ]
+
+        public static var allCases: [Pane] {
+            appPanes + ProviderOrderEditing.services(in: ProviderDisplayPreferences.defaultOrder).map(Self.service)
+        }
+
+        static func appPanes(syncAvailable: Bool) -> [Pane] {
+            appPanes.filter { $0 != .sync || syncAvailable }
+        }
 
         /// The panes the sidebar lists. Phone & Watch only exists in a build
         /// with a sync client: without one there is nothing to turn on.
@@ -25,51 +30,34 @@ public struct SettingsView: View {
 
         public var title: String {
             switch self {
-            case .providers: "Providers"
-            case .credentials: "API Keys"
-            case .workspaces: "OpenCode Go"
+            case .services: "Services"
+            case .service(let vendor): GlancePresentation.serviceName(for: vendor)
+            case .connections: "Connections"
             case .display: "Display"
             case .notifications: "Notifications"
-            case .cycles: "Billing Cycles"
             case .sync: "Phone & Watch"
             case .data: "History & Data"
+            case .guide: "How to read"
             case .about: "About"
-            }
-        }
-
-        /// One line under the pane's title saying what it is for.
-        public var summary: String {
-            switch self {
-            case .providers: "Connection state, visibility and order for every provider."
-            case .credentials: "Where each provider's key comes from, and overrides."
-            case .workspaces: "Each OpenCode Go subscription, its key, and its place in the list."
-            case .display: "The desktop widget, and how to read the popover and usage details."
-            case .notifications: "What FrugalBar tells you about, and when."
-            case .cycles: "Renewal dates for vendors that publish none."
-            case .sync: "Optional: show this Mac's readings on your Android phone and watch."
-            case .data: "What FrugalBar records, and where it is kept."
-            case .about: "Version and links."
             }
         }
 
         public var symbol: String {
             switch self {
-            case .providers: "list.bullet"
-            case .credentials: "key"
-            case .workspaces: "chevron.left.forwardslash.chevron.right"
+            case .services: "list.bullet"
+            case .service(let vendor): vendor.iconSymbol
+            case .connections: "key"
             case .display: "paintbrush"
             case .notifications: "bell.badge"
-            case .cycles: "calendar"
             case .sync: "arrow.triangle.2.circlepath"
             case .data: "cylinder.split.1x2"
+            case .guide: "questionmark.circle"
             case .about: "info.circle"
             }
         }
     }
 
-    /// Only vendors we can actually do something with are offered. Claude is
-    /// absent because Anthropic publishes no quota API, so a key field there
-    /// would imply a capability that does not exist.
+    /// Manual credential overrides, including OAuth tokens for Claude and Codex.
     private struct KeySlot: Identifiable {
         let id: VendorIdentifier
         let label: String
@@ -122,6 +110,8 @@ public struct SettingsView: View {
     ]
 
     @State private var selection: Pane?
+    @State private var providerOrder = CredentialStore.providerOrder
+    @State private var hiddenProviders = CredentialStore.hiddenProviders
     /// The running app's store, for live connection states. nil in the
     /// standalone Settings scene.
     private let store: QuotaStore?
@@ -131,7 +121,7 @@ public struct SettingsView: View {
     @State private var entered: [VendorIdentifier: String] = [:]
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
-    @State private var isVerifying = false
+    @State private var verifyingVendor: VendorIdentifier?
     @State private var busyWorkspaceIDs: Set<String> = []
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
@@ -207,20 +197,17 @@ public struct SettingsView: View {
     /// reading a single Keychain item, so a render can never touch the
     /// user's real credentials.
     private let readsCredentials: Bool
-    /// Taller only in the render harness, so one image shows a whole pane.
-    private let height: CGFloat
     @State private var vaultStatus: VaultStatusSnapshot = VaultStatusSnapshot(state: .unloaded)
     @State private var isUnlockingVault = false
 
-    public init(store: QuotaStore? = nil, sync: SyncController? = nil, initialPane: Pane = .providers) {
+    public init(store: QuotaStore? = nil, sync: SyncController? = nil, initialPane: Pane = .services) {
         self.init(store: store, sync: sync, initialPane: initialPane, readsCredentials: true)
     }
 
-    init(store: QuotaStore?, sync: SyncController? = nil, initialPane: Pane, readsCredentials: Bool, height: CGFloat = 580) {
+    init(store: QuotaStore?, sync: SyncController? = nil, initialPane: Pane, readsCredentials: Bool) {
         self.store = store
         self.sync = sync
         self.readsCredentials = readsCredentials
-        self.height = height
         _selection = State(initialValue: initialPane)
     }
 
@@ -253,31 +240,60 @@ public struct SettingsView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            List(Pane.visible(syncAvailable: sync != nil), selection: $selection) { pane in
-                Label(pane.title, systemImage: pane.symbol)
+            List(selection: $selection) {
+                ForEach(Pane.appPanes(syncAvailable: sync != nil)) { pane in
+                    Label {
+                        Text(pane.title)
+                    } icon: {
+                        Image(systemName: pane.symbol)
+                            .foregroundStyle(.secondary)
+                    }
                     .tag(pane)
-                    .accessibilityLabel(pane.title)
+                }
+                Section("Service setup") {
+                    ForEach(ProviderOrderEditing.services(in: providerOrder), id: \.self) { vendor in
+                        HStack(spacing: 7) {
+                            VendorAvatarView(vendorId: vendor, status: .healthy, size: 17)
+                                .accessibilityHidden(true)
+                            Text(Pane.service(vendor).title)
+                            Spacer(minLength: 0)
+                            if hasChanges(for: vendor) {
+                                Image(systemName: "pencil.circle")
+                                    .font(.caption)
+                                    .help("Unsaved credential changes")
+                                    .accessibilityLabel("Unsaved credential changes")
+                            }
+                            if ProviderOrderEditing.members(of: vendor, in: providerOrder)
+                                .allSatisfy(hiddenProviders.contains) {
+                                Image(systemName: "eye.slash")
+                                    .font(.caption)
+                                    .accessibilityLabel("Hidden")
+                            }
+                        }
+                        .tag(Pane.service(vendor))
+                    }
+                }
             }
             .listStyle(.sidebar)
             .frame(width: 190)
-            .accessibilityLabel("Preferences sections")
+            .accessibilityLabel("Settings sections")
 
             Divider()
 
             VStack(alignment: .leading, spacing: 0) {
-                paneHeader(selection ?? .providers)
-                if readsCredentials, let banner = SettingsVaultBannerPresentation.make(from: vaultStatus) {
+                paneHeader(selection ?? .services)
+                if readsCredentials, showsVaultBanner, let banner = SettingsVaultBannerPresentation.make(from: vaultStatus) {
                     SettingsVaultBannerView(
                         presentation: banner,
                         isBusy: isUnlockingVault,
                         onAction: { Task { await unlockVault() } }
                     )
                 }
-                pane(selection ?? .providers)
+                pane(selection ?? .services)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 780, height: height)
+        .frame(width: 780, height: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { if readsCredentials { loadKeysFromCache() } }
         .onAppear(perform: loadWorkspaces)
@@ -290,11 +306,19 @@ public struct SettingsView: View {
         // Turning discovery off can strip a row back to "Not configured";
         // saving a key can flip one to "Stored in Keychain". Both have to be
         // reflected, or the status line becomes a lie the moment it matters.
-        .onChange(of: cliDiscovery) { Task { await refreshSources() } }
+        .onChange(of: cliDiscovery) {
+            if readsCredentials { Task { await refreshSources() } }
+        }
         // A rename typed into the workspace list but never committed with
         // Return is kept when the user moves to another section.
         .onChange(of: selection) { old, _ in
-            if old == .workspaces { commitWorkspaceRenames() }
+            if old == .service(.opencode) { commitWorkspaceRenames() }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: .frugalbarProviderPreferencesDidChange, object: CredentialStore.preferencesChangeSender
+        )) { _ in
+            providerOrder = CredentialStore.providerOrder
+            hiddenProviders = CredentialStore.hiddenProviders
         }
         .onReceive(NotificationCenter.default.publisher(for: KeychainVault.statusDidChangeNotification)) { _ in
             guard readsCredentials else { return }
@@ -314,13 +338,14 @@ public struct SettingsView: View {
     }
 
     private func paneHeader(_ pane: Pane) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Label(pane.title, systemImage: pane.symbol)
-                .font(.title3.weight(.semibold))
+        HStack(spacing: 9) {
+            if case .service(let vendor) = pane {
+                VendorAvatarView(vendorId: vendor, status: .healthy, size: 24)
+                    .accessibilityHidden(true)
+            }
+            Text(pane.title)
+                .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text(pane.summary)
-                .font(.callout)
-                .foregroundStyle(Theme.systemSecondaryText)
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
@@ -330,18 +355,22 @@ public struct SettingsView: View {
     @ViewBuilder
     private func pane(_ pane: Pane) -> some View {
         switch pane {
-        case .providers:
-            ProviderOrderSettings(store: store, onManageWorkspaces: { selection = .workspaces })
-        case .credentials:
-            keysTab
-        case .workspaces:
-            workspacesPane
+        case .services:
+            ProviderOrderSettings(
+                store: store, order: $providerOrder, hidden: hiddenProviders,
+                onManage: { selection = .service($0) }
+            )
+        case .service(let vendor):
+            servicePane(vendor)
+        case .connections:
+            Form { credentialDiscoverySection }
+                .formStyle(.grouped)
         case .display:
             displayPane
         case .notifications:
             notificationsPane
-        case .cycles:
-            cyclesTab
+        case .guide:
+            readingGuide
         case .sync:
             if let sync { SyncSettingsPane(controller: sync) }
         case .data:
@@ -365,188 +394,48 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Keys
+    // MARK: - Service setup
 
-    private var keysTab: some View {
-        VStack(spacing: 0) {
-            keysForm
-            Divider()
-            saveBar
+    private var showsVaultBanner: Bool {
+        switch selection ?? .services {
+        case .services, .connections, .service, .sync: true
+        default: false
         }
     }
 
-    private var keysForm: some View {
-        Form {
-            credentialDiscoverySection
-            ClaudeAccountSettingsView()
-            AntigravityAccountSettingsView()
-            Section("Muse portal quota") {
-                Text("If the CLI response omits usage, connect Meta and select your subscription team. This app retains its own sign-in and team across restarts until you disconnect. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
-                    .font(.caption)
-                Button(musePortal.isEnabled ? "Open Muse portal connection" : "Connect Muse portal quota") {
-                    musePortal.connect()
-                    showMusePortal = true
-                }.disabled(musePortal.isDisconnecting)
-                if musePortal.isEnabled {
-                    Button("Disconnect Muse portal") {
-                        Task {
-                            await musePortal.disconnect()
-                            await store?.load()
+    private func servicePane(_ vendor: VendorIdentifier) -> some View {
+        let slot = Self.slots.first { $0.id == vendor }
+        let members = ProviderOrderEditing.members(of: vendor, in: providerOrder)
+        return VStack(spacing: 0) {
+            Form {
+                monitoringSection(vendor, members: members)
+                if let slot {
+                    Section("Credential") { slotRow(slot) }
+                }
+                serviceConnections(vendor)
+                if Self.cycleVendors.contains(vendor) {
+                    cycleSection(vendor)
+                }
+                let alertVendors = members.filter(Self.resetAlertCandidates.contains)
+                if !alertVendors.isEmpty {
+                    Section("Reset alerts") {
+                        ForEach(alertVendors, id: \.self) { member in
+                            Toggle(alertVendors.count == 1 ? "Notify when quota resets" : member.displayName,
+                                   isOn: resetAlertBinding(for: member))
                         }
                     }
                 }
-                if musePortal.isDisconnecting {
-                    Text("Clearing this app's Meta sign-in…").font(.caption)
-                }
             }
-            Section("OpenDesign Go usage") {
-                Text("Sign in to OpenDesign to read your current workspace's 5-hour and weekly coding-plan usage, and its monthly window when OpenDesign publishes one. An OpenDesign API key cannot read usage, so there is no key slot.")
-                    .font(.caption)
-                Button(openDesignEnabled ? "Open OpenDesign sign-in" : "Connect OpenDesign") {
-                    OpenDesignWebSession.shared.connect()
-                    openDesignEnabled = true
-                    showOpenDesign = true
-                }
-                if openDesignEnabled {
-                    Button("Disconnect OpenDesign") {
-                        OpenDesignWebSession.shared.disconnect()
-                        openDesignEnabled = false
-                        Task { await store?.forgetReadings(of: .opendesign) }
-                    }
-                }
+            .formStyle(.grouped)
+            .id(vendor)
+
+            if hasChanges(for: vendor) || verifyingVendor == vendor {
+                Divider()
+                saveBar(for: vendor)
             }
-            Section("Claude monthly API credit") {
-                Text("Connect Claude's billing page to read the linked Console monthly allowance and next credit date. This is separate from extra usage and is never shown as a remaining balance.")
-                    .font(.caption)
-                Button(claudeMonthlyEnabled ? "Open Claude billing connection" : "Connect Claude billing") {
-                    ClaudeMonthlyCreditSession.shared.connect()
-                    claudeMonthlyEnabled = true
-                    showClaudeMonthlyCredit = true
-                }
-                if claudeMonthlyEnabled, let placement = Self.claudeCreditPlacement(
-                    snapshots: store?.snapshots ?? [],
-                    webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
-                    rows: claudeCreditRows) {
-                    Label(placement, systemImage: "link")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if claudeMonthlyEnabled {
-                    Button("Disconnect monthly credit") {
-                        ClaudeMonthlyCreditSession.shared.disconnect()
-                        claudeMonthlyEnabled = false
-                        Task { await store?.clearMonthlyCredit() }
-                    }
-                }
-            }
-
-            Section("OpenAI monthly API credit") {
-                Text("Connect the OpenAI Platform billing page to read the linked organization's monthly API credit. This is the Pro/Business API-credits benefit, not the ChatGPT usage credit count, and it is never shown as a quota.")
-                    .font(.caption)
-                Button(openAIMonthlyEnabled ? "Open OpenAI billing connection" : "Connect OpenAI billing") {
-                    OpenAIMonthlyCreditSession.shared.connect()
-                    openAIMonthlyEnabled = true
-                    showOpenAIMonthlyCredit = true
-                }
-                if openAIMonthlyEnabled {
-                    Button("Disconnect OpenAI monthly credit") {
-                        OpenAIMonthlyCreditSession.shared.disconnect()
-                        openAIMonthlyEnabled = false
-                        Task { await store?.clearOpenAIMonthlyCredit() }
-                    }
-                }
-            }
-
-            Section {
-                ForEach(Self.slots) { slot in
-                    slotRow(slot)
-                }
-            } header: {
-                Text("Credentials")
-            } footer: {
-                Text("""
-                     These fill themselves in from your CLI logins. Expand a \
-                     row only to override one, or when it says "Not configured".
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            }
-
-            Section {
-                Button("Manage OpenCode Go workspace keys…") { selection = .workspaces }
-                    .buttonStyle(.link)
-            } header: {
-                Text("OpenCode Go")
-            } footer: {
-                Text("Each workspace has its own key, set in the OpenCode Go section.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            }
-
-            Section("Google (Gemini, AGY Claude/GPT and Argon)") {
-                HStack {
-                    Button("Connect Google account") { Task { await connectGemini() } }
-                        .disabled(isSigningInToGemini || isVerifying)
-                    if isSigningInToGemini { ProgressView().controlSize(.small) }
-                }
-                Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-
-                // Folded away by default. This is the OAuth *client* identity,
-                // not a credential of the user's — it is the one thing here
-                // that genuinely has to be typed, and also the thing almost
-                // nobody needs to touch twice.
-                DisclosureGroup(isExpanded: $showGeminiClient) {
-                    TextField("OAuth client ID", text: $geminiClientID)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField(
-                        "OAuth client secret",
-                        text: $geminiClientSecret,
-                        prompt: Text(geminiSecretIsStored
-                                     ? "•••••••• stored — leave blank to keep"
-                                     : "OAuth client secret")
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    Text("""
-                         The Cloud Code API is private to Google's own OAuth \
-                         clients, so one you create yourself will be refused — \
-                         use a pair whose project Google has allowlisted, such \
-                         as the one the antigravity-usage CLI publishes in its \
-                         OAUTH_CONFIG.
-                         """)
-                        .font(.caption)
-                        .foregroundStyle(Theme.systemSecondaryText)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("OAuth client")
-                        Spacer()
-                        // The symbol carries the tone; the words stay in a text
-                        // colour. System green text on the light form measured
-                        // 1.8:1 (design-loop sol-15).
-                        HStack(spacing: 4) {
-                            Image(systemName: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle")
-                                .foregroundStyle(geminiSecretIsStored ? Color.green : Theme.systemSecondaryText)
-                            Text(geminiSecretIsStored ? "Configured" : "Needs a client")
-                                .foregroundStyle(Theme.systemSecondaryText)
-                        }
-                        .font(.caption)
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-
-                // The AI Studio key's credit is a different surface from the
-                // Antigravity OAuth above: Google exposes its Prepay balance
-                // only in AI Studio's Billing tab, so these figures are typed
-                // by the account holder and labelled configured.
-                GeminiAPICreditSettingsView {
-                    Task { await store?.reloadConfiguredCredit() }
-                }
-            }
-
         }
-        .formStyle(.grouped)
         .onAppear {
+            guard readsCredentials else { return }
             claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
             openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
             openDesignEnabled = OpenDesignWebSession.shared.isEnabled
@@ -570,16 +459,242 @@ public struct SettingsView: View {
         }) { MusePortalConnectionView() }
     }
 
+    @ViewBuilder
+    private func serviceConnections(_ vendor: VendorIdentifier) -> some View {
+        switch vendor {
+        case .claude:
+            ClaudeAccountSettingsView()
+            claudeCreditSection
+        case .openai:
+            OpenAIAccountSettingsView(
+                accountKey: store?.snapshots.first(where: { $0.vendorId == .openai })?.openAIAccountKey
+            ) {
+                Task { await store?.forceRefresh() }
+            }
+            openAICreditSection
+        case .gemini:
+            AntigravityAccountSettingsView()
+            googleConnectionSection
+            Section("API billing") {
+                GeminiAPICreditSettingsView {
+                    Task { await store?.reloadConfiguredCredit() }
+                }
+            }
+        case .opencode:
+            openCodeWorkspaceSection
+        case .muse:
+            musePortalSection
+        case .opendesign:
+            openDesignSection
+        case .kiro:
+            Section("Connection") {
+                Text("Sign in to the Kiro CLI or IDE on this Mac, then turn on CLI discovery.")
+                Button("Open Connections") { selection = .connections }
+            }
+        case .copilot:
+            Section("Connection") {
+                Text("Copilot can use the token saved in GitHub settings or a local CLI login.")
+                Button("Open GitHub settings") { selection = .service(.githubRest) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func monitoringSection(_ service: VendorIdentifier, members: [VendorIdentifier]) -> some View {
+        Section {
+            ForEach(Array(members.enumerated()), id: \.element) { index, vendor in
+                let title = members.count == 1 ? Pane.service(service).title : vendor.displayName
+                let status = ProviderConnectionPresentation.status(
+                    vendorSnapshots: store?.snapshots.filter { $0.vendorId == vendor } ?? [],
+                    isHidden: hiddenProviders.contains(vendor), hasPolled: store?.hasLoaded ?? false,
+                    credentialSource: sources[vendor], now: Date())
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(members.count == 1 ? "Show in FrugalBar" : title)
+                        ConnectionStatusLine(status: status)
+                    }
+                    Spacer(minLength: 8)
+                    if service == .gemini {
+                        ServiceOrderButtons(
+                            title: title, canMoveUp: index > 0, canMoveDown: index < members.count - 1
+                        ) { offset in
+                            providerOrder = ProviderOrderEditing.moveMember(vendor, by: offset, in: providerOrder)
+                            CredentialStore.providerOrder = providerOrder
+                        }
+                    }
+                    Toggle("Monitor \(title)", isOn: Binding(
+                        get: { !hiddenProviders.contains(vendor) },
+                        set: { shown in
+                            hiddenProviders = ProviderOrderEditing.setShown(shown, vendor, hidden: hiddenProviders)
+                            CredentialStore.hiddenProviders = hiddenProviders
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+            }
+        } header: {
+            Text("Monitoring")
+        } footer: {
+            Text("Turning off monitoring stops polling and keeps your credentials.")
+                .font(.caption)
+                .foregroundStyle(Theme.systemSecondaryText)
+        }
+    }
+
+    private var musePortalSection: some View {
+        Section("Muse portal quota") {
+            Text("If the CLI response omits usage, connect Meta and select your subscription team. This app retains its own sign-in and team across restarts until you disconnect. Its account and plan must match Muse CLI. Your browser's cookies are never imported.")
+                .font(.caption)
+            Button(musePortal.isEnabled ? "Open Muse portal connection" : "Connect Muse portal quota") {
+                musePortal.connect()
+                showMusePortal = true
+            }.disabled(musePortal.isDisconnecting)
+            if musePortal.isEnabled {
+                Button("Disconnect Muse portal") {
+                    Task {
+                        await musePortal.disconnect()
+                        await store?.load()
+                    }
+                }
+            }
+            if musePortal.isDisconnecting {
+                Text("Clearing this app's Meta sign-in…").font(.caption)
+            }
+        }
+    }
+
+    private var openDesignSection: some View {
+        Section("OpenDesign Go usage") {
+            Text("Sign in to OpenDesign to read your current workspace's 5-hour and weekly coding-plan usage, and its monthly window when OpenDesign publishes one. An OpenDesign API key cannot read usage, so there is no key slot.")
+                .font(.caption)
+            Button(openDesignEnabled ? "Open OpenDesign sign-in" : "Connect OpenDesign") {
+                OpenDesignWebSession.shared.connect()
+                openDesignEnabled = true
+                showOpenDesign = true
+            }
+            if openDesignEnabled {
+                Button("Disconnect OpenDesign") {
+                    OpenDesignWebSession.shared.disconnect()
+                    openDesignEnabled = false
+                    Task { await store?.forgetReadings(of: .opendesign) }
+                }
+            }
+        }
+    }
+
+    private var claudeCreditSection: some View {
+        Section("Claude monthly API credit") {
+            Text("Connect Claude's billing page to read the linked Console monthly allowance and next credit date. This is separate from extra usage and is never shown as a remaining balance.")
+                .font(.caption)
+            Button(claudeMonthlyEnabled ? "Open Claude billing connection" : "Connect Claude billing") {
+                ClaudeMonthlyCreditSession.shared.connect()
+                claudeMonthlyEnabled = true
+                showClaudeMonthlyCredit = true
+            }
+            if claudeMonthlyEnabled, let placement = Self.claudeCreditPlacement(
+                snapshots: store?.snapshots ?? [],
+                webIdentities: ClaudeMonthlyCreditSession.shared.webIdentities,
+                rows: claudeCreditRows) {
+                Label(placement, systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if claudeMonthlyEnabled {
+                Button("Disconnect monthly credit") {
+                    ClaudeMonthlyCreditSession.shared.disconnect()
+                    claudeMonthlyEnabled = false
+                    Task { await store?.clearMonthlyCredit() }
+                }
+            }
+        }
+    }
+
+    private var openAICreditSection: some View {
+        Section("OpenAI monthly API credit") {
+            Text("Connect the OpenAI Platform billing page to read the linked organization's monthly API credit. This is the Pro/Business API-credits benefit, not the ChatGPT usage credit count, and it is never shown as a quota.")
+                .font(.caption)
+            Button(openAIMonthlyEnabled ? "Open OpenAI billing connection" : "Connect OpenAI billing") {
+                OpenAIMonthlyCreditSession.shared.connect()
+                openAIMonthlyEnabled = true
+                showOpenAIMonthlyCredit = true
+            }
+            if openAIMonthlyEnabled {
+                Button("Disconnect OpenAI monthly credit") {
+                    OpenAIMonthlyCreditSession.shared.disconnect()
+                    openAIMonthlyEnabled = false
+                    Task { await store?.clearOpenAIMonthlyCredit() }
+                }
+            }
+        }
+    }
+
+    private var googleConnectionSection: some View {
+        Section("Google sign-in") {
+            HStack {
+                Button("Connect Google account") { Task { await connectGemini() } }
+                    .disabled(isSigningInToGemini || verifyingVendor != nil)
+                if isSigningInToGemini { ProgressView().controlSize(.small) }
+            }
+            Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
+                .font(.caption)
+                .foregroundStyle(Theme.systemSecondaryText)
+
+            // Folded away by default. This is the OAuth *client* identity,
+            // not a credential of the user's — it is the one thing here
+            // that genuinely has to be typed, and also the thing almost
+            // nobody needs to touch twice.
+            DisclosureGroup(isExpanded: $showGeminiClient) {
+                TextField("OAuth client ID", text: $geminiClientID)
+                    .textFieldStyle(.roundedBorder)
+                SecureField(
+                    "OAuth client secret",
+                    text: $geminiClientSecret,
+                    prompt: Text(geminiSecretIsStored
+                                 ? "•••••••• stored — leave blank to keep"
+                                 : "OAuth client secret")
+                )
+                .textFieldStyle(.roundedBorder)
+                Text("""
+                     The Cloud Code API is private to Google's own OAuth \
+                     clients, so one you create yourself will be refused — \
+                     use a pair whose project Google has allowlisted, such \
+                     as the one the antigravity-usage CLI publishes in its \
+                     OAUTH_CONFIG.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(Theme.systemSecondaryText)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("OAuth client")
+                    Spacer()
+                    // The symbol carries the tone; the words stay in a text
+                    // colour. System green text on the light form measured
+                    // 1.8:1 (design-loop sol-15).
+                    HStack(spacing: 4) {
+                        Image(systemName: geminiSecretIsStored ? "checkmark.circle.fill" : "exclamationmark.circle")
+                            .foregroundStyle(geminiSecretIsStored ? Color.green : Theme.systemSecondaryText)
+                        Text(geminiSecretIsStored ? "Configured" : "Needs a client")
+                            .foregroundStyle(Theme.systemSecondaryText)
+                    }
+                    .font(.caption)
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+    }
+
     /// Pinned below the form rather than appended to it. As the last row of a
     /// scrolling `Form` this was off-screen at the default window height, so
     /// the one commit action in the window looked like it did not exist.
-    private var saveBar: some View {
+    private func saveBar(for vendor: VendorIdentifier) -> some View {
         HStack(spacing: 8) {
-            if isVerifying { ProgressView().controlSize(.small) }
+            if verifyingVendor == vendor { ProgressView().controlSize(.small) }
             Spacer()
-            Button("Save & verify") { Task { await saveAndVerify() } }
+            Button("Save & verify") { Task { await saveAndVerify(vendor) } }
                 .keyboardShortcut(.defaultAction)
-                .disabled(isVerifying || isSigningInToGemini || !hasChanges)
+                .disabled(verifyingVendor != nil || isSigningInToGemini)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -589,7 +704,7 @@ public struct SettingsView: View {
     /// when you ask for it — a field to override that.
     @ViewBuilder
     private func slotRow(_ slot: KeySlot) -> some View {
-        let source = sources[slot.id] ?? .absent
+        let source = sources[slot.id]
         DisclosureGroup(
             isExpanded: Binding(
                 get: { expanded.contains(slot.id) },
@@ -620,34 +735,21 @@ public struct SettingsView: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: Self.icon(for: source))
-                    .foregroundStyle(Self.tint(for: source))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(slot.label)
-                    // What the last poll made of the credential, so a key
-                    // that is stored but rejected does not look settled.
-                    if let status = liveStatus(for: slot.id) {
-                        ConnectionStatusLine(status: status)
-                    }
+                if let source {
+                    Image(systemName: Self.icon(for: source))
+                        .foregroundStyle(Self.tint(for: source))
+                        .accessibilityHidden(true)
                 }
+                Text(slot.label)
                 Spacer()
-                Text(Self.describe(source))
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
+                if let source {
+                    Text(Self.describe(source))
+                        .font(.caption)
+                        .foregroundStyle(Theme.systemSecondaryText)
+                }
             }
             .accessibilityElement(children: .combine)
         }
-    }
-
-    /// The vendor's state from the running app's last poll; nil without one,
-    /// or for a vendor the user hid (which is not polled).
-    private func liveStatus(for vendor: VendorIdentifier) -> ProviderConnectionPresentation.Status? {
-        guard let store, store.hasLoaded, !CredentialStore.hiddenProviders.contains(vendor) else { return nil }
-        let snapshots = store.snapshots.filter { $0.vendorId == vendor }
-        guard !snapshots.isEmpty else { return nil }
-        return ProviderConnectionPresentation.status(
-            vendorSnapshots: snapshots, isHidden: false, hasPolled: true, now: Date())
     }
 
     // MARK: - OpenCode Go workspaces
@@ -655,19 +757,6 @@ public struct SettingsView: View {
     /// One OpenCode Go subscription per row: name, enable toggle, its own key,
     /// and reorder/remove. The key is never read back into the field — it starts
     /// blank and a stored key is only ever indicated.
-    private var workspacesPane: some View {
-        Form {
-            openCodeWorkspaceSection
-        }
-        .formStyle(.grouped)
-        // The Providers section reorders the same list; re-read it so this
-        // one never shows, or later writes back, an order that is gone.
-        .onAppear {
-            workspaces = OpenCodeGoWorkspaceStore.resolved()
-            refreshWorkspaceHasKey()
-        }
-    }
-
     private var openCodeWorkspaceSection: some View {
         Section {
             ForEach(workspaces) { workspace in
@@ -975,67 +1064,25 @@ public struct SettingsView: View {
         sources = found
     }
 
-    /// The Gemini client fields count too. They did not, so typing a client ID
-    /// left "Save & verify" greyed out and the only way to persist it was the
-    /// Connect button — which is not where anyone looks for "save".
-    private var hasChanges: Bool {
-        if Self.slots.contains(where: { (entered[$0.id] ?? "") != (loaded[$0.id] ?? "") }) { return true }
-        if geminiClientID != loadedGeminiClientID { return true }
-        // A workspace key typed but not yet saved.
-        if workspaceKeys.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-            return true
-        }
-        // A workspace renamed in the field but not yet committed with Return.
-        let stored = OpenCodeGoWorkspaceStore.all()
-        if workspaces.contains(where: { workspace in
-            stored.first { $0.id == workspace.id }?.name != workspace.name
-        }) { return true }
-        // Blank means "keep the stored secret", so only a typed one is a change.
-        return !geminiClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private func hasChanges(for vendor: VendorIdentifier) -> Bool {
+        if vendor == .gemini { return hasGeminiClientEdits }
+        return entered[vendor, default: ""].trimmingCharacters(in: .whitespacesAndNewlines) != loaded[vendor, default: ""]
     }
 
-    // MARK: - General
-
-    // MARK: - Cycles
-
-    /// Renewal dates the user records for vendors that publish none.
-    ///
-    /// FrugalBar never fakes a quota, and this does not: a cycle row reports
-    /// elapsed time against a period the user stated, never consumption. It is
-    /// drawn as a separate `CYCLE` bar so a vendor's own window is never
-    /// confused with one typed in here.
-    private var cyclesTab: some View {
-        Form {
-            OpenAIAccountSettingsView(accountKey: store?.snapshots.first(where: { $0.vendorId == .openai })?.openAIAccountKey) {
-                Task { await store?.forceRefresh() }
-            }
-            Section {
-                ForEach(Self.cycleVendors, id: \.self) { vendor in
-                    CycleEditorRow(
-                        vendor: vendor,
-                        cycle: Binding(
-                            get: { cycles[vendor] },
-                            set: { cycles[vendor] = $0 }
-                        ),
-                        onCommit: { SubscriptionCycleStore.set(cycles[vendor], for: vendor) }
-                    )
-                }
-            } header: {
-                Text("Subscription cycles")
-            } footer: {
-                Text("""
-                     For subscriptions whose vendor publishes no billing period. \
-                     A cycle adds a CYCLE bar showing how many days of the period \
-                     you have paid for remain — it reports no usage, only elapsed \
-                     time against the date you entered. A vendor-published window \
-                     always wins where one exists.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-                    .padding(.top, 4)
-            }
+    private func cycleSection(_ vendor: VendorIdentifier) -> some View {
+        Section {
+            CycleEditorRow(
+                vendor: vendor,
+                cycle: Binding(get: { cycles[vendor] }, set: { cycles[vendor] = $0 }),
+                onCommit: { SubscriptionCycleStore.set(cycles[vendor], for: vendor) }
+            )
+        } header: {
+            Text("Renewal cycle")
+        } footer: {
+            Text("Enter a renewal date to see how much time is left in the billing period when the service leaves it out.")
+                .font(.caption)
+                .foregroundStyle(Theme.systemSecondaryText)
         }
-        .formStyle(.grouped)
     }
 
     /// Vendors worth offering a cycle for: every one FrugalBar tracks, since a
@@ -1096,16 +1143,10 @@ public struct SettingsView: View {
             }
 
             Section {
-                ForEach(Self.resetAlertCandidates, id: \.self) { vendor in
-                    Toggle(vendor.displayName, isOn: resetAlertBinding(for: vendor))
-                }
-                Text("""
-                     Posts a notification when a provider's quota window \
-                     rolls over, judged from the reset time the provider \
-                     itself reports. Off for every provider by default.
-                     """)
+                Text("Set reset alerts on each service's page. FrugalBar uses the reset time the service reports.")
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
+                Button("Open Services") { selection = .services }
             } header: {
                 Text("Reset alerts")
             }
@@ -1171,71 +1212,49 @@ public struct SettingsView: View {
                         DesktopWidgetWindow.toggle()
                     }
                 }
-                Text("""
-                     A small panel in one of three layouts: the tokens \
-                     recorded on this Mac, a tile per provider, or a chart of \
-                     the windows you select with each one's headroom, and \
-                     their average once two or more are selected. Open it \
-                     from the gear menu. It is a window FrugalBar owns, not a \
-                     WidgetKit widget — those need an app bundle this build \
-                     does not have.
-                     """)
+                Text("Story follows the menu bar's suggested pool or a pool you pin. Tokens shows usage recorded on this Mac.")
                     .font(.caption)
                     .foregroundStyle(Theme.systemSecondaryText)
             } header: {
                 Text("Desktop widget")
             }
+        }
+        .formStyle(.grouped)
+    }
 
-            Section {
-                legendRows(Self.popoverLegend)
-            } header: {
-                Text("Provider logos in the popover")
-            } footer: {
-                Text("""
-                     Only a provider that needs attention gets a mark. Each \
-                     provider sets its own levels: most count how full their \
-                     fullest window is, some how much credit is left, so the \
-                     same reading can be healthy for one and running low for \
-                     another.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
+    private var readingGuide: some View {
+        Form {
+            Section("Popover") {
+                guideRow("Providers", "Expand a provider to see its pools. Select a pool for details.")
+                guideRow("Averages", "Each reported window counts once. The count shows how many pools supplied a figure.")
+                guideRow("Bars and resets", "Bars show the share left. The tick marks even pace. Red bars and badges show spent or blocked windows and their published reset times.")
+                guideRow("Wallet", "Credits and reset tickets sit under their accounts. Direct balances appear with their providers.")
             }
 
-            Section {
-                legendRows(Self.detailLegend)
-            } header: {
-                Text("Usage details")
-            } footer: {
-                Text("""
-                     What the details opened from a provider's row lead with. \
-                     Unlike the popover's logo, they name Healthy with a \
-                     checkmark, and call a provider blocked whenever the \
-                     vendor blocks a window, whatever its level.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            }
-
-            Section {
-                legendRows(Self.windowLegend)
-            } header: {
-                Text("Window bars")
-            } footer: {
-                Text("""
-                     A bar's colour follows pace, blocking and exhaustion, not \
-                     the provider's levels, so a bar can stay green while its \
-                     provider runs low. Colour is not the only sign: a bar's \
-                     share used is written beside or under it, or in its \
-                     tooltip; ahead of pace means the fill has passed the \
-                     tick; and a blocked window carries a sign or a dashed \
-                     outline.
-                     """)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
+            Section("Status symbols") {
+                DisclosureGroup("Usage details") {
+                    legendRows(Self.detailLegend)
+                }
+                DisclosureGroup("Provider logos") {
+                    legendRows(Self.popoverLegend)
+                }
+                DisclosureGroup("Window bar symbols") {
+                    legendRows(Self.windowLegend)
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func guideRow(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).fontWeight(.medium)
+            Text(description)
+                .font(.callout)
+                .foregroundStyle(Theme.systemSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func legendRows(_ entries: [LegendEntry]) -> some View {
@@ -1514,7 +1533,7 @@ public struct SettingsView: View {
     }
 
     private func connectGemini() async {
-        guard !isSigningInToGemini && !isVerifying else { return }
+        guard !isSigningInToGemini && verifyingVendor == nil else { return }
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
 
@@ -1567,20 +1586,17 @@ public struct SettingsView: View {
     /// a truncated paste fails here — where the user can fix it — rather than
     /// as an unexplained blank row later. Vendors with no such endpoint report
     /// "Saved — cannot be verified" rather than implying a check happened.
-    private func saveAndVerify() async {
-        guard !isVerifying && !isSigningInToGemini else { return }
-        isVerifying = true
-        defer { isVerifying = false }
-
-        // Commit any workspace rename the user typed but did not press Return on.
-        commitWorkspaceRenames()
+    private func saveAndVerify(_ vendor: VendorIdentifier) async {
+        guard verifyingVendor == nil && !isSigningInToGemini else { return }
+        verifyingVendor = vendor
+        defer { verifyingVendor = nil }
 
         // Persist the Gemini client alongside the vendor keys. Changing it
         // orphans any stored session — a refresh token belongs to the client
         // that issued it — so say so rather than letting the row quietly read
         // "Not configured" afterwards.
         let clientChanged = geminiClientID != loadedGeminiClientID
-        if hasGeminiClientEdits {
+        if vendor == .gemini && hasGeminiClientEdits {
             let clientIDToSave = geminiClientID
             let clientSecretToSave = geminiClientSecret
             do {
@@ -1608,12 +1624,10 @@ public struct SettingsView: View {
 
         var githubPatChanged = false
 
-        for slot in Self.slots {
+        for slot in Self.slots where slot.id == vendor {
             let new = (entered[slot.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let old = loaded[slot.id] ?? ""
             guard new != old else { continue }
-            
-            if slot.id == .githubRest { githubPatChanged = true }
 
             let label = slot.id.rawValue
             do {
@@ -1630,6 +1644,7 @@ public struct SettingsView: View {
                     perKeyStatus[slot.id] = await verify(slot.id, key: new)
                 }
                 loaded[slot.id] = new
+                githubPatChanged = slot.id == .githubRest
             } catch {
                 perKeyStatus[slot.id] = Self.keychainAdvice(for: error)
             }

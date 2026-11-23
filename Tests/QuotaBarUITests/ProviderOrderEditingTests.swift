@@ -30,4 +30,17 @@ struct ProviderOrderEditingTests {
         #expect(ProviderOrderEditing.setShown(true, .grok, hidden: [.grok, .kiro]) == [.kiro])
         #expect(ProviderOrderEditing.setShown(true, .grok, hidden: []) == [])
     }
+
+    @Test("moving a service keeps all its saved members in order")
+    func movesService() {
+        let interleaved: [VendorIdentifier] = [
+            .antigravityArgon, .openai, .gemini, .githubGraphql, .antigravityClaude, .githubRest,
+        ]
+        #expect(ProviderOrderEditing.services(in: interleaved) == [.gemini, .openai, .githubRest])
+        #expect(ProviderOrderEditing.moveService(.gemini, by: 1, in: interleaved)
+            == [.openai, .antigravityArgon, .gemini, .antigravityClaude, .githubGraphql, .githubRest])
+        #expect(ProviderOrderEditing.moveService(.gemini, by: -1, in: interleaved) == interleaved)
+        #expect(ProviderOrderEditing.moveMember(.gemini, by: 1, in: interleaved)
+            == [.antigravityArgon, .openai, .antigravityClaude, .githubGraphql, .gemini, .githubRest])
+    }
 }

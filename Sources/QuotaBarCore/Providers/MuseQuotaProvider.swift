@@ -51,7 +51,7 @@ public final class MuseQuotaProvider: QuotaProvider, Sendable {
     // MARK: - Endpoint
 
     static let usageURL = "https://api.meta.ai/muse-code/key"
-    static let missingUsageMessage = "Muse omitted its usage window. Connect Muse portal quota in Settings → API Keys and select your subscription team."
+    static let missingUsageMessage = "Muse omitted its usage window. Connect Muse portal quota in Settings → Muse and select your subscription team."
 
     // MARK: - Fetch
 

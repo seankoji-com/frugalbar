@@ -240,42 +240,49 @@ public struct HistoryRootView: View {
 
             switch selectedTab {
             case .timeline:
-                ScrollView {
-                    VStack(spacing: 14) {
-                        if let loadError {
-                            failureCard(loadError)
-                        }
-
-                        // The selected provider's answer first, the small
-                        // multiples after it. With a dozen providers the grid
-                        // filled the first screen and every visit to a chart
-                        // started with a scroll. The header's provider picker
-                        // and the tiles below both change the selection.
-                        if selectedSubject != nil {
-                            if !isLoading, let pace {
-                                paceCard(pace)
+                // Pool list + one chart (owner, 23 Nov 2026): the list is the
+                // selection, so the page opens on the chart, not on a grid.
+                HStack(spacing: 0) {
+                    poolSidebar
+                    Rectangle().fill(Theme.outlineVariant.opacity(0.25)).frame(width: 1)
+                    ScrollView {
+                        VStack(spacing: 14) {
+                            if let loadError {
+                                failureCard(loadError)
                             }
-
-                            chartCard
-                        }
-
-                        overviewSection
-
-                        if selectedSubject != nil {
-                            if !isLoading {
-                                if isAttributionLoading, attribution == nil,
-                                   let subject = selectedSubject,
-                                   !HistoryOverviewPresentation.localActivitySources(for: subject).isEmpty {
-                                    attributionLoadingCard
-                                } else {
-                                    attributionCard
+                            if selectedSubject != nil {
+                                if !isLoading, let pace {
+                                    paceCard(pace)
                                 }
+                                chartCard
+                            } else {
+                                overviewNote(symbol: "sidebar.left", text: "Choose a pool on the left.")
                             }
-
-                            telemetryCard
                         }
+                        .padding(16)
                     }
-                    .padding(16)
+                }
+            case .tokens:
+                HStack(spacing: 0) {
+                    poolSidebar
+                    Rectangle().fill(Theme.outlineVariant.opacity(0.25)).frame(width: 1)
+                    ScrollView {
+                        VStack(spacing: 14) {
+                            if selectedSubject != nil {
+                                if !isLoading {
+                                    if isAttributionLoading, attribution == nil,
+                                       let subject = selectedSubject,
+                                       !HistoryOverviewPresentation.localActivitySources(for: subject).isEmpty {
+                                        attributionLoadingCard
+                                    } else {
+                                        attributionCard
+                                    }
+                                }
+                                telemetryCard
+                            }
+                        }
+                        .padding(16)
+                    }
                 }
             case .events:
                 EventsListView(store: liveStore, isSampleMode: isSampleMode)
@@ -318,7 +325,7 @@ public struct HistoryRootView: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    Text("Track quota consumption over time and monitor burn rate.")
+                    Text("How each pool's allowance went over time.")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                 }
@@ -333,7 +340,7 @@ public struct HistoryRootView: View {
                         .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedTab != .timeline)
+                .disabled(selectedTab == .events)
                 .accessibilityLabel("Reload history")
                 .help("Read the history again. It also reloads whenever a poll records new readings.")
 
@@ -362,11 +369,10 @@ public struct HistoryRootView: View {
                 .help(isSampleMode ? "Exit sample data mode" : "Switch to sample data mode")
                 .padding(.horizontal, 4)
             }
-            // The events tab has its own filter bar.
-            if selectedTab == .timeline {
+            // The events tab has its own filter bar. The pool list on the
+            // left replaces the old provider picker.
+            if selectedTab != .events {
                 HStack(spacing: 12) {
-                    // Time range first: it applies to the whole page, the
-                    // overview included.
                     Picker("Time range", selection: $timeRange) {
                         ForEach(HistoryPresentation.TimeRange.allCases) { range in
                             Text(range.title).tag(range)
@@ -376,23 +382,6 @@ public struct HistoryRootView: View {
                     .labelsHidden()
                     .fixedSize()
                     .accessibilityLabel("History time range")
-
-                    // Providers and workspaces in the popover's order. Hidden
-                    // ones are absent: they are not polled.
-                    Picker("Provider", selection: Binding(
-                        get: { selectedSubject?.id ?? "" },
-                        set: { select($0) }
-                    )) {
-                        ForEach(subjects) { subject in
-                            Text(subject.name).tag(subject.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 200)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .disabled(subjects.isEmpty)
-                    .accessibilityLabel("History provider")
                     Spacer(minLength: 0)
                 }
             }
@@ -444,7 +433,8 @@ public struct HistoryRootView: View {
                     ?? OpenCodeGoWorkspaceStore.displayName(forInstanceKey: pace.vendor)
                     ?? OpenCodeGoWorkspaceStore.vendor(forInstanceKey: pace.vendor)?.displayName
                     ?? pace.vendor
-                Text("Window Pace: \(name) (\(pace.barLabel))")
+                let window = WindowColumn.column(forLabel: pace.barLabel)?.spokenName ?? pace.barLabel
+                Text("\(name) · this \(window) window")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.onSurface)
 
@@ -459,19 +449,24 @@ public struct HistoryRootView: View {
                     .clipShape(Capsule())
             }
 
-            Text(pace.headline)
+            // In "% left", as everywhere else: what is left of the allowance
+            // beside what is left of the window. Left below time-left is
+            // ahead of pace.
+            let left = GlancePresentation.percent(1 - pace.consumedFraction)
+            let timeLeft = Int(((1 - min(max(pace.elapsedFraction, 0), 1)) * 100).rounded())
+            Text("\(left)% of the allowance left with \(timeLeft)% of the window to go")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.onSurfaceVariant)
 
             VStack(spacing: 6) {
                 paceProgressBar(
-                    label: "Quota Consumed",
-                    fraction: pace.consumedFraction,
+                    label: "Allowance left",
+                    fraction: 1 - pace.consumedFraction,
                     color: paceBadgeColor(pace.status)
                 )
                 paceProgressBar(
-                    label: "Window Elapsed",
-                    fraction: pace.elapsedFraction,
+                    label: "Window left",
+                    fraction: 1 - pace.elapsedFraction,
                     color: Theme.primary.opacity(0.85)
                 )
             }
@@ -528,7 +523,7 @@ public struct HistoryRootView: View {
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("\(selectedSubject?.name ?? "") Quota Timeline")
+                Text("\(selectedSubject?.name ?? "") · % left over time")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.onSurface)
 
@@ -867,6 +862,104 @@ public struct HistoryRootView: View {
 
     /// Small multiples: one card per visible provider or workspace, each its
     /// own longest window. Nothing here sums or averages across cards.
+    // MARK: - Pool sidebar
+
+    /// Every pool, grouped by service as the popover groups them, with its
+    /// latest "% left" in its longest window. The selection drives the
+    /// chart. Pools with nothing to draw, and hidden ones, are named at the
+    /// foot rather than given a row that reads as 0%.
+    private var poolSidebar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if subjects.isEmpty {
+                    overviewNote(symbol: "eye.slash",
+                                 text: "Every provider is hidden. Open Settings → Services to turn monitoring on.")
+                } else if overviewFailed {
+                    overviewNote(symbol: "exclamationmark.triangle",
+                                 text: "Could not read the recorded history. This is a failure to read, not an absence of data.")
+                }
+                ForEach(sidebarGroups, id: \.service) { group in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.service)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Theme.outline)
+                            .padding(.horizontal, 8)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(group.subjects) { subject in
+                            poolRow(subject)
+                        }
+                    }
+                }
+                if overviewLoaded, !overviewEmpty.isEmpty {
+                    overviewNote(symbol: "circle.dashed",
+                                 text: "No readings in this range: \(overviewEmpty.map(\.name).joined(separator: ", ")).")
+                }
+                if !hiddenNames.isEmpty {
+                    overviewNote(symbol: "eye.slash",
+                                 text: "Hidden in Preferences: \(hiddenNames.joined(separator: ", ")).")
+                }
+            }
+            .padding(10)
+        }
+        .frame(width: 230)
+        .background(Theme.surfaceContainerLowest)
+    }
+
+    private var sidebarGroups: [(service: String, subjects: [HistoryOverviewPresentation.Subject])] {
+        var order: [String] = []
+        var map: [String: [HistoryOverviewPresentation.Subject]] = [:]
+        for subject in subjects {
+            let service = GlancePresentation.serviceName(for: subject.vendor)
+            if map[service] == nil { order.append(service) }
+            map[service, default: []].append(subject)
+        }
+        return order.map { ($0, map[$0] ?? []) }
+    }
+
+    private func poolRow(_ subject: HistoryOverviewPresentation.Subject) -> some View {
+        let card = overviewCards.first { $0.subject.id == subject.id }
+        let unread = overviewUnread.first { $0.subject.id == subject.id }
+        let isSelected = subject.id == selectedSubject?.id
+        let latest = card?.latest
+        let spent = latest.map { $0.isBlocked || ($0.fraction ?? 0) >= QuotaSnapshot.exhaustionThreshold } ?? false
+        let figure: String? = latest?.fraction.map { "\(GlancePresentation.percent(1 - $0))%" }
+        return Button { select(subject.id) } label: {
+            HStack(spacing: 8) {
+                VendorAvatarView(vendorId: subject.vendor, status: .measured(.none), size: 18)
+                Text(subject.name)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(Theme.onSurface)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if spent {
+                    Text(latest?.isBlocked == true ? "blocked" : "spent")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.errorBold)
+                } else if let figure, let label = card?.barLabel {
+                    Text("\(figure) \(label)")
+                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                } else if unread != nil {
+                    Image(systemName: unread!.symbol).font(.system(size: 10)).foregroundStyle(Theme.outline)
+                        .help(unread!.explanation)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Theme.primary.opacity(0.16) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([subject.name,
+                             spent ? (latest?.isBlocked == true ? "blocked" : "spent")
+                                   : figure.map { "\($0) left in \(card?.barLabel ?? "")" },
+                             unread?.explanation].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -902,7 +995,7 @@ public struct HistoryRootView: View {
             } else if subjects.isEmpty {
                 overviewNote(
                     symbol: "eye.slash",
-                    text: "Every provider is hidden in Preferences → Providers, so there is nothing to chart.")
+                    text: "Every provider is hidden. Open Settings → Services to turn monitoring on.")
             } else if overviewFailed {
                 overviewNote(
                     symbol: "exclamationmark.triangle",

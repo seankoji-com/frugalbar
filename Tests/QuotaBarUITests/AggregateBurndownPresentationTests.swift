@@ -303,7 +303,8 @@ struct AggregateBurndownPresentationTests {
         #expect(P.title(for: WidgetFilters(vendors: [.claude, .openai], range: .last30Days, layout: .chart))
                 == "2 subscriptions · 30d · remaining")
         // Tokens are raw counts: a range, but no window and no used/remaining.
-        #expect(P.title(for: WidgetFilters()) == "All subscriptions · tokens · 24h")
+        #expect(P.title(for: WidgetFilters(layout: .tokens)) == "All subscriptions · tokens · 24h")
+        #expect(P.title(for: WidgetFilters()) == "Story")
         #expect(P.title(for: WidgetFilters(vendors: [.claude], windowLabel: "WK", range: .last7Days, metric: .used, layout: .tokens))
                 == "Claude · tokens · 7d")
     }

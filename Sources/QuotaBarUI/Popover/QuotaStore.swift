@@ -239,7 +239,7 @@ public final class QuotaStore {
         await run { await self.manager.forceRefresh(allowInteractiveUnlock: allowInteractiveUnlock) }
     }
 
-    /// Re-applies Preferences → Providers: a hidden provider is dropped and a
+    /// Re-applies Settings → Services: a hidden provider is dropped and a
     /// newly shown one fetched. Vendors the user has already refreshed inside
     /// the poll floor are served from cache, so repeated toggles cannot hammer
     /// a vendor.

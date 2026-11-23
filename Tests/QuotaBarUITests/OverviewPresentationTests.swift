@@ -123,10 +123,10 @@ struct OverviewPresentationTests {
 
     @Test("layout decodes tolerantly, round-trips, and shows in the title")
     func layoutCoding() throws {
-        // Tokens is the default layout; anything unreadable or unset gets it.
-        #expect(WidgetFilters.decode(Data(#"{"layout":"bogus"}"#.utf8)).layout == .tokens)
-        #expect(WidgetFilters.decode(Data("{}".utf8)).layout == .tokens)
-        #expect(WidgetFilters().layout == .tokens)
+        // Story is the default layout (23 Nov 2026); anything unreadable or unset gets it.
+        #expect(WidgetFilters.decode(Data(#"{"layout":"bogus"}"#.utf8)).layout == .story)
+        #expect(WidgetFilters.decode(Data("{}".utf8)).layout == .story)
+        #expect(WidgetFilters().layout == .story)
         // A layout the user chose survives the change of default.
         for layout in WidgetFilters.Layout.allCases {
             let stored = Data(#"{"layout":"\#(layout.rawValue)"}"#.utf8)
