@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import SwiftUI
 import Testing
 import WebKit
@@ -462,6 +463,32 @@ struct UXRenderTests {
         try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [claude, gemini, command],
             now: now).padding(12).frame(width: 384).background(Theme.surface),
             name: "popover-regression-states", directory: directory)
+    }
+
+    /// The Settings Keychain vault banner in each state it can show (#186), at
+    /// the width of the Settings content pane (780pt window minus the 190pt
+    /// sidebar and divider).
+    @Test func renderSettingsVaultBanner() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let states: [(VaultStatusSnapshot, Bool)] = [
+            (VaultStatusSnapshot(state: .lockedOrDenied(errSecInteractionNotAllowed)), false),
+            (VaultStatusSnapshot(state: .loaded, pendingLegacySyncKeys: [SyncSecretAccount.refreshToken],
+                                 legacyScanSucceeded: true), false),
+            (VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: true, deferredWriteCount: 1), false),
+            (VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: true, deferredWriteCount: 1), true),
+            (VaultStatusSnapshot(state: .corrupt), false),
+        ]
+        try await save(VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(states.enumerated()), id: \.offset) { _, entry in
+                if let presentation = SettingsVaultBannerPresentation.make(from: entry.0) {
+                    SettingsVaultBannerView(presentation: presentation, isBusy: entry.1, onAction: {})
+                }
+            }
+        }
+        .padding(.bottom, 12)
+        .frame(width: 589)
+        .background(Color(nsColor: .windowBackgroundColor)), name: "settings-vault-banner", directory: directory)
     }
 
     @Test func render() async throws {
