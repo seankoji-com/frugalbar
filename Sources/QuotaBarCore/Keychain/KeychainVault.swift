@@ -343,6 +343,12 @@ public final class KeychainVault: @unchecked Sendable {
     private struct DeferredWrite {
         let value: String
         let seq: UInt64
+        /// Optional compare-and-swap baseline captured before an async refresh
+        /// (e.g. Gemini OAuth renewal). When non-nil, flushing under `flock`
+        /// only applies the deferred write if the durable vault still holds
+        /// this exact value for the account; otherwise a newer explicit edit,
+        /// deletion, or cross-process update wins and the stale write is dropped.
+        let expectedPreviousValue: String?
     }
 
     private enum InternalState {
@@ -682,40 +688,85 @@ public final class KeychainVault: @unchecked Sendable {
 
     /// Clears only the `sync` namespace (and records tombstones for any sync
     /// accounts), leaving provider `keys` untouched.
+    ///
+    /// Enumerates legacy sync items under `flock` and throws
+    /// `.vaultUnavailable(.legacyScanFailed)` if enumeration fails so a clear
+    /// never reports success while leaving an untombstoned legacy token behind.
     public func clearSync(allowsPrompt: Bool = true) throws {
-        var legacySyncAccounts: [String] = []
-        if let listed = try? backend.listAccounts(service: syncService) {
-            legacySyncAccounts = listed
-        }
-        let knownAccounts: Set<String> = stateLock.withLock {
-            var set = Set(legacySyncAccounts)
-            if case .loaded(let doc) = internalState {
-                set.formUnion(doc.sync.keys)
+        try fileLock.withLock(blocking: true) {
+            let legacySyncAccounts: [String]
+            do {
+                legacySyncAccounts = try backend.listAccounts(service: syncService)
+                    .filter { $0 != Self.vaultAccount && $0 != Self.doctorProbeAccount }
+            } catch {
+                stateLock.withLock { legacyScanSucceeded = false }
+                throw KeychainError.vaultUnavailable(.legacyScanFailed)
             }
-            set.formUnion(pendingLegacySyncKeys)
-            for (k, _) in deferredWrites where k.namespace == .sync {
-                set.insert(k.account)
-            }
-            nextSeq += 1
-            let seq = nextSeq
-            for acct in set {
-                let k = VaultKey(namespace: .sync, account: acct)
-                explicitSeq[k] = seq
-                deferredWrites.removeValue(forKey: k)
-            }
-            return set
-        }
 
-        try mutateVaultBlocking(allowsPrompt: allowsPrompt) { doc, _, pendingSync in
+            let rawVault = try backend.read(
+                service: keysService,
+                account: Self.vaultAccount,
+                allowsPrompt: allowsPrompt
+            )
+            var doc: VaultDocument
+            if let rawVault {
+                guard let decoded = try? JSONDecoder().decode(VaultDocument.self, from: rawVault) else {
+                    stateLock.withLock { internalState = .corrupt }
+                    throw KeychainError.vaultUnavailable(.corrupt)
+                }
+                doc = decoded
+            } else {
+                doc = VaultDocument()
+            }
+
+            let allSync: Set<String> = stateLock.withLock {
+                var set = Set(legacySyncAccounts)
+                set.formUnion(doc.sync.keys)
+                if case .loaded(let cached) = internalState {
+                    set.formUnion(cached.sync.keys)
+                }
+                set.formUnion(pendingLegacySyncKeys)
+                for (k, _) in deferredWrites where k.namespace == .sync {
+                    set.insert(k.account)
+                }
+                nextSeq += 1
+                let seq = nextSeq
+                for acct in set {
+                    let k = VaultKey(namespace: .sync, account: acct)
+                    explicitSeq[k] = seq
+                    deferredWrites.removeValue(forKey: k)
+                }
+                return set
+            }
+
             var toDelete: [(VaultNamespace, String)] = []
-            let allSync = knownAccounts.union(doc.sync.keys)
             for acct in allSync {
                 doc.sync.removeValue(forKey: acct)
                 doc.deletedLegacySyncKeys.insert(acct)
-                pendingSync.remove(acct)
                 toDelete.append((.sync, acct))
             }
-            return toDelete
+
+            // Commit vault + tombstones FIRST
+            let encoded = try JSONEncoder().encode(doc)
+            try backend.write(
+                encoded,
+                service: keysService,
+                account: Self.vaultAccount,
+                label: "FrugalBar credential vault",
+                allowsPrompt: allowsPrompt
+            )
+
+            stateLock.withLock {
+                pendingLegacySyncKeys.subtract(allSync)
+                internalState = .loaded(doc)
+            }
+
+            try afterCommitBeforeLegacyDelete?()
+
+            for (ns, acct) in toDelete where acct != Self.vaultAccount {
+                let svc = ns == .keys ? keysService : syncService
+                try? backend.delete(service: svc, account: acct, allowsPrompt: allowsPrompt)
+            }
         }
     }
 
@@ -728,18 +779,31 @@ public final class KeychainVault: @unchecked Sendable {
     /// Never blocks a provider deadline and never prompts. If the lock is
     /// contended or Keychain is locked, the write remains in memory and is
     /// flushed on the next explicit Unlock or Save — unless superseded by a newer
-    /// explicit write or delete for the same key.
+    /// explicit write, deletion, or cross-process change (`expectedPreviousValue`).
     @discardableResult
     public func writeDeferred(
         _ value: String,
         namespace: VaultNamespace,
-        account: String
+        account: String,
+        expectedPreviousValue: String? = nil
     ) -> Bool {
         let key = VaultKey(namespace: namespace, account: account)
-        stateLock.withLock {
+        let shouldPersist: Bool = stateLock.withLock {
+            if let expected = expectedPreviousValue, case .loaded(let doc) = internalState {
+                let current = namespace == .keys ? doc.keys[account] : doc.sync[account]
+                if current != expected {
+                    return false
+                }
+            }
             nextSeq += 1
-            deferredWrites[key] = DeferredWrite(value: value, seq: nextSeq)
+            deferredWrites[key] = DeferredWrite(
+                value: value,
+                seq: nextSeq,
+                expectedPreviousValue: expectedPreviousValue
+            )
+            return true
         }
+        guard shouldPersist else { return false }
         return flushDeferredNonBlocking()
     }
 
@@ -777,7 +841,14 @@ public final class KeychainVault: @unchecked Sendable {
                 }
                 guard !eligible.isEmpty else { return true }
 
+                var appliedAny = false
+                var staleKeys: [VaultKey: UInt64] = [:]
                 for (k, dw) in eligible {
+                    let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
+                    if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                        staleKeys[k] = dw.seq
+                        continue
+                    }
                     switch k.namespace {
                     case .keys:
                         doc.keys[k.account] = dw.value
@@ -786,16 +857,19 @@ public final class KeychainVault: @unchecked Sendable {
                         doc.sync[k.account] = dw.value
                         doc.deletedLegacySyncKeys.remove(k.account)
                     }
+                    appliedAny = true
                 }
 
-                let encoded = try JSONEncoder().encode(doc)
-                try backend.write(
-                    encoded,
-                    service: keysService,
-                    account: Self.vaultAccount,
-                    label: "FrugalBar credential vault",
-                    allowsPrompt: false
-                )
+                if appliedAny {
+                    let encoded = try JSONEncoder().encode(doc)
+                    try backend.write(
+                        encoded,
+                        service: keysService,
+                        account: Self.vaultAccount,
+                        label: "FrugalBar credential vault",
+                        allowsPrompt: false
+                    )
+                }
 
                 stateLock.withLock {
                     for (k, flushed) in eligible {
@@ -803,7 +877,14 @@ public final class KeychainVault: @unchecked Sendable {
                             deferredWrites.removeValue(forKey: k)
                         }
                     }
-                    internalState = .loaded(doc)
+                    for (k, seq) in staleKeys {
+                        if deferredWrites[k]?.seq == seq {
+                            deferredWrites.removeValue(forKey: k)
+                        }
+                    }
+                    if appliedAny {
+                        internalState = .loaded(doc)
+                    }
                 }
                 return true
             }
@@ -836,18 +917,20 @@ public final class KeychainVault: @unchecked Sendable {
                 }
 
                 let hadExistingVault = rawVault != nil
-                var doc: VaultDocument
+                let baseDoc: VaultDocument
                 if let rawVault {
                     guard let decoded = try? JSONDecoder().decode(VaultDocument.self, from: rawVault) else {
                         stateLock.withLock { internalState = .corrupt }
                         return statusSnapshot()
                     }
-                    doc = decoded
+                    baseDoc = decoded
                 } else {
-                    doc = VaultDocument()
+                    baseDoc = VaultDocument()
                 }
+                var doc = baseDoc
 
-                // 2. Enumerate legacy items in both services
+                // 2. Enumerate legacy items in both services, always excluding
+                // the vault itself and the doctor probe account.
                 var scanOK = true
                 var legacyKeyAccounts: [String] = []
                 var legacySyncAccounts: [String] = []
@@ -861,6 +944,7 @@ public final class KeychainVault: @unchecked Sendable {
 
                 do {
                     legacySyncAccounts = try backend.listAccounts(service: syncService)
+                        .filter { $0 != Self.vaultAccount && $0 != Self.doctorProbeAccount }
                 } catch {
                     scanOK = false
                 }
@@ -869,6 +953,8 @@ public final class KeychainVault: @unchecked Sendable {
                 var dirty = false
                 var newPendingKeys: Set<String> = []
                 var newPendingSync: Set<String> = []
+                var migratedKeys: Set<String> = []
+                var migratedSync: Set<String> = []
                 var legacyToDelete: [(VaultNamespace, String)] = []
 
                 for account in legacyKeyAccounts {
@@ -881,11 +967,15 @@ public final class KeychainVault: @unchecked Sendable {
                         continue
                     }
                     do {
-                        if let data = try backend.read(service: keysService, account: account, allowsPrompt: interactive),
-                           let str = String(data: data, encoding: .utf8) {
-                            doc.keys[account] = str
-                            dirty = true
-                            legacyToDelete.append((.keys, account))
+                        if let data = try backend.read(service: keysService, account: account, allowsPrompt: interactive) {
+                            if let str = String(data: data, encoding: .utf8) {
+                                doc.keys[account] = str
+                                migratedKeys.insert(account)
+                                dirty = true
+                                legacyToDelete.append((.keys, account))
+                            } else {
+                                newPendingKeys.insert(account)
+                            }
                         }
                     } catch {
                         newPendingKeys.insert(account)
@@ -902,18 +992,22 @@ public final class KeychainVault: @unchecked Sendable {
                         continue
                     }
                     do {
-                        if let data = try backend.read(service: syncService, account: account, allowsPrompt: interactive),
-                           let str = String(data: data, encoding: .utf8) {
-                            doc.sync[account] = str
-                            dirty = true
-                            legacyToDelete.append((.sync, account))
+                        if let data = try backend.read(service: syncService, account: account, allowsPrompt: interactive) {
+                            if let str = String(data: data, encoding: .utf8) {
+                                doc.sync[account] = str
+                                migratedSync.insert(account)
+                                dirty = true
+                                legacyToDelete.append((.sync, account))
+                            } else {
+                                newPendingSync.insert(account)
+                            }
                         }
                     } catch {
                         newPendingSync.insert(account)
                     }
                 }
 
-                // 4. Merge any surviving deferred writes
+                // 4. Merge any surviving deferred writes (respecting CAS baseline)
                 let eligibleDeferred: [VaultKey: DeferredWrite] = stateLock.withLock {
                     var out: [VaultKey: DeferredWrite] = [:]
                     for (k, dw) in deferredWrites {
@@ -923,7 +1017,13 @@ public final class KeychainVault: @unchecked Sendable {
                     }
                     return out
                 }
+                var staleDeferred: [VaultKey: UInt64] = [:]
                 for (k, dw) in eligibleDeferred {
+                    let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
+                    if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                        staleDeferred[k] = dw.seq
+                        continue
+                    }
                     switch k.namespace {
                     case .keys:
                         doc.keys[k.account] = dw.value
@@ -960,13 +1060,27 @@ public final class KeychainVault: @unchecked Sendable {
                         try? afterCommitBeforeLegacyDelete?()
                     }
                     // Delete migrated or tombstoned legacy items only after commit succeeded
-                    for (ns, acct) in legacyToDelete {
+                    for (ns, acct) in legacyToDelete where acct != Self.vaultAccount {
                         let svc = ns == .keys ? keysService : syncService
                         try? backend.delete(service: svc, account: acct, allowsPrompt: interactive)
                     }
+                } else {
+                    // Commit failed: any newly migrated accounts are NOT durable in
+                    // vault.v1 yet, so keep them pending and publish only the durable
+                    // base document so a later unrelated save can never drop them
+                    // into confirmed absence.
+                    newPendingKeys.formUnion(migratedKeys)
+                    newPendingSync.formUnion(migratedSync)
                 }
 
+                let publishedDoc = commitSucceeded ? doc : baseDoc
+
                 stateLock.withLock {
+                    for (k, seq) in staleDeferred {
+                        if deferredWrites[k]?.seq == seq {
+                            deferredWrites.removeValue(forKey: k)
+                        }
+                    }
                     if commitSucceeded {
                         for (k, flushed) in eligibleDeferred {
                             if deferredWrites[k]?.seq == flushed.seq {
@@ -977,8 +1091,8 @@ public final class KeychainVault: @unchecked Sendable {
                     pendingLegacyKeys = newPendingKeys
                     pendingLegacySyncKeys = newPendingSync
                     legacyScanSucceeded = scanOK
-                    if hadExistingVault || !doc.isEmpty {
-                        internalState = .loaded(doc)
+                    if hadExistingVault || !publishedDoc.isEmpty {
+                        internalState = .loaded(publishedDoc)
                     } else {
                         internalState = .empty
                     }
@@ -1023,6 +1137,10 @@ public final class KeychainVault: @unchecked Sendable {
                 return out
             }
             for (k, dw) in eligibleDeferred {
+                let durableCurrent = k.namespace == .keys ? doc.keys[k.account] : doc.sync[k.account]
+                if let expected = dw.expectedPreviousValue, durableCurrent != expected {
+                    continue
+                }
                 switch k.namespace {
                 case .keys:
                     doc.keys[k.account] = dw.value

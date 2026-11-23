@@ -181,9 +181,10 @@ struct KeychainManagerTests {
     /// a real SecItemAdd under a non-randomised label and never deletes it.
     @Test("set/get expose allowsAuthenticationPrompt, defaulting to true")
     func authenticationPromptParameterExists() {
-        // Method references, never called — a hermetic compile guard.
-        let _: (String, String, Bool) throws -> Void = KeychainManager.shared.set(key:label:allowsAuthenticationPrompt:)
-        let _: (String, Bool) throws -> String = KeychainManager.shared.get(label:allowsAuthenticationPrompt:)
+        // Method references on an isolated manager, never called — a hermetic compile guard.
+        let isolated = makeIsolatedManager()
+        let _: (String, String, Bool) throws -> Void = isolated.set(key:label:allowsAuthenticationPrompt:)
+        let _: (String, Bool) throws -> String = isolated.get(label:allowsAuthenticationPrompt:)
     }
 
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")

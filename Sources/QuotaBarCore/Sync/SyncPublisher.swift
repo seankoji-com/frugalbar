@@ -174,6 +174,10 @@ public actor SyncPublisher {
     private var durableBehind = false
     /// When the lost write is next retried.
     private var durableRetryAt: Date?
+    /// Last attempt failed because the Keychain vault was unavailable; before
+    /// the next scheduled retry, run a coalesced non-interactive vault refresh
+    /// so Sync recovers automatically once the login Keychain unlocks.
+    private var needsSecretRefresh = false
 
     /// Called after each persisted Stop step. Tests throw from it to stop the
     /// protocol there, as a crash would.
@@ -346,7 +350,13 @@ public actor SyncPublisher {
         if stateUnreadable { return }
         if stopRequested {
             // Stop's write carries the whole state, so it also brings disk level.
-            if (retryAt ?? .distantPast) <= clock.now() { await stop() }
+            if (retryAt ?? .distantPast) <= clock.now() {
+                if needsSecretRefresh {
+                    needsSecretRefresh = false
+                    await secrets.refreshNonInteractively()
+                }
+                await stop()
+            }
             return
         }
         if durableBehind {
@@ -356,9 +366,17 @@ public actor SyncPublisher {
         }
         switch state.phase {
         case .stopping:
+            if needsSecretRefresh, (nextCleanupDue() ?? .distantFuture) <= clock.now() {
+                needsSecretRefresh = false
+                await secrets.refreshNonInteractively()
+            }
             await runCleanup()
         case .active:
             guard !publishing, let due = nextPublishDue(), due <= clock.now() else { return }
+            if needsSecretRefresh {
+                needsSecretRefresh = false
+                await secrets.refreshNonInteractively()
+            }
             publishing = true
             let task = Task { await self.publish() }
             publishTask = task
@@ -522,6 +540,9 @@ public actor SyncPublisher {
         do {
             try save(checkpoint)
         } catch {
+            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+                needsSecretRefresh = true
+            }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.stateNotSavedMessage
@@ -678,6 +699,9 @@ public actor SyncPublisher {
             // The gate closed (Stop pending, a lost write, a cancelled
             // attempt): not Google's failure, so no backoff and no message.
         } else {
+            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+                needsSecretRefresh = true
+            }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.describe(error)
@@ -815,6 +839,9 @@ public actor SyncPublisher {
                 // The session never stored one: nothing remote carries it.
                 publisherId = ""
             } catch {
+                if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+                    needsSecretRefresh = true
+                }
                 stopNotSaved()
                 return
             }
@@ -951,6 +978,9 @@ public actor SyncPublisher {
             retryAt = nil
             persist()
         } catch {
+            if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
+                needsSecretRefresh = true
+            }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.describe(error)

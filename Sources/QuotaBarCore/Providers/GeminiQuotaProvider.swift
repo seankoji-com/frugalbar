@@ -720,9 +720,17 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// or prompting the user. If the vault lock is contended or Keychain is
     /// locked, the renewed session stays in memory and flushes on explicit
     /// Unlock or Save unless superseded by a newer explicit edit or delete.
-    static func saveDeferred(_ session: GeminiOAuthSession, manager: KeychainManager = .shared) {
+    static func saveDeferred(
+        _ session: GeminiOAuthSession,
+        expectedPreviousValue: String? = nil,
+        manager: KeychainManager = .shared
+    ) {
         guard let encoded = try? JSONEncoder().encode(session) else { return }
-        _ = manager.setDeferred(key: String(decoding: encoded, as: UTF8.self), label: keychainLabel)
+        _ = manager.setDeferred(
+            key: String(decoding: encoded, as: UTF8.self),
+            label: keychainLabel,
+            expectedPreviousValue: expectedPreviousValue
+        )
     }
 
     /// The stored session, renewed first if its access token is spent.
@@ -731,7 +739,9 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// quota once and then reported "credential rejected" until the user
     /// noticed and signed in by hand.
     static func loadRefreshed() async -> GeminiOAuthSession? {
-        guard let session = load() else { return nil }
+        guard let raw = try? KeychainManager.shared.get(label: keychainLabel, allowsAuthenticationPrompt: false),
+              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8))
+        else { return nil }
         if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
         guard !session.refreshToken.isEmpty else { return nil }
         guard let renewed = try? await requestToken(
@@ -741,7 +751,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
             ],
             existingRefreshToken: session.refreshToken
         ) else { return nil }
-        saveDeferred(renewed)
+        saveDeferred(renewed, expectedPreviousValue: raw)
         return renewed
     }
 

@@ -15,6 +15,13 @@ public protocol SyncSecretStore: Sendable {
     func read(_ account: String) throws -> String?
     func write(_ value: String, account: String) throws
     func delete(_ account: String) throws
+    /// Optional non-interactive refresh before retrying after a recoverable
+    /// secret-store failure so Sync recovers once the login Keychain unlocks.
+    func refreshNonInteractively() async
+}
+
+public extension SyncSecretStore {
+    func refreshNonInteractively() async {}
 }
 
 /// Sync secret storage backed by `KeychainVault`'s `sync` namespace.
@@ -37,7 +44,9 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
         } else if service == Self.defaultService {
             self.vault = .shared
         } else {
-            self.vault = KeychainVault(keysService: service, syncService: service)
+            // Keep the custom vault service distinct from the legacy sync service
+            // so `vault.v1` and legacy sync items never share a Keychain service.
+            self.vault = KeychainVault(keysService: "\(service).vault", syncService: service)
         }
     }
 
@@ -71,5 +80,9 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
 
     public func delete(_ account: String) throws {
         try vault.delete(namespace: .sync, account: account, allowsPrompt: true)
+    }
+
+    public func refreshNonInteractively() async {
+        _ = await vault.warmUp(interactive: false)
     }
 }

@@ -476,6 +476,180 @@ struct KeychainVaultTests {
 
         #expect(recorded.values == [false, false, true])
     }
+
+    @Test("R1-01: warming a fresh vault sharing keysService/syncService never deletes vault.v1")
+    func reopenCustomSyncVaultPreservesVault() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        // Even if someone constructs a vault where keysService == syncService,
+        // vault.v1 must be excluded from legacy sync scans and deletions.
+        let writer = KeychainVault(keysService: "custom.svc", syncService: "custom.svc", backend: backend, lockFileURL: lockURL)
+        try writer.write("rt-1", namespace: .sync, account: SyncSecretAccount.refreshToken)
+
+        let reopened = KeychainVault(keysService: "custom.svc", syncService: "custom.svc", backend: backend, lockFileURL: lockURL)
+        _ = reopened.warmUpSync(interactive: false)
+        #expect(try reopened.read(namespace: .sync, account: SyncSecretAccount.refreshToken) == "rt-1")
+        #expect(backend.rawData(service: "custom.svc", account: KeychainVault.vaultAccount) != nil)
+
+        // And KeychainSyncSecretStore with a custom service separates vault and legacy services.
+        let customStore = KeychainSyncSecretStore(service: "com.quotabar.sync.custom-test")
+        #expect(customStore.vault.keysService != customStore.vault.syncService)
+    }
+
+    @Test("R1-02: failed migration commit keeps uncommitted legacy accounts pending across later saves")
+    func failedMigrationCommitKeepsLegacyAccountsPending() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-legacy")
+        backend.seedRaw(service: "test.keys", account: "bad-utf8", data: Data([0xFF, 0xFE]))
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecInteractionNotAllowed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let status = vault.warmUpSync(interactive: false)
+        #expect(status.pendingLegacySyncKeys.contains(SyncSecretAccount.publisherId))
+        #expect(status.pendingLegacyKeys.contains("bad-utf8"))
+
+        // Lift vault write denial and save an unrelated key: publisherId must STILL be pending, not nil!
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: nil)
+        try vault.write("sk-other", namespace: .keys, account: "openrouter")
+        #expect(throws: KeychainError.vaultUnavailable(.pendingLegacy)) {
+            _ = try vault.read(namespace: .sync, account: SyncSecretAccount.publisherId)
+        }
+    }
+
+    @Test("R1-03: late deferred renewal with stale expectedPreviousValue yields to newer explicit or cross-process edit")
+    func lateDeferredWriteYieldsToNewerEdit() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        _ = vaultB.warmUpSync(interactive: false)
+
+        // Another process replaces the session with session-v2 while vaultA's refresh was in flight.
+        try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
+
+        // vaultA's late deferred renewal carries expectedPreviousValue: "session-v1" and must be dropped.
+        _ = vaultA.writeDeferred("session-renewed-from-v1", namespace: .keys, account: "gemini-oauth", expectedPreviousValue: "session-v1")
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+    }
+
+    @Test("R1-04: clearSync fails closed when legacy sync enumeration fails")
+    func clearSyncFailsClosedOnEnumerationError() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.setListFailure(service: "test.sync", status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        #expect(throws: KeychainError.vaultUnavailable(.legacyScanFailed)) {
+            try vault.clearSync()
+        }
+    }
+
+    @Test("R1-05: SyncPublisher retries non-interactively after Keychain denial clears without manual Unlock")
+    func syncPublisherRecoversOnRetryTickAfterDenialClears() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-real")
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = vault.warmUpSync(interactive: false)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+
+        let stateStore = InMemorySyncStateStore()
+        var active = SyncPersistentState()
+        active.phase = .active
+        active.account = SyncAccount(permissionId: "perm-1", email: "user@example.com")
+        try stateStore.save(active)
+
+        let clock = FakeSyncClock()
+        let publisher = SyncPublisher(
+            configuration: SyncClientConfiguration(clientID: "cid", clientSecret: "csec"),
+            transport: ScriptedSyncTransport(),
+            secrets: secrets,
+            stateStore: stateStore,
+            clock: clock,
+            label: { "TestMac" }
+        )
+
+        // Stop fails because publisherId is denied; stays active with stopRequested.
+        await publisher.stop()
+        #expect(try stateStore.load().phase == .active)
+
+        // Lift denial WITHOUT calling vault.unlock(); advance clock past backoff and tick.
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: nil)
+        await publisher.setStopCheckpoint { gap in
+            if gap == .afterStoppingWrite { throw CancellationError() }
+        }
+        clock.advance(by: 120)
+        await publisher.tick()
+
+        let persisted = try stateStore.load()
+        #expect(persisted.phase == .stopping)
+        #expect(persisted.cleanup?.publisherId == "pub-real")
+    }
+
+    @Test("R1-06: passive forceRefresh(allowInteractiveUnlock: false) disables security CLI and never triggers startupWarmUp")
+    func passiveForceRefreshStaysNonInteractive() async {
+        let startupCalls = RecordedBools()
+        let securityCLIFlags = RecordedBools()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                [SecurityCLIObservingProvider(onFetch: { securityCLIFlags.append($0) })]
+            },
+            vaultWarmUp: { _ in },
+            startupWarmUp: { startupCalls.append(true) }
+        )
+
+        // Passive forceRefresh must NOT invoke startupWarmUp and must set allowsSecurityCLI = false.
+        _ = await manager.forceRefresh(allowInteractiveUnlock: false)
+        #expect(startupCalls.values.isEmpty)
+        #expect(securityCLIFlags.values == [false])
+
+        // Explicit interactive forceRefresh sets allowsSecurityCLI = true.
+        _ = await manager.forceRefresh(allowInteractiveUnlock: true)
+        #expect(securityCLIFlags.values == [false, true])
+    }
+}
+
+private struct SecurityCLIObservingProvider: QuotaProvider {
+    let vendorId: VendorIdentifier = .claude
+    var displayName: String { "Claude" }
+    var category: MetricCategory { .aiSubscriptions }
+    let onFetch: @Sendable (Bool) -> Void
+
+    func fetchSnapshot() async -> QuotaSnapshot {
+        onFetch(CredentialStore.allowsSecurityCLI)
+        return QuotaSnapshot(
+            id: vendorId.rawValue,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.1, displayDetails: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
+    }
 }
 
 // MARK: - Local Test Helpers

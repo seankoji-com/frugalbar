@@ -27,8 +27,11 @@ public actor QuotaManager {
             if interactive {
                 _ = await KeychainVault.shared.unlock()
             } else {
-                _ = await KeychainVault.shared.warmUpForStartup()
+                _ = await KeychainVault.shared.warmUp(interactive: false)
             }
+        },
+        startupWarmUp: {
+            _ = await KeychainVault.shared.warmUpForStartup()
         })
 
     // --- State ---
@@ -56,6 +59,8 @@ public actor QuotaManager {
     private let monthlyCreditConnection: @Sendable () async -> String?
     private let monthlyCreditIdentities: (@Sendable () async -> Set<String>?)?
     private let vaultWarmUp: (@Sendable (_ interactive: Bool) async -> Void)?
+    private let startupWarmUp: (@Sendable () async -> Void)?
+    private var hasRunStartupWarmUp = false
     private var monthlyCreditInvalidation = 0
     private var openAIMonthlyCreditInvalidation = 0
     private var activeTaskIsForced = false
@@ -125,6 +130,9 @@ public actor QuotaManager {
         // Coalesced vault warm-up executed before any discovery or provider
         // deadline starts. Nil in isolated tests unless injected.
         vaultWarmUp: (@Sendable (_ interactive: Bool) async -> Void)? = nil,
+        // One-shot startup warm-up for initial app launch (never invoked by
+        // passive `forceRefresh(allowInteractiveUnlock: false)`).
+        startupWarmUp: (@Sendable () async -> Void)? = nil,
         // Cache policy time is injectable independently of vendor observations
         // and real elapsed deadlines, so tests never race the scheduler.
         clock: @escaping @Sendable () -> Date = { Date() }
@@ -140,6 +148,7 @@ public actor QuotaManager {
         self.monthlyCreditConnection = monthlyCreditConnection
         self.monthlyCreditIdentities = monthlyCreditIdentities
         self.vaultWarmUp = vaultWarmUp
+        self.startupWarmUp = startupWarmUp
     }
 
     public static let defaultProviders: @Sendable () -> [any QuotaProvider] = {
@@ -534,9 +543,27 @@ public actor QuotaManager {
         // Warm up (or explicitly unlock) the Keychain vault BEFORE starting
         // any discovery or provider deadline timer, so time spent answering a
         // macOS Keychain prompt never times out initial quota requests.
-        if let vaultWarmUp {
+        // Launch `refresh()` uses `startupWarmUp` once; passive
+        // `forceRefresh(allowInteractiveUnlock: false)` ALWAYS stays strictly
+        // non-interactive even if the vault is still unloaded.
+        if !force, !allowInteractiveUnlock, !hasRunStartupWarmUp, let startupWarmUp {
+            hasRunStartupWarmUp = true
+            await startupWarmUp()
+        } else if let vaultWarmUp {
             await vaultWarmUp(allowInteractiveUnlock)
         }
+        // Passive forced refreshes (workspace edits, connection-sheet dismissal,
+        // Settings Save) must never trigger `/usr/bin/security` prompts either.
+        let allowSecurityCLI = allowInteractiveUnlock || !force
+        return await CredentialStore.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+            await self.executeParallelFetch(force: force, excluding: excluding)
+        }
+    }
+
+    private func executeParallelFetch(
+        force: Bool = false,
+        excluding: Set<String> = []
+    ) async -> [String: QuotaSnapshot] {
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at

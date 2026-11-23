@@ -54,8 +54,8 @@ public final class KeychainManager: Sendable {
     /// and attempts a non-blocking, non-interactive persist without blocking
     /// provider deadlines or prompting.
     @discardableResult
-    public func setDeferred(key: String, label: String) -> Bool {
-        vault.writeDeferred(key, namespace: .keys, account: label)
+    public func setDeferred(key: String, label: String, expectedPreviousValue: String? = nil) -> Bool {
+        vault.writeDeferred(key, namespace: .keys, account: label, expectedPreviousValue: expectedPreviousValue)
     }
 
     public func get(label: String, allowsAuthenticationPrompt: Bool = true) throws -> String {
@@ -528,13 +528,20 @@ public enum CredentialStore {
         return data.isEmpty ? nil : data
     }
 
+    /// Task-local switch controlling whether ambient CLI discovery may invoke
+    /// `/usr/bin/security`. Set to `false` during passive refreshes
+    /// (`forceRefresh(allowInteractiveUnlock: false)`) so workspace edits and
+    /// connection-sheet dismissal never trigger SecurityAgent prompts.
+    @TaskLocal static var allowsSecurityCLI: Bool = true
+
     private static func discoverClaudeBlob(allowsSecurityCLI: Bool = true) -> Data? {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
         let fileURL = CLIConfigLocations.liveClaudeRoot(containing: ".credentials.json")
             .appendingPathComponent(".credentials.json")
         if let fileData = try? Data(contentsOf: fileURL), !fileData.isEmpty {
             return fileData
         }
-        if allowsSecurityCLI, let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
+        if effectiveSecurityCLI, let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
             return secData
         }
         guard !TestHost.isActive else { return nil }
@@ -542,7 +549,8 @@ public enum CredentialStore {
     }
 
     static func cachedClaudeBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
-        if !allowsSecurityCLI {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if !effectiveSecurityCLI {
             return discoverClaudeBlob(allowsSecurityCLI: false)
         }
         return CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob(allowsSecurityCLI: true) }
@@ -589,7 +597,8 @@ public enum CredentialStore {
     }
 
     private static func discoverMuseBlob(allowsSecurityCLI: Bool = true) -> Data? {
-        if allowsSecurityCLI, let secData = runSecurityMuseCredential(), !secData.isEmpty {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if effectiveSecurityCLI, let secData = runSecurityMuseCredential(), !secData.isEmpty {
             return secData
         }
         guard !TestHost.isActive else { return nil }
@@ -597,7 +606,8 @@ public enum CredentialStore {
     }
 
     static func cachedMuseBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
-        if !allowsSecurityCLI {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if !effectiveSecurityCLI {
             return discoverMuseBlob(allowsSecurityCLI: false)
         }
         return CredentialCache.shared.museBlob(now: now) { discoverMuseBlob(allowsSecurityCLI: true) }
