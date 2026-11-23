@@ -23,7 +23,10 @@ public protocol SyncSecretStore: Sendable {
     func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws
     /// Optional non-interactive refresh before retrying after a recoverable
     /// secret-store failure so Sync recovers once the login Keychain unlocks.
-    func refreshNonInteractively() async
+    /// Returns whether the secrets are readable afterwards; a caller keeps
+    /// retrying the refresh until it reports true.
+    @discardableResult
+    func refreshNonInteractively() async -> Bool
 }
 
 public extension SyncSecretStore {
@@ -37,7 +40,8 @@ public extension SyncSecretStore {
         }
     }
 
-    func refreshNonInteractively() async {}
+    @discardableResult
+    func refreshNonInteractively() async -> Bool { true }
 }
 
 /// Sync secret storage backed by `KeychainVault`'s `sync` namespace.
@@ -106,7 +110,14 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
         _ = try vault.deleteIfMatching(expectedValue, namespace: .sync, account: account, allowsPrompt: false)
     }
 
-    public func refreshNonInteractively() async {
-        _ = await vault.warmUp(interactive: false)
+    @discardableResult
+    public func refreshNonInteractively() async -> Bool {
+        let status = await vault.warmUp(interactive: false)
+        switch status.state {
+        case .loaded, .empty:
+            return status.pendingLegacySyncKeys.isEmpty && status.legacyScanSucceeded
+        default:
+            return false
+        }
     }
 }

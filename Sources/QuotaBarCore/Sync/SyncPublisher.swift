@@ -352,8 +352,9 @@ public actor SyncPublisher {
             // Stop's write carries the whole state, so it also brings disk level.
             if (retryAt ?? .distantPast) <= clock.now() {
                 if needsSecretRefresh {
-                    needsSecretRefresh = false
-                    await secrets.refreshNonInteractively()
+                    // Cleared only when the refresh says the secrets are
+                    // readable; a failed refresh stays armed for the next tick.
+                    needsSecretRefresh = !(await secrets.refreshNonInteractively())
                 }
                 await stop()
             }
@@ -367,15 +368,13 @@ public actor SyncPublisher {
         switch state.phase {
         case .stopping:
             if needsSecretRefresh, (nextCleanupDue() ?? .distantFuture) <= clock.now() {
-                needsSecretRefresh = false
-                await secrets.refreshNonInteractively()
+                needsSecretRefresh = !(await secrets.refreshNonInteractively())
             }
             await runCleanup()
         case .active:
             guard !publishing, let due = nextPublishDue(), due <= clock.now() else { return }
             if needsSecretRefresh {
-                needsSecretRefresh = false
-                await secrets.refreshNonInteractively()
+                needsSecretRefresh = !(await secrets.refreshNonInteractively())
             }
             publishing = true
             let task = Task { await self.publish() }
@@ -540,12 +539,13 @@ public actor SyncPublisher {
         do {
             try save(checkpoint)
         } catch {
+            // Arm the refresh on a secret-store failure. Any other failure
+            // leaves it as it was: only a refresh that reports the secrets
+            // readable (or an Unlock) clears it.
             if error is KeychainError {
                 needsSecretRefresh = true
             } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
-            } else {
-                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
@@ -703,12 +703,13 @@ public actor SyncPublisher {
             // The gate closed (Stop pending, a lost write, a cancelled
             // attempt): not Google's failure, so no backoff and no message.
         } else {
+            // Arm the refresh on a secret-store failure. Any other failure
+            // leaves it as it was: only a refresh that reports the secrets
+            // readable (or an Unlock) clears it.
             if error is KeychainError {
                 needsSecretRefresh = true
             } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
-            } else {
-                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
@@ -991,12 +992,13 @@ public actor SyncPublisher {
             retryAt = nil
             persist()
         } catch {
+            // Arm the refresh on a secret-store failure. Any other failure
+            // leaves it as it was: only a refresh that reports the secrets
+            // readable (or an Unlock) clears it.
             if error is KeychainError {
                 needsSecretRefresh = true
             } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                 needsSecretRefresh = true
-            } else {
-                needsSecretRefresh = false
             }
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))

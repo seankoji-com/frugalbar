@@ -103,12 +103,29 @@ final class InMemorySyncSecrets: SyncSecretStore {
         items.withLock { $0 = initial }
     }
 
-    func read(_ account: String) throws -> String? { items.withLock { $0[account] } }
+    /// When set, every read throws it (a locked or denied Keychain).
+    private let readFailure = Mutex<KeychainError?>(nil)
+    /// Answers for the next non-interactive refreshes, before the default true.
+    private let refreshAnswers = Mutex<[Bool]>([])
+    private let refreshes = Mutex(0)
+    var refreshCount: Int { refreshes.withLock { $0 } }
+
+    func failReads(_ error: KeychainError?) { readFailure.withLock { $0 = error } }
+    func answerRefreshes(_ answers: [Bool]) { refreshAnswers.withLock { $0 = answers } }
+
+    func read(_ account: String) throws -> String? {
+        if let error = readFailure.withLock({ $0 }) { throw error }
+        return items.withLock { $0[account] }
+    }
     func write(_ value: String, account: String) throws {
         guard !dropsWrites else { return }
         items.withLock { $0[account] = value }
     }
     func delete(_ account: String) throws { _ = items.withLock { $0.removeValue(forKey: account) } }
+    func refreshNonInteractively() async -> Bool {
+        refreshes.withLock { $0 += 1 }
+        return refreshAnswers.withLock { $0.isEmpty ? true : $0.removeFirst() }
+    }
 }
 
 /// Google's token endpoint and Drive's app-data folder, in memory.

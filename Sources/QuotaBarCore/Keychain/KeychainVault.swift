@@ -248,7 +248,10 @@ public struct SystemKeychainBackend: KeychainBackend {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess else { throw KeychainError.unknown(status) }
-        guard let items = result as? [[String: Any]] else { return [] }
+        // A success with an unexpected shape is not an empty enumeration:
+        // treating it as one would let the legacy scan report success and
+        // reads claim confirmed absence for items it never saw.
+        guard let items = result as? [[String: Any]] else { throw KeychainError.invalidData }
         return items.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 

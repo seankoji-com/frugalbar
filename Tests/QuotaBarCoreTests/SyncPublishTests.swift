@@ -2,6 +2,57 @@ import Foundation
 import Testing
 @testable import QuotaBarCore
 
+@Suite("Sync secret refresh retry (PR 192 review)")
+struct SyncSecretRefreshRetryTests {
+    @Test("a refresh that leaves the secrets unreadable stays armed across an unrelated publish failure")
+    func failedRefreshStaysArmed() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        // A locked Keychain fails the first publish and arms the refresh.
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 0)
+
+        // The refresh still reports the secrets unreadable, and Google then
+        // fails the upload for an unrelated reason.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        await harness.google.configure { $0.uploadModes = [.status(500)] }
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 1)
+
+        // The next due attempt refreshes again rather than giving up.
+        harness.clock.set(start.addingTimeInterval(6 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
+    }
+
+    @Test("a non-Keychain publish error does not disarm a refresh that has not yet succeeded")
+    func unrelatedErrorKeepsRefreshArmed() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        // The refresh fails, then the pre-upload checkpoint fails to save for
+        // a reason that has nothing to do with Keychain.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        harness.store.failWrites()
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 1)
+
+        harness.store.failWrites(false)
+        harness.clock.set(start.addingTimeInterval(30 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
+    }
+}
+
 private func gaps(_ times: [Date]) -> [TimeInterval] {
     zip(times.dropFirst(), times).map { $0.timeIntervalSince($1) }
 }
