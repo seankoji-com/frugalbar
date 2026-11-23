@@ -151,10 +151,18 @@ struct ProviderGridView: View {
                         }
                     } else {
                         HStack(spacing: 7) {
-                            Text(bar.label)
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.outline)
-                                .frame(width: nameWidth, alignment: .leading)
+                            // A model's reset tickets sit beside that model's
+                            // line, in the account they reset (owner, 24 Nov 2026).
+                            HStack(spacing: 4) {
+                                Text(bar.label)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.outline)
+                                if let tickets = MetricRowPresentation(snapshot: pool.snapshot, now: presentation.now)
+                                    .modelResetCredits(for: bar.label) {
+                                    ModelTicketsBadge(credits: tickets)
+                                }
+                            }
+                            .frame(width: nameWidth, alignment: .leading)
                             windowCell(window, label: bar.label, stale: pool.isStale, showSpentPercent: true)
                         }
                         .padding(.horizontal, 14)
@@ -192,6 +200,35 @@ struct ProviderGridView: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Open usage details")
+    }
+
+    /// A model's banked reset tickets, beside that model's line: one gold
+    /// ticket per credit (capped, with an exact `+n`) and the soonest
+    /// published expiry. Each ticket's tooltip gives its own expiry.
+    struct ModelTicketsBadge: View {
+        let credits: MetricRowPresentation.ResetCredits
+
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(0..<credits.tickets, id: \.self) { index in
+                    GoldenTicketView(index: index)
+                        .frame(width: 13)
+                        .help(credits.expiryText(at: index, now: credits.now))
+                }
+                if credits.overflow > 0 {
+                    Text("+\(credits.overflow)")
+                }
+                // The soonest published expiry, compact; nothing when none
+                // was published (never the reset window's date).
+                if let expiry = credits.expiries.compactMap({ $0 }).min(),
+                   let compact = ResetCountdownBadge.compact(expiry, now: credits.now) {
+                    Text(compact)
+                }
+            }
+            .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+            .foregroundStyle(Theme.onSurfaceVariant)
+            .accessibilityLabel(credits.spoken)
+        }
     }
 
     private func balanceColor(_ metric: MetricType) -> Color {

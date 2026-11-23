@@ -1,188 +1,182 @@
 import Foundation
 import QuotaBarCore
 
-/// The Wallet: every credit, balance and reset ticket, grouped under the
-/// provider and account it belongs to (owner, 24 Nov 2026: "attribute the
-/// values to providers properly").
+/// The Wallet: every credit, balance and plan-wide reset ticket, one line each
+/// (owner, 24 Nov 2026: "collapse the credit lines into single lines. they
+/// don't need to be in groups").
 ///
-/// Each line takes its words and figures from that credit's existing
-/// presentation (`APICreditEntryPresentation`, `OpenAIUsageCreditPresentation`,
-/// `MonthlyPromoCreditPresentation`, `MonthlyCreditBarPresentation`,
-/// `GeminiAPICreditPresentation`, `MetricRowPresentation.ResetCredits`), so
-/// units, money formatting and what a meter measures stay as those rules
-/// define them. Only the grouping and the row anatomy are new: one title, one
-/// figure, and at most one meter whose caption says what it measures.
+/// A row names its provider in its own title ("ChatGPT API credit", "Claude
+/// Console credit") and its account in its context, so no group header is
+/// needed to attribute it. Every figure and meter caption is taken from that
+/// credit's existing presentation (`APICreditEntryPresentation`,
+/// `OpenAIUsageCreditPresentation`, `MonthlyPromoCreditPresentation`,
+/// `MonthlyCreditBarPresentation`, `GeminiAPICreditPresentation`,
+/// `MetricRowPresentation.ResetCredits`), so units, money formatting and what
+/// a percentage measures stay as those rules define them. A model-scoped
+/// ticket (Fable) is drawn beside its model's line in Providers, not here.
 struct WalletPresentation: Equatable, Sendable {
 
-    enum Tone: Equatable, Sendable { case normal, negative, unknown }
+    enum Tone: Equatable, Sendable { case normal, negative, exhausted, unknown }
 
-    /// What a meter's fill measures. Time and spend are drawn in different
-    /// colours and captioned in words, so neither reads as the other.
-    enum MeterKind: Equatable, Sendable {
-        /// Share of a credit used (a quota-like fill).
-        case used(exhausted: Bool, aheadOfPace: Bool)
-        /// Share of a month or billing period elapsed: time, not spend.
-        case elapsed
-    }
-
-    struct Meter: Equatable, Sendable {
-        let fraction: Double
-        let kind: MeterKind
-        /// "41% used", "87% of the month elapsed".
-        let caption: String
-        /// "26d", "Expires in 38 days".
-        let trailing: String?
-        /// Even-pace tick, where the credit's own presentation draws one.
-        let tick: Double?
-    }
-
-    struct Line: Equatable, Sendable, Identifiable {
+    struct Row: Equatable, Sendable, Identifiable {
         let id: String
-        let symbol: String?
+        let vendor: VendorIdentifier
+        /// "ChatGPT API credit", "ChatGPT bonus credits", "OpenRouter credit".
         let title: String
-        let detail: String?
+        /// Muted, on the same line: account, "configured", what a percentage
+        /// measures, when it resets. "Primary · 14% of the billing month gone · 27d".
+        let context: String?
+        /// The figure on the right: "$100.00/mo", "44,250 credits", "107d left".
         let figure: String?
         var tone: Tone = .normal
-        var meter: Meter? = nil
+        var symbol: String? = nil
         let spoken: String
     }
 
-    struct Entry: Equatable, Sendable, Identifiable {
-        let id: String
-        let vendor: VendorIdentifier
-        /// "Claude Code", "Codex", "Gemini API", "OpenRouter".
-        let provider: String
-        /// "Primary · Max (20x)", "Prolite", "AI Studio key". Nil when the
-        /// provider has one account.
-        let account: String?
-        /// "configured" for a figure the user typed rather than a reading.
-        let tag: String?
-        /// The vendor's newest poll failed: these figures are carried over.
-        let isStale: Bool
-        let lines: [Line]
-    }
-
-    let entries: [Entry]
+    let rows: [Row]
 
     init(snapshots: [QuotaSnapshot], now: Date) {
-        var entries: [Entry] = []
+        var rows: [Row] = []
         var geminiCreditDone = false
         for snapshot in snapshots where snapshot.category != .developerLimits {
             let p = MetricRowPresentation(snapshot: snapshot, now: now)
-            let stale = snapshot.staleReading != nil
+            let provider = Self.providerName(snapshot.vendorId)
+            let stale = snapshot.staleReading != nil ? "last reading" : nil
+            // A named account (multi-account Claude or Antigravity) is named;
+            // a vendor's single account needs no name.
+            let account: String? = snapshot.claudeAccount?.name ?? snapshot.antigravityAccount?.name
+            func context(_ parts: String?...) -> String? {
+                let text = ([account] + parts + [stale]).compactMap { $0 }.filter { !$0.isEmpty }
+                    .joined(separator: " · ")
+                return text.isEmpty ? nil : text
+            }
 
             if ProviderGridPresentation.isDirectBalance(snapshot) {
-                // A balance vendor's whole reading is its balance. One that was
-                // never configured has nothing to show and no line.
+                // A balance vendor's whole reading is its balance. One never
+                // configured has nothing to show.
                 guard snapshot.status.unavailableReason != .notConfigured else { continue }
-                var lines: [Line] = []
                 if snapshot.apiCredits.isEmpty {
                     let unread = snapshot.status.confidence == .unavailable
-                    lines.append(Line(
-                        id: snapshot.id + "#balance", symbol: nil, title: "Account credit", detail: nil,
+                    rows.append(Row(
+                        id: snapshot.id + "#balance", vendor: snapshot.vendorId, title: provider,
+                        context: context(),
                         figure: unread ? (snapshot.status.unavailableReason?.headline ?? "No reading") : p.valueLabel,
                         tone: unread ? .unknown : (Self.isNegative(snapshot.metric) ? .negative : .normal),
                         spoken: p.accessibilityLabel))
                 } else {
-                    lines += snapshot.apiCredits.map { Self.entryLine($0, ownerID: snapshot.id) }
+                    rows += snapshot.apiCredits.map { Self.entryRow($0, provider: provider, context: context()) }
                 }
-                entries.append(Entry(id: snapshot.id, vendor: snapshot.vendorId, provider: snapshot.vendorId.displayName,
-                                     account: nil, tag: nil, isStale: stale, lines: lines))
                 continue
             }
 
-            var lines: [Line] = []
-            lines += snapshot.apiCredits.filter { !$0.extendsSubscription }
-                .map { Self.entryLine($0, ownerID: snapshot.id) }
-            lines += p.subscriptionCredits.enumerated().map { index, e in
-                Line(id: "\(snapshot.id)#sub\(index)", symbol: nil, title: e.title, detail: e.detail,
-                     figure: e.figure, spoken: e.spoken)
-            }
-            if let usage = p.openAIUsageCredit {
-                lines.append(Line(
-                    id: snapshot.id + "#usage", symbol: nil, title: "Usage credits", detail: usage.totalText,
-                    figure: nil,
-                    meter: Meter(fraction: usage.fraction, kind: .used(exhausted: usage.fraction >= QuotaSnapshot.exhaustionThreshold,
-                                                                     aheadOfPace: false),
-                                 caption: usage.percentText, trailing: usage.expiryText, tick: nil),
+            rows += snapshot.apiCredits.filter { !$0.extendsSubscription }
+                .map { Self.entryRow($0, provider: provider, context: context()) }
+            // The ChatGPT credit count that extends the plan: "bonus credits".
+            if let usage = p.openAIUsageCredit,
+               let entry = snapshot.apiCredits.first(where: { $0.id == "openai.api-credits" }) {
+                let expiry = entry.creditGrant?.expiresAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
+                rows.append(Row(
+                    id: snapshot.id + "#bonus", vendor: snapshot.vendorId, title: "\(provider) bonus",
+                    context: context(usage.percentText, expiry.map { "expires \($0)" }),
+                    figure: APICreditEntryPresentation(entry: entry).figure,
+                    tone: usage.fraction >= QuotaSnapshot.exhaustionThreshold ? .exhausted : .normal,
                     spoken: usage.spoken))
             }
+            for (index, e) in p.subscriptionCredits.enumerated() {
+                let isBonus = snapshot.vendorId == .openai
+                    && snapshot.apiCredits.contains { $0.id == "openai.api-credits" && $0.extendsSubscription }
+                rows.append(Row(
+                    id: "\(snapshot.id)#sub\(index)", vendor: snapshot.vendorId,
+                    title: isBonus ? "\(provider) bonus" : Self.prefixed(e.title, with: provider),
+                    context: context(e.detail), figure: e.figure, spoken: e.spoken))
+            }
             if let promo = p.monthlyPromo {
-                let ahead = (promo.fraction ?? 0) > (promo.paceMarker ?? 1)
-                lines.append(Line(
-                    id: snapshot.id + "#promo", symbol: nil, title: promo.title, detail: nil,
-                    figure: promo.amountText,
-                    meter: promo.fraction.map {
-                        Meter(fraction: $0, kind: .used(exhausted: promo.isExhausted, aheadOfPace: ahead),
-                              caption: "\(promo.percentText ?? "") used", trailing: promo.dayCountdown,
-                              tick: promo.paceMarker)
-                    },
+                rows.append(Row(
+                    id: snapshot.id + "#promo", vendor: snapshot.vendorId,
+                    title: "\(provider) \(promo.title.lowercased().hasPrefix("api") ? "API" : promo.title.lowercased())",
+                    context: context(promo.percentText.map { "\($0) used" },
+                                     promo.dayCountdown.map { "resets \($0)" }),
+                    figure: promo.amountText.map { "\($0)/mo" },
+                    tone: promo.isExhausted ? .exhausted : .normal,
                     spoken: promo.spoken))
             }
             if let credit = p.monthlyCredit {
-                lines.append(Line(
-                    id: snapshot.id + "#console", symbol: nil, title: "Console \(credit.title)", detail: nil,
-                    figure: credit.amountText,
-                    meter: credit.fraction.map {
-                        Meter(fraction: $0, kind: .elapsed,
-                              caption: "\(Self.percent($0)) of the billing month elapsed",
-                              trailing: credit.countdown, tick: nil)
-                    },
-                    spoken: credit.spoken))
+                rows.append(Row(
+                    id: snapshot.id + "#console", vendor: snapshot.vendorId, title: "\(provider) Console",
+                    // Time through the billing month, not spend (no spend is published).
+                    context: context(credit.fraction.map { "\(Self.percent($0)) of month" }, credit.countdown),
+                    figure: "\(credit.amountText)/mo", spoken: credit.spoken))
             }
-            for (label, credits) in Self.ticketGroups(p) {
+            for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot) {
                 for index in 0..<credits.tickets {
-                    lines.append(Line(
-                        id: "\(snapshot.id)#ticket-\(label)-\(index)", symbol: "ticket.fill",
-                        title: "\(label) ticket", detail: nil,
+                    rows.append(Row(
+                        id: "\(snapshot.id)#ticket-\(label)-\(index)", vendor: snapshot.vendorId,
+                        title: "\(provider) \(label) ticket", context: context(),
                         figure: credits.expiryPhrase(at: index, now: credits.now),
+                        symbol: "ticket.fill",
                         spoken: index == 0 ? credits.spoken : credits.expirySpoken(at: index)))
                 }
                 if credits.overflow > 0 {
-                    lines.append(Line(id: "\(snapshot.id)#ticket-\(label)-more", symbol: nil,
-                                      title: "+\(credits.overflow) more \(label.lowercased()) tickets",
-                                      detail: nil, figure: nil, spoken: ""))
+                    rows.append(Row(id: "\(snapshot.id)#ticket-\(label)-more", vendor: snapshot.vendorId,
+                                    title: "\(provider) \(label) tickets", context: context(),
+                                    figure: "+\(credits.overflow) more", symbol: "ticket.fill",
+                                    spoken: "\(credits.overflow) more"))
                 }
-            }
-            if !lines.isEmpty {
-                let (service, name) = GlancePresentation.names(for: snapshot)
-                let plan = snapshot.claudeAccount == nil ? snapshot.shortPlanName : (snapshot.planName ?? "")
-                let account = [name == service ? nil : name, plan.isEmpty ? nil : plan].compactMap { $0 }
-                    .joined(separator: " · ")
-                entries.append(Entry(id: snapshot.id, vendor: snapshot.vendorId, provider: service,
-                                     account: account.isEmpty ? nil : account, tag: nil, isStale: stale, lines: lines))
             }
 
             // The AI Studio key's credit belongs to the Gemini API key, not to
-            // an Antigravity account: one entry of its own, once.
+            // an Antigravity account: one row of its own, once.
             if !geminiCreditDone, let credit = p.geminiAPICredit {
                 geminiCreditDone = true
                 let b = credit.budget
-                entries.append(Entry(
-                    id: "gemini-api-key", vendor: .gemini, provider: "Gemini API", account: "AI Studio key",
-                    tag: "configured", isStale: false,
-                    lines: [Line(id: "gemini-api-key#budget", symbol: nil, title: "API credit", detail: nil,
-                                 figure: b.amountText,
-                                 meter: Meter(fraction: b.fraction, kind: .elapsed,
-                                              caption: "\(b.percentText) of the month elapsed",
-                                              trailing: b.countdown, tick: nil),
-                                 spoken: credit.spoken)]))
+                rows.append(Row(
+                    id: "gemini-api-key", vendor: .gemini, title: "Gemini API",
+                    context: ["configured", "\(b.percentText) of month", b.countdown]
+                        .compactMap { $0 }.joined(separator: " · "),
+                    figure: "\(b.amountText)/mo", spoken: credit.spoken))
             }
         }
-        self.entries = entries
+        self.rows = rows
     }
 
-    static func entryLine(_ entry: APICreditEntry, ownerID: String) -> Line {
-        let e = APICreditEntryPresentation(entry: entry)
-        return Line(id: ownerID + "#" + entry.id, symbol: nil, title: e.title, detail: e.detail, figure: e.figure,
-                    tone: isNegative(entry.metric) ? .negative : .normal, spoken: e.spoken)
-    }
-
-    static func ticketGroups(_ p: MetricRowPresentation) -> [(String, MetricRowPresentation.ResetCredits)] {
-        if !p.resetCreditGroups.isEmpty {
-            return p.resetCreditGroups.map { ("\($0.scope.displayName) reset", $0.credits) }
+    /// The name a credit row leads with. ChatGPT, not Codex: the credits
+    /// belong to the ChatGPT account.
+    static func providerName(_ vendor: VendorIdentifier) -> String {
+        switch vendor {
+        case .openai: "ChatGPT"
+        case .claude: "Claude"
+        default: vendor.displayName
         }
-        return p.resetCredits.map { [("Reset", $0)] } ?? []
+    }
+
+    static func entryRow(_ entry: APICreditEntry, provider: String, context: String?) -> Row {
+        let e = APICreditEntryPresentation(entry: entry)
+        return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
+                   title: prefixed(e.title, with: provider),
+                   context: [context, e.detail].compactMap { $0 }.joined(separator: " · ").nilIfEmptyString,
+                   figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal, spoken: e.spoken)
+    }
+
+    /// "Extra usage" → "Claude extra usage"; a title that already names its
+    /// provider is left alone.
+    static func prefixed(_ title: String, with provider: String) -> String {
+        let lower = title.lowercased()
+        if lower.hasPrefix(provider.lowercased()) || lower.hasPrefix("openai") { return title }
+        return "\(provider) \(lower)"
+    }
+
+    /// Plan-wide tickets, plus any model ticket with no model line to sit
+    /// beside (it is still drawn, never dropped). A model's tickets with a
+    /// line (Fable) sit beside that line in the Providers row they reset.
+    static func planTicketGroups(_ p: MetricRowPresentation,
+                                 snapshot: QuotaSnapshot) -> [(String, MetricRowPresentation.ResetCredits)] {
+        if !p.resetCreditGroups.isEmpty {
+            let plan = p.resetCreditGroups.filter(\.scope.isPlan).map { ("plan reset", $0.credits) }
+            let unmatched = p.unmatchedResetCredits(scopedLabels: snapshot.scopedBars.map(\.label))
+                .map { ("\($0.scope.displayName) reset", $0.credits) }
+            return plan + unmatched
+        }
+        return p.resetCredits.map { [("reset", $0)] } ?? []
     }
 
     static func isNegative(_ metric: MetricType) -> Bool {
@@ -193,4 +187,8 @@ struct WalletPresentation: Equatable, Sendable {
     static func percent(_ fraction: Double) -> String {
         "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
+}
+
+private extension String {
+    var nilIfEmptyString: String? { isEmpty ? nil : self }
 }

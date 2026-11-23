@@ -188,7 +188,7 @@ public struct PopoverRootView: View {
                     }
                 }
             )
-            if !wallet.entries.isEmpty {
+            if !wallet.rows.isEmpty {
                 WalletSection(presentation: wallet)
             }
 

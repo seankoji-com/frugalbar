@@ -519,7 +519,7 @@ struct UXRenderTests {
         let wallet = WalletPresentation(
             snapshots: GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now).walletSnapshots, now: now)
         try await save(VStack(spacing: Theme.sectionGap) {
-            ProviderGridView(presentation: presentation, expanded: .gemini)
+            ProviderGridView(presentation: presentation, expanded: .claude)
             WalletSection(presentation: wallet)
         }
         .padding(Theme.edgeMargin)

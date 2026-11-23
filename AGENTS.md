@@ -442,9 +442,15 @@ this Mac's Google sign-in, "CLI Proxy"), from the reading's `cliSource` before
 the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
 OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
 entries only, never Providers rows (owner, 24 Nov 2026). The Wallet
-(`WalletPresentation`) groups every value under its provider and account, and
-the Gemini AI Studio key's configured credit is one "Gemini API" entry of its
-own, never an Antigravity account's line. The group
+(`WalletPresentation`) is a flat list, one line per credit with no group
+headers: the title names the provider ("ChatGPT API", "ChatGPT bonus",
+"Claude Console"), and a muted context names the account and what any
+percentage measures. ChatGPT has two lines: the monthly API credit grant and
+the bonus credit count. The Gemini AI Studio key's configured credit is one
+"Gemini API" line of its own, never an Antigravity account's. A model's reset
+tickets (Fable) sit beside that model's line in its Claude account's Providers
+row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
+model line to sit beside, are Wallet lines. The group
 averages use only fresh figures in the same window and report coverage. Each
 pool keeps its service identity and opens its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window

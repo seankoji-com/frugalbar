@@ -22,7 +22,7 @@ struct GlanceSectionsView: View {
                 ServicesSection(glance: glance, onSelect: onSelect)
             }
             let wallet = WalletPresentation(snapshots: glance.walletSnapshots, now: glance.now)
-            if !wallet.entries.isEmpty {
+            if !wallet.rows.isEmpty {
                 WalletSection(presentation: wallet)
             }
         }
@@ -591,8 +591,8 @@ private struct ServicePoolRow: View {
 
 // MARK: - Wallet
 
-/// Every credit, balance and reset ticket, under the provider and account it
-/// belongs to, in one row anatomy (`WalletPresentation`).
+/// Every credit and balance, one line each (`WalletPresentation`). The row's
+/// own title names its provider, so there are no group headers.
 struct WalletSection: View {
     let presentation: WalletPresentation
 
@@ -600,140 +600,60 @@ struct WalletSection: View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                ForEach(Array(presentation.entries.enumerated()), id: \.element.id) { index, entry in
-                    if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.4)) }
-                    WalletEntryView(entry: entry)
+                ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
+                    WalletRowView(row: row)
                 }
             }
         }
     }
 }
 
-private struct WalletEntryView: View {
-    let entry: WalletPresentation.Entry
+private struct WalletRowView: View {
+    let row: WalletPresentation.Row
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            // Who the values belong to, first and always.
-            HStack(spacing: 7) {
-                VendorAvatarView(vendorId: entry.vendor, status: .measured(.none), size: 16)
-                Text(entry.provider)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.onSurface)
-                if let account = entry.account {
-                    Text(account)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.onSurfaceVariant)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                if let tag = entry.tag {
-                    Text(tag.uppercased())
-                        .font(.system(size: 8.5, weight: .bold))
-                        .foregroundStyle(Theme.primary)
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.primary.opacity(0.6), lineWidth: 0.5))
-                }
-                Spacer(minLength: 0)
-                if entry.isStale {
-                    Label("stale", systemImage: "clock")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.tertiary)
-                        .help("The last poll failed; these figures are carried over from an earlier one")
-                }
+        HStack(spacing: 8) {
+            VendorAvatarView(vendorId: row.vendor, status: .measured(.none), size: 16)
+            if let symbol = row.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(red: 0.96, green: 0.78, blue: 0.29))
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-
-            ForEach(entry.lines) { line in
-                WalletLineView(line: line)
+            Text(row.title)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.onSurface)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if let context = row.context {
+                Text(context)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.outline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            .padding(.leading, 23)
+            Spacer(minLength: 6)
+            if let figure = row.figure {
+                Text(figure)
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(color(row.tone))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-}
-
-private struct WalletLineView: View {
-    let line: WalletPresentation.Line
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if let symbol = line.symbol {
-                    Image(systemName: symbol)
-                        .font(.system(size: 10))
-                        .foregroundStyle(symbol == "ticket.fill" ? Color(red: 0.96, green: 0.78, blue: 0.29) : Theme.outline)
-                }
-                Text(line.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.onSurface)
-                    .lineLimit(1)
-                if let detail = line.detail {
-                    Text(detail)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.outline)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                if let figure = line.figure {
-                    Text(figure)
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(color(line.tone))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                }
-            }
-            if let meter = line.meter {
-                WalletMeterView(meter: meter)
-            }
-        }
+        .padding(.vertical, 8)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(line.spoken.isEmpty ? line.title : line.spoken)
-        .help(line.spoken)
+        .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+        .help([row.title, row.context, row.figure].compactMap { $0 }.joined(separator: " · "))
     }
 
     private func color(_ tone: WalletPresentation.Tone) -> Color {
         switch tone {
         case .normal: Theme.onSurface
         case .negative: Theme.error
+        case .exhausted: Theme.errorBold
         case .unknown: Theme.outline
-        }
-    }
-}
-
-private struct WalletMeterView: View {
-    let meter: WalletPresentation.Meter
-
-    private var fill: Color {
-        switch meter.kind {
-        // Time is informational blue, never a quota colour.
-        case .elapsed: Theme.primary
-        case .used(let exhausted, let ahead): exhausted ? Theme.errorBold : (ahead ? Theme.tertiary : Theme.primary)
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.surfaceContainerHighest)
-                    Capsule().fill(fill).frame(width: proxy.size.width * min(max(meter.fraction, 0), 1))
-                    if let tick = meter.tick {
-                        Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: 7)
-                            .offset(x: proxy.size.width * tick - 0.75)
-                    }
-                }
-            }
-            .frame(height: 4)
-            HStack {
-                Text(meter.caption)
-                Spacer(minLength: 6)
-                if let trailing = meter.trailing { Text(trailing) }
-            }
-            .font(.system(size: 10.5).monospacedDigit())
-            .foregroundStyle(Theme.onSurfaceVariant)
         }
     }
 }
