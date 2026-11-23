@@ -514,16 +514,44 @@ public final class KeychainVault: @unchecked Sendable {
     /// Reads ONLY from the in-memory cache and deferred-write buffer.
     /// Never touches macOS Keychain, never blocks on `flock`, never prompts.
     public func cachedValue(namespace: VaultNamespace, account: String) -> String? {
+        stateLock.withLock { cachedValueLocked(namespace: namespace, account: account) }
+    }
+
+    /// The status and the cached values for `accounts`, read under one lock
+    /// acquisition so a background warm-up cannot change the state between
+    /// them (a healthy status paired with a denied read's missing value would
+    /// read as confirmed absence). Missing accounts are absent from `values`.
+    public func cachedSnapshot(
+        namespace: VaultNamespace,
+        accounts: [String]
+    ) -> (status: VaultStatusSnapshot, values: [String: String]) {
         stateLock.withLock {
-            let key = VaultKey(namespace: namespace, account: account)
-            if let deferred = deferredWrites[key] {
-                return deferred.value
+            var values: [String: String] = [:]
+            for account in accounts {
+                if let value = cachedValueLocked(namespace: namespace, account: account) {
+                    values[account] = value
+                }
             }
-            guard case .loaded(let doc) = internalState else { return nil }
-            switch namespace {
-            case .keys: return doc.keys[account]
-            case .sync: return doc.sync[account]
-            }
+            let status = VaultStatusSnapshot(
+                state: internalState.health,
+                pendingLegacyKeys: pendingLegacyKeys,
+                pendingLegacySyncKeys: pendingLegacySyncKeys,
+                legacyScanSucceeded: legacyScanSucceeded,
+                deferredWriteCount: deferredWrites.count
+            )
+            return (status, values)
+        }
+    }
+
+    private func cachedValueLocked(namespace: VaultNamespace, account: String) -> String? {
+        let key = VaultKey(namespace: namespace, account: account)
+        if let deferred = deferredWrites[key] {
+            return deferred.value
+        }
+        guard case .loaded(let doc) = internalState else { return nil }
+        switch namespace {
+        case .keys: return doc.keys[account]
+        case .sync: return doc.sync[account]
         }
     }
 
@@ -1140,8 +1168,12 @@ public final class KeychainVault: @unchecked Sendable {
             // recheck whether an explicit write, delete, or stale rejection already
             // superseded this entry; otherwise keep deferred writes in memory.
             if let (trackedKey, trackedSeq) = tracking {
+                // The lock may be held by an explicit save of a key this write
+                // co-expects (it queued before that save announced itself).
+                // That save will reject it, so the caller must not use it now.
                 let superseded = stateLock.withLock {
                     isTrackedSeqSupersededLocked(trackedKey, seq: trackedSeq)
+                        || isCoExpectationContestedLocked(trackedKey, seq: trackedSeq)
                 }
                 if superseded {
                     return .superseded
@@ -1155,6 +1187,16 @@ public final class KeychainVault: @unchecked Sendable {
     /// or rejected as stale by any flush path. Caller must hold `stateLock`.
     private func isTrackedSeqSupersededLocked(_ key: VaultKey, seq: UInt64) -> Bool {
         (explicitSeq[key] ?? 0) >= seq || (staleDeferredSeq[key] ?? 0) >= seq
+    }
+
+    /// Returns true if an explicit commit of one of the pending write's
+    /// co-expected keys is in flight or landed after it was queued. Caller
+    /// must hold `stateLock`.
+    private func isCoExpectationContestedLocked(_ key: VaultKey, seq: UInt64) -> Bool {
+        guard let write = deferredWrites[key], write.seq == seq else { return false }
+        return write.coExpectations.keys.contains { coKey in
+            explicitCommitsInFlight[coKey] != nil || (explicitSeq[coKey] ?? 0) > seq
+        }
     }
 
     /// Reconciles `deferredWrites` after `applied` entries have been durably

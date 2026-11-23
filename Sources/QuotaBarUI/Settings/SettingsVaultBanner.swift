@@ -69,6 +69,9 @@ enum SettingsVaultReload {
         previous.state != current.state
             || previous.pendingLegacyKeys != current.pendingLegacyKeys
             || previous.pendingLegacySyncKeys != current.pendingLegacySyncKeys
+            // A scan that now succeeds turns "unknown" fields into confirmed
+            // absence, which `freshValue` only reports after a reload.
+            || previous.legacyScanSucceeded != current.legacyScanSucceeded
     }
 
     /// The saved value Settings should show for `label`: the cached value,

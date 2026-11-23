@@ -1433,13 +1433,19 @@ public struct SettingsView: View {
     /// Populates credential fields from the in-memory vault cache only.
     /// Never blocks the main thread or prompts macOS Keychain.
     private func loadKeysFromCache() {
-        let status = KeychainVault.shared.statusSnapshot()
+        // One coherent read: status and values from the same vault state.
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+        let snapshot = KeychainVault.shared.cachedSnapshot(
+            namespace: .keys,
+            accounts: Self.slots.map(\.id.rawValue) + [clientLabel]
+        )
+        let status = snapshot.status
         var current: [VendorIdentifier: String] = [:]
         var unreadable: Set<VendorIdentifier> = []
         for slot in Self.slots {
             if let fresh = SettingsVaultReload.freshValue(
                 label: slot.id.rawValue,
-                cached: KeychainManager.shared.cachedValue(label: slot.id.rawValue),
+                cached: snapshot.values[slot.id.rawValue],
                 in: status
             ) {
                 current[slot.id] = fresh
@@ -1447,9 +1453,10 @@ public struct SettingsView: View {
                 unreadable.insert(slot.id)
             }
         }
+        let storedClient = snapshot.values[clientLabel].flatMap { $0.isEmpty ? nil : $0 }
         let freshGeminiClientID = SettingsVaultReload.freshValue(
-            label: GeminiOAuthSession.clientIDKeychainLabel,
-            cached: GeminiOAuthLogin.storedClientID(),
+            label: clientLabel,
+            cached: storedClient,
             in: status
         )
         let merged = SettingsCredentialMerge.merge(

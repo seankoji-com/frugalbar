@@ -1211,6 +1211,108 @@ struct KeychainVaultR11Tests {
     }
 }
 
+@Suite("KeychainVault R12")
+struct KeychainVaultR12Tests {
+    @Test("R12-01: a renewal queued before a client save, whose flush meets that save's lock, is superseded")
+    func renewalQueuedBeforeClientSaveIsSuperseded() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        let saveIsWriting = DispatchSemaphore(value: 0)
+        let releaseSave = DispatchSemaphore(value: 0)
+        let saveDone = DispatchSemaphore(value: 0)
+        let saveStarted = LockedFlag()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !saveStarted.value else { return }
+            saveStarted.set()
+            saveIsWriting.signal()
+            _ = releaseSave.wait(timeout: .now() + 5)
+        }
+        // The renewal is queued (passing every in-memory check), then the
+        // client-B save starts and holds flock before the renewal flushes.
+        vault.beforeDeferredFlushHook = {
+            DispatchQueue.global().async {
+                try? vault.write("client-B", namespace: .keys, account: "gemini-client")
+                saveDone.signal()
+            }
+            _ = saveIsWriting.wait(timeout: .now() + 5)
+        }
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        vault.beforeDeferredFlushHook = nil
+        releaseSave.signal()
+        #expect(saveDone.wait(timeout: .now() + 5) == .success)
+        hooked.onBeforeWrite = nil
+
+        #expect(saveStarted.value)
+        #expect(outcome == .superseded)
+        #expect(try vault.read(namespace: .keys, account: "gemini-client") == "client-B")
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R12-02: a current session is not usable while the client override is unreadable, even if it matches the environment client")
+    func currentSessionNeedsReadableClientOverride() throws {
+        let session = GeminiOAuthSession(
+            accessToken: "a", refreshToken: "r",
+            expiry: Date(timeIntervalSince1970: 4_000_000_000), clientID: "client-env")
+        let sessionText = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+        let environment = [GeminiOAuthSession.clientIDEnvVar: "client-env"]
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+
+        // Session is in the vault; the override (client-B) is a legacy item Keychain refuses.
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write(sessionText, namespace: .keys, account: GeminiOAuthSession.keychainLabel)
+        backend.seed(service: "test.keys", account: clientLabel, value: "client-B")
+        backend.setReadDenied(service: "test.keys", account: clientLabel, status: errSecInteractionNotAllowed)
+        _ = vault.warmUpSync(interactive: false)
+        #expect(vault.statusSnapshot().pendingLegacyKeys.contains(clientLabel))
+        let manager = KeychainManager(vault: vault)
+        #expect(GeminiOAuthSession.readUsableSession(manager: manager, environment: environment) == nil)
+
+        // Once the override is confirmed absent, the environment client owns the session.
+        backend.setReadDenied(service: "test.keys", account: clientLabel, status: nil)
+        try vault.delete(namespace: .keys, account: clientLabel)
+        let usable = GeminiOAuthSession.readUsableSession(manager: manager, environment: environment)
+        #expect(usable?.session.clientID == "client-env")
+        #expect(usable.map { $0.storedClientID == nil } == true)
+    }
+
+    @Test("R12-03: cachedSnapshot pairs the status with the values read in the same vault state")
+    func cachedSnapshotIsCoherent() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("sk-saved", namespace: .keys, account: "openai")
+
+        let loaded = vault.cachedSnapshot(namespace: .keys, accounts: ["openai", "missing"])
+        #expect(loaded.status.state == .loaded)
+        #expect(loaded.values == ["openai": "sk-saved"])
+
+        backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+        _ = vault.warmUpSync(interactive: true)
+        let denied = vault.cachedSnapshot(namespace: .keys, accounts: ["openai"])
+        #expect(denied.status.isLockedOrDenied)
+        #expect(denied.values.isEmpty)
+    }
+}
+
 private final class LockedOutcome: @unchecked Sendable {
     private let lock = NSLock()
     private var _value: DeferredWriteOutcome?

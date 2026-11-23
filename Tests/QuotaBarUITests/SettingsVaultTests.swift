@@ -74,6 +74,10 @@ struct SettingsVaultTests {
         #expect(SettingsVaultReload.shouldReloadCredentials(previous: pendingLegacy, current: loaded))
         #expect(!SettingsVaultReload.shouldReloadCredentials(previous: loaded, current: loadedWithPendingWrite))
         #expect(!SettingsVaultReload.shouldReloadCredentials(previous: loaded, current: loaded))
+
+        // R12-04: a legacy scan that recovers confirms absences the fields could not show before.
+        let scanFailed = VaultStatusSnapshot(state: .loaded, legacyScanSucceeded: false, deferredWriteCount: 0)
+        #expect(SettingsVaultReload.shouldReloadCredentials(previous: scanFailed, current: loaded))
     }
 
     @Test("R11-03: a cleared but unsaved key survives a background denial followed by unlock")
