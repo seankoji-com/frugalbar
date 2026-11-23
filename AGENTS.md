@@ -279,9 +279,8 @@ by every project and key on it. The Gemini API
 (`generativelanguage.googleapis.com`) has no billing operation and
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
-It is drawn in the Wallet as the **API credit** line, under a "Gemini API ·
-<account>" caption tagged CONFIGURED: name column, one bar, and a percentage and
-countdown beneath. The prepaid balance and
+It is drawn in the Wallet as one "Gemini API" line tagged CONFIGURED, with an
+elapsed-month meter ("MO 63%" and the countdown beneath). The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
 calendar time**, never spend: no documented API returns an API key's spend, and
@@ -443,19 +442,27 @@ the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
 OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
 entries only, never Providers rows (owner, 24 Nov 2026). The Wallet
 (`WalletPresentation`) is a flat list, one line per credit with no group
-headers: the title names the provider ("ChatGPT API", "ChatGPT bonus",
-"Claude Console"), and a muted context names the account and what any
-percentage measures. ChatGPT has two lines: the monthly API credit grant and
+headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
+and the account when the reading carries a named one ("ChatGPT API",
+"ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
+CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
+text beside the title. ChatGPT has two lines: the monthly API credit grant and
 the bonus credit count. The Gemini AI Studio key's configured credit is one
 "Gemini API" line of its own, never an Antigravity account's. A model's reset
 tickets (Fable) sit beside that model's line in its Claude account's Providers
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
-model line to sit beside, are Wallet lines. A credit that expires and
-publishes what was used draws a small usage bar on its line (`Usage`). Its
-even-use tick appears only when the credit's period is known: the ChatGPT API
-credit and Claude usage credits use the promo's own `paceMarker`. ChatGPT
-bonus credits publish an expiry but no start, so they draw a bar with no
-tick. Time-only credits (Claude Console, configured Gemini) draw no usage bar.
+model line to sit beside, are Wallet lines. Every meter sits in one fixed
+column so the bars line up. A credit that expires and publishes what was used
+draws the Providers bar (`Meter.credit`, through `RemainingBar`): % left and the
+countdown beneath, the same colours, and the even-use tick only where the
+credit's period is known. The ChatGPT API credit and Claude usage credits pass
+the promo's own `barMetrics`. ChatGPT bonus credits publish an expiry but no
+start, so their metrics carry no window length and draw no tick. Time-only
+credits (Claude Console, configured Gemini) draw an informational "MO 63%"
+elapsed meter (`Meter.elapsed`) in `Theme.primary`, never a quota colour. A
+balance (OpenRouter, DeepSeek, any `APICreditEntry` with a series) draws its
+recorded trend through `BalanceSparklinePresentation.make`, which draws nothing
+below two readings.
 The group
 averages use only fresh figures in the same window and report coverage. Each
 pool keeps its service identity and opens its own inspector.

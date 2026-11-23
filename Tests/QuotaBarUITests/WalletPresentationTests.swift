@@ -13,10 +13,10 @@ struct WalletPresentationTests {
                            now: now)
     }
 
-    @Test("one line per credit, each naming its provider, with no group headers")
+    @Test("one line per credit, each naming its provider and any named account, with no group headers")
     func singleLines() {
         #expect(wallet.rows.map(\.title) == [
-            "Claude Console", "Gemini API", "ChatGPT bonus", "ChatGPT API",
+            "Claude Console · Primary", "Gemini API", "ChatGPT bonus", "ChatGPT API",
             "OpenRouter", "DeepSeek",
         ])
     }
@@ -25,31 +25,56 @@ struct WalletPresentationTests {
     func chatGPTCredits() throws {
         let bonus = try #require(wallet.rows.first { $0.title == "ChatGPT bonus" })
         #expect(bonus.figure == "60,085 credits")
-        #expect(bonus.context?.contains("20% used") == true)
         let api = try #require(wallet.rows.first { $0.title == "ChatGPT API" })
         #expect(api.figure == "$100.00/mo")
-        #expect(api.context?.contains("96% used") == true)
     }
 
-    @Test("a credit with an expiry draws a usage bar; the even-use tick only where its period is published")
-    func usageBars() throws {
+    @Test("a credit with an expiry draws a provider-style bar; the even-use tick only where its period is published")
+    func creditMeters() throws {
         // ChatGPT's monthly API credit publishes its period: bar and tick.
-        let api = try #require(wallet.rows.first { $0.title == "ChatGPT API" }?.usage)
-        #expect(abs(api.used - 0.96) < 0.001)
-        let pace = try #require(api.evenPace)
+        guard case .credit(let api)? = wallet.rows.first(where: { $0.title == "ChatGPT API" })?.meter else {
+            Issue.record("ChatGPT API has no credit bar"); return
+        }
+        #expect(abs((api.primaryFraction ?? 0) - 0.96) < 0.001)
+        let pace = try #require(api.paceMarker)
         // Even use over the calendar month ending at the cycle end (OpenAI
         // publishes no cycle start; `OpenAIMonthlyCredit.entry`).
         let end = now.addingTimeInterval(26 * 86_400)
         let month = try #require(DualBarMetrics.monthWindowLength(endingAt: end))
         #expect(abs(pace - (1 - end.timeIntervalSince(now) / month)) < 0.001)
-        #expect(api.aheadOfPace)
-        // The bonus credits publish an expiry but no start: a bar, no tick.
-        let bonus = try #require(wallet.rows.first { $0.title == "ChatGPT bonus" }?.usage)
-        #expect(abs(bonus.used - (75_000 - 60_085) / 75_000) < 0.001)
-        #expect(bonus.evenPace == nil)
-        // Time-only credits (Console, configured Gemini) have no usage bar.
-        #expect(wallet.rows.first { $0.title == "Claude Console" }?.usage == nil)
-        #expect(wallet.rows.first { $0.title == "Gemini API" }?.usage == nil)
+        #expect(GlancePresentation.window(for: api, now: now).isAheadOfPace)
+        // The bonus credits publish an expiry but no start: a bar to the
+        // expiry, no tick.
+        guard case .credit(let bonus)? = wallet.rows.first(where: { $0.title == "ChatGPT bonus" })?.meter else {
+            Issue.record("ChatGPT bonus has no credit bar"); return
+        }
+        #expect(abs((bonus.primaryFraction ?? 0) - (75_000 - 60_085) / 75_000) < 0.001)
+        #expect(bonus.resetsAt == now.addingTimeInterval(38 * 86_400))
+        #expect(bonus.paceMarker == nil)
+    }
+
+    @Test("a time-only credit draws an elapsed-month meter, never a spend bar")
+    func elapsedMeters() throws {
+        for title in ["Claude Console · Primary", "Gemini API"] {
+            let row = try #require(wallet.rows.first { $0.title == title })
+            guard case .elapsed(let fraction, let countdown)? = row.meter else {
+                Issue.record("\(title) has no elapsed meter"); continue
+            }
+            #expect(fraction > 0 && fraction < 1)
+            #expect(countdown != nil)
+        }
+    }
+
+    @Test("each balance names its recorded series so its trend draws; credits with a bar do not")
+    func balanceTrends() throws {
+        let snapshots = GlancePresentation(snapshots: F.batchWithWallet, now: now).walletSnapshots
+        for vendor in [VendorIdentifier.openrouter, .deepseek] {
+            let snapshot = try #require(snapshots.first { $0.vendorId == vendor })
+            let row = try #require(wallet.rows.first { $0.vendor == vendor })
+            let id = try #require(BalanceSeries.of(snapshot)?.id)
+            #expect(row.balanceSeriesID == id)
+            #expect(row.meter == nil)
+        }
     }
 
     @Test("a Fable ticket is not in the Wallet: it sits beside the Fable line in Providers")
@@ -64,7 +89,7 @@ struct WalletPresentationTests {
                                                                expiries: [now.addingTimeInterval(20 * 86_400)]))
         snapshots[i].resetCreditsAvailable = 2
         let w = WalletPresentation(snapshots: snapshots, now: now)
-        #expect(w.rows.contains { $0.title == "Claude plan reset ticket" && $0.figure == "20d remaining" })
+        #expect(w.rows.contains { $0.title == "Claude plan reset ticket · Primary" && $0.figure == "20d remaining" })
     }
 
     @Test("a model ticket with no model line to sit beside stays in the Wallet")
@@ -72,15 +97,15 @@ struct WalletPresentationTests {
         var snapshot = try #require(F.batchWithWallet.first { $0.claudeAccount?.id == F.primary.id })
         snapshot.scopedBars = []   // no Fable line in Providers
         let w = WalletPresentation(snapshots: [snapshot], now: now)
-        #expect(w.rows.contains { $0.title == "Claude Fable reset ticket" })
+        #expect(w.rows.contains { $0.title == "Claude Fable reset ticket · Primary" })
     }
 
-    @Test("an account is named only when its provider has more than one")
-    func accountContext() throws {
-        let claude = try #require(wallet.rows.first { $0.title == "Claude Console" })
-        #expect(claude.context?.hasPrefix("Primary") == true)
-        let chatGPT = try #require(wallet.rows.first { $0.title == "ChatGPT API" })
-        #expect(chatGPT.context?.hasPrefix("96%") == true)
+    @Test("a named account is in the title; a vendor's single account is not named")
+    func accountInTitle() throws {
+        #expect(wallet.rows.contains { $0.title == "Claude Console · Primary" })
+        let chatGPT = wallet.rows.filter { $0.vendor == .openai }
+        #expect(!chatGPT.isEmpty)
+        #expect(chatGPT.allSatisfy { !$0.title.contains("·") })
     }
 
     @Test("the Gemini API key's credit is one configured line, never an Antigravity account's")
@@ -92,8 +117,7 @@ struct WalletPresentationTests {
         snapshots.append(second)
         let rows = WalletPresentation(snapshots: snapshots, now: now).rows.filter { $0.title == "Gemini API" }
         #expect(rows.count == 1)
-        #expect(rows.first?.context?.hasPrefix("configured") == true)
-        #expect(rows.first?.context?.contains("of month") == true)
+        #expect(rows.first?.tag == "configured")
     }
 
     @Test("an unreadable pool carrying a credit adds no 'Not configured' line")

@@ -189,7 +189,7 @@ public struct PopoverRootView: View {
                 }
             )
             if !wallet.rows.isEmpty {
-                WalletSection(presentation: wallet)
+                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now)
             }
 
             // Developer limits are not coding pools: they never enter the

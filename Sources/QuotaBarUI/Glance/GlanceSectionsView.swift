@@ -595,6 +595,9 @@ private struct ServicePoolRow: View {
 /// own title names its provider, so there are no group headers.
 struct WalletSection: View {
     let presentation: WalletPresentation
+    /// Recorded balance history by `BalanceSeries.id`, for each balance's trend.
+    var balanceSeries: [String: [BalancePoint]] = [:]
+    var now: Date = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -602,41 +605,79 @@ struct WalletSection: View {
             GlanceCard {
                 ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
                     if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
-                    WalletRowView(row: row)
+                    WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
+                        BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
+                    }, now: now)
                 }
             }
         }
     }
 }
 
-/// A credit's used share on one line: the fill is what was used (it is a
-/// credit, not a quota window, so "% used" as its own console reads), and the
-/// tick is where an even spend over its published period would be by now.
-private struct WalletUsageBar: View {
-    let usage: WalletPresentation.Usage
-
-    private var fill: Color {
-        usage.exhausted ? Theme.errorBold : (usage.aheadOfPace ? Theme.tertiary : Theme.primary)
-    }
+/// A Wallet line's meter, in the provider rows' anatomy: the bar, then "% left"
+/// and the countdown under it. A credit's bar is `RemainingBar`, so its fill,
+/// colour and even-use tick follow the same rules as a quota window; a
+/// time-only meter is drawn in the informational colour and says "MO 63%".
+private struct WalletMeterCell: View {
+    let meter: WalletPresentation.Meter
+    let now: Date
+    private let trackHeight: CGFloat = 3
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.surfaceContainerHighest)
-                Capsule().fill(fill).frame(width: proxy.size.width * min(max(usage.used, 0), 1))
-                if let pace = usage.evenPace, pace > 0, pace < 1, !usage.exhausted {
-                    Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: 8)
-                        .offset(x: proxy.size.width * pace - 0.75)
+        switch meter {
+        case .credit(let bar):
+            let window = GlancePresentation.window(for: bar, now: now)
+            let reset = bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
+            if window.isSpent {
+                VStack(alignment: .leading, spacing: 3) {
+                    Capsule()
+                        .fill(Theme.errorBold.opacity(0.6))
+                        .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+                        .frame(height: trackHeight)
+                    caption("100%", reset: reset, color: Theme.error)
+                }
+            } else if let remaining = window.remaining {
+                VStack(alignment: .leading, spacing: 3) {
+                    RemainingBar(window: window, height: trackHeight)
+                    caption(remaining.formatted(.percent.precision(.fractionLength(0))),
+                            reset: reset, color: GlanceColors.text(for: window))
                 }
             }
+        case .elapsed(let fraction, let countdown):
+            VStack(alignment: .leading, spacing: 3) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.surfaceContainerHighest)
+                        Capsule().fill(Theme.primary)
+                            .frame(width: max(0, proxy.size.width * min(max(fraction, 0), 1)))
+                    }
+                }
+                .frame(height: trackHeight)
+                caption("MO \(Int((fraction * 100).rounded()))%", reset: countdown, color: Theme.primary)
+            }
         }
-        .frame(width: 40, height: 4)
-        .accessibilityHidden(true)
+    }
+
+    private func caption(_ label: String, reset: String?, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(label).fontWeight(.semibold).foregroundStyle(color)
+            Spacer(minLength: 0)
+            if let reset { Text(reset).foregroundStyle(Theme.outline) }
+        }
+        .font(.system(size: 10).monospacedDigit())
+        .lineLimit(1)
     }
 }
 
 private struct WalletRowView: View {
     let row: WalletPresentation.Row
+    let trend: BalanceSparklinePresentation?
+    let now: Date
+
+    /// The meter column's width, so every line's bar starts and ends at the
+    /// same place, as the provider rows' window columns do.
+    private let meterWidth: CGFloat = 76
+    private let figureWidth: CGFloat = 84
 
     var body: some View {
         HStack(spacing: 8) {
@@ -650,17 +691,24 @@ private struct WalletRowView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.onSurface)
                 .lineLimit(1)
+                .truncationMode(.middle)
                 .layoutPriority(1)
-            if let context = row.context {
-                Text(context)
-                    .font(.system(size: 10.5))
+            if let tag = row.tag {
+                Text(tag.uppercased())
+                    .font(.system(size: 8.5, weight: .semibold))
                     .foregroundStyle(Theme.outline)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 0.75))
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize()
             }
             Spacer(minLength: 6)
-            if let usage = row.usage {
-                WalletUsageBar(usage: usage)
+            if let meter = row.meter {
+                WalletMeterCell(meter: meter, now: now)
+                    .frame(width: meterWidth)
+            } else if let trend {
+                BalanceSparklineView(presentation: trend)
             }
             if let figure = row.figure {
                 Text(figure)
@@ -668,13 +716,16 @@ private struct WalletRowView: View {
                     .foregroundStyle(color(row.tone))
                     .lineLimit(1)
                     .fixedSize()
+                    // One figure column, so the meters line up as the
+                    // provider rows' window columns do.
+                    .frame(minWidth: figureWidth, alignment: .trailing)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
-        .help([row.title, row.context, row.figure].compactMap { $0 }.joined(separator: " · "))
+        .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
     }
 
     private func color(_ tone: WalletPresentation.Tone) -> Color {

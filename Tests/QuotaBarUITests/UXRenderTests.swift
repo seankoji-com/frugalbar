@@ -518,9 +518,17 @@ struct UXRenderTests {
         let now = GlanceFixtures.now
         let wallet = WalletPresentation(
             snapshots: GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now).walletSnapshots, now: now)
+        // A week of recorded balances for each balance line, so its trend draws.
+        var series: [String: [BalancePoint]] = [:]
+        for (index, id) in wallet.rows.compactMap(\.balanceSeriesID).enumerated() {
+            series[id] = (0..<8).map { day in
+                BalancePoint(measuredAt: now.addingTimeInterval(Double(day - 7) * 86_400),
+                             value: Decimal(20 - day * (index + 1)) + Decimal(day % 3))
+            }
+        }
         try await save(VStack(spacing: Theme.sectionGap) {
             ProviderGridView(presentation: presentation, expanded: .claude)
-            WalletSection(presentation: wallet)
+            WalletSection(presentation: wallet, balanceSeries: series, now: now)
         }
         .padding(Theme.edgeMargin)
         .frame(width: PopoverRootView.popoverWidth)
