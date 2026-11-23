@@ -604,11 +604,17 @@ struct WalletSection: View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
-                    WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
-                        BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
-                    }, now: now)
+                // A grid, not stacked rows: the figure column is as wide as the
+                // widest figure ("60,085 credits"), so every meter starts and
+                // ends in the same place. A fixed figure width let a wider
+                // figure push its bar out of line.
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 0) {
+                    ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
+                        WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
+                            BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
+                        }, now: now)
+                    }
                 }
             }
         }
@@ -675,12 +681,44 @@ private struct WalletRowView: View {
     let trend: BalanceSparklinePresentation?
     let now: Date
 
-    /// The meter column's width, so every line's bar starts and ends at the
-    /// same place, as the provider rows' window columns do.
+    /// The meter column's width. With the grid's shared figure column, every
+    /// line's bar starts and ends at the same place.
     private let meterWidth: CGFloat = 76
-    private let figureWidth: CGFloat = 84
 
     var body: some View {
+        GridRow {
+            nameCell
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 14)
+                .padding(.vertical, 8)
+                // The grid has no row element, so the name cell speaks for the
+                // whole line and the other cells stay silent.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+                .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
+            Group {
+                if let meter = row.meter {
+                    WalletMeterCell(meter: meter, now: now)
+                } else if let trend {
+                    BalanceSparklineView(presentation: trend)
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+            }
+            .frame(width: meterWidth)
+            .accessibilityHidden(true)
+            Text(row.figure ?? "")
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(color(row.tone))
+                .lineLimit(1)
+                .fixedSize()
+                .gridColumnAlignment(.trailing)
+                .padding(.trailing, 14)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var nameCell: some View {
         HStack(spacing: 8) {
             VendorAvatarView(vendorId: row.vendor, status: .measured(.none), size: 16)
             if let symbol = row.symbol {
@@ -704,29 +742,7 @@ private struct WalletRowView: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-            Spacer(minLength: 6)
-            if let meter = row.meter {
-                WalletMeterCell(meter: meter, now: now)
-                    .frame(width: meterWidth)
-            } else if let trend {
-                BalanceSparklineView(presentation: trend)
-            }
-            if let figure = row.figure {
-                Text(figure)
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(color(row.tone))
-                    .lineLimit(1)
-                    .fixedSize()
-                    // One figure column, so the meters line up as the
-                    // provider rows' window columns do.
-                    .frame(minWidth: figureWidth, alignment: .trailing)
-            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
-        .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
     }
 
     private func color(_ tone: WalletPresentation.Tone) -> Color {

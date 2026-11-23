@@ -452,8 +452,10 @@ the bonus credit count. The Gemini AI Studio key's configured credit is one
 "Gemini API" line of its own, never an Antigravity account's. A model's reset
 tickets (Fable) sit beside that model's line in its Claude account's Subscriptions
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
-model line to sit beside, are Wallet lines. Every meter sits in one fixed
-column so the bars line up. A credit that expires and publishes what was used
+model line to sit beside, are Wallet lines. The Wallet is a `Grid`: a fixed
+meter column and a figure column as wide as the widest figure, so every bar
+starts and ends in the same place (a fixed figure width let "60,085 credits"
+push its bar out of line). A credit that expires and publishes what was used
 draws the Subscriptions bar (`Meter.credit`, through `UsageBar`): % used and the
 countdown beneath, the same colours, and the even-use tick only where the
 credit's period is known. The ChatGPT API credit and Claude usage credits pass
