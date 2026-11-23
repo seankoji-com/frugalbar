@@ -304,6 +304,9 @@ actor AntigravityAccountDiscovery {
         // one row from two accounts' credentials. This Mac's identity is
         // settled first, then the rest in a stable order.
         var claimedIDs = Set(identities.values)
+        // An ID kept as another account's history alias is that account's
+        // history; adopting it would put this account's readings in its chart.
+        let aliasedIDs = Set(oldAccounts.flatMap(\.historyAliases))
         let unassigned = verifiedGroups.filter { identities[$0.key] == nil }.sorted { lhs, rhs in
             let lhsPrimary = lhs.value.contains(where: \.isPrimary)
             let rhsPrimary = rhs.value.contains(where: \.isPrimary)
@@ -313,7 +316,7 @@ actor AntigravityAccountDiscovery {
         for (identity, matchingRoutes) in unassigned {
             let candidates = matchingRoutes.compactMap { route in
                 oldBindings.first { $0.source == route.source && !$0.verified }?.accountID
-            }.filter { !claimedIDs.contains($0) }
+            }.filter { !claimedIDs.contains($0) && !aliasedIDs.contains($0) }
             let previousID = candidates.min {
                 (Int(badges[$0] ?? "") ?? Int.max, $0) < (Int(badges[$1] ?? "") ?? Int.max, $1)
             }
@@ -343,7 +346,12 @@ actor AntigravityAccountDiscovery {
             } else {
                 let candidate = (previous?.verified == false ? previous?.accountID : nil)
                     ?? AntigravityAccount.instanceID(identity: "source|" + route.source)
-                id = verifiedAccountIDs.contains(candidate)
+                // Not only this pass's verified IDs: an ID any account holds
+                // (this Mac's row adopting a proxy's earlier ID, say) must not
+                // carry a failing route, or that account's cached quota would
+                // be shown under this route's row.
+                let heldByAnother = identities.contains { $0.value == candidate && $0.key != previous?.identity }
+                id = verifiedAccountIDs.contains(candidate) || heldByAnother
                     ? AntigravityAccount.instanceID(identity: "unverified|" + route.source)
                     : candidate
                 verified = false
@@ -676,9 +684,18 @@ actor AntigravityAccountDiscovery {
         ), http.statusCode == 200,
               let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let email = body["email"] as? String,
-              body["email_verified"] as? Bool == true
+              isJSONTrue(body["email_verified"])
         else { return nil }
         return AntigravityAccountRoute.accountKey(forEmail: email)
+    }
+
+    /// A JSON `true`, and nothing else: Foundation bridges `1` and `1.0` to
+    /// `Bool(true)` through `as? Bool`, so the boolean type is checked.
+    static func isJSONTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return false }
+        return number.boolValue
     }
 
     private static func proxySourcePrefix(_ config: CLIProxyConfig) -> String {

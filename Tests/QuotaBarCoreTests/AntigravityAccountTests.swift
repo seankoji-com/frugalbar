@@ -492,6 +492,57 @@ struct AntigravityAccountTests {
         #expect(Set(split.map(\.id)).count == 2)
         #expect(split.first(where: { $0.isPrimary })?.id == thisMacID)
         #expect(split.first(where: { !$0.isPrimary }).map { !$0.historyAliases.contains(thisMacID) } == true)
+
+        // R5: this Mac signs out and the proxy's probe fails. The failing proxy
+        // must not fall back onto this Mac's ID (whose cached quota it would show).
+        fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+        let failing = await discoverAccounts(session, suite: suiteName, defaults: defaults, thisMac: false)
+        #expect(!failing.contains { !$0.isPrimary && $0.id == thisMacID })
+    }
+
+    @Test("R6: a proxy account never adopts an ID kept as this Mac's history alias")
+    func proxyNeverAdoptsThisMacsHistoryAlias() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.hideProxyEmails = true
+        let session = makeSession(fixture: fixture)
+
+        // Both probes fail, then both recover on one project: one row, the
+        // other route's earlier ID kept as its history alias.
+        fixture.primaryUnverified = true
+        fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+        _ = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        fixture.primaryUnverified = false
+        fixture.secondaryErrorReason = nil
+        let merged = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        let thisMac = try #require(merged.first(where: { $0.isPrimary }))
+
+        // The proxy names a different account, fails once, then recovers.
+        fixture.hideProxyEmails = false
+        fixture.directEmail = "primary@example.test"
+        fixture.secondaryErrorReason = "VALIDATION_REQUIRED"
+        _ = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        fixture.secondaryErrorReason = nil
+        let recovered = await discoverAccounts(session, suite: suiteName, defaults: defaults)
+        let proxy = try #require(recovered.first(where: { !$0.isPrimary }))
+        #expect(proxy.id != thisMac.id)
+        #expect(!thisMac.historyAliases.contains(proxy.id))
+        #expect(recovered.first(where: { $0.isPrimary }).map { !$0.historyAliases.contains(proxy.id) } == true)
+    }
+
+    @Test("R4: only a JSON boolean true counts as a verified email")
+    func onlyJSONTrueIsVerified() throws {
+        let parsed = try #require(try JSONSerialization.jsonObject(
+            with: Data(#"{"t": true, "f": false, "one": 1, "onePoint": 1.0, "string": "true"}"#.utf8)
+        ) as? [String: Any])
+        #expect(AntigravityAccountDiscovery.isJSONTrue(parsed["t"]))
+        #expect(!AntigravityAccountDiscovery.isJSONTrue(parsed["f"]))
+        #expect(!AntigravityAccountDiscovery.isJSONTrue(parsed["one"]))
+        #expect(!AntigravityAccountDiscovery.isJSONTrue(parsed["onePoint"]))
+        #expect(!AntigravityAccountDiscovery.isJSONTrue(parsed["string"]))
+        #expect(!AntigravityAccountDiscovery.isJSONTrue(nil))
     }
 
     @Test("R2/R4: a sign-in without a refresh token has no cache key; an unverified email establishes nothing")
