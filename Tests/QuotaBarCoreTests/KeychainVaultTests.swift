@@ -1,0 +1,1566 @@
+import Foundation
+import Security
+import Testing
+@testable import QuotaBarCore
+
+// MARK: - Hermetic In-Memory Keychain Backend
+
+final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable {
+    struct ItemKey: Hashable {
+        let service: String
+        let account: String
+    }
+
+    struct Call: Equatable {
+        enum Kind: Equatable { case read, write, delete, list }
+        let kind: Kind
+        let service: String
+        let account: String?
+        let allowsPrompt: Bool?
+    }
+
+    private let lock = NSLock()
+    private var storage: [ItemKey: Data] = [:]
+    private var deniedReads: [ItemKey: OSStatus] = [:]
+    private var deniedWrites: [ItemKey: OSStatus] = [:]
+    private var failListServices: [String: OSStatus] = [:]
+    private var failNonInteractiveWrites = false
+    private(set) var calls: [Call] = []
+
+    func seed(service: String, account: String, value: String) {
+        lock.withLock { storage[ItemKey(service: service, account: account)] = Data(value.utf8) }
+    }
+
+    func seedRaw(service: String, account: String, data: Data) {
+        lock.withLock { storage[ItemKey(service: service, account: account)] = data }
+    }
+
+    func rawData(service: String, account: String) -> Data? {
+        lock.withLock { storage[ItemKey(service: service, account: account)] }
+    }
+
+    func setReadDenied(service: String, account: String, status: OSStatus?) {
+        lock.withLock {
+            let key = ItemKey(service: service, account: account)
+            if let status { deniedReads[key] = status } else { deniedReads.removeValue(forKey: key) }
+        }
+    }
+
+    func setWriteDenied(service: String, account: String, status: OSStatus?) {
+        lock.withLock {
+            let key = ItemKey(service: service, account: account)
+            if let status { deniedWrites[key] = status } else { deniedWrites.removeValue(forKey: key) }
+        }
+    }
+
+    func setFailNonInteractiveWrites(_ fail: Bool) {
+        lock.withLock { failNonInteractiveWrites = fail }
+    }
+
+    func setListFailure(service: String, status: OSStatus?) {
+        lock.withLock {
+            if let status { failListServices[service] = status } else { failListServices.removeValue(forKey: service) }
+        }
+    }
+
+    func promptCallCount() -> Int {
+        lock.withLock { calls.filter { $0.allowsPrompt == true }.count }
+    }
+
+    func recordedCalls() -> [Call] {
+        lock.withLock { calls }
+    }
+
+    func resetCalls() {
+        lock.withLock { calls.removeAll() }
+    }
+
+    func read(service: String, account: String, allowsPrompt: Bool) throws -> Data? {
+        try lock.withLock {
+            calls.append(Call(kind: .read, service: service, account: account, allowsPrompt: allowsPrompt))
+            let key = ItemKey(service: service, account: account)
+            if let status = deniedReads[key] {
+                throw KeychainError.unknown(status)
+            }
+            return storage[key]
+        }
+    }
+
+    func write(_ data: Data, service: String, account: String, label: String?, allowsPrompt: Bool) throws {
+        try lock.withLock {
+            calls.append(Call(kind: .write, service: service, account: account, allowsPrompt: allowsPrompt))
+            let key = ItemKey(service: service, account: account)
+            if !allowsPrompt && failNonInteractiveWrites {
+                throw KeychainError.unknown(errSecInteractionNotAllowed)
+            }
+            if let status = deniedWrites[key] {
+                throw KeychainError.unknown(status)
+            }
+            storage[key] = data
+        }
+    }
+
+    func delete(service: String, account: String, allowsPrompt: Bool) throws {
+        lock.withLock {
+            calls.append(Call(kind: .delete, service: service, account: account, allowsPrompt: allowsPrompt))
+            storage.removeValue(forKey: ItemKey(service: service, account: account))
+        }
+    }
+
+    func listAccounts(service: String) throws -> [String] {
+        try lock.withLock {
+            calls.append(Call(kind: .list, service: service, account: nil, allowsPrompt: nil))
+            if let status = failListServices[service] {
+                throw KeychainError.unknown(status)
+            }
+            return storage.keys.filter { $0.service == service }.map(\.account).sorted()
+        }
+    }
+}
+
+private func makeTempLockURL() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("frugalbar-vault-test-\(UUID().uuidString).lock")
+}
+
+// MARK: - Vault, Locking, Migration & Doctor Tests
+
+@Suite("KeychainVault")
+struct KeychainVaultTests {
+
+    @Test("two writers sharing a lockfile and backend preserve both keys")
+    func twoWritersMergeWithoutLoss() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let writerA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let writerB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try writerA.write("sk-claude", namespace: .keys, account: "claude", allowsPrompt: true)
+        try writerB.write("sk-openai", namespace: .keys, account: "openai", allowsPrompt: true)
+
+        let reader = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = reader.warmUpSync(interactive: false)
+        #expect(try reader.read(namespace: .keys, account: "claude") == "sk-claude")
+        #expect(try reader.read(namespace: .keys, account: "openai") == "sk-openai")
+    }
+
+    @Test("interruption after tombstone commit and before legacy deletion cannot restore a cleared key")
+    func tombstonePreventsResurrectionAfterCrash() throws {
+        struct SimulatedCrash: Error {}
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.keys", account: "claude", value: "old-secret")
+
+        let vault1 = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        vault1.afterCommitBeforeLegacyDelete = { throw SimulatedCrash() }
+
+        #expect(throws: SimulatedCrash.self) {
+            try vault1.delete(namespace: .keys, account: "claude", allowsPrompt: true)
+        }
+        // Legacy item is still present in the backend because delete was interrupted!
+        #expect(backend.rawData(service: "test.keys", account: "claude") != nil)
+
+        // Fresh process warms up: tombstone must block resurrection and clean up legacy item.
+        let vault2 = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = vault2.warmUpSync(interactive: false)
+        #expect(try vault2.read(namespace: .keys, account: "claude") == nil)
+        #expect(backend.rawData(service: "test.keys", account: "claude") == nil)
+    }
+
+    @Test("sync-only clear preserves provider secrets")
+    func syncOnlyClearPreservesProviderKeys() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("sk-provider", namespace: .keys, account: "openrouter", allowsPrompt: true)
+        try vault.write("rt-sync", namespace: .sync, account: SyncSecretAccount.refreshToken, allowsPrompt: true)
+        try vault.write("pub-123", namespace: .sync, account: SyncSecretAccount.publisherId, allowsPrompt: true)
+
+        try vault.clearSync(allowsPrompt: true)
+
+        let fresh = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = fresh.warmUpSync(interactive: false)
+        #expect(try fresh.read(namespace: .keys, account: "openrouter") == "sk-provider")
+        #expect(try fresh.read(namespace: .sync, account: SyncSecretAccount.refreshToken) == nil)
+        #expect(try fresh.read(namespace: .sync, account: SyncSecretAccount.publisherId) == nil)
+    }
+
+    @Test("corrupt vault and failed legacy enumeration never return nil as confirmed absence")
+    func corruptAndFailedScanNeverReturnNil() throws {
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        // 1. Corrupt vault
+        let corruptBackend = InMemoryKeychainBackend()
+        let garbage = Data("{not valid json".utf8)
+        corruptBackend.seedRaw(service: "test.keys", account: KeychainVault.vaultAccount, data: garbage)
+        let corruptVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: corruptBackend, lockFileURL: lockURL)
+        let corruptStatus = corruptVault.warmUpSync(interactive: false)
+        #expect(corruptStatus.isCorrupt)
+        #expect(throws: KeychainError.vaultUnavailable(.corrupt)) {
+            _ = try corruptVault.read(namespace: .sync, account: SyncSecretAccount.refreshToken)
+        }
+        // Corrupt data must not be overwritten.
+        #expect(corruptBackend.rawData(service: "test.keys", account: KeychainVault.vaultAccount) == garbage)
+
+        // 2. Failed legacy enumeration
+        let scanFailBackend = InMemoryKeychainBackend()
+        scanFailBackend.setListFailure(service: "test.sync", status: errSecAuthFailed)
+        let scanFailVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: scanFailBackend, lockFileURL: lockURL)
+        let scanStatus = scanFailVault.warmUpSync(interactive: false)
+        #expect(!scanStatus.legacyScanSucceeded)
+        #expect(scanStatus.needsUnlock)
+        #expect(throws: KeychainError.vaultUnavailable(.legacyScanFailed)) {
+            _ = try scanFailVault.read(namespace: .sync, account: SyncSecretAccount.refreshToken)
+        }
+    }
+
+    @Test("FB-R3-01: deferred write stays non-blocking when lock or Keychain is unavailable, flushes on Unlock even from .loaded, and yields to explicit write or delete")
+    func deferredWriteLifecycleAndPrecedence() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("initial", namespace: .keys, account: "gemini.oauth.session", allowsPrompt: true)
+        _ = vault.warmUpSync(interactive: false)
+        #expect(vault.statusSnapshot().state == .loaded)
+
+        // Contended lockfile: hold LOCK_EX externally so writeDeferred cannot block.
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX) == 0)
+        let flushedWhileLocked = vault.writeDeferred("renewed-token", namespace: .keys, account: "gemini.oauth.session")
+        #expect(flushedWhileLocked == .deferred)
+        #expect(vault.cachedValue(namespace: .keys, account: "gemini.oauth.session") == "renewed-token")
+        #expect(vault.statusSnapshot().hasPendingWrites)
+        _ = flock(fd, LOCK_UN)
+        close(fd)
+
+        // Unlock from .loaded must flush the deferred write!
+        let statusAfterUnlock = vault.warmUpSync(interactive: true)
+        #expect(!statusAfterUnlock.hasPendingWrites)
+        let reader = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = reader.warmUpSync(interactive: false)
+        #expect(try reader.read(namespace: .keys, account: "gemini.oauth.session") == "renewed-token")
+
+        // Now test non-interactive write denial + explicit replacement/deletion superseding deferred write.
+        backend.setFailNonInteractiveWrites(true)
+        #expect(vault.writeDeferred("stale-renewal", namespace: .keys, account: "gemini.oauth.session") == .deferred)
+        #expect(vault.statusSnapshot().hasPendingWrites)
+
+        // Explicit replacement supersedes deferred write.
+        try vault.write("explicit-new", namespace: .keys, account: "gemini.oauth.session", allowsPrompt: true)
+        #expect(!vault.statusSnapshot().hasPendingWrites)
+        #expect(try vault.read(namespace: .keys, account: "gemini.oauth.session") == "explicit-new")
+
+        // Deferred write followed by explicit delete: delete wins even after Unlock.
+        #expect(vault.writeDeferred("stale-renewal-2", namespace: .keys, account: "gemini.oauth.session") == .deferred)
+        try vault.delete(namespace: .keys, account: "gemini.oauth.session", allowsPrompt: true)
+        backend.setFailNonInteractiveWrites(false)
+        _ = vault.warmUpSync(interactive: true)
+        #expect(try vault.read(namespace: .keys, account: "gemini.oauth.session") == nil)
+    }
+
+    @Test("doctor probe uses raw non-interactive backend for set, get, and deferred delete without touching vault.v1")
+    func doctorProbeUsesRawNonInteractiveBackend() {
+        let backend = InMemoryKeychainBackend()
+        let result = CLIArguments.keychainRoundTripResult(
+            label: "com.quotabar.doctor.probe.test",
+            service: "test.keys",
+            backend: backend
+        )
+        switch result {
+        case .success: break
+        case .failure(let error): Issue.record("expected doctor probe success, got \(error)")
+        }
+
+        let calls = backend.recordedCalls()
+        #expect(calls.count == 3)
+        #expect(calls[0] == .init(kind: .write, service: "test.keys", account: "com.quotabar.doctor.probe.test", allowsPrompt: false))
+        #expect(calls[1] == .init(kind: .read, service: "test.keys", account: "com.quotabar.doctor.probe.test", allowsPrompt: false))
+        #expect(calls[2] == .init(kind: .delete, service: "test.keys", account: "com.quotabar.doctor.probe.test", allowsPrompt: false))
+        #expect(backend.rawData(service: "test.keys", account: KeychainVault.vaultAccount) == nil)
+    }
+
+    @Test("partial migration with denied refreshToken pauses Sync without needsSignIn and resumes on unlock")
+    func syncPausesOnDeniedRefreshTokenAndResumesOnUnlock() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-live")
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.refreshToken, status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let initialStatus = vault.warmUpSync(interactive: false)
+        #expect(initialStatus.pendingLegacySyncKeys.contains(SyncSecretAccount.refreshToken))
+        #expect(initialStatus.needsUnlock)
+
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+        let stateStore = InMemorySyncStateStore()
+        let clock = FakeSyncClock()
+        let transport = ScriptedSyncTransport()
+
+        // Seed active state directly so we simulate a cold restart with an active sync session.
+        var active = SyncPersistentState()
+        active.phase = .active
+        active.account = SyncAccount(permissionId: "perm-1", email: "user@example.com")
+        try stateStore.save(active)
+
+        let restarted = SyncPublisher(
+            configuration: SyncClientConfiguration(clientID: "cid", clientSecret: "csec"),
+            transport: transport,
+            secrets: secrets,
+            stateStore: stateStore,
+            clock: clock,
+            label: { "TestMac" }
+        )
+        await restarted.submit(SyncExportSource(snapshots: []))
+        await restarted.tick()
+
+        // Must NOT persist needsSignIn = true!
+        let pausedStatus = await restarted.status()
+        #expect(!pausedStatus.needsSignIn)
+        #expect(pausedStatus.phase == SyncPhase.active)
+        #expect(try stateStore.load().needsSignIn == false)
+
+        // Lift denial and unlock vault: refreshToken migrates and publish can proceed.
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.refreshToken, status: nil)
+        _ = await vault.unlock()
+        #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-live")
+        await restarted.vaultDidUnlock()
+        #expect(await restarted.status().needsSignIn == false)
+    }
+
+    @Test("partial migration with denied publisherId preserves real publisherId during Stop and completes after unlock")
+    func stopPreservesRealPublisherIdWhenDenied() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-real-id")
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = vault.warmUpSync(interactive: false)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+
+        let stateStore = InMemorySyncStateStore()
+        var active = SyncPersistentState()
+        active.phase = .active
+        active.account = SyncAccount(permissionId: "perm-1", email: "user@example.com")
+        try stateStore.save(active)
+
+        let publisher = SyncPublisher(
+            configuration: SyncClientConfiguration(clientID: "cid", clientSecret: "csec"),
+            transport: ScriptedSyncTransport(),
+            secrets: secrets,
+            stateStore: stateStore,
+            clock: FakeSyncClock(),
+            label: { "TestMac" }
+        )
+
+        await publisher.stop()
+        // Must NOT have persisted an empty publisherId!
+        let persisted = try stateStore.load()
+        #expect(persisted.phase == .active)
+        #expect(persisted.cleanup == nil)
+
+        // Unlock vault: now stop() reads the real publisherId and enters .stopping with it.
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: nil)
+        _ = await vault.unlock()
+        await publisher.vaultDidUnlock()
+        await publisher.setStopCheckpoint { gap in
+            if gap == .afterStoppingWrite { throw CancellationError() }
+        }
+        await publisher.tick()
+
+        let stoppingState = try stateStore.load()
+        #expect(stoppingState.phase == .stopping)
+        #expect(stoppingState.cleanup?.publisherId == "pub-real-id")
+    }
+
+    @Test("unfinished Stop on corrupt vault or locked refreshToken never sets cleanup.authLost = true")
+    func unfinishedStopNeverMarksAuthLostOnUnavailableVault() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seedRaw(service: "test.keys", account: KeychainVault.vaultAccount, data: Data("corrupt".utf8))
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = vault.warmUpSync(interactive: false)
+
+        let stateStore = InMemorySyncStateStore()
+        var stopping = SyncPersistentState()
+        stopping.phase = .stopping
+        stopping.account = SyncAccount(permissionId: "perm-1", email: "user@example.com")
+        stopping.cleanup = SyncCleanupRecord(
+            publisherId: "pub-1",
+            account: stopping.account,
+            refreshTokenAccount: SyncSecretAccount.refreshToken,
+            relistAt: [Date(), Date()],
+            completed: [],
+            authLost: false,
+            publishedThisSession: true
+        )
+        try stateStore.save(stopping)
+
+        let publisher = SyncPublisher(
+            configuration: SyncClientConfiguration(clientID: "cid", clientSecret: "csec"),
+            transport: ScriptedSyncTransport(),
+            secrets: KeychainSyncSecretStore(service: "test.sync", vault: vault),
+            stateStore: stateStore,
+            clock: FakeSyncClock(),
+            label: { "TestMac" }
+        )
+
+        await publisher.resume()
+        let status = await publisher.status()
+        #expect(status.phase == SyncPhase.stopping)
+        #expect(!status.cleanupNeedsSignIn)
+        #expect(try stateStore.load().cleanup?.authLost == false)
+    }
+
+    @Test("warm-up delayed beyond perProviderTimeout does not time out discovery or providers")
+    func warmUpOutsideDiscoveryAndProviderDeadlines() async {
+        let warmUpCompleted = LockedFlag()
+        let policy = CachePolicy(
+            cacheTTL: 60,
+            backgroundRefreshInterval: 120,
+            perProviderTimeout: 0.15,
+            minPollInterval: 0
+        )
+        let manager = QuotaManager(
+            cachePolicy: policy,
+            providerFactory: {
+                [FastMeasuredProvider(vendorId: .openrouter, checkWarmUp: { warmUpCompleted.value })]
+            },
+            claudeProviderFactory: {
+                [FastMeasuredProvider(vendorId: .claude, checkWarmUp: { warmUpCompleted.value })]
+            },
+            vaultWarmUp: { _ in
+                try? await Task.sleep(for: .milliseconds(250))
+                warmUpCompleted.set()
+            }
+        )
+
+        let result = await manager.refresh()
+        #expect(warmUpCompleted.value)
+        #expect(result[VendorIdentifier.openrouter.rawValue]?.status == .healthy)
+        #expect(result[VendorIdentifier.claude.rawValue]?.status == .healthy)
+    }
+
+    @Test("FB-R3-03: forceRefresh defaults to non-interactive unlock while explicit flag carries interactive intent")
+    func interactiveUnlockSeparatedFromForceRefresh() async {
+        let recorded = RecordedBools()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [] },
+            vaultWarmUp: { interactive in
+                recorded.append(interactive)
+            }
+        )
+
+        _ = await manager.forceRefresh()
+        _ = await manager.forceRefresh(allowInteractiveUnlock: false)
+        _ = await manager.forceRefresh(allowInteractiveUnlock: true)
+
+        #expect(recorded.values == [false, false, true])
+    }
+
+    @Test("R1-01: warming a fresh vault sharing keysService/syncService never deletes vault.v1")
+    func reopenCustomSyncVaultPreservesVault() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        // Even if someone constructs a vault where keysService == syncService,
+        // vault.v1 must be excluded from legacy sync scans and deletions.
+        let writer = KeychainVault(keysService: "custom.svc", syncService: "custom.svc", backend: backend, lockFileURL: lockURL)
+        try writer.write("rt-1", namespace: .sync, account: SyncSecretAccount.refreshToken)
+
+        let reopened = KeychainVault(keysService: "custom.svc", syncService: "custom.svc", backend: backend, lockFileURL: lockURL)
+        _ = reopened.warmUpSync(interactive: false)
+        #expect(try reopened.read(namespace: .sync, account: SyncSecretAccount.refreshToken) == "rt-1")
+        #expect(backend.rawData(service: "custom.svc", account: KeychainVault.vaultAccount) != nil)
+
+        // And KeychainSyncSecretStore with a custom service separates vault and legacy services.
+        let customStore = KeychainSyncSecretStore(service: "com.quotabar.sync.custom-test")
+        #expect(customStore.vault.keysService != customStore.vault.syncService)
+    }
+
+    @Test("R1-02: failed migration commit keeps uncommitted legacy accounts pending across later saves")
+    func failedMigrationCommitKeepsLegacyAccountsPending() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-legacy")
+        backend.seedRaw(service: "test.keys", account: "bad-utf8", data: Data([0xFF, 0xFE]))
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecInteractionNotAllowed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let status = vault.warmUpSync(interactive: false)
+        #expect(status.pendingLegacySyncKeys.contains(SyncSecretAccount.publisherId))
+        #expect(status.pendingLegacyKeys.contains("bad-utf8"))
+
+        // Lift vault write denial and save an unrelated key: publisherId must STILL be pending, not nil!
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: nil)
+        try vault.write("sk-other", namespace: .keys, account: "openrouter")
+        #expect(throws: KeychainError.vaultUnavailable(.pendingLegacy)) {
+            _ = try vault.read(namespace: .sync, account: SyncSecretAccount.publisherId)
+        }
+    }
+
+    @Test("R1-03: late deferred renewal with stale expectedPreviousValue yields to newer explicit or cross-process edit")
+    func lateDeferredWriteYieldsToNewerEdit() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        _ = vaultB.warmUpSync(interactive: false)
+
+        // Another process replaces the session with session-v2 while vaultA's refresh was in flight.
+        try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
+
+        // vaultA's late deferred renewal carries expectedPreviousValue: "session-v1" and must be dropped.
+        _ = vaultA.writeDeferred("session-renewed-from-v1", namespace: .keys, account: "gemini-oauth", expectedPreviousValue: "session-v1")
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+    }
+
+    @Test("R1-04: clearSync fails closed when legacy sync enumeration fails")
+    func clearSyncFailsClosedOnEnumerationError() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.setListFailure(service: "test.sync", status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        #expect(throws: KeychainError.vaultUnavailable(.legacyScanFailed)) {
+            try vault.clearSync()
+        }
+    }
+
+    @Test("R1-05: SyncPublisher retries non-interactively after Keychain denial clears without manual Unlock")
+    func syncPublisherRecoversOnRetryTickAfterDenialClears() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-live")
+        backend.seed(service: "test.sync", account: SyncSecretAccount.publisherId, value: "pub-real")
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: errSecAuthFailed)
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = vault.warmUpSync(interactive: false)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+
+        let stateStore = InMemorySyncStateStore()
+        var active = SyncPersistentState()
+        active.phase = .active
+        active.account = SyncAccount(permissionId: "perm-1", email: "user@example.com")
+        try stateStore.save(active)
+
+        let clock = FakeSyncClock()
+        let publisher = SyncPublisher(
+            configuration: SyncClientConfiguration(clientID: "cid", clientSecret: "csec"),
+            transport: ScriptedSyncTransport(),
+            secrets: secrets,
+            stateStore: stateStore,
+            clock: clock,
+            label: { "TestMac" }
+        )
+
+        // Stop fails because publisherId is denied; stays active with stopRequested.
+        await publisher.stop()
+        #expect(try stateStore.load().phase == .active)
+
+        // Lift denial WITHOUT calling vault.unlock(); advance clock past backoff and tick.
+        backend.setReadDenied(service: "test.sync", account: SyncSecretAccount.publisherId, status: nil)
+        await publisher.setStopCheckpoint { gap in
+            if gap == .afterStoppingWrite { throw CancellationError() }
+        }
+        clock.advance(by: 120)
+        await publisher.tick()
+
+        let persisted = try stateStore.load()
+        #expect(persisted.phase == .stopping)
+        #expect(persisted.cleanup?.publisherId == "pub-real")
+    }
+
+    @Test("R1-06: passive forceRefresh(allowInteractiveUnlock: false) disables security CLI and never triggers startupWarmUp")
+    func passiveForceRefreshStaysNonInteractive() async {
+        let startupCalls = RecordedBools()
+        let securityCLIFlags = RecordedBools()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: {
+                [SecurityCLIObservingProvider(onFetch: { securityCLIFlags.append($0) })]
+            },
+            vaultWarmUp: { _ in },
+            startupWarmUp: { startupCalls.append(true) }
+        )
+
+        // Passive forceRefresh must NOT invoke startupWarmUp and must set allowsSecurityCLI = false.
+        _ = await manager.forceRefresh(allowInteractiveUnlock: false)
+        #expect(startupCalls.values.isEmpty)
+        #expect(securityCLIFlags.values == [false])
+
+        // Explicit interactive forceRefresh sets allowsSecurityCLI = true.
+        _ = await manager.forceRefresh(allowInteractiveUnlock: true)
+        #expect(securityCLIFlags.values == [false, true])
+    }
+
+    @Test("R2-01: passive refresh suppresses /usr/bin/security across credentialQueue GCD hop")
+    func passiveRefreshSuppressesSecurityCLIAcrossGCDHop() async {
+        let invoked = RecordedStrings()
+        let hook: @Sendable (String) -> Data? = { service in
+            invoked.append(service)
+            return nil
+        }
+
+        // Enable CLI discovery via task-local override so parallel suites never race UserDefaults.
+        await CredentialStore.$cliDiscoveryOverride.withValue(true) {
+            // Across credentialQueue.async, allowsSecurityCLI == false must suppress the subprocess hook.
+            await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+                await CredentialStore.$allowsSecurityCLI.withValue(false) {
+                    _ = await CredentialStore.apiKeyAsync(for: .muse)
+                    _ = await CredentialStore.claudePlanNameAsync()
+                }
+            }
+            #expect(invoked.values.isEmpty)
+
+            // When allowsSecurityCLI == true (and CLI discovery enabled), the hook is reachable across the GCD hop.
+            await CredentialStore.$securityCLISubprocessHook.withValue(hook) {
+                await CredentialStore.$allowsSecurityCLI.withValue(true) {
+                    _ = await CredentialStore.apiKeyAsync(for: .muse)
+                }
+            }
+            #expect(invoked.values.contains("ai.meta.dev.credentials"))
+        }
+    }
+
+    @Test("R2-02: superseded deferred write returns .superseded and refreshes in-memory cache from durable vault")
+    func supersededDeferredWriteRefreshesCacheAndReportsOutcome() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        _ = vaultB.warmUpSync(interactive: false)
+        // Another process replaces the session with session-v2.
+        try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
+
+        // vaultA's stale cache still holds session-v1 until its deferred write runs under flock.
+        let outcome = vaultA.writeDeferred(
+            "session-renewed-from-v1",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(outcome == .superseded)
+        // vaultA's in-memory cache must immediately reflect the winning session-v2!
+        #expect(vaultA.cachedValue(namespace: .keys, account: "gemini-oauth") == "session-v2")
+        #expect(try vaultA.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // And when another process deletes the key, a stale renewal also reports .superseded and clears cache.
+        try vaultB.delete(namespace: .keys, account: "gemini-oauth")
+        let deletedOutcome = vaultA.writeDeferred(
+            "session-renewed-from-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v2"
+        )
+        #expect(deletedOutcome == .superseded)
+        #expect(vaultA.cachedValue(namespace: .keys, account: "gemini-oauth") == nil)
+    }
+
+    @Test("R2-03 & R3-05: interactive refresh arriving during a queued passive follow-up runs before activeTask releases")
+    func interactiveEscalationDuringPassiveFollowUpDrainsBeforeRelease() async {
+        let warmUps = RecordedBools()
+        let pass1Started = CoreAsyncSignal()
+        let releasePass1 = CoreAsyncSignal()
+        let passiveStarted = CoreAsyncSignal()
+        let releasePassive = CoreAsyncSignal()
+        let passCounter = AtomicCounter()
+
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 5, minPollInterval: 0),
+            providerFactory: { [] },
+            vaultWarmUp: { interactive in
+                let n = passCounter.increment()
+                warmUps.append(interactive)
+                if n == 1 {
+                    pass1Started.signal()
+                    await releasePass1.wait()
+                } else if n == 2 {
+                    passiveStarted.signal()
+                    await releasePassive.wait()
+                }
+            }
+        )
+
+        let autoTask = Task { await manager.refresh() }
+        // Deterministically wait for pass 1 to start, queue passive follow-up, then release pass 1.
+        await pass1Started.wait()
+        let queuedPassive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: false)
+        #expect(queuedPassive)
+        releasePass1.signal()
+
+        // Deterministically wait for passive follow-up to start, escalate with interactive click, then release.
+        await passiveStarted.wait()
+        let queuedInteractive = await manager.queueUserRefreshIfActive(allowInteractiveUnlock: true)
+        #expect(queuedInteractive)
+        releasePassive.signal()
+
+        _ = await autoTask.value
+        #expect(warmUps.values == [false, false, true])
+
+        // A subsequent unrelated automatic refresh must stay non-interactive.
+        _ = await manager.refresh()
+        #expect(warmUps.values == [false, false, true, false])
+    }
+
+    @Test("R3-03: chained renewal of a deferred token succeeds once contention clears")
+    func chainedDeferredRenewalPreservesDurableBaseline() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        // Hold flock externally so renewal 1 (v1 -> v2) is deferred.
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX) == 0)
+        let firstOutcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(firstOutcome == .deferred)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // Release flock; renewal 2 starts from the pending v2 and writes v3.
+        _ = flock(fd, LOCK_UN)
+        close(fd)
+        let secondOutcome = vault.writeDeferred(
+            "session-v3",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v2"
+        )
+        #expect(secondOutcome == .persisted)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v3")
+    }
+
+    @Test("R3-04: passive credential miss retaining a measured snapshot does not throttle an interactive retry")
+    func passiveCredentialMissDoesNotThrottleInteractiveRetry() async {
+        let fetchCount = AtomicCounter()
+        let provider = InteractiveCredentialProvider(onFetch: { _ = fetchCount.increment() })
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 5, minPollInterval: 30),
+            providerFactory: { [provider] },
+            vaultWarmUp: { _ in }
+        )
+
+        // 1. Initial refresh succeeds (measured).
+        _ = await manager.refresh()
+        #expect(fetchCount.current == 1)
+
+        // 2. Passive forceRefresh misses credential (allowsSecurityCLI == false -> .notConfigured),
+        //    retaining the measured snapshot with staleReading.reason == .notConfigured.
+        let passiveResult = await manager.forceRefresh(allowInteractiveUnlock: false)
+        #expect(fetchCount.current == 2)
+        #expect(passiveResult[VendorIdentifier.muse.rawValue]?.staleReading?.reason == .notConfigured)
+
+        // 3. Interactive forceRefresh within minPollInterval=30s MUST bypass the floor and re-fetch!
+        let interactiveResult = await manager.forceRefresh(allowInteractiveUnlock: true)
+        #expect(fetchCount.current == 3)
+        #expect(interactiveResult[VendorIdentifier.muse.rawValue]?.staleReading == nil)
+    }
+
+    @Test("R3-03 overlapping flush: v3 queued while v2 is committing advances its baseline and persists")
+    func overlappingFlushAdvancesChainedBaseline() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        let injected = LockedFlag()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !injected.value else { return }
+            injected.set()
+            // While flush 1 holds flock and is committing v2, renewal 2 queues v3.
+            // Its own non-blocking flush hits flock contention and stays queued.
+            let v3Outcome = vault.writeDeferred(
+                "session-v3",
+                namespace: .keys,
+                account: "gemini-oauth",
+                expectedPreviousValue: "session-v2"
+            )
+            #expect(v3Outcome == .deferred)
+        }
+
+        let v2Outcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(v2Outcome == .persisted)
+        #expect(injected.value)
+        // v3 must still be queued in memory with its baseline advanced to v2.
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+
+        hooked.onBeforeWrite = nil
+        #expect(vault.flushDeferredNonBlocking())
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: baseBackend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v3")
+    }
+
+    @Test("R4-01: failed explicit write or delete preserves pending deferred renewal")
+    func failedExplicitMutationPreservesPendingRenewal() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+
+        // Fail non-interactive writes so deferred renewal stays in memory.
+        backend.setFailNonInteractiveWrites(true)
+        let outcome = vault.writeDeferred(
+            "session-v2",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(outcome == .deferred)
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+
+        // Explicit write and delete both fail while Keychain denies vault writes.
+        backend.setFailNonInteractiveWrites(false)
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+        #expect(throws: KeychainError.self) {
+            try vault.write("session-explicit", namespace: .keys, account: "gemini-oauth")
+        }
+        #expect(throws: KeychainError.self) {
+            try vault.delete(namespace: .keys, account: "gemini-oauth")
+        }
+        // Pending renewal must still be intact!
+        #expect(vault.statusSnapshot().deferredWriteCount == 1)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+
+        // Once writes succeed again, Unlock flushes the preserved renewal.
+        backend.setWriteDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: nil)
+        _ = vault.warmUpSync(interactive: true)
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+    }
+
+    @Test("R4-02: passive warm-up refreshes cross-process credential deletion")
+    func passiveWarmUpObservesCrossProcessDeletion() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("secret-key", namespace: .keys, account: "openrouter")
+        _ = await vaultB.warmUp(interactive: false)
+        #expect(try vaultB.read(namespace: .keys, account: "openrouter") == "secret-key")
+
+        // Instance A deletes the key.
+        try vaultA.delete(namespace: .keys, account: "openrouter")
+
+        // Instance B's next passive warm-up must observe the deletion without prompting.
+        backend.resetCalls()
+        _ = await vaultB.warmUp(interactive: false)
+        #expect(backend.promptCallCount() == 0)
+        #expect(try vaultB.read(namespace: .keys, account: "openrouter") == nil)
+    }
+
+    @Test("R4-03: background sync delete uses non-interactive vault access and never prompts")
+    func syncDeleteNonInteractivelyNeverPrompts() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let store = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+        try store.write("refresh-tok", account: SyncSecretAccount.refreshToken)
+
+        // When non-interactive writes are blocked, deleteNonInteractively must fail
+        // without prompting.
+        backend.resetCalls()
+        backend.setFailNonInteractiveWrites(true)
+        #expect(throws: KeychainError.self) {
+            try store.deleteNonInteractively(SyncSecretAccount.refreshToken)
+        }
+        #expect(backend.promptCallCount() == 0)
+
+        // When unlocked, deleteNonInteractively removes the token with zero prompts.
+        backend.setFailNonInteractiveWrites(false)
+        try store.deleteNonInteractively(SyncSecretAccount.refreshToken)
+        #expect(backend.promptCallCount() == 0)
+        #expect(try store.read(SyncSecretAccount.refreshToken) == nil)
+    }
+
+    @Test("R5-01: compare-and-delete protects a newer cross-process Sync sign-in")
+    func terminalRefreshDoesNotDeleteNewerCrossProcessSignIn() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let storeA = KeychainSyncSecretStore(service: "test.sync", vault: vaultA)
+        let storeB = KeychainSyncSecretStore(service: "test.sync", vault: vaultB)
+
+        try storeA.write("token-T1", account: SyncSecretAccount.refreshToken)
+        // Process B signs in with T2 while Process A still has T1 cached.
+        try storeB.write("token-T2", account: SyncSecretAccount.refreshToken)
+
+        // Process A's terminal refresh of T1 attempts compare-and-delete: must NOT remove T2!
+        try storeA.deleteNonInteractivelyIfMatching("token-T1", account: SyncSecretAccount.refreshToken)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .sync, account: SyncSecretAccount.refreshToken) == "token-T2")
+        // Process A's cache also refreshed to T2.
+        #expect(try storeA.read(SyncSecretAccount.refreshToken) == "token-T2")
+    }
+
+    @Test("R5-02: warm-up rejecting a stale deferred renewal causes writeDeferred to return .superseded")
+    func warmUpRejectingStaleDeferredReportsSuperseded() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+        try vaultA.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        // Another process replaces the session with v2.
+        try vaultB.write("session-v2", namespace: .keys, account: "gemini-oauth")
+
+        // Right after writeDeferred queues session-stale and before its own
+        // flush reads deferredWrites, warmUpSync runs, sees durable v2, rejects
+        // session-stale as stale, and empties deferredWrites.
+        let warmUpRan = LockedFlag()
+        vaultA.beforeDeferredFlushHook = {
+            guard !warmUpRan.value else { return }
+            warmUpRan.set()
+            _ = vaultA.warmUpSync(interactive: false)
+        }
+
+        let outcome = vaultA.writeDeferred(
+            "session-stale",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1"
+        )
+        #expect(warmUpRan.value)
+        #expect(outcome == .superseded)
+        #expect(try vaultA.read(namespace: .keys, account: "gemini-oauth") == "session-v2")
+    }
+
+    @Test("R5-03: passive warm-up hitting errSecInteractionNotAllowed keeps already-loaded credentials (Allow Once)")
+    func passiveWarmUpPreservesLoadedVaultOnAllowOnce() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("secret-key", namespace: .keys, account: "openrouter")
+
+        // Simulate SecurityAgent "Allow" (once): interactive read succeeded,
+        // subsequent non-interactive reads return errSecInteractionNotAllowed.
+        backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecInteractionNotAllowed)
+
+        let status = await vault.warmUp(interactive: false)
+        #expect(status.state == .loaded)
+        #expect(try vault.read(namespace: .keys, account: "openrouter") == "secret-key")
+    }
+
+    @Test("R10-01: deferred renewal is dropped when another process switched the co-expected client ID")
+    func deferredRenewalYieldsToCrossProcessClientChange() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vaultA = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let vaultB = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vaultA.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+        _ = vaultB.warmUpSync(interactive: false)
+
+        // Process B switches clients and leaves the session record untouched.
+        try vaultB.write("client-B", namespace: .keys, account: "gemini-client")
+
+        // Process A still caches client-A; its renewal under client-A must not land.
+        let outcome = vaultA.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        #expect(outcome == .superseded)
+        #expect(try vaultA.read(namespace: .keys, account: "gemini-client") == "client-B")
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R10-01: a pending renewal is not merged into the commit that rewrites its co-expected client ID")
+    func pendingRenewalYieldsToClientRewriteInSameCommit() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        // Keychain refuses the background persist, so the renewal stays pending.
+        backend.setFailNonInteractiveWrites(true)
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        #expect(outcome == .deferred)
+
+        // The explicit client save would otherwise flush the pending renewal
+        // alongside the new client ID in one commit.
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        backend.setFailNonInteractiveWrites(false)
+
+        let verifier = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        _ = verifier.warmUpSync(interactive: false)
+        #expect(try verifier.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+        #expect(try verifier.read(namespace: .keys, account: "gemini-client") == "client-B")
+    }
+
+    @Test("R10-01: an in-process client change supersedes the renewal before it is queued")
+    func deferredRenewalYieldsToInProcessClientChange() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("session-v1", namespace: .keys, account: "gemini-oauth")
+        // The renewal started with no stored client (built-in client); the user then set one.
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        // Keychain refuses the background read, so the flush never sees the
+        // durable document and only the in-memory check can stop this poll
+        // from using the old client's session.
+        backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecInteractionNotAllowed)
+
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-builtin",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: nil)]
+        )
+        #expect(outcome == .superseded)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R10-02: a warm-up that hits a Keychain denial or corrupt vault still posts a status change")
+    func failedWarmUpPostsStatusChange() async throws {
+        for corrupt in [false, true] {
+            let backend = InMemoryKeychainBackend()
+            let lockURL = makeTempLockURL()
+            defer { try? FileManager.default.removeItem(at: lockURL) }
+            if corrupt {
+                backend.seedRaw(service: "test.keys", account: KeychainVault.vaultAccount, data: Data("not json".utf8))
+            } else {
+                backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+            }
+            let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+
+            let posted = PostedFlag()
+            let token = NotificationCenter.default.addObserver(
+                forName: KeychainVault.statusDidChangeNotification,
+                object: vault,
+                queue: nil
+            ) { _ in posted.set() }
+            defer { NotificationCenter.default.removeObserver(token) }
+
+            let status = await vault.warmUp(interactive: false)
+            #expect(corrupt ? status.isCorrupt : status.isLockedOrDenied)
+            // The post is enqueued on the main queue before warmUp returns, so
+            // one hop to the main actor runs after it.
+            await MainActor.run {}
+            #expect(posted.value, "corrupt: \(corrupt)")
+        }
+    }
+}
+
+@Suite("KeychainVault R11")
+struct KeychainVaultR11Tests {
+    @Test("R11-01: the Gemini client baseline is nil (unknown) when the override is pending legacy migration, never confirmed absence")
+    func clientBaselineDistinguishesUnreadableFromAbsent() throws {
+        let label = GeminiOAuthSession.clientIDKeychainLabel
+
+        // Override exists only as a legacy item Keychain refuses to read.
+        let pendingBackend = InMemoryKeychainBackend()
+        let pendingLock = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: pendingLock) }
+        pendingBackend.seed(service: "test.keys", account: label, value: "client-legacy")
+        pendingBackend.setReadDenied(service: "test.keys", account: label, status: errSecInteractionNotAllowed)
+        let pendingVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: pendingBackend, lockFileURL: pendingLock)
+        _ = pendingVault.warmUpSync(interactive: false)
+        #expect(pendingVault.statusSnapshot().pendingLegacyKeys.contains(label))
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: pendingVault)) == nil)
+
+        // No override anywhere: confirmed absence.
+        let absentBackend = InMemoryKeychainBackend()
+        let absentLock = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: absentLock) }
+        let absentVault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: absentBackend, lockFileURL: absentLock)
+        _ = absentVault.warmUpSync(interactive: false)
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: absentVault)) == .some(nil))
+
+        try absentVault.write("client-A", namespace: .keys, account: label)
+        #expect(GeminiOAuthSession.storedClientIDBaseline(manager: KeychainManager(vault: absentVault)) == .some("client-A"))
+    }
+
+    @Test("R11-02: a renewal queued while an explicit client save holds flock is superseded, not deferred")
+    func renewalQueuedDuringClientCommitIsSuperseded() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        let injected = LockedFlag()
+        let lateOutcome = LockedOutcome()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !injected.value else { return }
+            injected.set()
+            // The save of client-B has snapshotted the deferred buffer and is
+            // committing; the cache still says client-A.
+            lateOutcome.set(vault.writeDeferred(
+                "session-renewed-under-A",
+                namespace: .keys,
+                account: "gemini-oauth",
+                expectedPreviousValue: "session-v1",
+                alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+            ))
+        }
+        try vault.write("client-B", namespace: .keys, account: "gemini-client")
+        hooked.onBeforeWrite = nil
+
+        #expect(injected.value)
+        #expect(lateOutcome.value == .superseded)
+        #expect(vault.statusSnapshot().deferredWriteCount == 0)
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+}
+
+@Suite("KeychainVault R12")
+struct KeychainVaultR12Tests {
+    @Test("R12-01: a renewal queued before a client save, whose flush meets that save's lock, is superseded")
+    func renewalQueuedBeforeClientSaveIsSuperseded() throws {
+        let baseBackend = InMemoryKeychainBackend()
+        let hooked = HookedKeychainBackend(wrapping: baseBackend)
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: hooked, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: "gemini-oauth", value: "session-v1"),
+            (namespace: .keys, account: "gemini-client", value: "client-A"),
+        ])
+
+        let saveIsWriting = DispatchSemaphore(value: 0)
+        let releaseSave = DispatchSemaphore(value: 0)
+        let saveDone = DispatchSemaphore(value: 0)
+        let saveStarted = LockedFlag()
+        let saveHeldLock = LockedFlag()
+        let saveHeldUntilReleased = LockedFlag()
+        hooked.onBeforeWrite = { account in
+            guard account == KeychainVault.vaultAccount, !saveStarted.value else { return }
+            saveStarted.set()
+            saveIsWriting.signal()
+            // Released only after the renewal's flush returns, so success here
+            // proves the save held flock for the whole flush.
+            if releaseSave.wait(timeout: .now() + 30) == .success { saveHeldUntilReleased.set() }
+        }
+        // The renewal is queued (passing every in-memory check), then the
+        // client-B save starts and holds flock before the renewal flushes.
+        // The save runs on its own `Thread`, not a GCD or cooperative-pool
+        // queue: on a loaded CI runner a queued block was not scheduled
+        // within the wait, so the flush found the lock free and the test
+        // measured a different ordering from the one it names.
+        vault.beforeDeferredFlushHook = {
+            let saver = Thread {
+                try? vault.write("client-B", namespace: .keys, account: "gemini-client")
+                saveDone.signal()
+            }
+            saver.start()
+            if saveIsWriting.wait(timeout: .now() + 30) == .success { saveHeldLock.set() }
+        }
+        let outcome = vault.writeDeferred(
+            "session-renewed-under-A",
+            namespace: .keys,
+            account: "gemini-oauth",
+            expectedPreviousValue: "session-v1",
+            alsoExpecting: [(namespace: .keys, account: "gemini-client", value: "client-A")]
+        )
+        vault.beforeDeferredFlushHook = nil
+        releaseSave.signal()
+        #expect(saveDone.wait(timeout: .now() + 30) == .success)
+        hooked.onBeforeWrite = nil
+
+        // The ordering this test names must actually have happened.
+        try #require(saveHeldLock.value, "the client save never reached its Keychain write while the renewal flushed")
+        try #require(saveHeldUntilReleased.value, "the client save gave up its lock before the renewal's flush returned")
+        #expect(saveStarted.value)
+        #expect(outcome == .superseded)
+        #expect(try vault.read(namespace: .keys, account: "gemini-client") == "client-B")
+        #expect(try vault.read(namespace: .keys, account: "gemini-oauth") == "session-v1")
+    }
+
+    @Test("R12-02: a current session is not usable while the client override is unreadable, even if it matches the environment client")
+    func currentSessionNeedsReadableClientOverride() throws {
+        let session = GeminiOAuthSession(
+            accessToken: "a", refreshToken: "r",
+            expiry: Date(timeIntervalSince1970: 4_000_000_000), clientID: "client-env")
+        let sessionText = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+        let environment = [GeminiOAuthSession.clientIDEnvVar: "client-env"]
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+
+        // Session is in the vault; the override (client-B) is a legacy item Keychain refuses.
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write(sessionText, namespace: .keys, account: GeminiOAuthSession.keychainLabel)
+        backend.seed(service: "test.keys", account: clientLabel, value: "client-B")
+        backend.setReadDenied(service: "test.keys", account: clientLabel, status: errSecInteractionNotAllowed)
+        _ = vault.warmUpSync(interactive: false)
+        #expect(vault.statusSnapshot().pendingLegacyKeys.contains(clientLabel))
+        let manager = KeychainManager(vault: vault)
+        #expect(GeminiOAuthSession.readUsableSession(manager: manager, environment: environment) == nil)
+
+        // Once the override is confirmed absent, the environment client owns the session.
+        backend.setReadDenied(service: "test.keys", account: clientLabel, status: nil)
+        try vault.delete(namespace: .keys, account: clientLabel)
+        let usable = GeminiOAuthSession.readUsableSession(manager: manager, environment: environment)
+        #expect(usable?.session.clientID == "client-env")
+        #expect(usable.map { $0.storedClientID == nil } == true)
+    }
+
+    @Test("R13-01: a client switch committed between the override and session reads rejects the session")
+    func clientSwitchDuringSessionReadRejectsSession() throws {
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+        let session = GeminiOAuthSession(
+            accessToken: "a", refreshToken: "r",
+            expiry: Date(timeIntervalSince1970: 4_000_000_000), clientID: "client-A")
+        let sessionText = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.applyBatch([
+            (namespace: .keys, account: GeminiOAuthSession.keychainLabel, value: sessionText),
+            (namespace: .keys, account: clientLabel, value: "client-A"),
+        ])
+        let manager = KeychainManager(vault: vault)
+
+        #expect(GeminiOAuthSession.readUsableSession(manager: manager, environment: [:])?.session.clientID == "client-A")
+        let raced = GeminiOAuthSession.readUsableSession(manager: manager, environment: [:]) {
+            // Settings saves client B and leaves the session record untouched.
+            try? vault.write("client-B", namespace: .keys, account: clientLabel)
+        }
+        #expect(raced == nil)
+    }
+
+    @Test("R12-03: cachedSnapshot pairs the status with the values read in the same vault state")
+    func cachedSnapshotIsCoherent() throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = makeTempLockURL()
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("sk-saved", namespace: .keys, account: "openai")
+
+        let loaded = vault.cachedSnapshot(namespace: .keys, accounts: ["openai", "missing"])
+        #expect(loaded.status.state == .loaded)
+        #expect(loaded.values == ["openai": "sk-saved"])
+
+        backend.setReadDenied(service: "test.keys", account: KeychainVault.vaultAccount, status: errSecAuthFailed)
+        _ = vault.warmUpSync(interactive: true)
+        let denied = vault.cachedSnapshot(namespace: .keys, accounts: ["openai"])
+        #expect(denied.status.isLockedOrDenied)
+        #expect(denied.values.isEmpty)
+    }
+}
+
+private final class LockedOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: DeferredWriteOutcome?
+    var value: DeferredWriteOutcome? { lock.withLock { _value } }
+    func set(_ outcome: DeferredWriteOutcome) { lock.withLock { _value = outcome } }
+}
+
+private final class PostedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = false
+    var value: Bool { lock.withLock { _value } }
+    func set() { lock.withLock { _value = true } }
+}
+
+private final class HookedKeychainBackend: KeychainBackend, @unchecked Sendable {
+    private let wrapped: InMemoryKeychainBackend
+    private let lock = NSLock()
+    private var _onBeforeWrite: (@Sendable (String) -> Void)?
+    private var _onAfterRead: (@Sendable (String) -> Void)?
+
+    var onBeforeWrite: (@Sendable (String) -> Void)? {
+        get { lock.withLock { _onBeforeWrite } }
+        set { lock.withLock { _onBeforeWrite = newValue } }
+    }
+
+    var onAfterRead: (@Sendable (String) -> Void)? {
+        get { lock.withLock { _onAfterRead } }
+        set { lock.withLock { _onAfterRead = newValue } }
+    }
+
+    init(wrapping wrapped: InMemoryKeychainBackend) {
+        self.wrapped = wrapped
+    }
+
+    func read(service: String, account: String, allowsPrompt: Bool) throws -> Data? {
+        let data = try wrapped.read(service: service, account: account, allowsPrompt: allowsPrompt)
+        onAfterRead?(account)
+        return data
+    }
+
+    func write(_ data: Data, service: String, account: String, label: String?, allowsPrompt: Bool) throws {
+        onBeforeWrite?(account)
+        try wrapped.write(data, service: service, account: account, label: label, allowsPrompt: allowsPrompt)
+    }
+
+    func delete(service: String, account: String, allowsPrompt: Bool) throws {
+        try wrapped.delete(service: service, account: account, allowsPrompt: allowsPrompt)
+    }
+
+    func listAccounts(service: String) throws -> [String] {
+        try wrapped.listAccounts(service: service)
+    }
+}
+
+private struct InteractiveCredentialProvider: QuotaProvider {
+    let vendorId: VendorIdentifier = .muse
+    var displayName: String { "Muse" }
+    var category: MetricCategory { .aiSubscriptions }
+    let onFetch: @Sendable () -> Void
+
+    func fetchSnapshot() async -> QuotaSnapshot {
+        onFetch()
+        if !CredentialStore.allowsSecurityCLI {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .percentage(usedFraction: 0, displayDetails: nil),
+                status: .unavailable(.notConfigured),
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: nil
+            )
+        }
+        return QuotaSnapshot(
+            id: vendorId.rawValue,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.4, displayDetails: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
+    }
+}
+
+private final class RecordedStrings: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    var values: [String] { lock.withLock { items } }
+    func append(_ v: String) { lock.withLock { items.append(v) } }
+}
+
+private final class AtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var current: Int { lock.withLock { count } }
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
+}
+
+private final class CoreAsyncSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var signaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        let list: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !signaled else { return [] }
+            signaled = true
+            let copy = waiters
+            waiters.removeAll()
+            return copy
+        }
+        for c in list { c.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { cont in
+            let done: Bool = lock.withLock {
+                if signaled { return true }
+                waiters.append(cont)
+                return false
+            }
+            if done { cont.resume() }
+        }
+    }
+}
+
+private struct SecurityCLIObservingProvider: QuotaProvider {
+    let vendorId: VendorIdentifier = .claude
+    var displayName: String { "Claude" }
+    var category: MetricCategory { .aiSubscriptions }
+    let onFetch: @Sendable (Bool) -> Void
+
+    func fetchSnapshot() async -> QuotaSnapshot {
+        onFetch(CredentialStore.allowsSecurityCLI)
+        return QuotaSnapshot(
+            id: vendorId.rawValue,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.1, displayDetails: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
+    }
+}
+
+// MARK: - Local Test Helpers
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    var value: Bool { lock.withLock { flag } }
+    func set() { lock.withLock { flag = true } }
+}
+
+private final class RecordedBools: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [Bool] = []
+    var values: [Bool] { lock.withLock { items } }
+    func append(_ v: Bool) { lock.withLock { items.append(v) } }
+}
+
+private struct FastMeasuredProvider: QuotaProvider {
+    let vendorId: VendorIdentifier
+    let checkWarmUp: @Sendable () -> Bool
+    var displayName: String { vendorId.displayName }
+    var category: MetricCategory { .aiSubscriptions }
+
+    func fetchSnapshot() async -> QuotaSnapshot {
+        guard checkWarmUp() else {
+            return QuotaSnapshot(
+                id: vendorId.rawValue,
+                vendorId: vendorId,
+                displayName: displayName,
+                category: category,
+                metric: .percentage(usedFraction: 0, displayDetails: nil),
+                status: .unavailable(.badResponse),
+                resetsAt: nil,
+                lastUpdated: Date(),
+                auxiliaryInfo: nil
+            )
+        }
+        return QuotaSnapshot(
+            id: vendorId.rawValue,
+            vendorId: vendorId,
+            displayName: displayName,
+            category: category,
+            metric: .percentage(usedFraction: 0.25, displayDetails: nil),
+            status: .healthy,
+            resetsAt: nil,
+            lastUpdated: Date(),
+            auxiliaryInfo: nil
+        )
+    }
+}
+
+private final class ScriptedSyncTransport: SyncTransport, @unchecked Sendable {
+    func send(_ request: SyncHTTPRequest) async throws -> SyncHTTPResponse {
+        SyncHTTPResponse(status: 500, headers: [:], body: Data())
+    }
+}

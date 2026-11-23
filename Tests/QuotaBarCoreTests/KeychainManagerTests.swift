@@ -46,25 +46,47 @@ enum KeychainAvailability {
 struct KeychainManagerTests {
 
     private let label = "quotabar-test-\(UUID().uuidString)"
+    private let testService = "com.quotabar.keys.tests.\(UUID().uuidString)"
+    private let testSyncService = "com.quotabar.sync.tests.\(UUID().uuidString)"
+    private let testLockURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("quotabar-km-test-\(UUID().uuidString).lock")
 
-    private func cleanup(_ label: String) {
-        try? KeychainManager.shared.delete(label: label)
+    private func makeIsolatedManager() -> KeychainManager {
+        KeychainManager(
+            vault: KeychainVault(
+                keysService: testService,
+                syncService: testSyncService,
+                backend: SystemKeychainBackend.shared,
+                lockFileURL: testLockURL
+            )
+        )
+    }
+
+    private func cleanupVault() {
+        try? SystemKeychainBackend.shared.delete(
+            service: testService,
+            account: KeychainVault.vaultAccount,
+            allowsPrompt: false
+        )
+        try? FileManager.default.removeItem(at: testLockURL)
     }
 
     @Test("set then get round-trips the value")
     func roundTrip() throws {
-        defer { cleanup(label) }
-        try KeychainManager.shared.set(key: "s3cret-value", label: label)
-        #expect(try KeychainManager.shared.get(label: label) == "s3cret-value")
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
+        try manager.set(key: "s3cret-value", label: label)
+        #expect(try manager.get(label: label) == "s3cret-value")
     }
 
     /// The regression guard: this fails with `KeychainError.unknown(-34018)`
     /// the moment an attribute requiring an entitlement is reintroduced.
     @Test("storing a credential works from an unsigned test binary")
     func worksWithoutCodeSigningEntitlement() throws {
-        defer { cleanup(label) }
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
         do {
-            try KeychainManager.shared.set(key: "v", label: label)
+            try manager.set(key: "v", label: label)
         } catch let KeychainError.unknown(status) {
             Issue.record("""
                 SecItemAdd failed with OSStatus \(status). \
@@ -77,21 +99,24 @@ struct KeychainManagerTests {
 
     @Test("set overwrites an existing value rather than duplicating it")
     func overwrite() throws {
-        defer { cleanup(label) }
-        try KeychainManager.shared.set(key: "first", label: label)
-        try KeychainManager.shared.set(key: "second", label: label)
-        #expect(try KeychainManager.shared.get(label: label) == "second")
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
+        try manager.set(key: "first", label: label)
+        try manager.set(key: "second", label: label)
+        #expect(try manager.get(label: label) == "second")
     }
 
     @Test("delete removes the item and get then reports itemNotFound")
     func deleteRemoves() throws {
-        try KeychainManager.shared.set(key: "v", label: label)
-        try KeychainManager.shared.delete(label: label)
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
+        try manager.set(key: "v", label: label)
+        try manager.delete(label: label)
         #expect(throws: KeychainError.self) {
-            _ = try KeychainManager.shared.get(label: label)
+            _ = try manager.get(label: label)
         }
         do {
-            _ = try KeychainManager.shared.get(label: label)
+            _ = try manager.get(label: label)
             Issue.record("expected itemNotFound after delete")
         } catch KeychainError.itemNotFound {
             // expected
@@ -102,25 +127,29 @@ struct KeychainManagerTests {
 
     @Test("deleting an absent item is not an error")
     func deleteAbsentIsIdempotent() throws {
-        try KeychainManager.shared.delete(label: "quotabar-never-written-\(UUID().uuidString)")
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
+        try manager.delete(label: "quotabar-never-written-\(UUID().uuidString)")
     }
 
     @Test("values round-trip unicode and long tokens intact")
     func unicodeAndLength() throws {
-        defer { cleanup(label) }
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
         let value = "ghp_" + String(repeating: "aA0", count: 100) + "—✓"
-        try KeychainManager.shared.set(key: value, label: label)
-        #expect(try KeychainManager.shared.get(label: label) == value)
+        try manager.set(key: value, label: label)
+        #expect(try manager.get(label: label) == value)
     }
 
     @Test("distinct labels do not collide")
     func labelsAreIndependent() throws {
+        defer { cleanupVault() }
+        let manager = makeIsolatedManager()
         let a = "\(label)-a", b = "\(label)-b"
-        defer { cleanup(a); cleanup(b) }
-        try KeychainManager.shared.set(key: "alpha", label: a)
-        try KeychainManager.shared.set(key: "beta", label: b)
-        #expect(try KeychainManager.shared.get(label: a) == "alpha")
-        #expect(try KeychainManager.shared.get(label: b) == "beta")
+        try manager.set(key: "alpha", label: a)
+        try manager.set(key: "beta", label: b)
+        #expect(try manager.get(label: a) == "alpha")
+        #expect(try manager.get(label: b) == "beta")
     }
 
     @Test("KeychainError.unknown maps known OSStatus codes to readable text")
@@ -152,9 +181,10 @@ struct KeychainManagerTests {
     /// a real SecItemAdd under a non-randomised label and never deletes it.
     @Test("set/get expose allowsAuthenticationPrompt, defaulting to true")
     func authenticationPromptParameterExists() {
-        // Method references, never called — a hermetic compile guard.
-        let _: (String, String, Bool) throws -> Void = KeychainManager.shared.set(key:label:allowsAuthenticationPrompt:)
-        let _: (String, Bool) throws -> String = KeychainManager.shared.get(label:allowsAuthenticationPrompt:)
+        // Method references on an isolated manager, never called — a hermetic compile guard.
+        let isolated = makeIsolatedManager()
+        let _: (String, String, Bool) throws -> Void = isolated.set(key:label:allowsAuthenticationPrompt:)
+        let _: (String, Bool) throws -> String = isolated.get(label:allowsAuthenticationPrompt:)
     }
 
     @Test("CredentialCache.ghToken resolves once within the TTL, then again after it expires")

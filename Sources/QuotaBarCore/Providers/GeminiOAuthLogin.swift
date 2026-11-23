@@ -31,11 +31,20 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
     /// back for display, so its field is *always* blank on open — clearing the
     /// stored secret on save would wipe it every time Settings was reopened.
     /// Blank there means "keep what is stored"; `clearClientSecret()` removes it.
-    public static func saveClientConfiguration(clientID: String, clientSecret: String) throws {
+    public static func saveClientConfiguration(
+        clientID: String,
+        clientSecret: String,
+        updateClientID: Bool = true
+    ) throws {
+        var updates: [(namespace: VaultNamespace, account: String, value: String?)] = []
         if let secret = secretToStore(entered: clientSecret) {
-            try KeychainManager.shared.set(key: secret, label: GeminiOAuthSession.clientSecretKeychainLabel)
+            updates.append((.keys, GeminiOAuthSession.clientSecretKeychainLabel, secret))
         }
-        try store(clientID, label: GeminiOAuthSession.clientIDKeychainLabel)
+        if updateClientID {
+            updates.append((.keys, GeminiOAuthSession.clientIDKeychainLabel, clientIDToStore(entered: clientID)))
+        }
+        guard !updates.isEmpty else { return }
+        try KeychainVault.shared.applyBatch(updates, allowsPrompt: true)
     }
 
     /// What a submitted secret field should write, or nil for "keep what is
@@ -57,29 +66,23 @@ public final class GeminiOAuthLogin: NSObject, @unchecked Sendable {
         try KeychainManager.shared.delete(label: GeminiOAuthSession.clientSecretKeychainLabel)
     }
 
-    /// The stored client ID, or nil when the built-in one is in use. The
-    /// secret is deliberately never read back out for display.
+    /// The stored client ID from the in-memory vault cache, or nil when the
+    /// built-in one is in use or the vault is not yet loaded. Never touches
+    /// Keychain synchronously on the main thread.
     public static func storedClientID() -> String? {
-        guard let stored = try? KeychainManager.shared.get(label: GeminiOAuthSession.clientIDKeychainLabel),
+        guard let stored = KeychainManager.shared.cachedValue(label: GeminiOAuthSession.clientIDKeychainLabel),
               !stored.isEmpty
         else { return nil }
         return stored
     }
 
-    /// Whether a *user-supplied* secret overrides the vendored default.
+    /// Whether a *user-supplied* secret overrides the vendored default, read
+    /// from the in-memory vault cache without touching Keychain.
     public static func hasClientSecretOverride() -> Bool {
-        (try? KeychainManager.shared.get(label: GeminiOAuthSession.clientSecretKeychainLabel))
+        KeychainManager.shared.cachedValue(label: GeminiOAuthSession.clientSecretKeychainLabel)
             .map { !$0.isEmpty } ?? false
     }
 
-    private static func store(_ value: String, label: String) throws {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try KeychainManager.shared.delete(label: label)
-        } else {
-            try KeychainManager.shared.set(key: trimmed, label: label)
-        }
-    }
     private let lock = NSLock()
     private var listener: NWListener?
     private var continuation: CheckedContinuation<Void, Error>?

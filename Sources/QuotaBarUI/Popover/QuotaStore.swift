@@ -222,15 +222,21 @@ public final class QuotaStore {
     }
 
     /// Explicit user action — bypasses the cache.
-    public func forceRefresh() async {
+    ///
+    /// `allowInteractiveUnlock` defaults to `false`: only explicit refresh/unlock
+    /// clicks carry interactive Keychain unlock intent.
+    public func forceRefresh(allowInteractiveUnlock: Bool = false) async {
         if isRefreshing {
             // Join the manager's pass while it can still select only skipped
             // or failed providers. Queuing a separate forced pass here would
             // re-fetch every provider the automatic pass just read successfully.
-            if !(await manager.queueUserRefreshIfActive()) { forcedRefreshPending = true }
+            if !(await manager.queueUserRefreshIfActive(allowInteractiveUnlock: allowInteractiveUnlock)) {
+                forcedRefreshPending = true
+                if allowInteractiveUnlock { forcedRefreshInteractivePending = true }
+            }
             return
         }
-        await run { await self.manager.forceRefresh() }
+        await run { await self.manager.forceRefresh(allowInteractiveUnlock: allowInteractiveUnlock) }
     }
 
     /// Re-applies Preferences → Providers: a hidden provider is dropped and a
@@ -241,16 +247,17 @@ public final class QuotaStore {
     /// If a refresh is already running it was planned against the old
     /// preferences (a provider shown meanwhile was left out of that fetch),
     /// so this queues one more pass for when it ends instead of dropping the
-    /// request.
+    /// request. Deliberately non-interactive so workspace edits never prompt.
     public func applyProviderPreferences() async {
         if isRefreshing {
             forcedRefreshPending = true
             return
         }
-        await forceRefresh()
+        await forceRefresh(allowInteractiveUnlock: false)
     }
 
     private var forcedRefreshPending = false
+    private var forcedRefreshInteractivePending = false
 
     private func run(_ fetch: @escaping @Sendable () async -> [String: QuotaSnapshot]) async {
         guard !isRefreshing else { return }
@@ -259,8 +266,10 @@ public final class QuotaStore {
         _ = await fetch()
         await publishRefresh()
         while forcedRefreshPending {
+            let interactive = forcedRefreshInteractivePending
             forcedRefreshPending = false
-            _ = await manager.forceRefresh()
+            forcedRefreshInteractivePending = false
+            _ = await manager.forceRefresh(allowInteractiveUnlock: interactive)
             await publishRefresh()
         }
     }

@@ -132,6 +132,7 @@ public struct SettingsView: View {
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
     @State private var isVerifying = false
+    @State private var busyWorkspaceIDs: Set<String> = []
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
@@ -208,6 +209,8 @@ public struct SettingsView: View {
     private let readsCredentials: Bool
     /// Taller only in the render harness, so one image shows a whole pane.
     private let height: CGFloat
+    @State private var vaultStatus: VaultStatusSnapshot = VaultStatusSnapshot(state: .unloaded)
+    @State private var isUnlockingVault = false
 
     public init(store: QuotaStore? = nil, sync: SyncController? = nil, initialPane: Pane = .providers) {
         self.init(store: store, sync: sync, initialPane: initialPane, readsCredentials: true)
@@ -263,16 +266,27 @@ public struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 paneHeader(selection ?? .providers)
+                if readsCredentials, let banner = SettingsVaultBannerPresentation.make(from: vaultStatus) {
+                    SettingsVaultBannerView(
+                        presentation: banner,
+                        isBusy: isUnlockingVault,
+                        onAction: { Task { await unlockVault() } }
+                    )
+                }
                 pane(selection ?? .providers)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: 780, height: height)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { if readsCredentials { loadKeys() } }
+        .onAppear { if readsCredentials { loadKeysFromCache() } }
         .onAppear(perform: loadWorkspaces)
         .onAppear { cycles = SubscriptionCycleStore.all() }
-        .task { if readsCredentials { await refreshSources() } }
+        .task {
+            if readsCredentials {
+                await loadVaultAsyncAndRefreshSources()
+            }
+        }
         // Turning discovery off can strip a row back to "Not configured";
         // saving a key can flip one to "Stored in Keychain". Both have to be
         // reflected, or the status line becomes a lie the moment it matters.
@@ -281,6 +295,21 @@ public struct SettingsView: View {
         // Return is kept when the user moves to another section.
         .onChange(of: selection) { old, _ in
             if old == .workspaces { commitWorkspaceRenames() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: KeychainVault.statusDidChangeNotification)) { _ in
+            guard readsCredentials else { return }
+            let previous = vaultStatus
+            let current = KeychainVault.shared.statusSnapshot()
+            vaultStatus = current
+            // A vault unlocked elsewhere (e.g. a popover refresh) must also
+            // reload the fields, sources and key indicators, or the banner
+            // clears while the controls still show the locked vault. The
+            // merge keeps any edits the user has typed.
+            if SettingsVaultReload.shouldReloadCredentials(previous: previous, current: current) {
+                loadKeysFromCache()
+                refreshWorkspaceHasKey()
+                Task { await refreshSources() }
+            }
         }
     }
 
@@ -457,7 +486,7 @@ public struct SettingsView: View {
             Section("Google (Gemini, AGY Claude/GPT and Argon)") {
                 HStack {
                     Button("Connect Google account") { Task { await connectGemini() } }
-                        .disabled(isSigningInToGemini)
+                        .disabled(isSigningInToGemini || isVerifying)
                     if isSigningInToGemini { ProgressView().controlSize(.small) }
                 }
                 Text(geminiSignInStatus ?? "Reads Antigravity quota over Google OAuth. Tokens stay in your Keychain.")
@@ -550,7 +579,7 @@ public struct SettingsView: View {
             Spacer()
             Button("Save & verify") { Task { await saveAndVerify() } }
                 .keyboardShortcut(.defaultAction)
-                .disabled(isVerifying || !hasChanges)
+                .disabled(isVerifying || isSigningInToGemini || !hasChanges)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -717,10 +746,11 @@ public struct SettingsView: View {
                 .disabled(workspaces.last?.id == workspace.id)
                 .accessibilityLabel("Move \(workspace.name) down")
 
-                Button(role: .destructive) { removeWorkspace(workspace.id) } label: {
+                Button(role: .destructive) { Task { await removeWorkspace(workspace.id) } } label: {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .disabled(busyWorkspaceIDs.contains(workspace.id))
                 .accessibilityLabel("Remove \(workspace.name)")
             }
 
@@ -735,8 +765,9 @@ public struct SettingsView: View {
                 .textFieldStyle(.roundedBorder)
 
                 Button("Save") { Task { await saveWorkspaceKey(workspace) } }
-                    .disabled((workspaceKeys[instanceID] ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(busyWorkspaceIDs.contains(workspace.id)
+                        || (workspaceKeys[instanceID] ?? "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             // Credential ownership follows the workspace, not its position:
@@ -855,15 +886,22 @@ public struct SettingsView: View {
         persistWorkspaces()
     }
 
-    private func removeWorkspace(_ id: String) {
-        guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
+    private func removeWorkspace(_ id: String) async {
+        guard !busyWorkspaceIDs.contains(id),
+              let workspace = workspaces.first(where: { $0.id == id })
+        else { return }
+        busyWorkspaceIDs.insert(id)
+        defer { busyWorkspaceIDs.remove(id) }
         let instanceID = workspace.instanceID
         // A removed workspace must not leave its key behind in the Keychain.
         // If it cannot be deleted, keep the row: dropping it here would orphan
         // the secret with no way left to retry from the UI, and it would hide
-        // the failure a moment after it happened.
+        // the failure a moment after it happened. Run off MainActor so an
+        // unanswered startup Keychain prompt never freezes Settings.
         do {
-            try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
+            try await Self.runKeychainOffMainActor {
+                try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
+            }
         } catch {
             workspaceStatus[instanceID] = "Could not remove: its key could not be deleted from the Keychain"
             return
@@ -872,6 +910,7 @@ public struct SettingsView: View {
         workspaceKeys[instanceID] = nil
         workspaceHasKey[instanceID] = nil
         workspaceStatus[instanceID] = nil
+        vaultStatus = KeychainVault.shared.statusSnapshot()
         persistWorkspaces()
     }
 
@@ -883,15 +922,21 @@ public struct SettingsView: View {
     /// Stores one workspace's key and exercises it, so a truncated paste fails
     /// here rather than as an unexplained blank row later.
     private func saveWorkspaceKey(_ workspace: OpenCodeGoWorkspace) async {
+        guard !busyWorkspaceIDs.contains(workspace.id) else { return }
         let instanceID = workspace.instanceID
         let key = (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        isVerifying = true
-        defer { isVerifying = false }
+        busyWorkspaceIDs.insert(workspace.id)
+        defer { busyWorkspaceIDs.remove(workspace.id) }
         do {
-            try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
-            workspaceKeys[instanceID] = ""
+            try await Self.runKeychainOffMainActor {
+                try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
+            }
+            if (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == key {
+                workspaceKeys[instanceID] = ""
+            }
             workspaceHasKey[instanceID] = true
+            vaultStatus = KeychainVault.shared.statusSnapshot()
             workspaceStatus[instanceID] = await verify(.opencode, key: key)
         } catch {
             workspaceStatus[instanceID] = Self.keychainAdvice(for: error)
@@ -1385,18 +1430,82 @@ public struct SettingsView: View {
 
     // MARK: - Actions
 
-    private func loadKeys() {
+    /// Populates credential fields from the in-memory vault cache only.
+    /// Never blocks the main thread or prompts macOS Keychain.
+    private func loadKeysFromCache() {
+        // One coherent read: status and values from the same vault state.
+        let clientLabel = GeminiOAuthSession.clientIDKeychainLabel
+        let snapshot = KeychainVault.shared.cachedSnapshot(
+            namespace: .keys,
+            accounts: Self.slots.map(\.id.rawValue) + [clientLabel]
+        )
+        let status = snapshot.status
         var current: [VendorIdentifier: String] = [:]
+        var unreadable: Set<VendorIdentifier> = []
         for slot in Self.slots {
-            current[slot.id] = (try? KeychainManager.shared.get(label: slot.id.rawValue)) ?? ""
+            if let fresh = SettingsVaultReload.freshValue(
+                label: slot.id.rawValue,
+                cached: snapshot.values[slot.id.rawValue],
+                in: status
+            ) {
+                current[slot.id] = fresh
+            } else {
+                unreadable.insert(slot.id)
+            }
         }
-        loaded = current
-        entered = current
-
-        geminiClientID = GeminiOAuthLogin.storedClientID() ?? ""
-        loadedGeminiClientID = geminiClientID
+        let storedClient = snapshot.values[clientLabel].flatMap { $0.isEmpty ? nil : $0 }
+        let freshGeminiClientID = SettingsVaultReload.freshValue(
+            label: clientLabel,
+            cached: storedClient,
+            in: status
+        )
+        let merged = SettingsCredentialMerge.merge(
+            slots: Self.slots.map(\.id),
+            currentLoaded: loaded,
+            currentEntered: entered,
+            freshLoaded: current,
+            currentLoadedGeminiClientID: loadedGeminiClientID,
+            currentEnteredGeminiClientID: geminiClientID,
+            freshGeminiClientID: freshGeminiClientID ?? "",
+            unreadableSlots: unreadable,
+            geminiClientIDUnreadable: freshGeminiClientID == nil
+        )
+        loaded = merged.loaded
+        entered = merged.entered
+        loadedGeminiClientID = merged.loadedGeminiClientID
+        geminiClientID = merged.enteredGeminiClientID
         geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+        vaultStatus = status
+    }
 
+    /// Runs a non-interactive vault warm-up off the main thread when the vault
+    /// is still unloaded, merges freshly cached values while preserving dirty
+    /// user edits, and refreshes non-interactive credential provenance.
+    private func loadVaultAsyncAndRefreshSources() async {
+        let current = KeychainVault.shared.statusSnapshot()
+        if current.state == .unloaded {
+            vaultStatus = await KeychainVault.shared.warmUp(interactive: false)
+        } else {
+            vaultStatus = current
+        }
+        loadKeysFromCache()
+        refreshWorkspaceHasKey()
+        await refreshSources()
+    }
+
+    /// Explicit interactive Unlock / Save pending changes / Retry action from
+    /// the inline Settings banner.
+    private func unlockVault() async {
+        isUnlockingVault = true
+        defer { isUnlockingVault = false }
+        vaultStatus = await KeychainVault.shared.unlock()
+        loadKeysFromCache()
+        refreshWorkspaceHasKey()
+        await refreshSources()
+        if vaultStatus.state == .loaded || vaultStatus.state == .empty {
+            sync?.vaultDidUnlock()
+        }
+        Task { await store?.forceRefresh(allowInteractiveUnlock: false) }
     }
 
     private var hasGeminiClientEdits: Bool {
@@ -1405,18 +1514,38 @@ public struct SettingsView: View {
     }
 
     private func connectGemini() async {
+        guard !isSigningInToGemini && !isVerifying else { return }
         isSigningInToGemini = true
         defer { isSigningInToGemini = false }
 
-        // Persist the client configuration before signing in: the flow reads
-        // it from the Keychain, so a secret typed but not yet saved would fail
-        // the exchange and look like a rejected sign-in.
-        do {
-            try GeminiOAuthLogin.saveClientConfiguration(
-                clientID: geminiClientID, clientSecret: geminiClientSecret)
-        } catch {
-            geminiSignInStatus = "Could not save the client configuration to the Keychain"
-            return
+        // Persist any unsaved client configuration edits before signing in:
+        // the flow reads from the Keychain, so a secret typed but not yet saved
+        // would fail the exchange. Skip writing untouched fields so clicking
+        // Connect (or typing only a secret) before the vault finishes loading
+        // cannot overwrite or delete an already-stored client ID.
+        if hasGeminiClientEdits {
+            let clientChanged = geminiClientID != loadedGeminiClientID
+            let clientIDToSave = geminiClientID
+            let clientSecretToSave = geminiClientSecret
+            do {
+                try await Self.runKeychainOffMainActor {
+                    try GeminiOAuthLogin.saveClientConfiguration(
+                        clientID: clientIDToSave,
+                        clientSecret: clientSecretToSave,
+                        updateClientID: clientChanged
+                    )
+                }
+                if clientChanged {
+                    loadedGeminiClientID = clientIDToSave
+                }
+                if geminiClientSecret == clientSecretToSave {
+                    geminiClientSecret = ""
+                }
+                geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
+            } catch {
+                geminiSignInStatus = "Could not save the client configuration to the Keychain"
+                return
+            }
         }
 
         do {
@@ -1439,6 +1568,7 @@ public struct SettingsView: View {
     /// as an unexplained blank row later. Vendors with no such endpoint report
     /// "Saved — cannot be verified" rather than implying a check happened.
     private func saveAndVerify() async {
+        guard !isVerifying && !isSigningInToGemini else { return }
         isVerifying = true
         defer { isVerifying = false }
 
@@ -1451,11 +1581,22 @@ public struct SettingsView: View {
         // "Not configured" afterwards.
         let clientChanged = geminiClientID != loadedGeminiClientID
         if hasGeminiClientEdits {
+            let clientIDToSave = geminiClientID
+            let clientSecretToSave = geminiClientSecret
             do {
-                try GeminiOAuthLogin.saveClientConfiguration(
-                    clientID: geminiClientID, clientSecret: geminiClientSecret)
-                loadedGeminiClientID = geminiClientID
-                geminiClientSecret = ""
+                try await Self.runKeychainOffMainActor {
+                    try GeminiOAuthLogin.saveClientConfiguration(
+                        clientID: clientIDToSave,
+                        clientSecret: clientSecretToSave,
+                        updateClientID: clientChanged
+                    )
+                }
+                if clientChanged {
+                    loadedGeminiClientID = clientIDToSave
+                }
+                if geminiClientSecret == clientSecretToSave {
+                    geminiClientSecret = ""
+                }
                 geminiSecretIsStored = GeminiOAuthLogin.hasClientSecretOverride()
                 geminiSignInStatus = clientChanged
                     ? "Client saved. Connect Google account again to sign in with it."
@@ -1474,13 +1615,18 @@ public struct SettingsView: View {
             
             if slot.id == .githubRest { githubPatChanged = true }
 
+            let label = slot.id.rawValue
             do {
                 if new.isEmpty {
                     // Clearing a field means "forget this", not "store empty".
-                    try KeychainManager.shared.delete(label: slot.id.rawValue)
+                    try await Self.runKeychainOffMainActor {
+                        try KeychainManager.shared.delete(label: label)
+                    }
                     perKeyStatus[slot.id] = "Removed"
                 } else {
-                    try KeychainManager.shared.set(key: new, label: slot.id.rawValue)
+                    try await Self.runKeychainOffMainActor {
+                        try KeychainManager.shared.set(key: new, label: label)
+                    }
                     perKeyStatus[slot.id] = await verify(slot.id, key: new)
                 }
                 loaded[slot.id] = new
@@ -1493,24 +1639,38 @@ public struct SettingsView: View {
         // sync must be reported — otherwise the GraphQL and Copilot rows keep
         // serving a revoked token with no field to fix it in.
         if githubPatChanged, let pat = loaded[.githubRest] {
-            let failures = applyGitHubTokenToLinkedVendors(pat)
+            let failures = await applyGitHubTokenToLinkedVendors(pat)
             if !failures.isEmpty {
                 perKeyStatus[.githubRest] = "Saved, but could not sync to \(failures.joined(separator: ", "))"
             }
         }
 
+        vaultStatus = KeychainVault.shared.statusSnapshot()
         await refreshSources()
     }
 
+    /// Runs a blocking Keychain mutation off MainActor so an in-flight startup
+    /// SecurityAgent prompt holding the vault lock never freezes Settings.
+    private static func runKeychainOffMainActor<T: Sendable>(
+        _ operation: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try operation()
+        }.value
+    }
+
     /// Returns the display names of any linked vendors that could not be synced.
-    private func applyGitHubTokenToLinkedVendors(_ pat: String) -> [String] {
+    private func applyGitHubTokenToLinkedVendors(_ pat: String) async -> [String] {
         var failed: [String] = []
         for vendor in [VendorIdentifier.githubGraphql, .copilot] {
+            let label = vendor.rawValue
             do {
-                if pat.isEmpty {
-                    try KeychainManager.shared.delete(label: vendor.rawValue)
-                } else {
-                    try KeychainManager.shared.set(key: pat, label: vendor.rawValue)
+                try await Self.runKeychainOffMainActor {
+                    if pat.isEmpty {
+                        try KeychainManager.shared.delete(label: label)
+                    } else {
+                        try KeychainManager.shared.set(key: pat, label: label)
+                    }
                 }
             } catch {
                 failed.append(vendor.displayName)   // continue; don't abort the rest

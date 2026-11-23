@@ -1,6 +1,132 @@
 import Foundation
+import Security
 import Testing
 @testable import QuotaBarCore
+
+@Suite("Sync secret refresh retry (PR 192 review)")
+struct SyncSecretRefreshRetryTests {
+    @Test("a refresh that leaves the secrets unreadable stays armed across an unrelated publish failure")
+    func failedRefreshStaysArmed() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        // A locked Keychain fails the first publish and arms the refresh.
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 0)
+
+        // The refresh still reports the secrets unreadable, and Google then
+        // fails the upload for an unrelated reason.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        await harness.google.configure { $0.uploadModes = [.status(500)] }
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 1)
+
+        // The next due attempt refreshes again rather than giving up.
+        harness.clock.set(start.addingTimeInterval(6 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
+    }
+
+    @Test("a non-Keychain publish error does not disarm a refresh that has not yet succeeded")
+    func unrelatedErrorKeepsRefreshArmed() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        // The refresh fails, then the pre-upload checkpoint fails to save for
+        // a reason that has nothing to do with Keychain.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        harness.store.failWrites()
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 1)
+
+        harness.store.failWrites(false)
+        harness.clock.set(start.addingTimeInterval(30 * 60))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
+    }
+
+    @Test("R15-01: an Unlock clears a Keychain backoff but not a later unrelated one, even with the refresh still armed")
+    func unlockKeepsUnrelatedBackoff() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        // The refresh fails and the next attempt fails for a non-Keychain
+        // reason, which sets its own backoff while the refresh stays armed.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        harness.store.failWrites()
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        harness.store.failWrites(false)
+        let backedOffUntil = await harness.publisher.nextWakeup()
+        #expect(backedOffUntil == start.addingTimeInterval(2 * 60 + SyncPublisher.backoff(2)))
+
+        await harness.publisher.vaultDidUnlock()
+        #expect(await harness.publisher.nextWakeup() == backedOffUntil)
+
+        // R17-01: the Unlock did not prove the Sync secrets readable, so the
+        // next due attempt still refreshes before it reads them.
+        #expect(harness.secrets.refreshCount == 1)
+        harness.clock.set(try #require(backedOffUntil))
+        await harness.publisher.tick()
+        #expect(harness.secrets.refreshCount == 2)
+    }
+}
+
+@Suite("Sync secret refresh readiness (PR 192 review)")
+struct SyncSecretRefreshReadinessTests {
+    @Test("R15-02: a provider-key scan failure does not make readable Sync secrets report unrefreshed")
+    func providerKeyScanFailureDoesNotBlockSyncRefresh() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("frugalbar-vault-test-\(UUID().uuidString).lock")
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("rt-live", namespace: .sync, account: SyncSecretAccount.refreshToken)
+        try vault.write("pub-real", namespace: .sync, account: SyncSecretAccount.publisherId)
+
+        let fresh = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        backend.setListFailure(service: "test.keys", status: errSecAuthFailed)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: fresh)
+        #expect(await secrets.refreshNonInteractively())
+        #expect(!fresh.statusSnapshot().legacyScanSucceeded)
+        #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-live")
+    }
+
+    @Test("R16-01: a failed Sync scan reports the secrets not ready, even with no pending Sync items")
+    func syncScanFailureReportsNotReady() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("frugalbar-vault-test-\(UUID().uuidString).lock")
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        // The refresh token exists only as a legacy item, and enumerating the
+        // Sync service fails, so it is never found or marked pending.
+        backend.seed(service: "test.sync", account: SyncSecretAccount.refreshToken, value: "rt-legacy")
+        backend.setListFailure(service: "test.sync", status: errSecAuthFailed)
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: vault)
+
+        #expect(!(await secrets.refreshNonInteractively()))
+        #expect(vault.statusSnapshot().pendingLegacySyncKeys.isEmpty)
+        #expect(throws: (any Error).self) { try secrets.read(SyncSecretAccount.refreshToken) }
+
+        // Once enumeration works, the token migrates and the refresh reports ready.
+        backend.setListFailure(service: "test.sync", status: nil)
+        #expect(await secrets.refreshNonInteractively())
+        #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-legacy")
+    }
+}
 
 private func gaps(_ times: [Date]) -> [TimeInterval] {
     zip(times.dropFirst(), times).map { $0.timeIntervalSince($1) }

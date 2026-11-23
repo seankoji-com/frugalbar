@@ -27,6 +27,7 @@ public final class SyncController {
     private let flow: SyncSignInFlow
     private let makeListener: @Sendable () throws -> any SyncCallbackListener
     private let eventsLoader: @Sendable () async -> [AIEvent]
+    private let vaultWarmUp: @Sendable () async -> Void
     private let openURL: @MainActor (URL) -> Void
     private var loopTask: Task<Void, Never>?
     private var signInTask: Task<Void, Never>?
@@ -41,6 +42,7 @@ public final class SyncController {
         flow: SyncSignInFlow,
         makeListener: @escaping @Sendable () throws -> any SyncCallbackListener = { try SyncLoopbackListener() },
         eventsLoader: @escaping @Sendable () async -> [AIEvent],
+        vaultWarmUp: @escaping @Sendable () async -> Void = { _ = await KeychainVault.shared.warmUpForStartup() },
         notificationCenter: NotificationCenter = .default,
         openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) },
         macLabel: String
@@ -49,6 +51,7 @@ public final class SyncController {
         self.flow = flow
         self.makeListener = makeListener
         self.eventsLoader = eventsLoader
+        self.vaultWarmUp = vaultWarmUp
         self.openURL = openURL
         self.macLabel = macLabel
         // A clock correction makes every reading retained so far untrusted
@@ -80,11 +83,14 @@ public final class SyncController {
 
     // MARK: Driving
 
-    /// Resumes an unfinished Stop, then runs the publisher until the app quits.
+    /// Joins the shared startup vault warm-up, then resumes any unfinished Stop
+    /// and runs the publisher until the app quits.
     public func start() {
         guard loopTask == nil else { return }
         let publisher = self.publisher
+        let vaultWarmUp = self.vaultWarmUp
         loopTask = Task { [weak self] in
+            await vaultWarmUp()
             await publisher.resume()
             while !Task.isCancelled {
                 await publisher.tick()
@@ -94,6 +100,16 @@ public final class SyncController {
                 self.status = status
                 await self.wait(until: next)
             }
+        }
+    }
+
+    /// Called after explicit Keychain Unlock so paused sync or an unfinished
+    /// Stop resumes immediately instead of waiting out backoff.
+    public func vaultDidUnlock() {
+        let publisher = self.publisher
+        Task { [weak self] in
+            await publisher.vaultDidUnlock()
+            await self?.refresh()
         }
     }
 

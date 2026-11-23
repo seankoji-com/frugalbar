@@ -15,27 +15,62 @@ public protocol SyncSecretStore: Sendable {
     func read(_ account: String) throws -> String?
     func write(_ value: String, account: String) throws
     func delete(_ account: String) throws
+    /// Non-interactive delete for background cleanup and token revocation so
+    /// unattended Sync work never presents a macOS Keychain prompt.
+    func deleteNonInteractively(_ account: String) throws
+    /// Atomic compare-and-delete (non-interactive): deletes `account` only if
+    /// the durable value still matches `expectedValue`.
+    func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws
+    /// Optional non-interactive refresh before retrying after a recoverable
+    /// secret-store failure so Sync recovers once the login Keychain unlocks.
+    /// Returns whether the secrets are readable afterwards; a caller keeps
+    /// retrying the refresh until it reports true.
+    @discardableResult
+    func refreshNonInteractively() async -> Bool
 }
 
-/// Generic-password items under their own service, so a sync reset can never
-/// touch a provider credential.
-///
-/// Every item is non-synchronizable and written with
-/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. A bare, unsigned binary
-/// writes to the legacy file keychain, which neither records nor enforces
-/// that attribute; it is set for when FrugalBar ships as a signed `.app`
-/// (D§2.2.B, D§2.2.N). `kSecUseDataProtectionKeychain` is deliberately absent:
-/// without an entitlement it fails every write with -34018 (see
-/// `KeychainManager`).
-public struct KeychainSyncSecretStore: SyncSecretStore {
-    public static let defaultService = "com.quotabar.sync"
-    public let service: String
-
-    public init(service: String = KeychainSyncSecretStore.defaultService) {
-        self.service = service
+public extension SyncSecretStore {
+    func deleteNonInteractively(_ account: String) throws {
+        try delete(account)
     }
 
-    /// The identity of one item: also the query that finds it.
+    func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws {
+        if (try read(account)) == expectedValue {
+            try deleteNonInteractively(account)
+        }
+    }
+
+    @discardableResult
+    func refreshNonInteractively() async -> Bool { true }
+}
+
+/// Sync secret storage backed by `KeychainVault`'s `sync` namespace.
+///
+/// Legacy items under `com.quotabar.sync` are migrated automatically into
+/// `vault.v1`'s `sync` dictionary on warm-up, while `delete` and `clearSync`
+/// modify only the `sync` namespace and never touch provider credentials.
+public struct KeychainSyncSecretStore: SyncSecretStore {
+    public static let defaultService = KeychainVault.defaultSyncService
+    public let service: String
+    public let vault: KeychainVault
+
+    public init(
+        service: String = KeychainSyncSecretStore.defaultService,
+        vault: KeychainVault? = nil
+    ) {
+        self.service = service
+        if let vault {
+            self.vault = vault
+        } else if service == Self.defaultService {
+            self.vault = .shared
+        } else {
+            // Keep the custom vault service distinct from the legacy sync service
+            // so `vault.v1` and legacy sync items never share a Keychain service.
+            self.vault = KeychainVault(keysService: "\(service).vault", syncService: service)
+        }
+    }
+
+    /// The identity of one legacy item: also the query that finds it.
     static func itemQuery(service: String, account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -45,9 +80,8 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
         ]
     }
 
-    /// Everything `write` adds: the item's identity, its value and its
-    /// accessibility. Pure, so the attributes are asserted without trusting
-    /// what the legacy keychain chooses to report back.
+    /// Everything a legacy `write` added: kept for compatibility with existing
+    /// attribute unit tests.
     static func addAttributes(service: String, account: String, value: String) -> [String: Any] {
         var attributes = itemQuery(service: service, account: account)
         attributes[kSecValueData as String] = Data(value.utf8)
@@ -57,29 +91,41 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
     }
 
     public func read(_ account: String) throws -> String? {
-        var query = Self.itemQuery(service: service, account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw KeychainError.unknown(status) }
-        guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
-        }
-        return value
+        try vault.read(namespace: .sync, account: account, allowsPrompt: false)
     }
 
-    /// Delete, then add: an update would keep whatever accessibility an older
-    /// item was written with.
     public func write(_ value: String, account: String) throws {
-        try delete(account)
-        let status = SecItemAdd(Self.addAttributes(service: service, account: account, value: value) as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unknown(status) }
+        try vault.write(value, namespace: .sync, account: account, allowsPrompt: true)
     }
 
     public func delete(_ account: String) throws {
-        let status = SecItemDelete(Self.itemQuery(service: service, account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.unknown(status) }
+        try vault.delete(namespace: .sync, account: account, allowsPrompt: true)
+    }
+
+    public func deleteNonInteractively(_ account: String) throws {
+        try vault.delete(namespace: .sync, account: account, allowsPrompt: false)
+    }
+
+    public func deleteNonInteractivelyIfMatching(_ expectedValue: String, account: String) throws {
+        _ = try vault.deleteIfMatching(expectedValue, namespace: .sync, account: account, allowsPrompt: false)
+    }
+
+    @discardableResult
+    public func refreshNonInteractively() async -> Bool {
+        _ = await vault.warmUp(interactive: false)
+        // Ready means the Sync secrets themselves can be answered for: each
+        // read returns a value or confirmed absence without throwing. Vault
+        // health alone is the wrong test either way: a provider-key scan
+        // failure says nothing about Sync, while a failed Sync scan can leave
+        // no pending items yet still make an unmigrated token unreadable.
+        // `read` is non-interactive here and answers from the loaded cache.
+        do {
+            for account in [SyncSecretAccount.refreshToken, SyncSecretAccount.publisherId] {
+                _ = try vault.read(namespace: .sync, account: account, allowsPrompt: false)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 }

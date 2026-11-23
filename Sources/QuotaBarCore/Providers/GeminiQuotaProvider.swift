@@ -637,7 +637,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     public let clientID: String?
 
     static let keychainLabel = "gemini.oauth.session"
-    static let clientIDKeychainLabel = "gemini.oauth.client_id"
+    public static let clientIDKeychainLabel = "gemini.oauth.client_id"
     static let clientSecretKeychainLabel = "gemini.oauth.client_secret"
     static let clientSecretEnvVar = "FRUGALBAR_GEMINI_CLIENT_SECRET"
 
@@ -660,7 +660,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
 
 
     static var clientID: String? {
-        if let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel),
+        if let stored = try? KeychainManager.shared.get(label: clientIDKeychainLabel, allowsAuthenticationPrompt: false),
            !stored.isEmpty {
             return stored
         }
@@ -673,7 +673,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
     /// before the user ever saw a token.
     ///
     static var clientSecret: String? {
-        if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel),
+        if let stored = try? KeychainManager.shared.get(label: clientSecretKeychainLabel, allowsAuthenticationPrompt: false),
            !stored.isEmpty {
             return stored
         }
@@ -689,14 +689,39 @@ public struct GeminiOAuthSession: Codable, Sendable {
     private static let renewalMargin: TimeInterval = 120
 
     static func load() -> GeminiOAuthSession? {
-        guard let text = try? KeychainManager.shared.get(label: keychainLabel),
-              let data = text.data(using: .utf8),
-              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: data)
+        readUsableSession()?.session
+    }
+
+    /// The stored session with the raw text it was decoded from and the
+    /// client-override baseline it was judged against, or nil when there is
+    /// no session, it belongs to another client, or the configured client
+    /// cannot be determined.
+    ///
+    /// Sessions from another client are discarded rather than sent to be
+    /// rejected: the honest state is "sign in again", not "bad credential".
+    /// An override the vault cannot read (locked, or a legacy item pending
+    /// migration) is not "absent": falling back to the environment client
+    /// then would poll with a session the configured client may not own.
+    ///
+    /// The override is read on both sides of the session read and must agree:
+    /// a client switch committed in between (Settings leaves the session
+    /// record untouched) would otherwise approve the old client's session
+    /// against the baseline read before the switch.
+    static func readUsableSession(
+        manager: KeychainManager = .shared,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        afterSessionRead: () -> Void = {}
+    ) -> (raw: String, session: GeminiOAuthSession, storedClientID: String?)? {
+        guard let storedClient = storedClientIDBaseline(manager: manager),
+              let raw = try? manager.get(label: keychainLabel, allowsAuthenticationPrompt: false),
+              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8))
         else { return nil }
-        // Sessions from another client are discarded rather than sent to be
-        // rejected: the honest state is "sign in again", not "bad credential".
-        guard isUsable(session, forClientID: clientID) else { return nil }
-        return session
+        afterSessionRead()
+        guard let confirmed = storedClientIDBaseline(manager: manager), confirmed == storedClient else { return nil }
+        let fromEnvironment = environment[clientIDEnvVar].flatMap { $0.isEmpty ? nil : $0 }
+        let effectiveClient = storedClient.flatMap { $0.isEmpty ? nil : $0 } ?? fromEnvironment
+        guard isUsable(session, forClientID: effectiveClient) else { return nil }
+        return (raw, session, storedClient)
     }
 
     /// Whether a stored session can be used by the currently configured
@@ -716,13 +741,56 @@ public struct GeminiOAuthSession: Codable, Sendable {
                                        label: keychainLabel)
     }
 
+    /// Persists a background token renewal without blocking provider deadlines
+    /// or prompting the user. If the vault lock is contended or Keychain is
+    /// locked, the renewed session stays in memory and flushes on explicit
+    /// Unlock or Save unless superseded by a newer explicit edit or delete.
+    @discardableResult
+    static func saveDeferred(
+        _ session: GeminiOAuthSession,
+        expectedPreviousValue: String? = nil,
+        expectedStoredClientID: String?? = nil,
+        manager: KeychainManager = .shared
+    ) -> DeferredWriteOutcome {
+        guard let encoded = try? JSONEncoder().encode(session) else { return .deferred }
+        var alsoExpecting: [String: String?] = [:]
+        if let expectedStoredClientID {
+            alsoExpecting[clientIDKeychainLabel] = expectedStoredClientID
+        }
+        return manager.setDeferred(
+            key: String(decoding: encoded, as: UTF8.self),
+            label: keychainLabel,
+            expectedPreviousValue: expectedPreviousValue,
+            alsoExpecting: alsoExpecting
+        )
+    }
+
+    /// The stored client-ID override as a compare-and-swap baseline:
+    /// `.some(value)` when stored, `.some(nil)` only on *confirmed* absence,
+    /// and `nil` when the vault cannot say (locked, corrupt, or the override
+    /// is a legacy item still pending migration).
+    static func storedClientIDBaseline(manager: KeychainManager = .shared) -> String?? {
+        do {
+            return .some(try manager.get(label: clientIDKeychainLabel, allowsAuthenticationPrompt: false))
+        } catch KeychainError.itemNotFound {
+            return .some(nil)
+        } catch {
+            return nil
+        }
+    }
+
     /// The stored session, renewed first if its access token is spent.
     ///
     /// Google's access tokens last an hour. Without this the app read a live
     /// quota once and then reported "credential rejected" until the user
     /// noticed and signed in by hand.
     static func loadRefreshed() async -> GeminiOAuthSession? {
-        guard let session = load() else { return nil }
+        // `storedClientAtStart` is the client override as it stood when this
+        // read (and any renewal) started. The deferred write is compared
+        // against it under `flock`, so another process switching clients
+        // mid-renewal drops the renewed session even when the session record
+        // itself is unchanged.
+        guard let (raw, session, storedClientAtStart) = readUsableSession() else { return nil }
         if session.expiry.timeIntervalSinceNow > renewalMargin { return session }
         guard !session.refreshToken.isEmpty else { return nil }
         guard let renewed = try? await requestToken(
@@ -732,8 +800,30 @@ public struct GeminiOAuthSession: Codable, Sendable {
             ],
             existingRefreshToken: session.refreshToken
         ) else { return nil }
-        try? save(renewed)
+        // If the configured OAuth client changed while Google was replying,
+        // discard the old client's renewed session rather than saving it.
+        guard isUsable(renewed, forClientID: clientID) else { return liveWinner() }
+        let outcome = saveDeferred(
+            renewed,
+            expectedPreviousValue: raw,
+            expectedStoredClientID: .some(storedClientAtStart)
+        )
+        if outcome == .superseded {
+            // Another sign-in, deletion, or cross-process edit replaced the
+            // session while Google was refreshing the old token: return the
+            // winning session (or nil if deleted) rather than the stale one.
+            return liveWinner()
+        }
         return renewed
+    }
+
+    /// The session that won a race with a discarded renewal, but only if its
+    /// access token is still live. The winner can be the very session whose
+    /// token just expired; handing that out costs a failed poll, while nil
+    /// lets the caller fall back or retry on the next cycle.
+    private static func liveWinner() -> GeminiOAuthSession? {
+        guard let winner = load(), winner.expiry.timeIntervalSinceNow > renewalMargin else { return nil }
+        return winner
     }
 
     /// Posts a form-encoded grant to Google's token endpoint.
@@ -778,7 +868,7 @@ public struct GeminiOAuthSession: Codable, Sendable {
             accessToken: token.access_token,
             refreshToken: token.refresh_token ?? existingRefreshToken ?? "",
             expiry: Date().addingTimeInterval(TimeInterval(token.expires_in ?? 3600)),
-            clientID: clientID
+            clientID: id
         )
     }
 

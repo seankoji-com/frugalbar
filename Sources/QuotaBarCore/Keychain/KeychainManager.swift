@@ -4,10 +4,11 @@ import LocalAuthentication
 
 // MARK: - Keychain wrapper (macOS Security framework)
 
-public enum KeychainError: Error, Sendable, LocalizedError {
+public enum KeychainError: Error, Sendable, LocalizedError, Equatable {
     case unknown(OSStatus)
     case itemNotFound
     case invalidData
+    case vaultUnavailable(VaultUnavailableReason)
 
     public var errorDescription: String? {
         switch self {
@@ -29,119 +30,64 @@ public enum KeychainError: Error, Sendable, LocalizedError {
             }
         case .itemNotFound:   "No matching keychain item found"
         case .invalidData:    "Invalid keychain data"
+        case .vaultUnavailable(let reason): reason.userDescription
         }
     }
 }
 
 public final class KeychainManager: Sendable {
 
-    public static let shared = KeychainManager()
-    private let service = "com.quotabar.keys"
+    public static let shared = KeychainManager(vault: .shared)
+    public let vault: KeychainVault
 
-    private init() {}
+    public init(vault: KeychainVault) {
+        self.vault = vault
+    }
 
     // MARK: Public API
 
     public func set(key: String, label: String, allowsAuthenticationPrompt: Bool = true) throws {
-        guard let data = key.data(using: .utf8) else { throw KeychainError.invalidData }
+        try vault.write(key, namespace: .keys, account: label, allowsPrompt: allowsAuthenticationPrompt)
+    }
 
-        // When the caller is an unattended context (the `--doctor` probe), the
-        // probe must never trigger the interactive unlock prompt. The
-        // non-interactive context is attached to `query` itself — NOT only to
-        // the item-insert query — so it also reaches the `SecItemUpdate` call
-        // in the `errSecDuplicateItem` path below. A re-run of `--doctor` over
-        // a lingering probe item (a previous run killed between set and its
-        // delete) would otherwise update that item WITHOUT the context and
-        // still prompt/hang on a locked keychain.
-        var query: [String: Any] = [
-            kSecClass as String:              kSecClassGenericPassword,
-            kSecAttrService as String:        service,
-            kSecAttrAccount as String:        label,
-            // Never sync a credential to iCloud.
-            //
-            // NOTE: kSecUseDataProtectionKeychain is deliberately *not* set.
-            // It requires a code-signed bundle with an application-identifier
-            // entitlement; from `swift run` SecItemAdd returns -34018
-            // (errSecMissingEntitlement) and no credential can be stored at
-            // all. Add it together with proper .app signing, not before.
-            kSecAttrSynchronizable as String: false,
-        ]
-        if !allowsAuthenticationPrompt {
-            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
-        }
-        let attributes: [String: Any] = [
-            kSecValueData as String:          data,
-            kSecAttrAccessible as String:     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-
-        var addQuery = query
-        for (k, v) in attributes { addQuery[k] = v }
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-
-        switch addStatus {
-        case errSecSuccess:
-            return
-        case errSecDuplicateItem:
-            let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw KeychainError.unknown(updateStatus)
-            }
-        default:
-            throw KeychainError.unknown(addStatus)
-        }
+    /// Background write (e.g. Gemini OAuth renewal): stores in memory immediately
+    /// and attempts a non-blocking, non-interactive persist without blocking
+    /// provider deadlines or prompting. `alsoExpecting` maps other labels to
+    /// the value (nil = absent) they must still hold when the write lands.
+    @discardableResult
+    public func setDeferred(
+        key: String,
+        label: String,
+        expectedPreviousValue: String? = nil,
+        alsoExpecting: [String: String?] = [:]
+    ) -> DeferredWriteOutcome {
+        vault.writeDeferred(
+            key,
+            namespace: .keys,
+            account: label,
+            expectedPreviousValue: expectedPreviousValue,
+            alsoExpecting: alsoExpecting.map { (namespace: .keys, account: $0.key, value: $0.value) }
+        )
     }
 
     public func get(label: String, allowsAuthenticationPrompt: Bool = true) throws -> String {
-        var query: [String: Any] = [
-            kSecClass as String:              kSecClassGenericPassword,
-            kSecAttrService as String:        service,
-            kSecAttrAccount as String:        label,
-            kSecReturnData as String:         true,
-            kSecMatchLimit as String:         kSecMatchLimitOne,
-            kSecAttrSynchronizable as String: false,
-        ]
-        if !allowsAuthenticationPrompt {
-            query[kSecUseAuthenticationContext as String] = Self.nonPromptingAuthContext()
+        guard let value = try vault.read(
+            namespace: .keys,
+            account: label,
+            allowsPrompt: allowsAuthenticationPrompt
+        ) else {
+            throw KeychainError.itemNotFound
         }
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess else {
-            if status == errSecItemNotFound { throw KeychainError.itemNotFound }
-            throw KeychainError.unknown(status)
-        }
-
-        guard let data = result as? Data, let string = String(data: data, encoding: .utf8) else {
-            throw KeychainError.invalidData
-        }
-        return string
+        return value
     }
 
-    public func delete(label: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: label,
-            kSecAttrSynchronizable as String: false,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unknown(status)
-        }
+    /// Cache-only read for UI surfaces (Settings). Never touches Keychain or prompts.
+    public func cachedValue(label: String) -> String? {
+        vault.cachedValue(namespace: .keys, account: label)
     }
 
-    /// An `LAContext` whose `interactionNotAllowed` is true. Attached to a
-    /// query via `kSecUseAuthenticationContext`, it makes the call return
-    /// `errSecInteractionNotAllowed` instead of presenting a lock/permission
-    /// prompt — exactly what the `--doctor` probe (T9) needs to test the
-    /// keychain non-interactively. This is the non-deprecated replacement for
-    /// the old `kSecUseAuthenticationUIFail`, which is unavailable from
-    /// `swift run` anyway.
-    private static func nonPromptingAuthContext() -> LAContext {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        return context
+    public func delete(label: String, allowsAuthenticationPrompt: Bool = true) throws {
+        try vault.delete(namespace: .keys, account: label, allowsPrompt: allowsAuthenticationPrompt)
     }
 }
 
@@ -244,8 +190,12 @@ public enum CredentialStore {
         values.isEmpty ? nil : values.contains(true)
     }
 
+    /// Test-only task-local override for `isCLIDiscoveryEnabled` so parallel
+    /// tests can exercise CLI discovery without mutating shared `UserDefaults`.
+    @TaskLocal static var cliDiscoveryOverride: Bool? = nil
+
     public static var isCLIDiscoveryEnabled: Bool {
-        preferences.bool(forKey: cliDiscoveryDefaultsKey)
+        cliDiscoveryOverride ?? preferences.bool(forKey: cliDiscoveryDefaultsKey)
     }
 
     public static var isNotificationsEnabled: Bool {
@@ -354,7 +304,9 @@ public enum CredentialStore {
     /// user has opted in — known CLI config locations.
     public static func apiKey(
         for vendor: VendorIdentifier,
-        readKeychain: (String) -> String? = { try? KeychainManager.shared.get(label: $0) }
+        readKeychain: (String) -> String? = {
+            try? KeychainManager.shared.get(label: $0, allowsAuthenticationPrompt: false)
+        }
     ) -> String? {
         if let kc = readKeychain(vendor.rawValue), !kc.isEmpty {
             return kc
@@ -499,6 +451,20 @@ public enum CredentialStore {
             return token
         }
 
+        func peekClaudeBlob(now: Date) -> Data? {
+            lock.withLock {
+                guard let cached = claudeBlobCache, cached.expires > now else { return nil }
+                return cached.data
+            }
+        }
+
+        func peekMuseBlob(now: Date) -> Data? {
+            lock.withLock {
+                guard let cached = museBlobCache, cached.expires > now else { return nil }
+                return cached.data
+            }
+        }
+
         func claudeBlob(now: Date, resolve: () -> Data?) -> Data? {
             lock.lock()
             if let cached = claudeBlobCache, cached.expires > now {
@@ -592,21 +558,46 @@ public enum CredentialStore {
         return data.isEmpty ? nil : data
     }
 
-    private static func discoverClaudeBlob() -> Data? {
+    /// Task-local switch controlling whether ambient CLI discovery may invoke
+    /// `/usr/bin/security`. Set to `false` during passive refreshes
+    /// (`forceRefresh(allowInteractiveUnlock: false)`) so workspace edits and
+    /// connection-sheet dismissal never trigger SecurityAgent prompts.
+    @TaskLocal static var allowsSecurityCLI: Bool = true
+
+    /// Test-only hook invoked when a credential lookup reaches the
+    /// `/usr/bin/security` subprocess path, allowing tests to verify across
+    /// GCD queue hops whether subprocess invocation is suppressed.
+    @TaskLocal static var securityCLISubprocessHook: (@Sendable (_ service: String) -> Data?)? = nil
+
+    private static func discoverClaudeBlob(allowsSecurityCLI: Bool = true) -> Data? {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
         let fileURL = CLIConfigLocations.liveClaudeRoot(containing: ".credentials.json")
             .appendingPathComponent(".credentials.json")
         if let fileData = try? Data(contentsOf: fileURL), !fileData.isEmpty {
             return fileData
         }
-        if let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
-            return secData
+        if effectiveSecurityCLI {
+            if let hook = securityCLISubprocessHook {
+                if let hooked = hook("Claude Code-credentials"), !hooked.isEmpty {
+                    return hooked
+                }
+            } else if let secData = runSecurityClaudeCredentials(), !secData.isEmpty {
+                return secData
+            }
         }
         guard !TestHost.isActive else { return nil }
         return claudeCodeKeychainBlob()
     }
 
-    static func cachedClaudeBlob(now: Date = Date()) -> Data? {
-        CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob() }
+    static func cachedClaudeBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if !effectiveSecurityCLI {
+            if let cached = CredentialCache.shared.peekClaudeBlob(now: now) {
+                return cached
+            }
+            return discoverClaudeBlob(allowsSecurityCLI: false)
+        }
+        return CredentialCache.shared.claudeBlob(now: now) { discoverClaudeBlob(allowsSecurityCLI: true) }
     }
 
     /// The Muse Code CLI credential blob from the macOS login Keychain
@@ -649,28 +640,44 @@ public enum CredentialStore {
         return data.isEmpty ? nil : data
     }
 
-    private static func discoverMuseBlob() -> Data? {
-        if let secData = runSecurityMuseCredential(), !secData.isEmpty {
-            return secData
+    private static func discoverMuseBlob(allowsSecurityCLI: Bool = true) -> Data? {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if effectiveSecurityCLI {
+            if let hook = securityCLISubprocessHook {
+                if let hooked = hook("ai.meta.dev.credentials"), !hooked.isEmpty {
+                    return hooked
+                }
+            } else if let secData = runSecurityMuseCredential(), !secData.isEmpty {
+                return secData
+            }
         }
         guard !TestHost.isActive else { return nil }
         return museKeychainBlob()
     }
 
-    static func cachedMuseBlob(now: Date = Date()) -> Data? {
-        CredentialCache.shared.museBlob(now: now) { discoverMuseBlob() }
+    static func cachedMuseBlob(now: Date = Date(), allowsSecurityCLI: Bool = true) -> Data? {
+        let effectiveSecurityCLI = allowsSecurityCLI && Self.allowsSecurityCLI
+        if !effectiveSecurityCLI {
+            if let cached = CredentialCache.shared.peekMuseBlob(now: now) {
+                return cached
+            }
+            return discoverMuseBlob(allowsSecurityCLI: false)
+        }
+        return CredentialCache.shared.museBlob(now: now) { discoverMuseBlob(allowsSecurityCLI: true) }
     }
 
     /// The Muse blob the CLI writes to the macOS login Keychain, which lives
     /// under a different service name than our own items and so cannot be
-    /// served by `KeychainManager`.
-    private static func museKeychainBlob() -> Data? {
+    /// served by `KeychainManager`. Always non-interactive so a restrictive ACL
+    /// never triggers a SecurityAgent prompt.
+    static func museKeychainBlob() -> Data? {
         let query: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: "ai.meta.dev.credentials",
-            kSecAttrAccount as String: "meta",
-            kSecReturnData as String:  true,
-            kSecMatchLimit as String:  kSecMatchLimitOne,
+            kSecClass as String:                    kSecClassGenericPassword,
+            kSecAttrService as String:              "ai.meta.dev.credentials",
+            kSecAttrAccount as String:              "meta",
+            kSecReturnData as String:               true,
+            kSecMatchLimit as String:               kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: SystemKeychainBackend.nonPromptingAuthContext(),
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
@@ -872,9 +879,19 @@ extension CredentialStore {
     /// fetching concurrently that can starve the pool. This hops to a
     /// dedicated background queue instead.
     static func apiKeyAsync(for vendor: VendorIdentifier) async -> String? {
-        await withCheckedContinuation { continuation in
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
+        let discovery = Self.cliDiscoveryOverride
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                continuation.resume(returning: apiKey(for: vendor))
+                let result = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        Self.$cliDiscoveryOverride.withValue(discovery) {
+                            apiKey(for: vendor)
+                        }
+                    }
+                }
+                continuation.resume(returning: result)
             }
         }
     }
@@ -887,17 +904,22 @@ extension CredentialStore {
     /// the user opted into CLI discovery — so a workspace that never had one
     /// cannot silently read another workspace's CLI credential.
     static func apiKeyAsync(label: String, cliVendorFallback: VendorIdentifier? = nil) async -> String? {
-        await withCheckedContinuation { continuation in
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
+        return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                if let stored = try? KeychainManager.shared.get(label: label), !stored.isEmpty {
-                    continuation.resume(returning: stored)
-                    return
+                let result: String? = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        if let stored = try? KeychainManager.shared.get(label: label, allowsAuthenticationPrompt: false), !stored.isEmpty {
+                            return stored
+                        }
+                        guard isCLIDiscoveryEnabled, let vendor = cliVendorFallback else {
+                            return nil
+                        }
+                        return discoverFromCLI(vendor: vendor)
+                    }
                 }
-                guard isCLIDiscoveryEnabled, let vendor = cliVendorFallback else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: discoverFromCLI(vendor: vendor))
+                continuation.resume(returning: result)
             }
         }
     }
@@ -905,12 +927,14 @@ extension CredentialStore {
     /// The credential blob the Claude Code CLI writes to the macOS login
     /// Keychain. It lives under a different service name than our own items,
     /// so `KeychainManager` — scoped to `com.quotabar.keys` — cannot serve it.
-    private static func claudeCodeKeychainBlob() -> Data? {
+    /// Always non-interactive so a restrictive ACL never prompts.
+    static func claudeCodeKeychainBlob() -> Data? {
         let query: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: "Claude Code-credentials",
-            kSecReturnData as String:  true,
-            kSecMatchLimit as String:  kSecMatchLimitOne,
+            kSecClass as String:                    kSecClassGenericPassword,
+            kSecAttrService as String:              "Claude Code-credentials",
+            kSecReturnData as String:               true,
+            kSecMatchLimit as String:               kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: SystemKeychainBackend.nonPromptingAuthContext(),
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
@@ -973,10 +997,14 @@ extension CredentialStore {
 
     /// Resolves provenance off the main thread — `discoverFromCLI` can shell
     /// out to `gh`, which has no business running during a view update.
+    ///
+    /// Strictly non-interactive: reads FrugalBar's vault from cache only and
+    /// skips `/usr/bin/security` for third-party Keychain items so Settings
+    /// provenance checks can never trigger a Keychain prompt.
     public static func credentialSourceAsync(for vendor: VendorIdentifier) async -> CredentialSource {
         await withCheckedContinuation { continuation in
             credentialQueue.async {
-                if let stored = try? KeychainManager.shared.get(label: vendor.rawValue),
+                if let stored = KeychainManager.shared.cachedValue(label: vendor.rawValue),
                    !stored.isEmpty {
                     continuation.resume(returning: .keychain)
                     return
@@ -990,7 +1018,18 @@ extension CredentialStore {
                     continuation.resume(returning: .discovered("CLI Proxy (\(host))"))
                     return
                 }
-                guard let found = discoverFromCLI(vendor: vendor), !found.isEmpty else {
+                let found: String?
+                switch vendor {
+                case .claude:
+                    found = claudeOAuthToken(from: cachedClaudeBlob(allowsSecurityCLI: false))
+                case .muse:
+                    found = cachedMuseBlob(allowsSecurityCLI: false).flatMap {
+                        MuseQuotaProvider.accessToken(from: $0)
+                    }
+                default:
+                    found = discoverFromCLI(vendor: vendor)
+                }
+                guard let found, !found.isEmpty else {
                     continuation.resume(returning: .absent)
                     return
                 }
@@ -1063,9 +1102,15 @@ extension CredentialStore {
             }
             return nil
         }
+        let allowSecurityCLI = Self.allowsSecurityCLI
+        let hook = Self.securityCLISubprocessHook
         return await withCheckedContinuation { continuation in
             credentialQueue.async {
-                let name = claudePlanName(from: cachedClaudeBlob())
+                let name = Self.$allowsSecurityCLI.withValue(allowSecurityCLI) {
+                    Self.$securityCLISubprocessHook.withValue(hook) {
+                        claudePlanName(from: cachedClaudeBlob())
+                    }
+                }
                 continuation.resume(returning: name)
             }
         }
