@@ -1231,11 +1231,14 @@ struct KeychainVaultR12Tests {
         let saveDone = DispatchSemaphore(value: 0)
         let saveStarted = LockedFlag()
         let saveHeldLock = LockedFlag()
+        let saveHeldUntilReleased = LockedFlag()
         hooked.onBeforeWrite = { account in
             guard account == KeychainVault.vaultAccount, !saveStarted.value else { return }
             saveStarted.set()
             saveIsWriting.signal()
-            _ = releaseSave.wait(timeout: .now() + 30)
+            // Released only after the renewal's flush returns, so success here
+            // proves the save held flock for the whole flush.
+            if releaseSave.wait(timeout: .now() + 30) == .success { saveHeldUntilReleased.set() }
         }
         // The renewal is queued (passing every in-memory check), then the
         // client-B save starts and holds flock before the renewal flushes.
@@ -1265,6 +1268,7 @@ struct KeychainVaultR12Tests {
 
         // The ordering this test names must actually have happened.
         try #require(saveHeldLock.value, "the client save never reached its Keychain write while the renewal flushed")
+        try #require(saveHeldUntilReleased.value, "the client save gave up its lock before the renewal's flush returned")
         #expect(saveStarted.value)
         #expect(outcome == .superseded)
         #expect(try vault.read(namespace: .keys, account: "gemini-client") == "client-B")
