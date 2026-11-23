@@ -436,8 +436,15 @@ only go in alongside a signed, entitled `.app`.
 **The glance.** The popover answers "which pool do I use now, and when do the
 spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows Providers,
 Wallet and a footer. Providers expands one group at a time. Claude combines
-Claude Code with Antigravity Claude/GPT. DeepSeek groups OpenCode Go, Command
-Code and OpenDesign, with direct API credit listed separately. The group
+Claude Code with Antigravity Claude/GPT. Gemini holds Gemini and Argon, and
+each Antigravity row names its model and the route that read it ("AGY" for
+this Mac's Google sign-in, "CLI Proxy"), from the reading's `cliSource` before
+the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
+OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
+entries only, never Providers rows (owner, 24 Nov 2026). The Wallet
+(`WalletPresentation`) groups every value under its provider and account, and
+the Gemini AI Studio key's configured credit is one "Gemini API" entry of its
+own, never an Antigravity account's line. The group
 averages use only fresh figures in the same window and report coverage. Each
 pool keeps its service identity and opens its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window

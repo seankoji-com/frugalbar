@@ -21,8 +21,9 @@ struct GlanceSectionsView: View {
             if !glance.services.isEmpty || !glance.foldedServices.isEmpty {
                 ServicesSection(glance: glance, onSelect: onSelect)
             }
-            if !glance.walletSnapshots.isEmpty {
-                WalletSection(snapshots: glance.walletSnapshots, now: glance.now)
+            let wallet = WalletPresentation(snapshots: glance.walletSnapshots, now: glance.now)
+            if !wallet.entries.isEmpty {
+                WalletSection(presentation: wallet)
             }
         }
     }
@@ -590,182 +591,149 @@ private struct ServicePoolRow: View {
 
 // MARK: - Wallet
 
-/// Every credit, balance and reset ticket, one line each. Each line is drawn
-/// from the existing presentation for that figure, so its label, unit and
-/// money formatting are the ones those rules already test.
+/// Every credit, balance and reset ticket, under the provider and account it
+/// belongs to, in one row anatomy (`WalletPresentation`).
 struct WalletSection: View {
-    let snapshots: [QuotaSnapshot]
-    let now: Date
+    let presentation: WalletPresentation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(snapshots, id: \.id) { snapshot in
-                        WalletLines(snapshot: snapshot, now: now)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-            }
-        }
-    }
-}
-
-private struct WalletLines: View {
-    let snapshot: QuotaSnapshot
-    let now: Date
-
-    var body: some View {
-        let p = MetricRowPresentation(snapshot: snapshot, now: now)
-        let stale = snapshot.staleReading != nil
-        let isBalanceOnly = snapshot.quotaBars.allSatisfy { $0.allowanceRole != .plan }
-        VStack(alignment: .leading, spacing: 8) {
-            if isBalanceOnly, snapshot.apiCredits.isEmpty {
-                WalletValueRow(vendor: snapshot.vendorId, title: snapshot.rowTitle,
-                               detail: snapshot.auxiliaryInfo, figure: p.valueLabel,
-                               isNegative: Self.isNegative(snapshot.metric), spoken: p.accessibilityLabel)
-            } else {
-                // Every credit sits under the account it belongs to: the
-                // credit views were drawn under their quota row, which named
-                // it, and several ("Usage credits", "API credit") do not.
-                WalletOwnerCaption(vendor: snapshot.vendorId, owner: ownerTitle, tag: nil)
-            }
-            // The same split the old row and credit card made, so no figure
-            // is drawn twice and each keeps its own meter and freshness rule.
-            ForEach(snapshot.apiCredits.filter { !$0.extendsSubscription }, id: \.id) { entry in
-                let e = APICreditEntryPresentation(entry: entry)
-                WalletValueRow(vendor: entry.vendorId, title: e.title, detail: e.detail, figure: e.figure,
-                               isNegative: Self.isNegative(entry.metric), spoken: e.spoken, isStale: stale)
-            }
-            ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, e in
-                WalletValueRow(vendor: snapshot.vendorId, title: e.title, detail: e.detail, figure: e.figure,
-                               spoken: e.spoken, isStale: stale)
-            }
-            if let usage = p.openAIUsageCredit { OpenAIUsageCreditView(presentation: usage) }
-            if let promo = p.monthlyPromo { MonthlyPromoCreditView(presentation: promo) }
-            if let credit = p.monthlyCredit { MonthlyCreditBarView(presentation: credit) }
-            if let credit = p.geminiAPICredit {
-                // The AI Studio key's credit, typed by the user: say so where
-                // it is drawn, not only in its tooltip.
-                Text("GEMINI API KEY · CONFIGURED")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Theme.primary)
-                GeminiAPICreditView(presentation: credit)
-            }
-            ForEach(ticketGroups(p), id: \.label) { group in
-                TicketLines(owner: ownerTitle, label: group.label, credits: group.credits)
-            }
-        }
-        .padding(.bottom, isBalanceOnly ? 0 : 2)
-    }
-
-    /// "Codex · Pro", "Claude Code · Primary · Max (20x)", "Antigravity · Gemini · Burner".
-    private var ownerTitle: String {
-        let (service, name) = GlancePresentation.names(for: snapshot)
-        let plan = snapshot.claudeAccount == nil ? snapshot.shortPlanName : (snapshot.planName ?? "")
-        return ([service] + [name == service ? nil : name, plan.isEmpty ? nil : plan].compactMap { $0 })
-            .joined(separator: " · ")
-    }
-
-    private func ticketGroups(_ p: MetricRowPresentation) -> [(label: String, credits: MetricRowPresentation.ResetCredits)] {
-        if !p.resetCreditGroups.isEmpty {
-            return p.resetCreditGroups.map { ("\($0.scope.displayName) reset", $0.credits) }
-        }
-        return p.resetCredits.map { [("Reset", $0)] } ?? []
-    }
-
-    static func isNegative(_ metric: MetricType) -> Bool {
-        if case .currency(let balance, _, _, _) = metric { return balance < 0 }
-        return false
-    }
-}
-
-private struct WalletValueRow: View {
-    let vendor: VendorIdentifier
-    let title: String
-    let detail: String?
-    let figure: String
-    var isNegative = false
-    let spoken: String
-    var isStale = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VendorAvatarView(vendorId: vendor, status: .measured(.none), size: 18)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.onSurface).lineLimit(1)
-                if let detail {
-                    Text(detail).font(.system(size: 10.5)).foregroundStyle(Theme.outline).lineLimit(1)
+                ForEach(Array(presentation.entries.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.4)) }
+                    WalletEntryView(entry: entry)
                 }
             }
-            Spacer(minLength: 6)
-            if isStale {
-                Image(systemName: "clock").font(.system(size: 9)).foregroundStyle(Theme.tertiary)
-                    .help("Carried over from an earlier poll")
-            }
-            Text(figure)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isNegative ? Theme.error : Theme.onSurface)
-                .lineLimit(1)
-                .layoutPriority(1)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken + (isStale ? ", carried over from an earlier poll" : ""))
     }
 }
 
-private struct WalletOwnerCaption: View {
-    let vendor: VendorIdentifier
-    let owner: String
-    let tag: String?
+private struct WalletEntryView: View {
+    let entry: WalletPresentation.Entry
 
     var body: some View {
-        HStack(spacing: 6) {
-            VendorAvatarView(vendorId: vendor, status: .measured(.none), size: 14)
-            Text(owner).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant)
-            if let tag {
-                Text(tag.uppercased())
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Theme.primary)
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.primary.opacity(0.6), lineWidth: 0.5))
+        VStack(alignment: .leading, spacing: 7) {
+            // Who the values belong to, first and always.
+            HStack(spacing: 7) {
+                VendorAvatarView(vendorId: entry.vendor, status: .measured(.none), size: 16)
+                Text(entry.provider)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.onSurface)
+                if let account = entry.account {
+                    Text(account)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if let tag = entry.tag {
+                    Text(tag.uppercased())
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(Theme.primary)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.primary.opacity(0.6), lineWidth: 0.5))
+                }
+                Spacer(minLength: 0)
+                if entry.isStale {
+                    Label("stale", systemImage: "clock")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary)
+                        .help("The last poll failed; these figures are carried over from an earlier one")
+                }
             }
-            Spacer(minLength: 0)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+
+            ForEach(entry.lines) { line in
+                WalletLineView(line: line)
+            }
+            .padding(.leading, 23)
         }
-        // A heading, so VoiceOver names the account before its credit lines.
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }
 
-/// One line per displayed ticket, each with its own published expiry.
-private struct TicketLines: View {
-    /// Spoken only: the Wallet's owner caption names it on screen.
-    let owner: String
-    let label: String
-    let credits: MetricRowPresentation.ResetCredits
+private struct WalletLineView: View {
+    let line: WalletPresentation.Line
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(0..<credits.tickets, id: \.self) { index in
-                HStack(spacing: 8) {
-                    GoldenTicketView(index: index).frame(width: 18)
-                        .help(credits.expiryText(at: index, now: credits.now))
-                    Text("1 \(label) ticket").font(.system(size: 12.5)).foregroundStyle(Theme.onSurface)
-                    Spacer(minLength: 6)
-                    Text(credits.expiryPhrase(at: index, now: credits.now))
-                        .font(.system(size: 11.5).monospacedDigit())
-                        .foregroundStyle(Theme.onSurfaceVariant)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let symbol = line.symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 10))
+                        .foregroundStyle(symbol == "ticket.fill" ? Color(red: 0.96, green: 0.78, blue: 0.29) : Theme.outline)
+                }
+                Text(line.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.onSurface)
+                    .lineLimit(1)
+                if let detail = line.detail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.outline)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                if let figure = line.figure {
+                    Text(figure)
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(color(line.tone))
+                        .lineLimit(1)
+                        .layoutPriority(1)
                 }
             }
-            if credits.overflow > 0 {
-                Text("+\(credits.overflow) more").font(.system(size: 10.5)).foregroundStyle(Theme.outline)
-                    .padding(.leading, 26)
+            if let meter = line.meter {
+                WalletMeterView(meter: meter)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(owner): \(credits.spoken)")
+        .accessibilityLabel(line.spoken.isEmpty ? line.title : line.spoken)
+        .help(line.spoken)
+    }
+
+    private func color(_ tone: WalletPresentation.Tone) -> Color {
+        switch tone {
+        case .normal: Theme.onSurface
+        case .negative: Theme.error
+        case .unknown: Theme.outline
+        }
+    }
+}
+
+private struct WalletMeterView: View {
+    let meter: WalletPresentation.Meter
+
+    private var fill: Color {
+        switch meter.kind {
+        // Time is informational blue, never a quota colour.
+        case .elapsed: Theme.primary
+        case .used(let exhausted, let ahead): exhausted ? Theme.errorBold : (ahead ? Theme.tertiary : Theme.primary)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.surfaceContainerHighest)
+                    Capsule().fill(fill).frame(width: proxy.size.width * min(max(meter.fraction, 0), 1))
+                    if let tick = meter.tick {
+                        Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: 7)
+                            .offset(x: proxy.size.width * tick - 0.75)
+                    }
+                }
+            }
+            .frame(height: 4)
+            HStack {
+                Text(meter.caption)
+                Spacer(minLength: 6)
+                if let trailing = meter.trailing { Text(trailing) }
+            }
+            .font(.system(size: 10.5).monospacedDigit())
+            .foregroundStyle(Theme.onSurfaceVariant)
+        }
     }
 }

@@ -23,8 +23,12 @@ struct ProviderGridPresentationTests {
 
         let deepSeek = try #require(grid.groups.first { $0.id == .deepseek })
         #expect(deepSeek.pools.count == 7)
-        #expect(deepSeek.balances.map(\.vendorId) == [.deepseek])
-        #expect(grid.groups.allSatisfy { ![.opencode, .commandcode, .opendesign, .antigravityClaude].contains($0.id) })
+        // Direct balances live in the Wallet only (24 Nov 2026).
+        #expect(deepSeek.balances.isEmpty)
+        #expect(!grid.groups.contains { $0.id == .openrouter })
+        #expect(grid.groups.allSatisfy {
+            ![.opencode, .commandcode, .opendesign, .antigravityClaude, .antigravityArgon].contains($0.id)
+        })
         guard case .average(_, let measured, let poolCount) = deepSeek.summary(for: .monthly) else {
             Issue.record("Expected the DeepSeek monthly average")
             return
@@ -103,6 +107,30 @@ struct ProviderGridPresentationTests {
         #expect(group.summary(for: .weekly) == .spent(
             reset: now.addingTimeInterval(12 * 3600), allMeasuredExhausted: true, includesBlocked: true
         ))
+    }
+
+    @Test("Argon sits in the Gemini group, and each Antigravity row names its model and the route that read it")
+    func argonUnderGeminiWithRoutes() throws {
+        func account(_ id: String, _ name: String, _ source: String) -> AntigravityAccount {
+            AntigravityAccount(id: id, badge: "", sourceLabel: source, fallbackName: name)
+        }
+        let main = account("agy-main", "main", "This Mac's Google OAuth session")
+        let burner = account("agy-burner", "burner", "CLI Proxy (proxy.example)")
+        var argonMain = Fixtures.agy(.antigravityArgon, main, [Fixtures.bar("WK", 0.2, resetsInHours: 50, windowHours: 168)])
+        argonMain.antigravityAccount = main
+        let argonBurner = Fixtures.agy(.antigravityArgon, burner,
+                                       [Fixtures.bar("WK", 0.2, resetsInHours: 50, windowHours: 168)])
+        // The reading's own route wins over the account's list of routes: an
+        // account reachable both ways that was read through the proxy says so.
+        let both = account("agy-both", "both", "CLI Proxy (proxy.example) · This Mac's Google OAuth session")
+        var geminiBurner = Fixtures.agy(.gemini, both, [Fixtures.bar("WK", 0.4, resetsInHours: 50, windowHours: 168)])
+        geminiBurner.cliSource = "CLI Proxy (proxy.example)"
+
+        let grid = presentation([argonMain, argonBurner, geminiBurner])
+        #expect(grid.groups.map(\.id) == [.gemini])
+        let gemini = try #require(grid.groups.first)
+        #expect(gemini.title == "Gemini")
+        #expect(gemini.pools.map(\.source) == ["Argon · AGY", "Argon · CLI Proxy", "Gemini · CLI Proxy"])
     }
 
     private func presentation(_ snapshots: [QuotaSnapshot]) -> ProviderGridPresentation {

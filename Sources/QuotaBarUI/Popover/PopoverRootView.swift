@@ -174,8 +174,11 @@ public struct PopoverRootView: View {
         let now = Date()
         let order = CredentialStore.providerOrder
         let grid = ProviderGridPresentation(snapshots: store.snapshots, serviceOrder: order, now: now)
-        let wallet = GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order).walletSnapshots
-            .filter { !ProviderGridPresentation.isDirectBalance($0) || !$0.apiCredits.isEmpty }
+        // Every credit and balance, direct balances (OpenRouter, DeepSeek)
+        // included, under the provider it belongs to.
+        let wallet = WalletPresentation(
+            snapshots: GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order).walletSnapshots,
+            now: now)
         return VStack(spacing: Theme.sectionGap) {
             ProviderGridView(
                 presentation: grid,
@@ -185,8 +188,8 @@ public struct PopoverRootView: View {
                     }
                 }
             )
-            if !wallet.isEmpty {
-                WalletSection(snapshots: wallet, now: now)
+            if !wallet.entries.isEmpty {
+                WalletSection(presentation: wallet)
             }
 
             // Developer limits are not coding pools: they never enter the

@@ -513,6 +513,18 @@ struct UXRenderTests {
                 name: vendor == .claude ? "provider-grid-claude" :
                     vendor == nil ? "provider-grid-collapsed" : "provider-grid-expanded", directory: directory)
         }
+        // The popover as drawn: Gemini expanded (Argon now sits in it, each
+        // row naming its route), then the Wallet.
+        let now = GlanceFixtures.now
+        let wallet = WalletPresentation(
+            snapshots: GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now).walletSnapshots, now: now)
+        try await save(VStack(spacing: Theme.sectionGap) {
+            ProviderGridView(presentation: presentation, expanded: .gemini)
+            WalletSection(presentation: wallet)
+        }
+        .padding(Theme.edgeMargin)
+        .frame(width: PopoverRootView.popoverWidth)
+        .background(Theme.surface), name: "provider-grid-gemini-wallet", directory: directory)
     }
 
     /// The rebuilt detail view for a synthetic Gemini account, with a
