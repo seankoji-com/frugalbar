@@ -138,4 +138,29 @@ struct WalletPresentationTests {
             row1: nil, row2: nil)
         #expect(WalletPresentation(snapshots: [unconfigured], now: now).rows.isEmpty)
     }
+
+    @Test("OpenRouter and DeepSeek's own credit are Wallet lines, never Providers rows, overdrawn or empty")
+    func directBalancesLiveInTheWallet() throws {
+        // The figures from the owner's popover on 24 Nov 2026: DeepSeek's
+        // API credit overdrawn by a cent, OpenRouter at zero.
+        var snapshots = F.batch.filter { $0.vendorId != .deepseek && $0.vendorId != .openrouter }
+        snapshots.append(F.balance("deepseek", .deepseek, "DeepSeek", Decimal(string: "-0.01")!))
+        snapshots.append(F.balance("openrouter", .openrouter, "OpenRouter", 0))
+
+        let grid = ProviderGridPresentation(snapshots: snapshots,
+                                            serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now)
+        #expect(!grid.groups.contains { $0.id == .openrouter })
+        #expect(grid.groups.allSatisfy { $0.balances.isEmpty })
+        #expect(!grid.groups.flatMap(\.pools).contains { $0.id == "deepseek" || $0.id == "openrouter" })
+
+        let rows = WalletPresentation(snapshots: GlancePresentation(snapshots: snapshots, now: now).walletSnapshots,
+                                      now: now).rows
+        let deepSeek = try #require(rows.first { $0.id == "deepseek#balance" })
+        #expect(deepSeek.title == "DeepSeek")
+        #expect(deepSeek.figure == "-$0.01")
+        #expect(deepSeek.tone == .negative)
+        let openRouter = try #require(rows.first { $0.id == "openrouter#balance" })
+        #expect(openRouter.figure == "$0.00")
+        #expect(openRouter.tone == .normal)
+    }
 }
