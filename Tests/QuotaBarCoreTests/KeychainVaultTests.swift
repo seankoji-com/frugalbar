@@ -1230,20 +1230,26 @@ struct KeychainVaultR12Tests {
         let releaseSave = DispatchSemaphore(value: 0)
         let saveDone = DispatchSemaphore(value: 0)
         let saveStarted = LockedFlag()
+        let saveHeldLock = LockedFlag()
         hooked.onBeforeWrite = { account in
             guard account == KeychainVault.vaultAccount, !saveStarted.value else { return }
             saveStarted.set()
             saveIsWriting.signal()
-            _ = releaseSave.wait(timeout: .now() + 5)
+            _ = releaseSave.wait(timeout: .now() + 30)
         }
         // The renewal is queued (passing every in-memory check), then the
         // client-B save starts and holds flock before the renewal flushes.
+        // The save runs on its own `Thread`, not a GCD or cooperative-pool
+        // queue: on a loaded CI runner a queued block was not scheduled
+        // within the wait, so the flush found the lock free and the test
+        // measured a different ordering from the one it names.
         vault.beforeDeferredFlushHook = {
-            DispatchQueue.global().async {
+            let saver = Thread {
                 try? vault.write("client-B", namespace: .keys, account: "gemini-client")
                 saveDone.signal()
             }
-            _ = saveIsWriting.wait(timeout: .now() + 5)
+            saver.start()
+            if saveIsWriting.wait(timeout: .now() + 30) == .success { saveHeldLock.set() }
         }
         let outcome = vault.writeDeferred(
             "session-renewed-under-A",
@@ -1254,9 +1260,11 @@ struct KeychainVaultR12Tests {
         )
         vault.beforeDeferredFlushHook = nil
         releaseSave.signal()
-        #expect(saveDone.wait(timeout: .now() + 5) == .success)
+        #expect(saveDone.wait(timeout: .now() + 30) == .success)
         hooked.onBeforeWrite = nil
 
+        // The ordering this test names must actually have happened.
+        try #require(saveHeldLock.value, "the client save never reached its Keychain write while the renewal flushed")
         #expect(saveStarted.value)
         #expect(outcome == .superseded)
         #expect(try vault.read(namespace: .keys, account: "gemini-client") == "client-B")
