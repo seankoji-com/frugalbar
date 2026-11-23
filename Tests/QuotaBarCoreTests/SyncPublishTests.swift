@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 @testable import QuotaBarCore
 
@@ -50,6 +51,50 @@ struct SyncSecretRefreshRetryTests {
         harness.clock.set(start.addingTimeInterval(30 * 60))
         await harness.publisher.tick()
         #expect(harness.secrets.refreshCount == 2)
+    }
+
+    @Test("R15-01: an Unlock clears a Keychain backoff but not a later unrelated one, even with the refresh still armed")
+    func unlockKeepsUnrelatedBackoff() async throws {
+        let harness = try await SyncHarness.active()
+        let start = harness.clock.now()
+        harness.secrets.failReads(.unknown(-25308)) // errSecInteractionNotAllowed
+        await harness.publisher.submit(SyncFakes.source())
+        await harness.publisher.tick()
+
+        // The refresh fails and the next attempt fails for a non-Keychain
+        // reason, which sets its own backoff while the refresh stays armed.
+        harness.secrets.failReads(nil)
+        harness.secrets.answerRefreshes([false])
+        harness.store.failWrites()
+        harness.clock.set(start.addingTimeInterval(2 * 60))
+        await harness.publisher.tick()
+        harness.store.failWrites(false)
+        let backedOffUntil = await harness.publisher.nextWakeup()
+        #expect(backedOffUntil == start.addingTimeInterval(2 * 60 + SyncPublisher.backoff(2)))
+
+        await harness.publisher.vaultDidUnlock()
+        #expect(await harness.publisher.nextWakeup() == backedOffUntil)
+    }
+}
+
+@Suite("Sync secret refresh readiness (PR 192 review)")
+struct SyncSecretRefreshReadinessTests {
+    @Test("R15-02: a provider-key scan failure does not make readable Sync secrets report unrefreshed")
+    func providerKeyScanFailureDoesNotBlockSyncRefresh() async throws {
+        let backend = InMemoryKeychainBackend()
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("frugalbar-vault-test-\(UUID().uuidString).lock")
+        defer { try? FileManager.default.removeItem(at: lockURL) }
+        let vault = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        try vault.write("rt-live", namespace: .sync, account: SyncSecretAccount.refreshToken)
+        try vault.write("pub-real", namespace: .sync, account: SyncSecretAccount.publisherId)
+
+        let fresh = KeychainVault(keysService: "test.keys", syncService: "test.sync", backend: backend, lockFileURL: lockURL)
+        backend.setListFailure(service: "test.keys", status: errSecAuthFailed)
+        let secrets = KeychainSyncSecretStore(service: "test.sync", vault: fresh)
+        #expect(await secrets.refreshNonInteractively())
+        #expect(!fresh.statusSnapshot().legacyScanSucceeded)
+        #expect(try secrets.read(SyncSecretAccount.refreshToken) == "rt-live")
     }
 }
 

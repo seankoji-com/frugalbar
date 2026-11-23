@@ -115,7 +115,11 @@ public struct KeychainSyncSecretStore: SyncSecretStore {
         let status = await vault.warmUp(interactive: false)
         switch status.state {
         case .loaded, .empty:
-            return status.pendingLegacySyncKeys.isEmpty && status.legacyScanSucceeded
+            // Only the Sync side matters here. A provider-key scan failure
+            // would otherwise keep this false while both Sync secrets read
+            // fine, re-running the warm-up on every heartbeat; an unconfirmed
+            // Sync absence still throws on read and re-arms the refresh.
+            return status.pendingLegacySyncKeys.isEmpty
         default:
             return false
         }

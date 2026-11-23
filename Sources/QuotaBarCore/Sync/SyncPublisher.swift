@@ -178,6 +178,9 @@ public actor SyncPublisher {
     /// the next scheduled retry, run a coalesced non-interactive vault refresh
     /// so Sync recovers automatically once the login Keychain unlocks.
     private var needsSecretRefresh = false
+    /// Whether the current backoff came from a secret-store failure. An
+    /// Unlock clears only that backoff, never Google's (a rate limit, say).
+    private var backoffFromSecrets = false
 
     /// Called after each persisted Stop step. Tests throw from it to stop the
     /// protocol there, as a crash would.
@@ -540,13 +543,12 @@ public actor SyncPublisher {
             try save(checkpoint)
         } catch {
             // Arm the refresh on a secret-store failure. Any other failure
-            // leaves it as it was: only a refresh that reports the secrets
-            // readable (or an Unlock) clears it.
-            if error is KeychainError {
-                needsSecretRefresh = true
-            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
-                needsSecretRefresh = true
-            }
+            // leaves the refresh as it was (only a refresh that reports the
+            // secrets readable, or an Unlock, clears it) but records that this
+            // backoff is not Keychain's, so an Unlock leaves it in place.
+            let secretFailure = Self.isSecretStoreFailure(error)
+            if secretFailure { needsSecretRefresh = true }
+            backoffFromSecrets = secretFailure
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.stateNotSavedMessage
@@ -704,13 +706,12 @@ public actor SyncPublisher {
             // attempt): not Google's failure, so no backoff and no message.
         } else {
             // Arm the refresh on a secret-store failure. Any other failure
-            // leaves it as it was: only a refresh that reports the secrets
-            // readable (or an Unlock) clears it.
-            if error is KeychainError {
-                needsSecretRefresh = true
-            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
-                needsSecretRefresh = true
-            }
+            // leaves the refresh as it was (only a refresh that reports the
+            // secrets readable, or an Unlock, clears it) but records that this
+            // backoff is not Keychain's, so an Unlock leaves it in place.
+            let secretFailure = Self.isSecretStoreFailure(error)
+            if secretFailure { needsSecretRefresh = true }
+            backoffFromSecrets = secretFailure
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.describe(error)
@@ -728,13 +729,22 @@ public actor SyncPublisher {
     /// clearing unrelated backoff (such as a Google rate limit).
     public func vaultDidUnlock() {
         let keyError = Self.describe(SyncAuthError.secretsUnavailable)
-        guard needsSecretRefresh || state.lastError == keyError else { return }
         needsSecretRefresh = false
+        // The refresh flag can stay armed across a later Google failure, so
+        // it no longer says whose backoff this is; `backoffFromSecrets` does.
+        guard backoffFromSecrets || state.lastError == keyError else { return }
+        backoffFromSecrets = false
         retryAt = nil
         failures = 0
         if state.lastError == keyError {
             state.lastError = nil
         }
+    }
+
+    static func isSecretStoreFailure(_ error: Error) -> Bool {
+        if error is KeychainError { return true }
+        if let auth = error as? SyncAuthError, case .secretsUnavailable = auth { return true }
+        return false
     }
 
     /// A line for Settings. Never a URL, a token or raw error text.
@@ -854,12 +864,14 @@ public actor SyncPublisher {
             } catch {
                 if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
                     needsSecretRefresh = true
+                    backoffFromSecrets = true
                 }
                 stopNotSaved()
                 return
             }
             let now = clock.now()
             needsSecretRefresh = false
+            backoffFromSecrets = false
             var next = state
             next.phase = .stopping
             next.ownership = nil
@@ -993,13 +1005,12 @@ public actor SyncPublisher {
             persist()
         } catch {
             // Arm the refresh on a secret-store failure. Any other failure
-            // leaves it as it was: only a refresh that reports the secrets
-            // readable (or an Unlock) clears it.
-            if error is KeychainError {
-                needsSecretRefresh = true
-            } else if let auth = error as? SyncAuthError, case .secretsUnavailable = auth {
-                needsSecretRefresh = true
-            }
+            // leaves the refresh as it was (only a refresh that reports the
+            // secrets readable, or an Unlock, clears it) but records that this
+            // backoff is not Keychain's, so an Unlock leaves it in place.
+            let secretFailure = Self.isSecretStoreFailure(error)
+            if secretFailure { needsSecretRefresh = true }
+            backoffFromSecrets = secretFailure
             failures += 1
             retryAt = clock.now().addingTimeInterval(Self.backoff(failures))
             state.lastError = Self.describe(error)
