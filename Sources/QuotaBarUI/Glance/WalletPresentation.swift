@@ -90,11 +90,9 @@ struct WalletPresentation: Equatable, Sendable {
                     tag: staleTag,
                     figure: APICreditEntryPresentation(entry: entry).figure,
                     tone: usage.fraction >= QuotaSnapshot.exhaustionThreshold ? .exhausted : .normal,
-                    // An expiry but no published start: a bar with no period
-                    // length, so no even-use tick is drawn.
-                    meter: entry.creditGrant?.expiresAt.map {
-                        .credit(DualBarMetrics(primaryFraction: usage.fraction, label: "EXP", resetsAt: $0))
-                    },
+                    // A bar to the expiry; the even-use tick only when the
+                    // grant date was confirmed too (`OpenAICreditGrant.periodLength`).
+                    meter: usage.barMetrics.map { .credit($0) },
                     spoken: usage.spoken))
             }
             for (index, e) in p.subscriptionCredits.enumerated() {

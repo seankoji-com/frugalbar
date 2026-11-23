@@ -459,8 +459,12 @@ push its bar out of line). A credit that expires and publishes what was used
 draws the Subscriptions bar (`Meter.credit`, through `UsageBar`): % used and the
 countdown beneath, the same colours, and the even-use tick only where the
 credit's period is known. The ChatGPT API credit and Claude usage credits pass
-the promo's own `barMetrics`. ChatGPT bonus credits publish an expiry but no
-start, so their metrics carry no window length and draw no tick. Time-only
+the promo's own `barMetrics`. ChatGPT bonus credits come from the account
+holder's saved grant (`OpenAICreditGrant`: total, expiry, and optionally the
+date it was granted); OpenAI's usage payload publishes only the balance. The
+bar draws its even-use tick only when both the grant date and the expiry were
+saved (`periodLength`), paced over that period and never a calendar month.
+Without a grant date it is a bar to the expiry with no tick. Time-only
 credits (Claude Console, configured Gemini) draw an informational "MO 63%"
 elapsed meter (`Meter.elapsed`) in `Theme.primary`, never a quota colour. A
 balance (OpenRouter, DeepSeek, any `APICreditEntry` with a series) draws its

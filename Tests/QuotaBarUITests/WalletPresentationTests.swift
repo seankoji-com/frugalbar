@@ -53,6 +53,30 @@ struct WalletPresentationTests {
         #expect(bonus.paceMarker == nil)
     }
 
+    @Test("a confirmed grant date gives the bonus bar its even-use tick over the grant's own period")
+    func bonusGrantDate() throws {
+        // The owner's grant: 62,500 credits, granted 30 Sep 2026, expiring at
+        // the end of 31 Dec 2026, read on 24 Nov with 44,135 left.
+        var snapshots = F.batchWithWallet
+        let i = try #require(snapshots.firstIndex { $0.vendorId == .openai })
+        let start = now.addingTimeInterval(-55 * 86_400)
+        let end = now.addingTimeInterval(37 * 86_400)
+        snapshots[i].apiCredits = [APICreditEntry(
+            id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
+            metric: .credits(remaining: 44_135, unitName: "credits"),
+            creditGrant: OpenAICreditGrant(total: 62_500, expiresAt: end, grantedAt: start))]
+        let rows = WalletPresentation(snapshots: snapshots, now: now).rows
+        guard case .credit(let bonus)? = rows.first(where: { $0.title == "ChatGPT bonus" })?.meter else {
+            Issue.record("ChatGPT bonus has no credit bar"); return
+        }
+        #expect(abs((bonus.primaryFraction ?? 0) - (62_500 - 44_135) / 62_500) < 0.001)
+        // 55 of the grant's 92 days have passed.
+        let pace = try #require(bonus.paceMarker)
+        #expect(abs(pace - 55.0 / 92.0) < 0.001)
+        // Well short of even use: a lot is at risk of expiring unspent.
+        #expect(bonus.paceStanding == .behind)
+    }
+
     @Test("a time-only credit draws an elapsed-month meter, never a spend bar")
     func elapsedMeters() throws {
         for title in ["Claude Console · Primary", "Gemini API"] {

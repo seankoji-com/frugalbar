@@ -79,6 +79,26 @@ struct OpenAIAccountPreferencesTests {
         #expect(unlimited.first?.creditGrant == nil)
     }
 
+    @Test("a confirmed grant date is kept, gives the grant its period, and must precede the expiry")
+    func grantDate() throws {
+        let start = now.addingTimeInterval(-55 * 86_400)
+        let end = now.addingTimeInterval(37 * 86_400)
+        let grant = try #require(OpenAICreditGrant(total: 62_500, expiresAt: end, grantedAt: start))
+        #expect(grant.periodLength == TimeInterval(92 * 86_400))
+        // Saved and read back with its date.
+        let data = try JSONEncoder().encode(grant)
+        #expect(try JSONDecoder().decode(OpenAICreditGrant.self, from: data) == grant)
+        // A grant saved before the field existed still reads, with no period.
+        let old = try JSONDecoder().decode(OpenAICreditGrant.self,
+                                           from: Data(#"{"total":75000,"expiresAt":820414800}"#.utf8))
+        #expect(old.grantedAt == nil)
+        #expect(old.periodLength == nil)
+        // No expiry, no period; a date on or after the expiry is no grant.
+        #expect(try #require(OpenAICreditGrant(total: 62_500, grantedAt: start)).periodLength == nil)
+        #expect(OpenAICreditGrant(total: 62_500, expiresAt: end, grantedAt: end) == nil)
+        #expect(OpenAICreditGrant(total: 62_500, expiresAt: start, grantedAt: end) == nil)
+    }
+
     @Test("billing cycle rebuilds preserve account, grant and per-ticket expiries")
     func cycleRebuild() throws {
         var snapshot = OpenAIQuotaProvider(accountPreferences: { _ in nil }).makeSnapshot(
