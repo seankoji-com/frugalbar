@@ -170,7 +170,7 @@ private struct WalletMeterCell: View {
                 }
             }
         case .elapsed(let fraction, let countdown):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         Capsule()
@@ -198,6 +198,10 @@ private struct WalletMeterCell: View {
                 }
                 .font(.system(size: 9.5).monospacedDigit())
                 .lineLimit(1)
+                Text("month elapsed")
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(Theme.outline)
+                    .lineLimit(1)
             }
         }
     }
@@ -283,21 +287,24 @@ private struct WalletRowView: View {
                     title(lineLimit: 1).fixedSize()
                     if let tag = row.tag { tagCapsule { Text(tag.uppercased()) } }
                 }
-                HStack(spacing: 6) {
-                    title(lineLimit: 2)
-                    if let tag = row.tag { tagCapsule { Image(systemName: Self.glyph(for: tag)) } }
+                HStack(alignment: .top, spacing: 6) {
+                    title(lineLimit: nil)
+                    if let tag = row.tag {
+                        tagCapsule { Image(systemName: Self.glyph(for: tag)) }
+                            .padding(.top, 1)
+                    }
                 }
             }
         }
     }
 
-    private func title(lineLimit: Int) -> some View {
+    private func title(lineLimit: Int?) -> some View {
         Text(row.title)
             .font(.system(size: 12))
             .foregroundStyle(Theme.onSurface)
             .lineLimit(lineLimit)
             .truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: lineLimit > 1)
+            .fixedSize(horizontal: false, vertical: lineLimit != 1)
             .layoutPriority(1)
     }
 

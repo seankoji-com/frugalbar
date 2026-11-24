@@ -285,5 +285,20 @@ struct GlanceAccessibilityInvariantTests {
         #expect(spoken.contains("58 percent used"))
         #expect(spoken.contains("Resets in"))
         #expect(spoken.contains("before the reset"))
+
+        // Unknown reset with rising recent history: must NOT set runsOutBeforeReset or claim "before the reset"
+        let undatedBar = DualBarMetrics(primaryFraction: 0.58, label: "5H")
+        let undatedReadings = (0..<4).map { i in
+            QuotaHistoryStore.ReadingRecord(
+                vendor: "opencode-go", barLabel: "5H",
+                measuredAt: now.addingTimeInterval(-Double(30 - i * 10) * 60),
+                fraction: 0.40 + Double(i) * 0.06,
+                isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: nil, windowLength: nil, elapsedOnly: false
+            )
+        }
+        let undatedResult = try #require(InspectorRunOut.compute(for: undatedBar, snapshotID: "opencode-go", readings: undatedReadings, now: now))
+        #expect(!undatedResult.runsOutBeforeReset)
+        #expect(!undatedResult.text.contains("before the reset"))
     }
 }

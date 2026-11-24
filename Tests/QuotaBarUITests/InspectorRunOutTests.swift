@@ -49,6 +49,25 @@ struct InspectorRunOutTests {
         #expect(InspectorRunOut.text(for: undated, snapshotID: "claude", readings: [], now: now) == nil)
     }
 
+    @Test("without a published reset, recent-rate forecast never claims exhaustion before reset")
+    func unknownResetNeverWarnsBeforeReset() throws {
+        let undatedBar = DualBarMetrics(primaryFraction: 0.58, label: "5H")
+        let undatedBurning = (0..<10).map { i in
+            QuotaHistoryStore.ReadingRecord(
+                vendor: "opencode-go", barLabel: "5H",
+                measuredAt: now.addingTimeInterval(-Double(45 - i * 5) * 60),
+                fraction: 0.40 + Double(i) * 0.02,
+                isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: nil, windowLength: nil, elapsedOnly: false
+            )
+        }
+        let result = try #require(InspectorRunOut.compute(for: undatedBar, snapshotID: "opencode-go", readings: undatedBurning, now: now))
+        #expect(!result.runsOutBeforeReset)
+        #expect(result.text.hasPrefix("At your recent rate, runs out in"))
+        #expect(!result.text.contains("before the reset"))
+        #expect(result.text.contains("no reset published"))
+    }
+
     @Test("the window lines no longer carry their own unlabelled projection")
     func windowLinesCarryNoProjection() {
         let line = MetricDetailPresentation.windowLine(bar(0.9), now: now)

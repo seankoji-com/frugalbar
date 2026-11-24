@@ -795,7 +795,7 @@ public struct MetricDetailModalView: View {
            ) {
             // Room above the plot: its "now" annotation sits at the top edge
             // and overprinted the caption.
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if burndown.isBlocked {
                         BlockedGlyph(color: Theme.onSurfaceVariant, size: 10)
@@ -816,12 +816,15 @@ public struct MetricDetailModalView: View {
                 }
                 .accessibilityHidden(true)
                 BurndownChartView(burndown: burndown, now: now)
-                if burndown.ideal == nil {
+                    .padding(.top, 4)
+                if burndown.ideal == nil && burndown.projection == nil {
                     Text("No window length published, so no pace line can be drawn")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.outline)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
+                } else {
+                    burndownLegend(for: burndown)
                 }
             }
         } else if let label = activeBurndownLabel {
@@ -837,6 +840,41 @@ public struct MetricDetailModalView: View {
                 message: "No consumable window, so there is no burndown to draw"
             )
         }
+    }
+
+    private func burndownLegend(for burndown: BurndownPresentation.Burndown) -> some View {
+        HStack(spacing: 12) {
+            if burndown.ideal != nil {
+                HStack(spacing: 5) {
+                    legendDashSwatch(color: Theme.outline.opacity(0.85), dash: [4, 2.5], lineWidth: 1.25)
+                    Text("Even pace")
+                }
+            }
+            if burndown.projection != nil {
+                HStack(spacing: 5) {
+                    legendDashSwatch(
+                        color: burndown.projectedExhaustion != nil ? Theme.error : Theme.tertiary,
+                        dash: [1.5, 2.5],
+                        lineWidth: 1.5
+                    )
+                    Text("Recent pace")
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 9.5, weight: .medium))
+        .foregroundStyle(Theme.outline)
+        .accessibilityHidden(true)
+    }
+
+    private func legendDashSwatch(color: Color, dash: [CGFloat], lineWidth: CGFloat) -> some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: size.height / 2))
+            path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, dash: dash))
+        }
+        .frame(width: 14, height: 6)
     }
 
     @ViewBuilder

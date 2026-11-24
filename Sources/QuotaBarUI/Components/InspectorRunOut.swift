@@ -27,16 +27,26 @@ enum InspectorRunOut {
            let burndown = BurndownPresentation.burndown(readings: readings, instanceID: snapshotID,
                                                        barLabel: bar.label, now: now),
            burndown.projection != nil {
+            let hasPublishedReset = bar.resetsAt != nil && burndown.resetsAt != nil
             if let out = burndown.projectedExhaustion, out > now {
+                if hasPublishedReset {
+                    return Result(
+                        text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
+                        runsOutBeforeReset: true
+                    )
+                }
                 return Result(
-                    text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
-                    runsOutBeforeReset: true
+                    text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)) (no reset published)",
+                    runsOutBeforeReset: false
                 )
             }
-            return Result(
-                text: "At your recent rate, lasts until the reset",
-                runsOutBeforeReset: false
-            )
+            if hasPublishedReset {
+                return Result(
+                    text: "At your recent rate, lasts until the reset",
+                    runsOutBeforeReset: false
+                )
+            }
+            return nil
         }
 
         // No usable history: the window's own average, from its published
