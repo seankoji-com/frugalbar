@@ -74,6 +74,13 @@ public struct GlancePresentation: Equatable, Sendable {
         public let returnsAt: Date?
         /// A paid overage or on-demand allowance is still open beside a spent plan.
         public let hasPaidOverage: Bool
+
+        /// The vendor, not the user's own use, stopped this pool: the account
+        /// badge (`QuotaSnapshot.isAccountBlocked`) or a blocked plan window.
+        /// The one definition every "blocked" word on the glance reads.
+        public var isBlocked: Bool {
+            snapshot.isAccountBlocked || windows.contains { $0.isSpent && $0.bar.isBlocked }
+        }
     }
 
     public struct Pick: Equatable, Sendable {
@@ -172,7 +179,7 @@ public struct GlancePresentation: Equatable, Sendable {
         // Keep its row so the user can see why no quota is available.
         let readFailed = snapshot.category == .aiSubscriptions
             && snapshot.status.unavailableReason.map { $0 != .notConfigured } == true
-        let accountBlocked = snapshot.badgeText == "Blocked"
+        let accountBlocked = snapshot.isAccountBlocked
         guard !plan.isEmpty || isNamedClaudeAccount(snapshot) || readFailed || accountBlocked else { return nil }
         let windows = plan.map { window(for: $0, now: now) }
         // The vendor's account-level block (Command Code's `limited`) is
@@ -366,7 +373,7 @@ public struct GlancePresentation: Equatable, Sendable {
     static func returnEntry(_ pool: Pool, now: Date) -> ReturnEntry {
         let spent = pool.windows.filter(\.isSpent)
         let label = spent.max { ($0.bar.resetsAt ?? .distantFuture) < ($1.bar.resetsAt ?? .distantFuture) }?.bar.label
-        let blocked = pool.snapshot.badgeText == "Blocked" || spent.contains { $0.bar.isBlocked }
+        let blocked = pool.isBlocked
         let text: String
         if let at = pool.returnsAt {
             text = at > now

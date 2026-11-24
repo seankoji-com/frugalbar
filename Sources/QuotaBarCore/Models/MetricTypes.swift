@@ -703,6 +703,14 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         quotaBars.contains { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold || $0.isBlocked }
     }
 
+    /// The vendor blocked the whole account, on its badge rather than on a
+    /// window (Command Code's `limited`, OpenCode Go's rate-limited signal).
+    /// Its windows may still read well under 100%; the account is unusable
+    /// all the same. Every surface that says "blocked" reads this, so the
+    /// popover, the group subtitle and the inspector cannot disagree.
+    public static let accountBlockedBadge = "Blocked"
+    public var isAccountBlocked: Bool { badgeText == Self.accountBlockedBadge }
+
     /// Every consumable window is blocked with no percentage at all — a fully
     /// rate-limited / cut-off account (e.g. OpenCode's `rate-limited` signal).
     ///

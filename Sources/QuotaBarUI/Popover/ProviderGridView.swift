@@ -63,7 +63,7 @@ struct ProviderGridView: View {
         } label: {
             line {
                 identity(
-                    group.title, subtitle: group.subtitle, vendor: group.id, status: .measured(.none),
+                    group.title, subtitle: group.displaySubtitle, vendor: group.id, status: .measured(.none),
                     spent: group.allSpent, reset: presentation.countdown(group.nextReturn), size: 23,
                     staleBadgeCount: staleCount
                 )
@@ -241,8 +241,15 @@ struct ProviderGridView: View {
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    // Names and status lines wrap rather than clip: the
+                    // column is 136pt, and a long account name or a mixed
+                    // "2 usable · 3 blocked · 2 spent" status was cut on one
+                    // line three rounds running. A taller row is honest; an
+                    // ellipsis hides the one word the user opened this for.
                     Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onSurface)
-                        .truncationMode(.middle)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
                     if staleBadgeCount > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -261,10 +268,10 @@ struct ProviderGridView: View {
                     Text(subtitle)
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.outline)
-                        .minimumScaleFactor(0.82)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .lineLimit(1)
         }
     }
 

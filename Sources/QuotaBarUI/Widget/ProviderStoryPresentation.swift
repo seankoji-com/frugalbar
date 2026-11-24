@@ -151,9 +151,9 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             lines.append(Line(symbol: "chart.line.downtrend.xyaxis",
                 text: "You've used \(usedPct)% of the \(name) allowance."))
         }
-        if !pool.isStale, let runOut = InspectorRunOut.text(for: bar, snapshotID: pool.id, readings: readings, now: now) {
-            lines.append(Line(symbol: "hourglass", text: runOut + ".",
-                              tone: runOut.contains("runs out") ? .caution : .good))
+        if let runOut = InspectorRunOut.compute(for: bar, in: pool.snapshot, readings: readings, now: now) {
+            lines.append(Line(symbol: "hourglass", text: runOut.text + ".",
+                              tone: runOut.warns ? .caution : .good))
         }
         if let resetWhen {
             lines.append(Line(symbol: "arrow.clockwise", text: "It resets in \(resetWhen)."))

@@ -216,8 +216,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let state: State
         // The focus is a blocked window whenever the vendor blocked one, with
         // or without a percentage: a 97% the vendor has cut off is not "low",
-        // it is unusable, and the glance must say which.
-        if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading {
+        // it is unusable, and the glance must say which. An account the vendor
+        // blocked on its badge is unusable at any percentage too: the popover
+        // already files it as blocked, and the inspector must not call the
+        // same pool "Healthy" (`QuotaSnapshot.isAccountBlocked`).
+        if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading || snapshot.isAccountBlocked {
             state = .blocked
         } else if row.isExhausted {
             state = .exhausted

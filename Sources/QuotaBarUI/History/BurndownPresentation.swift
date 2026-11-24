@@ -399,8 +399,8 @@ public enum BurndownPresentation {
            let reset = ResetCountdownBadge.compact(resetsAt, now: now) {
             parts.append("resets in \(reset)")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent rate, out in \(GlancePresentation.countdown(exhaustion, now: now))")
+        if let clause = burndown.runOutVerdict(now: now).captionClause(now: now) {
+            parts.append(clause)
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
     }
@@ -427,10 +427,8 @@ public enum BurndownPresentation {
         if burndown.ideal != nil {
             parts.append("ideal pace line shown")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent pace runs out in \(GlancePresentation.countdownSpoken(exhaustion, now: now))")
-        } else if burndown.projection != nil {
-            parts.append("at recent pace resets before running out")
+        if let clause = burndown.runOutVerdict(now: now).spokenClause(now: now) {
+            parts.append(clause)
         }
         return parts.joined(separator: ", ")
     }

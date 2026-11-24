@@ -418,10 +418,11 @@ public struct MetricDetailModalView: View {
     }
 
     /// True when the snapshot's raw quota band is still `.healthy` yet the
-    /// observed burn rate explicitly forecasts running out *before* reset.
-    /// Forecasts that say "lasts until the reset" never trigger this warning.
+    /// forecast says it runs out: before the reset, any moment now, or with
+    /// no reset published to save it (`RunOutVerdict.warns`). Forecasts that
+    /// say "lasts until the reset" never trigger this warning.
     private var forecastWarnsEarlyRunOut: Bool {
-        presentation.summary.state == .healthy && runOutResult?.runsOutBeforeReset == true
+        presentation.summary.state == .healthy && runOutResult?.warns == true
     }
 
     private var summaryColor: Color {
@@ -590,9 +591,9 @@ public struct MetricDetailModalView: View {
     }
 
     private var runOutResult: InspectorRunOut.Result? {
-        guard let label = presentation.summary.focusLabel, snapshot.staleReading == nil,
+        guard let label = presentation.summary.focusLabel,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
-        return InspectorRunOut.compute(for: bar, snapshotID: snapshot.id,
+        return InspectorRunOut.compute(for: bar, in: snapshot,
                                        readings: isLoading || readingsFailed ? nil : readings, now: now)
     }
 

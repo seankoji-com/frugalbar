@@ -20,12 +20,12 @@ struct ProviderGridPresentation {
         var isStale: Bool { snapshot.staleReading != nil }
         var isUsable: Bool { !isStale && (state == .usable || state == .onBonus) }
         var isSpent: Bool { !isStale && state == .spent }
-        /// True when the pool is unusable because the vendor explicitly blocked
-        /// a plan window, rather than the user exhausting measured quota.
-        var isBlocked: Bool {
-            isSpent && (windows.values.contains { $0.bar.isBlocked }
-                        || extraBars.contains { $0.allowanceRole == .plan && $0.isBlocked })
-        }
+        /// True when the pool is unusable because the vendor blocked it — the
+        /// account badge or a plan window — rather than the user exhausting
+        /// measured quota. `GlancePresentation.Pool.isBlocked` is the one
+        /// definition; this pool only adds that it is spent and current.
+        let blocksPool: Bool
+        var isBlocked: Bool { isSpent && blocksPool }
 
         var nonstandardPlanBar: DualBarMetrics? {
             extraBars.first {
@@ -56,6 +56,7 @@ struct ProviderGridPresentation {
             let pool = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false)
             state = pool?.state ?? .unreadable
             returnsAt = pool?.returnsAt
+            blocksPool = pool?.isBlocked ?? snapshot.isAccountBlocked
 
             if snapshot.vendorId == .antigravityClaude {
                 name = snapshot.antigravityAccount?.name ?? snapshot.displayName
@@ -120,18 +121,30 @@ struct ProviderGridPresentation {
         var allSpent: Bool { !pools.isEmpty && pools.allSatisfy(\.isSpent) }
         var nextReturn: Date? { allSpent ? pools.compactMap(\.returnsAt).min() : nil }
 
-        var subtitle: String? {
+        /// The status line under the group's name, as spoken and tested.
+        var subtitle: String? { statusParts?.joined(separator: " · ") }
+
+        /// `subtitle` as drawn. It wraps in a 136pt column, so each count
+        /// keeps its word on the same line ("1 stale", never "1" / "stale"):
+        /// the spaces inside a part are non-breaking.
+        var displaySubtitle: String? {
+            statusParts.map { parts in
+                parts.map { $0.replacingOccurrences(of: " ", with: "\u{00A0}") }.joined(separator: " · ")
+            }
+        }
+
+        private var statusParts: [String]? {
             if pools.isEmpty { return nil }
             let blocked = pools.filter(\.isBlocked).count
             let exhausted = pools.filter { $0.isSpent && !$0.isBlocked }.count
             if allSpent {
                 if blocked == pools.count {
-                    return pools.count == 1 ? "1 blocked" : "All \(pools.count) blocked"
+                    return [pools.count == 1 ? "1 blocked" : "All \(pools.count) blocked"]
                 }
                 if exhausted == pools.count {
-                    return pools.count == 1 ? "1 spent" : "All \(pools.count) spent"
+                    return [pools.count == 1 ? "1 spent" : "All \(pools.count) spent"]
                 }
-                return ["\(blocked) blocked", "\(exhausted) spent"].joined(separator: " · ")
+                return ["\(blocked) blocked", "\(exhausted) spent"]
             }
             let usable = pools.filter(\.isUsable).count
             let stale = pools.filter(\.isStale).count
@@ -141,7 +154,7 @@ struct ProviderGridPresentation {
                     exhausted > 0 ? "\(exhausted) spent" : nil,
                     stale > 0 ? "\(stale) stale" : nil,
                     unreadable > 0 ? "\(unreadable) unreadable" : nil]
-                .compactMap { $0 }.joined(separator: " · ")
+                .compactMap { $0 }
         }
 
         func summary(for column: WindowColumn) -> Summary? {
