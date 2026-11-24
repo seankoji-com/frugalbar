@@ -428,10 +428,6 @@ struct UXRenderTests {
             Text("Fixture · mixed exhaustion stays in its service").font(.caption)
             MetricSectionView(category: .aiSubscriptions, snapshots: exhaustedRows)
         }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-exhausted", directory: directory)
-        try await save(VStack(spacing: 12) {
-            Text("Fixture · custom service blocks").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: rows, ordering: .custom)
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-custom", directory: directory)
         try await save(HStack(spacing: 16) {
             VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, size: 28)
             VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, isExhausted: true, size: 28)
@@ -440,18 +436,16 @@ struct UXRenderTests {
         }.padding(12).background(Theme.surface), name: "agy-claude-icons", directory: directory)
     }
 
-    /// The redesigned popover (A2 + B1-F2 hero) with a synthetic mixed-provider batch,
-    /// and the menu-bar title in each tone.
-    @Test func renderGlancePopover() async throws {
+    /// The menu-bar title in each tone, and Subscriptions with stale, weak and
+    /// unreadable pools.
+    @Test func renderGlanceStates() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = GlanceFixtures.now
-        let glance = GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now)
-        try await save(VStack(spacing: 0) {
-            GlanceSectionsView(glance: glance).padding(Theme.edgeMargin)
-            FooterActionsView(summary: .compute(from: GlanceFixtures.batch), isRefreshing: false,
-                              onOpenSettings: {}, onQuit: {}, onRefresh: {}, eventCount: 1)
-        }.frame(width: PopoverRootView.popoverWidth).background(Theme.surface), name: "glance-popover", directory: directory)
+        func grid(_ snapshots: [QuotaSnapshot]) -> ProviderGridView {
+            ProviderGridView(presentation: ProviderGridPresentation(
+                snapshots: snapshots, serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now))
+        }
 
         func spent(_ hours: Double?) -> QuotaSnapshot {
             GlanceFixtures.snapshot("s\(hours ?? -1)", .opencode, "Spent",
@@ -480,7 +474,7 @@ struct UXRenderTests {
                         .foregroundStyle(Color(nsColor: MenuBarGlance.color(for: title.tone)))
                 }
             }
-            GlanceSectionsView(glance: GlancePresentation(snapshots: [stale, weak], now: now))
+            grid([stale, weak])
         }.padding(12).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
             name: "glance-states", directory: directory)
 
@@ -491,7 +485,7 @@ struct UXRenderTests {
                                     status: .unavailable(.timedOut)),
         ]
         try await save(
-            GlanceSectionsView(glance: GlancePresentation(snapshots: unreadableClaude + [weak], now: now))
+            grid(unreadableClaude + [weak])
                 .padding(Theme.edgeMargin)
                 .frame(width: PopoverRootView.popoverWidth)
                 .background(Theme.surface),
@@ -721,22 +715,12 @@ struct UXRenderTests {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
             MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
                               balanceSeries: balanceFixtures(now: now), onSelect: { _ in })
-            APICreditSectionView(entries: creditFixtures(), balanceSeries: balanceFixtures(now: now))
             FooterActionsView(summary: .compute(from: snapshots), isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
         }.padding(12).frame(width: 384).background(Theme.surface), name: "popover", directory: directory)
         try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] }, balanceLoader: { _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
-        // A vendor's failed poll retains its balances, and the card must not
-        // present them as this poll's reading. OpenAI's row here is stale;
-        // Claude's, in the same card, is not — a whole card marked stale would
-        // not show that the marker belongs to the vendor.
-        try await save(VStack(spacing: 12) {
-            Text("Credit card · OpenAI's newest poll failed").font(.caption).foregroundStyle(Theme.outline)
-            APICreditSectionView(entries: creditFixtures(), staleVendors: ["openai"])
-        }.padding(12).frame(width: 384).background(Theme.surface),
-            name: "credit-section-stale", directory: directory)
         // The inspector's balance card, against a money row that has a month of
         // recorded history — the surface the inline strip only gestures at.
         let balanceHistory = balanceFixtures(now: now)
@@ -790,19 +774,15 @@ struct UXRenderTests {
         let providers = (snapshots + [graphQL]).map { FixtureProvider(snapshot: $0) }
         let store = QuotaStore(manager: QuotaManager(providerFactory: { providers }, displayPreferences: { .default }))
         await store.load()
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .used, layout: .overview))
-            .frame(width: 320, height: 300), name: "widget-used", directory: directory)
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(vendors: [.githubGraphql], metric: .remaining, layout: .overview))
-            .frame(width: 320, height: 240), name: "widget-graphql", directory: directory)
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .remaining, layout: .overview))
-            .frame(width: 360, height: 300), name: "widget-two-columns", directory: directory)
+        try await save(DesktopWidgetView(store: store, filters: WidgetFilters())
+            .frame(width: 320, height: 300), name: "widget-story", directory: directory)
         let unreadable = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
             status: .unavailable(.offline), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
         let unreadableStore = QuotaStore(manager: QuotaManager(
             providerFactory: { [FixtureProvider(snapshot: unreadable)] }, displayPreferences: { .default }))
         await unreadableStore.load()
-        try await save(DesktopWidgetView(store: unreadableStore, filters: WidgetFilters(layout: .overview))
+        try await save(DesktopWidgetView(store: unreadableStore, filters: WidgetFilters())
             .frame(width: 320, height: 240).background(Theme.surface),
             name: "widget-unreadable", directory: directory)
         let tokenChart = TokenUsagePresentation.chart(usage: .init(buckets: [
@@ -1163,25 +1143,6 @@ struct UXRenderTests {
             HistoryOverviewCardView(card: blockedCard, isSelected: false, onSelect: {})
                 .padding(14).frame(width: 260).background(Theme.card),
             name: "history-card-blocked", directory: directory)
-
-        // The widget's Chart layout when history reads fail: wholly, then for
-        // one of two vendors.
-        let widgetFixtures = [claude, goBeta].map { FixtureProvider(snapshot: $0) }
-        for (name, failing) in [("widget-chart-read-failed", Set<VendorIdentifier>([.claude, .opencode])),
-                                ("widget-chart-read-partial", Set<VendorIdentifier>([.opencode]))] {
-            let widgetStore = QuotaStore(
-                manager: QuotaManager(
-                    providerFactory: { widgetFixtures },
-                    displayPreferences: { ProviderDisplayPreferences(ordering: .automatic) }),
-                vendorReadingsLoader: { [readings] vendor, _ in
-                    failing.contains(vendor) ? nil : readings.filter { $0.vendor == vendor.rawValue }
-                })
-            await widgetStore.load()
-            try await save(
-                DesktopWidgetView(store: widgetStore, filters: WidgetFilters(layout: .chart))
-                    .frame(width: 420, height: 320).background(Theme.surface),
-                name: name, directory: directory)
-        }
 
         // MARK: Attempt-4 states: provider-level failed polls, blocked readout
         // Measured polls, an offline poll stored under the provider's own

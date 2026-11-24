@@ -122,12 +122,6 @@ struct ProviderPollBoundaryTests {
         #expect(card.barLabel == "WK")
         #expect(card.segments.map(\.points.count) == [4, 2])
 
-        // The desktop widget's chart.
-        let widget = AggregateBurndownPresentation.series(
-            readings: readings, snapshots: [measured(fiveHour: 0.52, week: 0.45)],
-            filters: WidgetFilters(), now: now,
-            instanceName: { _ in nil }, instancePosition: { _ in nil })
-        #expect(widget.first?.segments.map(\.points.count) == [4, 2])
     }
 
     @Test("a window filter still sees the provider's failed polls, and other windows stay apart")

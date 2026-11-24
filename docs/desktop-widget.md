@@ -4,7 +4,7 @@ A small panel that shows how much you are using your AI tools. Open it from the 
 
 ## Layouts
 
-The segmented **Story | Tokens** control in the filter bar picks the body. The choice is stored with the filters. Chart and Overview were retired on 23 November 2026; a stored choice of either now opens as Story.
+The segmented **Story | Tokens** control in the filter bar picks the body. The choice is stored with the filters. Chart and Overview were retired on 23 November 2026 and have since been removed; a stored choice of either opens as Story, and the other saved filters are kept.
 
 | Layout | Shows |
 |---|---|
@@ -55,32 +55,15 @@ The local activity history: tokens that Claude Code, Codex and OpenCode recorded
 
 ### Controls
 
-The vendor menu lists the providers that have token data, and the range picker offers 24h, 7d and 30d. The window menu and used/remaining switch are quota concerns and are hidden here. The header shows no "updated" age, which would describe quota readings and not token history.
-
-## What it shows (Chart layout)
-
-| Part | Content | Source |
-|---|---|---|
-| Lines | One line per subscription window, drawn from stored quota readings | Real readings only. Gaps are never filled or interpolated, and a reset, an outage or a long gap breaks the line instead of joining across it. |
-| Markers | A mark on the latest reading of each line, and on readings under pressure. Shape carries urgency: circle normal, diamond warning, triangle critical, square blocked | The reading's own urgency and blocked flag |
-| Average | A heavy dashed line, labelled "Average (N windows)" | Mean of the selected windows' readings, see below |
-| Headroom strip | Current remaining % per window with a micro bar and reset countdown. "blocked" or a dash when there is no figure | Latest snapshots |
-| Header | Overall health symbol and "updated N ago" for the oldest reading | Snapshots |
-
-Windows that measure elapsed time only (a recorded subscription **cycle**) are excluded: they report no usage.
-
-### The average is not a quota
-
-Vendors meter different things over different windows, so FrugalBar never combines them into one allowance. The average line is the mean of real readings that exist in each time bucket (5 min buckets for 24h, 30 min for 7d, 2 h for 30d; the line also breaks across a gap of more than 2 hours). `sampleCount` is whatever contributed to the bucket and is never padded to the number selected, which is why the label can read "Average (2–3 windows)". The line breaks whenever the set of contributing windows changes, so one vendor's outage shows as a gap rather than a plunge. It appears only when two or more windows are charted. Hovering it says "Mean of the selected windows' real readings — not a combined quota."
+The vendor menu lists the providers that have token data, and the range picker offers 24h, 7d and 30d. The header names the selection and range ("All subscriptions · tokens · 24h") beside the overall health symbol. It shows no "updated" age, which would describe quota readings and not token history.
 
 ## Filters
 
-| Filter | Options | Default |
-|---|---|---|
-| Subscriptions | All, or any subset of vendors that have a consumable window. Ticking every vendor is stored as "all", so a provider you add later appears automatically | All |
-| Window | A window label (for example `5H`, `WK`, `MO`) or "Longest window per subscription". The menu shows "All" for that default | Longest per subscription |
-| Range | 24h, 7d, 30d | 24h |
-| Metric | Used or Remaining | Remaining |
+| Filter | Layout | Options | Default |
+|---|---|---|---|
+| Pool | Story | The Use-now top pick, or any pool | Top pick |
+| Subscriptions | Tokens | All, or any subset of providers with token data. Ticking every provider is stored as "all", so a provider you add later appears automatically | All |
+| Range | Tokens | 24h, 7d, 30d | 24h |
 
 ## Pinned or floating
 
@@ -91,7 +74,7 @@ Vendors meter different things over different windows, so FrugalBar never combin
 | Pinned to desktop (default) | On the wallpaper, one level above the desktop icons and beneath every ordinary window. Above the icons on purpose: below them, Finder's desktop layer takes every click and the panel cannot be dragged, resized or filtered |
 | Floats above windows | A normal floating panel above other windows |
 
-Either way the panel can be dragged by its background, resized (minimum 340 × 260, default 420 × 320), joins all Spaces, and doesn't steal focus from the app you are using. The chart is always drawn dark.
+Either way the panel can be dragged by its background, resized (minimum 340 × 260, default 420 × 320), joins all Spaces, and doesn't steal focus from the app you are using. The panel is always drawn dark.
 
 ## Persistence
 
@@ -110,14 +93,12 @@ A WidgetKit widget must ship as a signed `.appex` inside a `.app`. FrugalBar shi
 
 - It exists only while FrugalBar is running. It does not appear in the macOS widget gallery or Notification Centre.
 - It reads the live in-process store and the same history database as the History window, so it needs no extra request to any vendor.
-- Empty states say why: "No subscription windows yet" (no provider with a usage window), "No readings in this range" (history still accumulating), "Could not read quota history" (a failed read, never drawn as no readings). When only some vendors' history could not be read, the chart names them under the legend and draws no average: a mean of the windows that happened to read is not the mean of the windows selected.
+- Empty states say why. The Tokens layout's are listed under [What it will not draw](#what-it-will-not-draw); the story leads with a failed poll rather than drawing an old figure as current.
 
 ## Accessibility
 
-- The chart is one accessibility element with a spoken summary of every series and the average, and the label names the metric and range.
-- The Tokens chart is one element too. It speaks the total, each provider's share and every footnote shown under it, from the same strings, so what is read out is what is drawn. Layers are told apart by hue, which is why the three are kept well apart (OpenCode is drawn in blue, not its brand amber, which sits next to Claude's salmon).
-- Each headroom row is read as, for example, "OpenAI WK window, 62 percent remaining. Resets in 3 days". A window with no figure reads "blocked" or "no reading", never 0.
-- Urgency uses marker shape and the health symbol, not colour alone.
-- Every control (vendor menu, window menu, range, metric) has a label.
+- The Tokens chart is one accessibility element. It speaks the total, each provider's share and every footnote shown under it, from the same strings, so what is read out is what is drawn. Layers are told apart by hue, which is why the three are kept well apart (OpenCode is drawn in blue, not its brand amber, which sits next to Claude's salmon).
+- Urgency uses the health symbol's shape, not colour alone.
+- Every control (layout, pool menu, vendor menu, range) has a label.
 
-Code: `Sources/QuotaBarUI/Widget/` (`DesktopWidgetWindow`, `DesktopWidgetView`, `AggregateBurndownPresentation`), preferences in `Sources/QuotaBarCore/Keychain/KeychainManager.swift`.
+Code: `Sources/QuotaBarUI/Widget/` (`DesktopWidgetWindow`, `DesktopWidgetView`, `WidgetFilters`, `ProviderStoryPresentation`, `TokenUsagePresentation`), preferences in `Sources/QuotaBarCore/Keychain/KeychainManager.swift`.

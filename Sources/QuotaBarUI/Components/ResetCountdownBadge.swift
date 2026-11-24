@@ -75,10 +75,25 @@ public enum ResetCountdownBadge {
     /// figure a sighted user can read in the cell has to reach the row's
     /// label too. nil when there is no reset time.
     public static func compactSpoken(_ date: Date?, now: Date = Date()) -> String? {
-        func unit(_ n: Int, _ name: String) -> String { "resets in \(n) \(name)\(n == 1 ? "" : "s")" }
+        guard let span = spanSpoken(date, now: now) else { return nil }
+        return span == "now" ? "resets now" : "resets in \(span)"
+    }
+
+    /// `compact` as a phrase for the inspector: "Resets in 3h", "Resets in 6d",
+    /// "Resets now". One unit, so it never disagrees with the Subscriptions
+    /// cell the inspector was opened from.
+    public static func compactDescription(_ date: Date, now: Date = Date()) -> String {
+        guard let span = compact(date, now: now), span != "now" else { return "Resets now" }
+        return "Resets in \(span)"
+    }
+
+    /// `compact`'s span in words, with no verb: "3 hours", "6 days", or "now"
+    /// once it has passed. For a countdown that is not a reset ("runs out in").
+    public static func spanSpoken(_ date: Date?, now: Date = Date()) -> String? {
+        func unit(_ n: Int, _ name: String) -> String { "\(n) \(name)\(n == 1 ? "" : "s")" }
         switch compactReset(date, now: now) {
         case nil:             return nil
-        case .now:            return "resets now"
+        case .now:            return "now"
         case .minutes(let n): return unit(n, "minute")
         case .hours(let n):   return unit(n, "hour")
         case .days(let n):    return unit(n, "day")

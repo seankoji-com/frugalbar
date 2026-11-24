@@ -63,53 +63,6 @@ struct AntigravityAccountPresentationTests {
         return snap
     }
 
-    @Test("single Antigravity account preserves shared headerPlan; multiple accounts suppress headerPlan and label rows")
-    func groupingHeaderPlanAndSubtitles() {
-        let singleRows = [
-            makeSnapshot(account: primary, allowance: .gemini),
-            makeSnapshot(account: primary, allowance: .claude)
-        ]
-        let singleGroup = PopoverRowGrouping.groups(for: singleRows)[0]
-        #expect(singleGroup.header == "Antigravity")
-        #expect(singleGroup.headerPlan == "Google AI Ultra")
-        #expect(singleGroup.suppressPlan)
-        #expect(!singleGroup.showAntigravityAccountBadge)
-
-        let multiRows = [
-            makeSnapshot(account: primary, allowance: .gemini),
-            makeSnapshot(account: primary, allowance: .claude),
-            makeSnapshot(account: secondary, allowance: .gemini, fraction: 0.70),
-            makeSnapshot(account: secondary, allowance: .claude, fraction: 0.80)
-        ]
-        let multiGroup = PopoverRowGrouping.groups(for: multiRows)[0]
-        #expect(multiGroup.header == "Antigravity")
-        #expect(multiGroup.headerPlan == nil)
-        #expect(!multiGroup.suppressPlan)
-        #expect(multiGroup.showAntigravityAccountBadge)
-        #expect(multiGroup.rowSubtitle(for: multiRows[0]) == "Personal · AI Ultra")
-        #expect(multiGroup.rowSubtitle(for: multiRows[2]) == "Work · AI Ultra")
-    }
-
-    @Test("accessibility label includes account badge and name only in multi-account mode")
-    func accessibilityLabelIncludesAccount() {
-        let snap = makeSnapshot(account: secondary, allowance: .gemini, fraction: 0.70)
-        let singleRow = MetricRowView(snapshot: snap, isGrouped: true, showAntigravityAccountBadge: false, now: now)
-        let singleLabel = singleRow.combinedAccessibilityLabel(
-            grid: WindowGridPresentation(snapshot: snap, now: now),
-            presentation: MetricRowPresentation(snapshot: snap, now: now)
-        )
-        #expect(!singleLabel.contains("Account 2"))
-
-        let multiRow = MetricRowView(snapshot: snap, isGrouped: true, showAntigravityAccountBadge: true, now: now)
-        let multiLabel = multiRow.combinedAccessibilityLabel(
-            grid: WindowGridPresentation(snapshot: snap, now: now),
-            presentation: MetricRowPresentation(snapshot: snap, now: now)
-        )
-        #expect(multiLabel.contains("Account 2"))
-        #expect(multiLabel.contains("Work"))
-        #expect(multiLabel.contains("Gemini"))
-    }
-
     @Test("HistoryOverviewPresentation emits per-account subjects with legacy key continuity and proxy-only fallback")
     func historySubjectsAndLegacyContinuity() {
         let subjects = HistoryOverviewPresentation.subjects(
@@ -146,36 +99,6 @@ struct AntigravityAccountPresentationTests {
         )
         #expect(proxyOnlySubjects.count == 2)
         #expect(proxyOnlySubjects.contains { $0.id == "gemini" && $0.name == "Gemini (unattributed)" })
-    }
-
-    @Test("widget Overview tiles and AggregateBurndown series distinguish multi-account Antigravity labels")
-    func widgetMultiAccountLabels() {
-        let snaps = [
-            makeSnapshot(account: primary, allowance: .gemini, fraction: 0.25),
-            makeSnapshot(account: secondary, allowance: .gemini, fraction: 0.75)
-        ]
-        let tiles = OverviewPresentation.tiles(snapshots: snaps, filters: WidgetFilters())
-        #expect(tiles.map(\.name) == ["Gemini · Personal", "Gemini · Work"])
-
-        let readings = [
-            QuotaHistoryStore.ReadingRecord(
-                vendor: primary.poolInstanceID(for: .gemini), barLabel: "5H",
-                measuredAt: now.addingTimeInterval(-600), fraction: 0.25, isBlocked: false,
-                confidence: .measured, urgency: .none, resetsAt: now.addingTimeInterval(3600),
-                windowLength: 18000, elapsedOnly: false),
-            QuotaHistoryStore.ReadingRecord(
-                vendor: secondary.poolInstanceID(for: .gemini), barLabel: "5H",
-                measuredAt: now.addingTimeInterval(-600), fraction: 0.75, isBlocked: false,
-                confidence: .measured, urgency: .none, resetsAt: now.addingTimeInterval(3600),
-                windowLength: 18000, elapsedOnly: false)
-        ]
-        let series = AggregateBurndownPresentation.series(
-            readings: readings,
-            snapshots: snaps,
-            filters: WidgetFilters(),
-            now: now
-        )
-        #expect(series.map(\.displayName) == ["Gemini · Personal", "Gemini · Work"])
     }
 
     @Test(

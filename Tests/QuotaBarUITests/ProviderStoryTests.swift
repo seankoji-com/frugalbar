@@ -54,12 +54,16 @@ struct ProviderStoryTests {
         #expect(!s.lines.contains { $0.symbol == "hourglass" })
     }
 
-    @Test("retired widget layouts are drawn as the story; the picker offers Story and Tokens")
+    @Test("a stored retired widget layout opens on the story; the picker offers Story and Tokens")
     func layouts() {
-        #expect(WidgetFilters.Layout.chart.drawn == .story)
-        #expect(WidgetFilters.Layout.overview.drawn == .story)
-        #expect(WidgetFilters.Layout.tokens.drawn == .tokens)
-        #expect(WidgetFilters.Layout.offered == [.story, .tokens])
+        for retired in ["chart", "overview"] {
+            let stored = Data(#"{"vendors":["openai"],"range":"7d","layout":"\#(retired)"}"#.utf8)
+            let decoded = WidgetFilters.decode(stored)
+            #expect(decoded.layout == .story)
+            // The rest of the user's choices survive the unknown layout.
+            #expect(decoded.vendors == [.openai])
+        }
+        #expect(WidgetFilters.Layout.allCases == [.story, .tokens])
         var filters = WidgetFilters()
         filters.storyPoolID = "opencode-go:gamma"
         #expect(WidgetFilters.decode(filters.encoded()).storyPoolID == "opencode-go:gamma")

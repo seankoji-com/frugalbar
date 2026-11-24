@@ -6,7 +6,7 @@ import QuotaBarCore
 ///
 /// A row's title names its provider, and its account where the provider has
 /// named accounts ("Claude Console · Primary"). A credit with a period draws
-/// the same bar the provider rows draw (`Meter.credit`: "% left", the even-use
+/// the same bar the provider rows draw (`Meter.credit`: "% used", the even-use
 /// tick, the countdown); a credit published only as time through a month
 /// draws an informational `MO` meter (`Meter.elapsed`), never a quota colour;
 /// a balance draws its recorded trend (`balanceSeriesID`). Every figure comes
@@ -15,7 +15,7 @@ import QuotaBarCore
 /// `MonthlyCreditBarPresentation`, `GeminiAPICreditPresentation`,
 /// `MetricRowPresentation.ResetCredits`), so units, money formatting and what a
 /// meter measures stay as those rules define them. A model-scoped ticket
-/// (Fable) is drawn beside its model's line in Providers, not here.
+/// (Fable) is drawn beside its model's line in Subscriptions, not here.
 struct WalletPresentation: Equatable, Sendable {
 
     enum Tone: Equatable, Sendable { case normal, negative, exhausted, unknown }

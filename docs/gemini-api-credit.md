@@ -81,7 +81,7 @@ percentage of the A$30 spent.
 - **Not a measured vendor balance.** Nothing in the line claims a poll produced
   it. The tooltip says when the cap was saved.
 - **Not a quota.** It never reaches `consumptionFraction`, urgency, exhaustion
-  sorting, the advice engine, the menu-bar icon, the widget's average or the
+  sorting, the advice engine, the menu-bar icon, the widget or the
   sync export.
 - **Not a spend bar.** The API credit meter is elapsed calendar time. It draws
   no percentage of the cap spent, because a balance with no measured usage has

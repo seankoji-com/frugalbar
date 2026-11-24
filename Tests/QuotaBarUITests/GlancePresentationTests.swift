@@ -17,7 +17,6 @@ struct GlancePresentationTests {
             "Argon · Account 2", "Claude · Account 2", "Gamma",
             "Gemini · Account 2", "Primary", "Gemini · Account 1", "Workspace 5",
         ])
-        #expect(glance.strip.count == 3)
         #expect(glance.ranking.allSatisfy { !$0.isCaveat })
         let scores = glance.ranking.prefix(3).compactMap(\.score)
         #expect(abs(scores[0] - 1.157) < 0.002)
@@ -28,7 +27,7 @@ struct GlancePresentationTests {
     @Test("the pick's reason names its binding window, floored")
     func realBatchReasons() {
         let glance = GlancePresentation(snapshots: F.batch, now: now)
-        #expect(glance.strip.map(\.reason) == [
+        #expect(glance.ranking.prefix(3).map(\.reason) == [
             "99% WK left · resets in 6d", "98% WK left · resets in 7d", "87% MO left · resets in 29d",
         ])
     }
@@ -40,7 +39,7 @@ struct GlancePresentationTests {
         #expect(Set(flagged) == ["Gemini · Account 2", "Primary", "Gemini · Account 1", "Workspace 5"])
     }
 
-    @Test("every spent pool is in Back soon, soonest first, and none is in Services")
+    @Test("every spent pool is in Back soon, soonest first")
     func realBatchBackSoon() {
         let glance = GlancePresentation(snapshots: F.batch, now: now)
         #expect(glance.backSoon.map(\.pool.name) == [
@@ -48,9 +47,7 @@ struct GlancePresentationTests {
             "OpenDesign", "Command Code", "Alpha", "Beta",
         ])
         #expect(glance.backSoon.map(\.returnText) == ["39h", "44h", "2d", "3d", "5d", "5d", "12d", "17d", "17d"])
-        let inServices = Set(glance.services.flatMap(\.pools).map(\.id))
-        #expect(glance.backSoon.allSatisfy { !inServices.contains($0.pool.id) })
-        #expect(glance.foldedServices == ["Codex", "OpenDesign", "Command Code"])
+        #expect(glance.backSoon.allSatisfy { $0.pool.state == .spent })
     }
 
     @Test("saved service positions apply independently of the recommendations and returns")
@@ -60,12 +57,8 @@ struct GlancePresentationTests {
             snapshots: F.batch, now: now,
             serviceOrder: [.opencode, .antigravityArgon, .claude, .gemini, .commandcode, .opendesign, .openai]
         )
-        #expect(Array(reordered.services.map(\.name).prefix(3)) == ["OpenCode Go", "Antigravity", "Claude Code"])
-        #expect(reordered.foldedServices == ["Command Code", "OpenDesign", "Codex"])
         #expect(reordered.ranking == original.ranking)
         #expect(reordered.backSoon == original.backSoon)
-        #expect(reordered.services.first { $0.name == "Antigravity" }
-            == original.services.first { $0.name == "Antigravity" })
     }
 
     @Test("balance services follow the saved order in the Wallet")
@@ -76,14 +69,17 @@ struct GlancePresentationTests {
         ]
         let glance = GlancePresentation(snapshots: snapshots, now: now, serviceOrder: [.deepseek, .openrouter])
 
-        #expect(glance.services.isEmpty)
+        #expect(glance.pools.isEmpty)
         #expect(glance.walletSnapshots.map(\.vendorId) == [.deepseek, .openrouter])
     }
 
     @Test("the menu bar title is the top pick, with the account named")
     func realBatchMenuTitle() {
         let glance = GlancePresentation(snapshots: F.batch, now: now)
-        #expect(glance.menuTitle.text == "Account 2 · 99% WK · 6d")
+        // % used, rounded as the pick's Subscriptions cell rounds it (0.8% → 1%),
+        // never the share left: the bars all read used.
+        #expect(glance.menuTitle.text == "Account 2 · 1% WK used · 6d")
+        #expect(glance.menuTitle.spoken.contains("99% WK left"))
         #expect(glance.menuTitle.vendor == .antigravityArgon)
         #expect(glance.menuTitle.tone == .normal)
     }
@@ -157,7 +153,7 @@ struct GlancePresentationTests {
         #expect(glance.ranking.first?.pool.name == "Kiro")
     }
 
-    @Test("a spent plan with bonus left stays in Services, on bonus, and is only a caveat pick")
+    @Test("a spent plan with bonus left is on bonus, not spent, and is only a caveat pick")
     func onBonus() {
         let kiro = F.snapshot("kiro", .kiro, "Kiro", [
             F.bar("MO", 1.0, resetsInHours: 200, windowHours: 720),
@@ -165,7 +161,8 @@ struct GlancePresentationTests {
         let fresh = F.snapshot("q", .opencode, "Fresh", [F.bar("WK", 0.1, resetsInHours: 100, windowHours: 168)])
         let both = GlancePresentation(snapshots: [kiro, fresh], now: now)
         #expect(both.ranking.map(\.pool.name) == ["Fresh"])
-        #expect(both.services.flatMap(\.pools).first { $0.name == "Kiro" }?.state == .onBonus)
+        #expect(both.pools.first { $0.name == "Kiro" }?.state == .onBonus)
+        #expect(both.backSoon.isEmpty)
         let alone = GlancePresentation(snapshots: [kiro], now: now)
         #expect(alone.ranking.first?.isCaveat == true)
         #expect(alone.ranking.first?.reason.hasPrefix("on bonus") == true)
@@ -216,7 +213,7 @@ struct GlancePresentationTests {
         stale.staleReading = StaleReading(reason: .rateLimited(retryAfter: nil), at: now)
         let glance = GlancePresentation(snapshots: [stale], now: now)
         #expect(glance.ranking.isEmpty)
-        #expect(glance.services.first?.pools.first?.isStale == true)
+        #expect(glance.pools.first?.isStale == true)
         #expect(glance.menuTitle.text.hasPrefix("None confirmed usable"))
         #expect(glance.menuTitle.tone == .unknown)
     }
@@ -318,7 +315,7 @@ struct GlancePresentationTests {
         let spent = F.snapshot("codex", .openai, "Codex",
                                [F.bar("WK", 1, resetsInHours: 38, windowHours: 168)])
         let glance = GlancePresentation(snapshots: [primary, secondary, unconfigured, spent], now: now)
-        let pools = glance.services.first { $0.name == "Claude Code" }?.pools ?? []
+        let pools = glance.pools.filter { $0.service == "Claude Code" }
 
         #expect(pools.map(\.name) == ["Primary", "Secondary"])
         #expect(pools.map(\.snapshot.status.unavailableReason) == [.rateLimited(retryAfter: nil), .timedOut])
@@ -344,16 +341,16 @@ struct GlancePresentationTests {
         let github = F.snapshot("github_rest", .githubRest, "GitHub",
                                 [F.bar("REST", 0.1, resetsInHours: 0.5, windowHours: 1)], category: .developerLimits)
         let glance = GlancePresentation(snapshots: [github], now: now)
-        #expect(glance.ranking.isEmpty && glance.backSoon.isEmpty && glance.services.isEmpty)
+        #expect(glance.ranking.isEmpty && glance.backSoon.isEmpty && glance.pools.isEmpty)
     }
 
-    @Test("a balance-only vendor goes to the Wallet, not Services")
+    @Test("a balance-only vendor goes to the Wallet, never a pool")
     func balanceOnlyToWallet() {
         let openrouter = QuotaSnapshot(id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter",
             category: .apiSpendAndCredits, metric: .currency(balance: 0, limit: nil, spent: nil, currencyCode: "USD"),
             status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil, row1: nil, row2: nil)
         let glance = GlancePresentation(snapshots: [openrouter], now: now)
-        #expect(glance.services.isEmpty)
+        #expect(glance.pools.isEmpty)
         #expect(glance.walletSnapshots.map(\.id) == ["openrouter"])
     }
 

@@ -23,6 +23,18 @@ struct ResetCountdownBadgeTests {
         #expect(ResetCountdownBadge.description(inSeconds(-1), now: now) == "Resets now")
     }
 
+    @Test("the inspector's phrase and the spoken span use the compact cell's one unit")
+    func compactPhrases() {
+        // 3h 20m, which `description` spells out in two units.
+        #expect(ResetCountdownBadge.compactDescription(inSeconds(12_000), now: now) == "Resets in 3h")
+        #expect(ResetCountdownBadge.compactDescription(inSeconds(3.5 * 86_400 + 60), now: now) == "Resets in 4d")
+        #expect(ResetCountdownBadge.compactDescription(inSeconds(-1), now: now) == "Resets now")
+        #expect(ResetCountdownBadge.spanSpoken(inSeconds(12_000), now: now) == "3 hours")
+        #expect(ResetCountdownBadge.spanSpoken(inSeconds(60), now: now) == "1 minute")
+        #expect(ResetCountdownBadge.compactSpoken(inSeconds(12_000), now: now) == "resets in 3 hours")
+        #expect(ResetCountdownBadge.compactSpoken(inSeconds(-1), now: now) == "resets now")
+    }
+
     @Test("seconds")
     func seconds() {
         #expect(ResetCountdownBadge.format(inSeconds(30), now: now) == "30s")

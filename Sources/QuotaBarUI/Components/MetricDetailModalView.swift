@@ -607,7 +607,7 @@ public struct MetricDetailModalView: View {
         )
     }
 
-    /// Spoken in the unit drawn: "% left", or elapsed for a billing cycle.
+    /// Spoken in the unit drawn: "% used", or elapsed for a billing cycle.
     private func windowSpoken(line: MetricDetailPresentation.WindowLine, left: String?,
                               window: GlancePresentation.Window, asOf: Date?) -> String {
         let name = WindowColumn.column(forLabel: line.label)?.spokenName ?? line.label

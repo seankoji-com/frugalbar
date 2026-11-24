@@ -4,9 +4,10 @@ import QuotaBarCore
 /// What the popover and the menu bar answer at a glance: which pool to use
 /// now, and when the spent ones come back.
 ///
-/// One presentation feeds the Use now strip, Back soon, the service blocks,
-/// the Wallet and the menu-bar title, so the title can never name a pool the
-/// strip does not lead with. Everything here is built from figures the vendor
+/// One presentation ranks the pools (Use now), orders the spent ones by return
+/// (Back soon), chooses the Wallet's snapshots and builds the menu-bar title,
+/// which the widget's Story reads too, so the title can never name a pool the
+/// ranking does not lead with. Everything here is built from figures the vendor
 /// published: a fraction, a reset, a window length. Nothing is projected, and a
 /// pool with nothing measured is never ranked.
 public struct GlancePresentation: Equatable, Sendable {
@@ -22,8 +23,6 @@ public struct GlancePresentation: Equatable, Sendable {
     /// "Ahead of pace" is flagged in the first half of a window when usage is
     /// at least this far past an even pace.
     public static let aheadOfPaceLead = 0.20
-    /// Picks shown in the strip. The ranking behind it keeps every candidate.
-    public static let stripCount = 3
 
     // MARK: Types
 
@@ -97,15 +96,6 @@ public struct GlancePresentation: Equatable, Sendable {
         public let isBlocked: Bool
     }
 
-    public struct ServiceBlock: Identifiable, Equatable, Sendable {
-        public var id: String { name }
-        public let name: String
-        /// Pools still in Services (never spent ones).
-        public let pools: [Pool]
-        /// How many of this service's pools are in Back soon.
-        public let spentCount: Int
-    }
-
     public enum MenuTone: Equatable, Sendable { case normal, caveat, critical, unknown }
 
     public struct MenuTitle: Equatable, Sendable {
@@ -123,11 +113,7 @@ public struct GlancePresentation: Equatable, Sendable {
     public let pools: [Pool]
     /// Every qualifying pool in rank order, or the single caveat pick.
     public let ranking: [Pick]
-    public var strip: [Pick] { Array(ranking.prefix(Self.stripCount)) }
     public let backSoon: [ReturnEntry]
-    public let services: [ServiceBlock]
-    /// Services whose every pool is spent: named once, pointing at Back soon.
-    public let foldedServices: [String]
     /// Snapshots whose Wallet lines are drawn, in display order.
     public let walletSnapshots: [QuotaSnapshot]
     public let menuTitle: MenuTitle
@@ -162,28 +148,13 @@ public struct GlancePresentation: Equatable, Sendable {
 
         // Keep the saved service order even if the store delivered the
         // snapshots in deadline order. Preserve the account order within each.
-        var seen: Set<String> = []
-        var order = serviceOrder.map(Self.serviceName(for:)).filter { seen.insert($0).inserted }
-        var byService: [String: [Pool]] = [:]
-        for pool in pools {
-            if seen.insert(pool.service).inserted { order.append(pool.service) }
-            byService[pool.service, default: []].append(pool)
-        }
-        services = order.compactMap { name in
-            let all = byService[name] ?? []
-            let shown = all.filter { $0.state != .spent }
-            guard !shown.isEmpty else { return nil }
-            return ServiceBlock(name: name, pools: shown, spentCount: all.count - shown.count)
-        }
-        foldedServices = order.filter { name in
-            let all = byService[name] ?? []
-            return !all.isEmpty && all.allSatisfy { $0.state == .spent }
-        }
-
         let wallet = snapshots.filter(Self.hasWalletLine)
         if serviceOrder.isEmpty {
             walletSnapshots = wallet
         } else {
+            var seen: Set<String> = []
+            var order = serviceOrder.map(Self.serviceName(for:)).filter { seen.insert($0).inserted }
+            for pool in pools where seen.insert(pool.service).inserted { order.append(pool.service) }
             let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
             walletSnapshots = wallet.sorted {
                 (rank[Self.serviceName(for: $0.vendorId)] ?? .max) < (rank[Self.serviceName(for: $1.vendorId)] ?? .max)
@@ -383,6 +354,12 @@ public struct GlancePresentation: Equatable, Sendable {
         Int((min(max(remaining, 0), 1) * 100 + 1e-9).rounded(.down))
     }
 
+    /// A used share as the Subscriptions cells print it: rounded to the
+    /// nearest whole percent.
+    static func usedPercent(_ used: Double) -> Int {
+        Int((min(max(used, 0), 1) * 100).rounded())
+    }
+
     // MARK: Back soon
 
     static func returnEntry(_ pool: Pool, now: Date) -> ReturnEntry {
@@ -458,9 +435,13 @@ public struct GlancePresentation: Equatable, Sendable {
     static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date) -> MenuTitle {
         if let pick = ranking.first {
             let who = pick.pool.accountTag ?? pick.pool.name
-            let left = "\(percent(pick.binding.remaining ?? 0))% \(pick.binding.bar.label)"
+            // % used, as the popover's bars print it (owner, 24 Nov 2026), and
+            // rounded as they round, so the title and the pick's cell agree.
+            // The spoken label keeps the reason's "% left", which names its
+            // direction.
+            let used = "\(usedPercent(pick.binding.used ?? 0))% \(pick.binding.bar.label) used"
             let reset = pick.binding.bar.resetsAt.map { countdown($0, now: now) }
-            let text = ([who, left] + [reset].compactMap { $0 }).joined(separator: " · ")
+            let text = ([who, used] + [reset].compactMap { $0 }).joined(separator: " · ")
             let spoken = "Use \(pick.pool.service) \(pick.pool.name): \(pick.reason)"
                 + (pick.isCaveat ? ". Best available, not a strong pick" : "")
             return MenuTitle(vendor: pick.pool.snapshot.vendorId, text: text,

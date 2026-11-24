@@ -2,12 +2,12 @@ import SwiftUI
 import QuotaBarCore
 
 /// A categorized section: one card holding the vendor rows for that category,
-/// with hairlines between vendor groups and standalone rows.
+/// with hairlines between rows. The popover draws it only for developer
+/// limits that are close to running out.
 struct MetricSectionView: View {
 
     let category: MetricCategory
     let snapshots: [QuotaSnapshot]
-    var ordering: ProviderOrdering = .automatic
     var forecasts: [String: BurnRateForecast] = [:]
     /// Recorded balance-over-time points per `BalanceSeries.id`, for the rows
     /// that carry a money figure. Empty when the history loader was not
@@ -27,54 +27,21 @@ struct MetricSectionView: View {
             if showsColumnHeader {
                 columnHeader
             }
-            let groupNow = now ?? Date()
-            let groups = PopoverRowGrouping.groups(for: snapshots, ordering: ordering)
-            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                VStack(spacing: 0) {
-                    ForEach(group.snapshots) { snap in
-                        MetricRowView(
-                            snapshot: snap,
-                            onSelect: onSelect,
-                            forecast: forecasts[snap.id],
-                            // Only this card's final row draws its hover forecast above
-                            // itself: every other row has a row or group header below it.
-                            // A card rendered below this one puts content there, so this
-                            // is a per-card rule, not a per-popover one.
-                            forecastAbove: index == groups.count - 1
-                                && snap.id == group.snapshots.last?.id,
-                            balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
-                            isGrouped: group.isGrouped,
-                            suppressPlan: group.suppressPlan,
-                            groupSubtitle: group.rowSubtitle(for: snap),
-                            showAntigravityAccountBadge: group.showAntigravityAccountBadge,
-                            continuesGroup: snap.id != group.snapshots.last?.id,
-                            now: groupNow
-                        )
-                    }
-                }
-                .backgroundPreferenceValue(GroupAvatarAnchors.self) { anchors in
-                    if group.isGrouped, group.snapshots.count > 1,
-                       let first = group.snapshots.first.flatMap({ anchors[$0.id] }),
-                       let last = group.snapshots.last.flatMap({ anchors[$0.id] }) {
-                        GeometryReader { proxy in
-                            Path { path in
-                                let start = proxy[first]
-                                let end = proxy[last]
-                                path.move(to: CGPoint(x: start.midX, y: start.midY))
-                                path.addLine(to: CGPoint(x: start.midX, y: end.midY))
-                            }
-                            .stroke(Theme.outlineVariant.opacity(0.55), lineWidth: 2)
-                        }
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                    }
-                }
-                // Keep the service group traversable in VoiceOver even
-                // though its visible heading has been replaced by a rail.
-                .modifier(GroupAccessibilityContainer(label: group.accessibilityLabel))
-                // The hairline sits between groups, outside the container, so
-                // it never becomes part of a group's spoken element.
-                if index < groups.count - 1 {
+            let rowNow = now ?? Date()
+            ForEach(Array(snapshots.enumerated()), id: \.element.id) { index, snap in
+                MetricRowView(
+                    snapshot: snap,
+                    onSelect: onSelect,
+                    forecast: forecasts[snap.id],
+                    // Only this card's final row draws its hover forecast above
+                    // itself: every other row has a row below it. A card
+                    // rendered below this one puts content there, so this is a
+                    // per-card rule, not a per-popover one.
+                    forecastAbove: index == snapshots.count - 1,
+                    balancePoints: BalanceSeries.of(snap).flatMap { balanceSeries[$0.id] } ?? [],
+                    now: rowNow
+                )
+                if index < snapshots.count - 1 {
                     Rectangle()
                         .fill(Theme.outlineVariant.opacity(0.22))
                         .frame(height: 0.5)
@@ -140,30 +107,5 @@ struct MetricSectionView: View {
         }
         .padding(.top, 8)
         .accessibilityHidden(true)
-    }
-}
-
-/// Actual avatar bounds keep the spine attached when ticket stacks, wrapping
-/// subtitles or accessibility text sizes change a row's height.
-struct GroupAvatarAnchors: PreferenceKey {
-    static let defaultValue: [String: Anchor<CGRect>] = [:]
-
-    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-
-/// Keeps a service's rows together in VoiceOver, leaving standalone rows alone.
-private struct GroupAccessibilityContainer: ViewModifier {
-    let label: String?
-
-    func body(content: Content) -> some View {
-        if let label {
-            content.accessibilityElement(children: .contain)
-                .accessibilityLabel(label)
-                .accessibilityAddTraits(.isHeader)
-        } else {
-            content
-        }
     }
 }

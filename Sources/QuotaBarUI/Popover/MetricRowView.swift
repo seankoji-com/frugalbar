@@ -1,74 +1,6 @@
 import SwiftUI
 import QuotaBarCore
 
-/// One line aligned with the provider title. The enclosing row speaks both
-/// the ticket count and credit figure, so these children stay decorative.
-struct SubscriptionCreditLineView: View {
-    let presentation: MetricRowPresentation
-    var showsTickets: Bool = true
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if showsTickets, let credits = presentation.resetCredits {
-                HStack(spacing: 3) {
-                    ForEach(0..<credits.tickets, id: \.self) { index in
-                        GoldenTicketView(index: index)
-                            .help(credits.expiryText(at: index, now: credits.now))
-                    }
-                    if credits.overflow > 0 {
-                        Text("+\(credits.overflow)")
-                            .help("\(credits.overflow) more banked reset credit\(credits.overflow == 1 ? "" : "s")")
-                    }
-                }
-                .fixedSize()
-            }
-            ForEach(Array(presentation.subscriptionCredits.enumerated()), id: \.offset) { _, credit in
-                HStack(spacing: 4) {
-                    Image(systemName: "plus.circle")
-                    Text(credit.figure).lineLimit(1).minimumScaleFactor(0.8)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .font(Theme.Typography.subtitle)
-        .foregroundStyle(Theme.onSurfaceVariant)
-        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .accessibilityHidden(true)
-    }
-}
-
-/// One scope's banked reset tickets, stacked one per line with each published
-/// expiry to the right — the OpenAI Codex layout, including its 10.5pt ticket
-/// text and 2pt line spacing. The enclosing provider row speaks the count and
-/// every expiry, so these glyph runs stay decorative.
-struct ResetTicketGroupView: View {
-    let credits: MetricRowPresentation.ResetCredits
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<credits.tickets, id: \.self) { index in
-                HStack(spacing: 5) {
-                    GoldenTicketView(index: index)
-                        .help(credits.expiryText(at: index, now: credits.now))
-                    Text(credits.expiryPhrase(at: index, now: credits.now))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-            }
-            if credits.overflow > 0 {
-                Text("+\(credits.overflow) more")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-            }
-        }
-        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .padding(.top, 8)
-        .accessibilityHidden(true)
-    }
-}
-
 /// A single provider row: vendor mark, name and plan, then one cell per
 /// window column (5H / WK / MO, see `WindowColumn`) so the same window lines
 /// up down the card. Pools that are not a window (bonus credits, overage,
@@ -87,15 +19,7 @@ struct MetricRowView: View {
     /// first. Empty when the row is not a money row, or its series has no
     /// history yet — in which case nothing is drawn rather than a flat line.
     var balancePoints: [BalancePoint] = []
-
-    var isGrouped: Bool = false
-    var suppressPlan: Bool = false
-    var groupSubtitle: String? = nil
-    var showAntigravityAccountBadge: Bool = false
-    var continuesGroup: Bool = false
     var now: Date? = nil
-
-    private var isClaudeAccount: Bool { snapshot.vendorId == .claude && snapshot.claudeAccount != nil }
 
     @ScaledMetric(relativeTo: .caption) private var barWidth: CGFloat = 84
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -120,14 +44,12 @@ struct MetricRowView: View {
     /// The colour of an exhausted row's reset countdown and fallback text.
     nonisolated static let exhaustedTextColor = Theme.errorBold
 
-    /// The second line of the name column. Published exhausted reset text wins.
-    /// Otherwise draw the plan unless `suppressPlan`, when the header already
-    /// states it. A suppressed, exhausted workspace without reset text leaves
-    /// this slot empty too; it must not repeat the plan.
+    /// The second line of the name column. Published exhausted reset text
+    /// wins; otherwise the plan.
     private func subtitle(_ p: MetricRowPresentation) -> String {
-        if let groupSubtitle { return groupSubtitle }
         if p.exhaustedResetCountdown != nil { return snapshot.shortPlanName }
-        return PopoverRowGrouping.subtitle(for: snapshot, suppressPlan: suppressPlan, presentation: p)
+        if p.isExhausted, let reset = p.exhaustedResetText, !reset.isEmpty { return reset }
+        return snapshot.shortPlanName
     }
 
     /// Words for what a measured money row's chip figure is, or nil. Follows
@@ -180,95 +102,15 @@ struct MetricRowView: View {
         let label = combinedAccessibilityLabel(grid: grid, presentation: p)
         VStack(alignment: .leading, spacing: 4) {
             row(grid, presentation: p)
-            if isClaudeAccount, let credits = p.planResetCredits ?? (p.resetCreditGroups.isEmpty ? p.resetCredits : nil) {
-                accountResetTickets(credits)
-            }
-            // Model-scoped windows are drawn on their own line, with their
-            // own percentage and reset. They deliberately stay out of the
-            // window grid and out of the plan-wide bars (see
-            // `QuotaSnapshot.scopedBars`). Their tickets sit in the name
-            // column under the model title, matching the plan row.
-            ForEach(Array(p.visibleScopedBars.enumerated()), id: \.offset) { _, bar in
-                scopedWindowRow(bar, now: grid.now,
-                                credits: p.modelResetCredits(for: bar.label))
-            }
             ForEach(Array(grid.extras.enumerated()), id: \.offset) { _, bar in
                 extraRow(bar)
-            }
-            // A scoped group whose window the vendor did not publish still
-            // keeps its tickets rather than silently dropping them.
-            ForEach(Array(p.unmatchedResetCredits(
-                scopedLabels: p.visibleScopedBars.map(\.label)
-            ).enumerated()), id: \.offset) { _, group in
-                ResetTicketGroupView(credits: group.credits)
-                    .overlay(alignment: .topLeading) {
-                        if isGrouped { railElbow.padding(.top, 15) }
-                    }
             }
             if let staleNote = p.staleNote {
                 staleReadingRow(staleNote)
             }
-            if (!isClaudeAccount && snapshot.vendorId != .openai && p.resetCredits != nil) || !p.subscriptionCredits.isEmpty {
-                SubscriptionCreditLineView(
-                    presentation: p,
-                    showsTickets: !isClaudeAccount && snapshot.vendorId != .openai && p.resetCreditGroups.isEmpty
-                )
-                .overlay(alignment: .topLeading) {
-                    if isGrouped { railElbow.padding(.top, 7) }
-                }
-            }
-            // The linked Console entitlement is a different fact from the
-            // promo-credit row below (which reports usage of a different
-            // pool), so it keeps its own line rather than being folded into
-            // that row or dropped when no promo credit is published.
-            if let credit = p.monthlyCredit {
-                MonthlyCreditBarView(presentation: credit)
-                    .overlay(alignment: .topLeading) {
-                        if isGrouped { railElbow.padding(.top, 15) }
-                    }
-            }
-            if let credits = p.openAIUsageCredit {
-                OpenAIUsageCreditView(presentation: credits)
-                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                    .overlay(alignment: .topLeading) {
-                        if isGrouped { railElbow.padding(.top, 15) }
-                    }
-            }
-            if let promo = p.monthlyPromo {
-                MonthlyPromoCreditView(presentation: promo)
-                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                    .overlay(alignment: .topLeading) {
-                        if isGrouped { railElbow.padding(.top, 15) }
-                    }
-            }
-            // The configured AI Studio credit is not a quota window and not a
-            // balance a poll produced. It sits under Gemini's own row, inside
-            // the Antigravity block, so the service grouping stays intact.
-            if let credit = p.geminiAPICredit {
-                GeminiAPICreditView(presentation: credit)
-                    .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-                    .overlay(alignment: .topLeading) {
-                        if isGrouped { railElbow.padding(.top, 13) }
-                    }
-            }
         }
-        .backgroundPreferenceValue(RowRailAnchors.self) { anchors in
-            if isGrouped, !continuesGroup, let avatar = anchors.avatar, !anchors.branches.isEmpty {
-                GeometryReader { proxy in
-                    Path { path in
-                        let start = proxy[avatar]
-                        let end = anchors.branches.map { proxy[$0].y }.max() ?? start.y
-                        path.move(to: start)
-                        path.addLine(to: CGPoint(x: start.x, y: end))
-                    }
-                    .stroke(Theme.outlineVariant.opacity(0.55), lineWidth: 2)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
-        .padding(.vertical, isGrouped ? 4 : 8)
-        .frame(minHeight: isGrouped ? Theme.groupedRowMinHeight : Theme.rowMinHeight)
+        .padding(.vertical, 8)
+        .frame(minHeight: Theme.rowMinHeight)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
@@ -315,16 +157,7 @@ struct MetricRowView: View {
         if let reset = presentation.exhaustedResetSpoken, !label.contains(reset) {
             label += ", exhausted quota window \(reset)"
         }
-        let title = isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.displayName
-        let namedLabel = title == snapshot.displayName ? label : "\(title). \(label)"
-        let accountLabel: String = if let account = snapshot.claudeAccount {
-            "Account \(account.badge). Claude Code. \(namedLabel)"
-        } else if showAntigravityAccountBadge, let account = snapshot.antigravityAccount {
-            "Account \(account.badge), \(account.name). \(namedLabel)"
-        } else {
-            namedLabel
-        }
-        return PopoverRowGrouping.accessibilityPrefix(for: snapshot).map { "\($0). \(accountLabel)" } ?? accountLabel
+        return label
     }
 
     /// Only for a provider we are currently reading: a forecast under an
@@ -342,27 +175,13 @@ struct MetricRowView: View {
     /// Shared with the default-suite layout check at the actual name width.
     var titleView: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(isGrouped ? PopoverRowGrouping.rowTitle(for: snapshot) : snapshot.rowTitle)
-                .font(isGrouped ? Theme.Typography.subtitle : Theme.Typography.title)
-                .tracking(isGrouped ? 0 : Theme.Tracking.title)
-                .foregroundStyle(isGrouped ? Theme.onSurfaceVariant : Theme.onSurface)
-                .lineLimit(snapshot.instanceIdOrNil == nil && (isGrouped || snapshot.vendorId != .antigravityClaude) ? 1 : 2)
+            Text(snapshot.rowTitle)
+                .font(Theme.Typography.title)
+                .tracking(Theme.Tracking.title)
+                .foregroundStyle(Theme.onSurface)
+                .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
                 .minimumScaleFactor(0.85)
-            if let badge = PopoverRowGrouping.planBadge(for: snapshot) {
-                Text(badge)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color(red: 0xd9 / 255.0, green: 0xbd / 255.0, blue: 1))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color(red: 0x30 / 255.0, green: 0x29 / 255.0, blue: 0x3c / 255.0),
-                                in: RoundedRectangle(cornerRadius: 4))
-                    .overlay(RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(Color(red: 0xb4 / 255.0, green: 0x90 / 255.0, blue: 0xe5 / 255.0)
-                            .opacity(0.42), lineWidth: 0.5))
-                    .fixedSize()
-                    .help("OpenCode Go Plus")
-            }
         }
     }
 
@@ -404,7 +223,7 @@ struct MetricRowView: View {
     }
 
     private func row(_ grid: WindowGridPresentation, presentation p: MetricRowPresentation) -> some View {
-        HStack(alignment: isGrouped ? .top : .center, spacing: Theme.rowSpacing) {
+        HStack(alignment: .center, spacing: Theme.rowSpacing) {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
@@ -421,27 +240,9 @@ struct MetricRowView: View {
                             .fill(Color.white.opacity(isHovered ? 0.06 : 0))
                     }
             }
-            .anchorPreference(key: GroupAvatarAnchors.self, value: .bounds) { [snapshot.id: $0] }
-            .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(avatar: $0) }
-            .overlay(alignment: .bottomTrailing) {
-                let badge = snapshot.claudeAccount?.badge
-                    ?? (showAntigravityAccountBadge ? snapshot.antigravityAccount?.badge : nil)
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Theme.onSurface)
-                        .padding(.horizontal, 3)
-                        .frame(minWidth: 13, minHeight: 13)
-                        .background(Theme.surfaceContainerHighest, in: Capsule())
-                        .overlay(Capsule().stroke(Theme.card, lineWidth: 2))
-                        .offset(x: 4, y: 4)
-                        .accessibilityHidden(true)
-                }
-            }
 
             // The name, then the row's second line: the vendor's reset text for
-            // an exhausted row, otherwise the plan unless a group header
-            // already carries it.
+            // an exhausted row, otherwise the plan.
             VStack(alignment: .leading, spacing: 1) {
                 titleView
 
@@ -449,7 +250,7 @@ struct MetricRowView: View {
                     Text(subtitle(p))
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(subtitleColor(p))
-                        .lineLimit(groupSubtitle == nil ? 1 : 2)
+                        .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
                 }
@@ -458,14 +259,6 @@ struct MetricRowView: View {
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Self.exhaustedTextColor)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                // Tickets sit inside the name column, directly under the
-                // title, exactly like the OpenAI Codex row. Claude's plan
-                // group goes here; its model group goes under the scoped
-                // title in `scopedWindowRow`.
-                if !isClaudeAccount, let credits = snapshot.vendorId == .openai
-                    ? p.resetCredits : p.planResetCredits {
-                    ResetTicketsView(credits: credits)
                 }
                 // A money provider has no plan. Its figure is printed once, in
                 // the value chip on the right where every other row's figures
@@ -503,7 +296,8 @@ struct MetricRowView: View {
                 Spacer()
 
                 if let fraction = p.fraction, !typeSize.isAccessibilitySize {
-                    MicroProgressBar(fraction: 1.0 - fraction, statusColor: urgencyColor(p))
+                    // % used, as every bar in the popover reads.
+                    MicroProgressBar(fraction: fraction, statusColor: urgencyColor(p))
                         .frame(width: barWidth)
                 }
 
@@ -586,38 +380,6 @@ struct MetricRowView: View {
         }
     }
 
-    /// A model-scoped weekly window — today Anthropic's Fable cap — on its own
-    /// line under the row, spanning the meter area with its own WK token.
-    /// A spent scoped window says nothing about the plan.
-    private func scopedWindowRow(
-        _ bar: DualBarMetrics, now: Date,
-        credits: MetricRowPresentation.ResetCredits? = nil
-    ) -> some View {
-        HStack(alignment: .top, spacing: Theme.rowSpacing) {
-            // The model title, then its tickets directly beneath it. This is
-            // the same name-column anatomy as the OpenAI Codex row, not a
-            // separate full-width block below the bar.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(bar.label)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-                    .lineLimit(1)
-                if let credits {
-                    ResetTicketsView(credits: credits)
-                }
-            }
-            .frame(width: Theme.nameColumnWidth, alignment: .leading)
-
-            scopedMeter(bar, now: now)
-        }
-        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .padding(.top, 8)
-        .overlay(alignment: .topLeading) {
-            if isGrouped { railElbow.padding(.top, 15) }
-        }
-        .accessibilityHidden(true)
-    }
-
     /// A percentage, "Blocked" or a dash keeps its full width, as before.
     /// A published balance is longer than the column, so it may scale
     /// instead of truncating to "$1…".
@@ -634,66 +396,6 @@ struct MetricRowView: View {
             .layoutPriority(1)
     }
 
-    private func scopedMeter(_ bar: DualBarMetrics, now: Date,
-                             token: String = WindowColumn.weekly.label) -> some View {
-        VStack(spacing: 4) {
-            DualBarProgressView(metrics: bar, showsLabel: false, showsExhaustionPattern: true)
-            HStack(spacing: 2) {
-                Text(token)
-                    .font(Theme.Typography.token)
-                    .tracking(Theme.Tracking.token)
-                    .foregroundStyle(Theme.onSurfaceVariant)
-                    .padding(.trailing, 4)
-                    .accessibilityHidden(true)
-                if WindowGridPresentation.showsExhaustionGlyph(for: bar) {
-                    BlockedGlyph(color: DualBarProgressView.stateColor(for: bar), size: 8)
-                }
-                if !WindowGridPresentation.isExhausted(bar) {
-                    cellFigure(bar)
-                }
-                Spacer(minLength: 0)
-                if let reset = ResetCountdownBadge.compact(bar.resetsAt, now: now) {
-                    Text(reset)
-                        .font(Theme.Typography.gridReset)
-                        .foregroundStyle(WindowGridPresentation.isExhausted(bar)
-                            ? DualBarProgressView.stateColor(for: bar) : Theme.onSurfaceVariant.opacity(0.78))
-                        .minimumScaleFactor(0.7)
-                }
-            }
-            .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var railElbow: some View {
-        Rectangle().fill(Theme.outlineVariant.opacity(0.55))
-            .frame(width: 10, height: 2)
-            .anchorPreference(key: RowRailAnchors.self, value: .center) { .init(branches: [$0]) }
-            .padding(.leading, Theme.rowAvatarSize / 2)
-            .accessibilityHidden(true)
-    }
-
-    private func accountResetTickets(_ credits: MetricRowPresentation.ResetCredits) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<credits.tickets, id: \.self) { index in
-                HStack(spacing: 5) {
-                    GoldenTicketView(index: index)
-                        .help(credits.expiryText(at: index, now: credits.now))
-                    Text("Reset credit")
-                    Spacer(minLength: 0)
-                    Text(credits.expiryPhrase(at: index, now: credits.now))
-                }
-                .overlay(alignment: .leading) { railElbow.offset(x: -(Theme.rowAvatarSize + Theme.rowSpacing)) }
-            }
-            if credits.overflow > 0 { Text("+\(credits.overflow) more") }
-        }
-        .font(.system(size: 10.5))
-        .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
-        .padding(.leading, Theme.rowAvatarSize + Theme.rowSpacing)
-        .padding(.top, 4)
-        .accessibilityHidden(true)
-    }
-
     /// A pool that is not a window — Kiro's bonus or overage credits, Grok's
     /// on-demand budget — on its own line under the grid, with its own token.
     private func extraRow(_ bar: DualBarMetrics) -> some View {
@@ -701,22 +403,6 @@ struct MetricRowView: View {
             Color.clear.frame(width: Theme.gridLeadingInset, height: 1)
             DualBarProgressView(metrics: bar, showsExhaustionPattern: true)
         }
-    }
-}
-
-/// A continuation exists only when a real branch exists. Its endpoint follows
-/// the last branch, rather than a guessed inset from the row's total height.
-private struct RowRailAnchors: PreferenceKey {
-    struct Value {
-        var avatar: Anchor<CGPoint>?
-        var branches: [Anchor<CGPoint>] = []
-    }
-    static let defaultValue = Value()
-
-    static func reduce(value: inout Value, nextValue: () -> Value) {
-        let next = nextValue()
-        value.avatar = next.avatar ?? value.avatar
-        value.branches += next.branches
     }
 }
 

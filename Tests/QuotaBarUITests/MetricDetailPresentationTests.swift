@@ -43,7 +43,12 @@ struct MetricDetailPresentationTests {
         #expect(p.summary.symbol == "checkmark.circle.fill")
         #expect(p.summary.focusLabel == "WK")
         #expect(p.summary.percentUsed == 60)
-        #expect(p.summary.resetText?.hasPrefix("Resets") == true)
+        // One unit, as the Subscriptions cell says it: never "3h 20m" or a date.
+        #expect(p.summary.resetText?.wholeMatch(of: /Resets in \d+[mhd]/) != nil)
+        let resetClauses = p.windows.flatMap { $0.detail.components(separatedBy: " · ") }
+            .filter { $0.hasPrefix("Resets") }
+        #expect(!resetClauses.isEmpty)
+        #expect(resetClauses.allSatisfy { $0.wholeMatch(of: /Resets in \d+[mhd]/) != nil })
         #expect(p.summary.paceVerdict?.hasPrefix("Ahead of even pace") == true)
         #expect(p.summary.accessibilityLabel.contains("weekly window 60 percent used"))
     }
