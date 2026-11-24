@@ -34,6 +34,7 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
     private var _calls: [RecordedCall] = []
     private var _inventoryDown = false
     private var _duplicateDirect = false
+    private var _directOmitsArgon = false
     private var _dailyMissingForSecondary = false
     private var _secondaryErrorReason: String? = nil
     private var _primaryUnverified = false
@@ -52,6 +53,7 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
 
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
     var duplicateDirect: Bool { get { lock.withLock { _duplicateDirect } } set { lock.withLock { _duplicateDirect = newValue } } }
+    var directOmitsArgon: Bool { get { lock.withLock { _directOmitsArgon } } set { lock.withLock { _directOmitsArgon = newValue } } }
     var dailyMissingForSecondary: Bool { get { lock.withLock { _dailyMissingForSecondary } } set { lock.withLock { _dailyMissingForSecondary = newValue } } }
     var secondaryErrorReason: String? { get { lock.withLock { _secondaryErrorReason } } set { lock.withLock { _secondaryErrorReason = newValue } } }
     var primaryUnverified: Bool { get { lock.withLock { _primaryUnverified } } set { lock.withLock { _primaryUnverified = newValue } } }
@@ -193,29 +195,35 @@ private final class AntigravityAccountFixture: @unchecked Sendable {
             let geminiRemaining = isPrimary ? 0.80 : 0.30
             let claudeRemaining = isPrimary ? 0.60 : 0.25
             let argonRemaining = isPrimary ? 0.90 : 0.40
-            return (200, json([
-                "groups": [
-                    [
-                        "displayName": "Gemini Models",
-                        "buckets": [
-                            ["bucketId": "gemini-5h", "window": "5h", "remainingFraction": geminiRemaining, "resetTime": "2027-01-15T06:00:00Z"],
-                            ["bucketId": "gemini-wk", "window": "weekly", "remainingFraction": geminiRemaining - 0.1, "resetTime": "2027-01-20T00:00:00Z"]
-                        ]
-                    ],
-                    [
-                        "displayName": "Claude and GPT models",
-                        "buckets": [
-                            ["bucketId": "claude-5h", "window": "5h", "remainingFraction": claudeRemaining, "resetTime": "2027-01-15T06:00:00Z"]
-                        ]
-                    ],
-                    [
-                        "displayName": "Gemini 4 Argon",
-                        "buckets": [
-                            ["bucketId": "gemini-argon-5h", "window": "5h", "remainingFraction": argonRemaining, "resetTime": "2027-01-15T06:00:00Z"]
-                        ]
+            let directOmitsArgon = _directOmitsArgon && !isSecondary
+            var geminiGroup: [String: Any] = [
+                "displayName": "Gemini Models",
+                "buckets": [
+                    ["bucketId": "gemini-5h", "window": "5h", "remainingFraction": geminiRemaining, "resetTime": "2027-01-15T06:00:00Z"],
+                    ["bucketId": "gemini-wk", "window": "weekly", "remainingFraction": geminiRemaining - 0.1, "resetTime": "2027-01-20T00:00:00Z"]
+                ]
+            ]
+            if directOmitsArgon {
+                geminiGroup["description"] = "Models within this group: Gemini 4 Argon"
+            }
+            var groups: [[String: Any]] = [
+                geminiGroup,
+                [
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        ["bucketId": "claude-5h", "window": "5h", "remainingFraction": claudeRemaining, "resetTime": "2027-01-15T06:00:00Z"]
                     ]
                 ]
-            ]))
+            ]
+            if !directOmitsArgon {
+                groups.append([
+                    "displayName": "Gemini 4 Argon",
+                    "buckets": [
+                        ["bucketId": "gemini-argon-5h", "window": "5h", "remainingFraction": argonRemaining, "resetTime": "2027-01-15T06:00:00Z"]
+                    ]
+                ])
+            }
+            return (200, json(["groups": groups]))
         }
 
         return (404, Data())
@@ -948,6 +956,38 @@ struct AntigravityAccountTests {
                 #expect(snapshot.cliSource == "CLI Proxy")
                 #expect(snapshot.antigravityAccount == nil)
             }
+        }
+    }
+
+    @Test("a proxy inventory outage cannot retire Argon its proxy route published")
+    func proxyInventoryOutageKeepsMeasuredArgon() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.duplicateDirect = true
+        fixture.directEmail = "secondary@example.test"
+        fixture.directOmitsArgon = true
+        let session = makeSession(fixture: fixture)
+
+        try await QuotaHTTP.$session.withValue(session) {
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suiteName,
+                proxyConfig: { proxyConfig },
+                directCredential: { directToken },
+                environment: [:]
+            )
+            let first = await discovery.providers(now: now)
+            let measuredProvider = try #require(first.first { $0.vendorId == .antigravityArgon })
+            let measured = try await measuredProvider.fetchSnapshot()
+            #expect(measured.status.confidence == .measured)
+            #expect(abs((measured.row1?.primaryFraction ?? -1) - 0.10) < 0.001)
+
+            fixture.inventoryDown = true
+            let second = await discovery.providers(now: now.addingTimeInterval(60))
+            let afterProvider = try #require(second.first { $0.vendorId == .antigravityArgon })
+            let after = try await afterProvider.fetchSnapshot()
+            #expect(after.status.confidence == .unavailable)
+            #expect(after.status.unavailableReason != GeminiQuotaProvider.argonMeteredWithGeminiReason)
         }
     }
 

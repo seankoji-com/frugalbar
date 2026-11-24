@@ -251,14 +251,29 @@ public actor QuotaManager {
         visibleCache()
     }
 
-    /// The cache minus hidden vendors. Every read goes through this, so the
-    /// fresh-cache fast path cannot return a provider the user just hid.
+    /// The cache minus hidden vendors and retired pools. Every read goes
+    /// through this, so the fresh-cache fast path cannot return a provider the
+    /// user just hid, or one the vendor has stopped metering.
     private func visibleCache() -> [String: QuotaSnapshot] {
         let hidden = displayPreferences().hidden
         let credit = geminiCreditLookup()
         let accountCredits = geminiAccountCreditLookup()
-        return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }
+        return cache.filter {
+            !hidden.contains($0.value.snapshot.vendorId) && !Self.isRetiredPool($0.value.snapshot)
+        }
             .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit, accountCredits: accountCredits) }
+    }
+
+    /// A pool the vendor has stopped metering separately.
+    ///
+    /// It stays in the cache so the poll floor and a vendor's own backoff still
+    /// apply to it — deleting the entry made every manual refresh re-hit the
+    /// vendor for a pool nobody can see. It is never drawn, recorded or
+    /// reported as a provider: there is no row, no figure and no failure to
+    /// show.
+    static func isRetiredPool(_ snapshot: QuotaSnapshot) -> Bool {
+        snapshot.vendorId == .antigravityArgon
+            && snapshot.status.unavailableReason == GeminiQuotaProvider.argonMeteredWithGeminiReason
     }
 
     /// Adds the user-configured Gemini API credit to the Gemini row.
@@ -323,7 +338,8 @@ public actor QuotaManager {
         let accountCredits = geminiAccountCreditLookup()
         return Self.arrange(
             cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit,
-                                                          accountCredits: accountCredits) },
+                                                          accountCredits: accountCredits) }
+                .filter { !Self.isRetiredPool($0) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )
@@ -626,24 +642,49 @@ public actor QuotaManager {
             allProviders.insert(contentsOf: accounts, at: min(insertion, allProviders.count))
         }
         let antigravityVendors: Set<VendorIdentifier> = [.gemini, .antigravityClaude, .antigravityArgon]
+        // A discovery pass that could not inventory this machine's accounts is
+        // not evidence that an account's retired Argon pool was removed. Keep
+        // its cache entry and poll clocks through that failure.
+        var antigravityDiscoveryFailed = false
         if !antigravityVendors.isSubset(of: hidden), let discoverAGY = antigravityProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
                 await QuotaFetchContext.$isUserInitiated.withValue(force) { await discoverAGY() }
             }
             let agyProviders: [any QuotaProvider]
             switch discovery {
-            case .success(let found): agyProviders = found
+            case .success(let found):
+                // An inventory-failure provider list is not evidence about a
+                // pool's existence. When a retired entry is the pool's only
+                // evidence, drop the bare Argon failure placeholder so it
+                // cannot reappear in reads or history.
+                let inventoryFailed = found.contains { $0 is AntigravityDiscoveryFailureProvider }
+                antigravityDiscoveryFailed = inventoryFailed
+                if inventoryFailed, cache.values.contains(where: { Self.isRetiredPool($0.snapshot) }) {
+                    agyProviders = found.filter { $0.vendorId != .antigravityArgon }
+                } else {
+                    agyProviders = found
+                }
             case .failure(let reason):
-                let previous = cache.values.map(\.snapshot).filter { antigravityVendors.contains($0.vendorId) }
-                agyProviders = previous.isEmpty
-                    ? [
+                antigravityDiscoveryFailed = true
+                let previous = cache.values.map(\.snapshot).filter {
+                    antigravityVendors.contains($0.vendorId) && !Self.isRetiredPool($0)
+                }
+                let hasRetiredPool = cache.values.contains { Self.isRetiredPool($0.snapshot) }
+                if previous.isEmpty {
+                    // A retired pool is the only evidence this account has
+                    // published, so do not invent an Argon failure placeholder
+                    // for it; the entry and its clocks stay in the cache.
+                    agyProviders = [
                         UnavailableAntigravityInstance(id: VendorIdentifier.gemini.rawValue, vendorId: .gemini, name: VendorIdentifier.gemini.displayName, account: nil, reason: reason),
                         UnavailableAntigravityInstance(id: VendorIdentifier.antigravityClaude.rawValue, vendorId: .antigravityClaude, name: VendorIdentifier.antigravityClaude.displayName, account: nil, reason: reason),
+                    ] + (hasRetiredPool ? [] : [
                         UnavailableAntigravityInstance(id: VendorIdentifier.antigravityArgon.rawValue, vendorId: .antigravityArgon, name: VendorIdentifier.antigravityArgon.displayName, account: nil, reason: reason),
-                    ]
-                    : previous.map {
+                    ])
+                } else {
+                    agyProviders = previous.map {
                         UnavailableAntigravityInstance(id: $0.id, vendorId: $0.vendorId, name: $0.displayName, account: $0.antigravityAccount, reason: reason)
                     }
+                }
             }
             let insertion = allProviders.firstIndex { antigravityVendors.contains($0.vendorId) } ?? allProviders.count
             allProviders.removeAll { antigravityVendors.contains($0.vendorId) }
@@ -673,6 +714,9 @@ public actor QuotaManager {
             let legacyAGYKeys = Set(antigravityVendors.map(\.rawValue))
             for key in Array(cache.keys) where (legacyAGYKeys.contains(key)
                 || key.hasPrefix(AntigravityAccount.instancePrefix)) && !liveAntigravity.contains(key) {
+                if antigravityDiscoveryFailed, let entry = cache[key], Self.isRetiredPool(entry.snapshot) {
+                    continue
+                }
                 cache[key] = nil
             }
         }
@@ -865,8 +909,15 @@ public actor QuotaManager {
         where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
             results[provider.instanceID] = nil
         }
+        // A retired pool is kept in the cache (see `isRetiredPool`) so the poll
+        // floor and a vendor's backoff still apply, but every read filters it
+        // out. It is never shown and never recorded.
+        // A retired pool is a settled determination, not an unavailable outcome
+        // to retry: a queued user follow-up must not re-hit the vendor for a
+        // pool nobody can see, and the bump below then arms its user clock.
         successfulPassIDs = Set(results.compactMap { id, snapshot in
-            snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
+            (snapshot.status.confidence == .measured && snapshot.staleReading == nil)
+                || Self.isRetiredPool(snapshot) ? id : nil
         })
         let now = clock()
         for provider in providersToFetch {
@@ -897,7 +948,7 @@ public actor QuotaManager {
             // duration of an outage, so every subsequent forceRefresh
             // re-hit the failing vendor once the floor's window (measured
             // from that stale timestamp) had elapsed.
-            let displaySnapshot: QuotaSnapshot
+            var displaySnapshot: QuotaSnapshot
             // Retention preserves *figures*, so it only applies to a provider
             // we previously read. An absence is always the current one: two
             // failures in a row must report the newest reason rather than
@@ -943,6 +994,18 @@ public actor QuotaManager {
                 displaySnapshot = retained
             } else {
                 displaySnapshot = snap
+            }
+            // A retired pool is a statement about the vendor, not a reading to
+            // be overwritten by a failure to reach the vendor. A route that
+            // could not be checked leaves the retirement in place; only a
+            // measured reading or the vendor publishing an Argon group with no
+            // readable window may bring the row back. The vendor's own backoff
+            // is still stored below from the failure itself.
+            if let existing = cache[id], Self.isRetiredPool(existing.snapshot),
+               let reason = snap.status.unavailableReason,
+               reason != GeminiQuotaProvider.argonNoQuotaReason,
+               reason != GeminiQuotaProvider.unreadableSummaryReason {
+                displaySnapshot = existing.snapshot
             }
             // A provider we attempted re-arms the floors it is supposed to:
             // `fetchedAt` always (so the automatic floor measures from the
