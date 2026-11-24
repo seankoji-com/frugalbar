@@ -191,9 +191,12 @@ struct WalletPresentation: Equatable, Sendable {
     static func entryRow(_ entry: APICreditEntry, title: (String) -> String, tag: String?,
                          namesAccount: Bool) -> Row {
         let e = APICreditEntryPresentation(entry: entry)
-        var unnamed = entry
-        if namesAccount { unnamed.accountName = nil }
-        let name = APICreditEntryPresentation(entry: unnamed).title
+        var name = e.title
+        if namesAccount, entry.accountName != nil {
+            var unnamed = entry
+            unnamed.accountName = nil
+            name = APICreditEntryPresentation(entry: unnamed).title
+        }
         return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
                    title: title(prefixed(name, with: providerName(entry.vendorId))), tag: tag,
                    figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal,

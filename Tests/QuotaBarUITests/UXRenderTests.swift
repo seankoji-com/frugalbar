@@ -571,7 +571,10 @@ struct UXRenderTests {
         let grid = ProviderGridPresentation(snapshots: routed, serviceOrder: ProviderDisplayPreferences.defaultOrder,
                                             now: now)
         let gemini = try #require(grid.groups.first { $0.id == .gemini })
-        #expect(gemini.pools.count == 4)
+        #expect(gemini.pools.map { "\($0.name) | \($0.source ?? "")" } == [
+            "Account 1 | Gemini · AGY", "Account 1 | Argon · AGY",
+            "Account 2 | Gemini · CLI Proxy", "Account 2 | Argon · CLI Proxy",
+        ])
         try await save(ProviderGridView(presentation: grid, expanded: .gemini)
             .padding(Theme.edgeMargin)
             .frame(width: PopoverRootView.popoverWidth)
@@ -601,8 +604,29 @@ struct UXRenderTests {
             label: "Extra usage", metric: .currency(balance: 42, limit: 200, spent: nil, currencyCode: "USD"),
             poolID: "claude.extra-usage", accountID: staleClaude.id, accountName: longClaude.name)]
         staleClaude.staleReading = StaleReading(reason: .offline, at: now)
-        let tagged = WalletPresentation(snapshots: [plainGemini, longGemini, staleBalance, staleClaude], now: now)
-        #expect(tagged.rows.map(\.tag) == ["configured", "configured", "last reading", "last reading"])
+        // Names long enough to push out the tag's word but short enough to
+        // stay whole beside its glyph: the case the glyph exists for.
+        let midGoogle = AntigravityAccount(id: "agy-mid", badge: "4", sourceLabel: "fixture",
+            fallbackName: "Research", planName: "Google AI Pro")
+        var midGemini = GlanceFixtures.agy(.gemini, midGoogle,
+            [GlanceFixtures.bar("WK", 0.2, resetsInHours: 100, windowHours: 168)])
+        midGemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                    configuredAt: now.addingTimeInterval(-86_400))
+        let midClaude = ClaudeAccount(id: "claude-mid", badge: "4", sourceLabel: "fixture", fallbackName: "Ops")
+        var midStale = GlanceFixtures.claude(midClaude,
+            [GlanceFixtures.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])
+        midStale.apiCredits = [APICreditEntry(id: midClaude.id + "|claude.extra-usage", vendorId: .claude,
+            label: "Extra usage", metric: .currency(balance: 42, limit: 200, spent: nil, currencyCode: "USD"),
+            poolID: "claude.extra-usage", accountID: midStale.id, accountName: midClaude.name)]
+        midStale.staleReading = StaleReading(reason: .offline, at: now)
+        let tagged = WalletPresentation(
+            snapshots: [plainGemini, midGemini, longGemini, staleBalance, midStale, staleClaude], now: now)
+        #expect(tagged.rows.map(\.title) == [
+            "Gemini API", "Gemini API · Research", "Gemini API · research-burner-account@example.com",
+            "OpenRouter", "Claude Extra usage · Ops", "Claude Extra usage · Platform Engineering Shared Seat",
+        ])
+        #expect(tagged.rows.map(\.tag) == ["configured", "configured", "configured",
+                                           "last reading", "last reading", "last reading"])
         try await save(WalletSection(presentation: tagged, now: now)
             .padding(Theme.edgeMargin)
             .frame(width: PopoverRootView.popoverWidth)
