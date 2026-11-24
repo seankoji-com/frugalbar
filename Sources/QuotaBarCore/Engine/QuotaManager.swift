@@ -280,7 +280,9 @@ public actor QuotaManager {
         // which name no account, never attach one.
         let attached: GeminiAPICredit?
         if let account = snapshot.antigravityAccount {
-            attached = accountCredits[account.id] ?? (account.isPrimary ? credit : nil)
+            attached = GeminiAPICreditStore.credit(for: account.id, aliases: account.historyAliases,
+                                                   in: accountCredits)
+                ?? (account.isPrimary ? credit : nil)
         } else if snapshot.id == VendorIdentifier.gemini.rawValue {
             attached = credit
         } else {

@@ -45,6 +45,9 @@ struct WalletPresentation: Equatable, Sendable {
         /// The balance's recorded series (`BalanceSeries.id`), for its trend.
         var balanceSeriesID: String? = nil
         let spoken: String
+        /// The snapshot this line came from: selecting the line opens its
+        /// inspector, as the Subscriptions rows do.
+        var snapshotID: String = ""
     }
 
     let rows: [Row]
@@ -53,6 +56,9 @@ struct WalletPresentation: Equatable, Sendable {
         var rows: [Row] = []
         var geminiCreditAccounts: Set<String> = []
         for snapshot in snapshots where snapshot.category != .developerLimits {
+            // Every line this snapshot adds opens this snapshot's inspector.
+            let firstRow = rows.count
+            defer { for i in firstRow..<rows.count { rows[i].snapshotID = snapshot.id } }
             let p = MetricRowPresentation(snapshot: snapshot, now: now)
             let provider = Self.providerName(snapshot.vendorId)
             let staleTag: String? = snapshot.staleReading != nil ? "last reading" : nil
@@ -107,7 +113,10 @@ struct WalletPresentation: Equatable, Sendable {
                 rows.append(Row(
                     id: snapshot.id + "#promo", vendor: snapshot.vendorId,
                     title: titled("\(provider) \(promo.title.lowercased().hasPrefix("api") ? "API" : promo.title.lowercased())"),
-                    tag: staleTag,
+                    // The promo's own freshness: OpenAI's grant has its own
+                    // billing read, so a quota outage does not stale it and a
+                    // failed billing read does even when quota is fresh.
+                    tag: promo.isStale ? "last reading" : nil,
                     figure: promo.amountText.map { "\($0)/mo" },
                     tone: promo.isExhausted ? .exhausted : .normal,
                     // The promo's own bar metrics: its period, so its tick.
@@ -117,7 +126,9 @@ struct WalletPresentation: Equatable, Sendable {
             if let credit = p.monthlyCredit {
                 rows.append(Row(
                     id: snapshot.id + "#console", vendor: snapshot.vendorId, title: titled("\(provider) Console"),
-                    tag: credit.isStale ? "last reading" : staleTag,
+                    // Read by the Console billing session, not the quota
+                    // poll: only its own failed read makes it stale.
+                    tag: credit.isStale ? "last reading" : nil,
                     figure: "\(credit.amountText)/mo",
                     // Time through the billing month, not spend (no spend is published).
                     meter: credit.fraction.map { .elapsed(fraction: $0, countdown: credit.countdown) },

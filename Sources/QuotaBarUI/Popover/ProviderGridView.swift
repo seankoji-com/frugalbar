@@ -37,10 +37,6 @@ struct ProviderGridView: View {
                                 Divider()
                                 poolButton(pool)
                             }
-                            ForEach(group.balances) { balance in
-                                Divider()
-                                balanceButton(balance)
-                            }
                         }
                         .background(Theme.surfaceContainerHighest.opacity(0.25))
                     }
@@ -179,30 +175,6 @@ struct ProviderGridView: View {
         .accessibilityHint("Open usage details")
     }
 
-    private func balanceButton(_ snapshot: QuotaSnapshot) -> some View {
-        Button { onSelect(snapshot) } label: {
-            HStack {
-                Text(snapshot.vendorId == .deepseek ? "DeepSeek API credit" : snapshot.rowTitle)
-                    .font(.system(size: 11.5))
-                Spacer()
-                if snapshot.staleReading != nil {
-                    Text("Last reading")
-                        .foregroundStyle(Theme.tertiary)
-                        .font(.system(size: 10))
-                }
-                Text(snapshot.status.unavailableReason?.headline ?? MetricRowPresentation.value(for: snapshot.metric))
-                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(balanceColor(snapshot.metric))
-            }
-            .foregroundStyle(Theme.onSurface)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Open usage details")
-    }
-
     /// A model's banked reset tickets, beside that model's line: one gold
     /// ticket per credit (capped, with an exact `+n`) and the soonest
     /// published expiry. Each ticket's tooltip gives its own expiry.
@@ -230,11 +202,6 @@ struct ProviderGridView: View {
             .foregroundStyle(Theme.onSurfaceVariant)
             .accessibilityLabel(credits.spoken)
         }
-    }
-
-    private func balanceColor(_ metric: MetricType) -> Color {
-        if case .currency(let balance, _, _, _) = metric, balance < 0 { return Theme.error }
-        return Theme.onSurface
     }
 
     private func identity(

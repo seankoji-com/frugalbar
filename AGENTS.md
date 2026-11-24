@@ -284,7 +284,10 @@ each account has its own credit (owner, 24 Nov 2026): `GeminiAPICreditStore`
 keeps one per Antigravity account id (`accountsDefaultsKey`), and the older
 single credit (`defaultsKey`) reads as the primary account's until the primary
 saves its own; removing the primary's also removes the older one, so it cannot
-return through that fallback. Settings has one editor per account. Each is
+return through that fallback. A credit saved under an id discovery later folds
+into an account (`AntigravityAccount.historyAliases`) is still that account's
+(`GeminiAPICreditStore.credit(for:aliases:in:)`), and the next save moves it to
+the current id. Settings has one editor per account. Each is
 drawn in the Wallet as its own "Gemini API · <account>" line tagged CONFIGURED,
 once per account however many routes read it, with an
 elapsed-month meter ("MO 63%" and the countdown beneath). The prepaid balance and
@@ -457,7 +460,14 @@ and the account when the reading carries a named one ("ChatGPT API",
 CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
 text beside the title. When the title needs the room, the tag shrinks to its
 glyph (pencil, clock) rather than cutting the account name; the tooltip and
-spoken label still say the word. ChatGPT has two lines: the monthly API credit grant and
+spoken label still say the word. A line is LAST READING by the read that
+produced it: the ChatGPT API grant and the Console credit have their own billing
+reads, so a quota outage does not tag them and their own failed read does. A
+direct balance whose read failed is still a Wallet line that says why
+(`GlancePresentation` admits every `isDirectBalance` snapshot): it is in
+Subscriptions nowhere, so dropping it would hide the failure from both. Clicking
+a line opens the inspector of the snapshot it came from (`Row.snapshotID`).
+ChatGPT has two lines: the monthly API credit grant and
 the bonus credit count. Each Google account's configured Gemini API credit is
 its own "Gemini API · <account>" line in the Wallet, never under an Antigravity
 row in Subscriptions. A model's reset

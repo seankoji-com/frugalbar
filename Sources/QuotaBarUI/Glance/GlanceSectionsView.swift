@@ -599,6 +599,9 @@ struct WalletSection: View {
     /// Recorded balance history by `BalanceSeries.id`, for each balance's trend.
     var balanceSeries: [String: [BalancePoint]] = [:]
     var now: Date = Date()
+    /// Opens the inspector for the snapshot a line came from
+    /// (`WalletPresentation.Row.snapshotID`), as a Subscriptions row does.
+    var onSelect: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -613,7 +616,7 @@ struct WalletSection: View {
                         if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
                         WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
                             BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
-                        }, now: now)
+                        }, now: now, onSelect: { onSelect(row.snapshotID) })
                     }
                 }
             }
@@ -621,7 +624,7 @@ struct WalletSection: View {
     }
 }
 
-/// A Wallet line's meter, in the provider rows' anatomy: the bar, then "% left"
+/// A Wallet line's meter, in the provider rows' anatomy: the bar, then "% used"
 /// and the countdown under it. A credit's bar is `UsageBar`, so its fill,
 /// colour and even-use tick follow the same rules as a quota window; a
 /// time-only meter is drawn in the informational colour and says "MO 63%".
@@ -680,6 +683,7 @@ private struct WalletRowView: View {
     let row: WalletPresentation.Row
     let trend: BalanceSparklinePresentation?
     let now: Date
+    let onSelect: () -> Void
 
     /// The meter column's width. With the grid's shared figure column, every
     /// line's bar starts and ends at the same place.
@@ -695,7 +699,11 @@ private struct WalletRowView: View {
                 // whole line and the other cells stay silent.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Open usage details")
+                .accessibilityAction { onSelect() }
                 .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
+                .selectsWalletLine(onSelect)
             Group {
                 if let meter = row.meter {
                     WalletMeterCell(meter: meter, now: now)
@@ -707,6 +715,7 @@ private struct WalletRowView: View {
             }
             .frame(width: meterWidth)
             .accessibilityHidden(true)
+            .selectsWalletLine(onSelect)
             Text(row.figure ?? "")
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 .foregroundStyle(color(row.tone))
@@ -715,6 +724,7 @@ private struct WalletRowView: View {
                 .gridColumnAlignment(.trailing)
                 .padding(.trailing, 14)
                 .accessibilityHidden(true)
+                .selectsWalletLine(onSelect)
         }
     }
 
@@ -776,5 +786,13 @@ private struct WalletRowView: View {
         case .exhausted: Theme.errorBold
         case .unknown: Theme.outline
         }
+    }
+}
+
+private extension View {
+    /// A grid row is not one view, so each cell of a Wallet line takes the
+    /// click: anywhere on the line opens its inspector.
+    func selectsWalletLine(_ action: @escaping () -> Void) -> some View {
+        contentShape(Rectangle()).onTapGesture(perform: action)
     }
 }

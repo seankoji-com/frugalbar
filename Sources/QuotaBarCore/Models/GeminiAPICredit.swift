@@ -212,19 +212,31 @@ public enum GeminiAPICreditStore {
         }
     }
 
-    /// The credit for one account: its own, or for the primary account the
-    /// older single credit.
-    public static func load(accountID: String, isPrimary: Bool,
-                            preferences: UserDefaults = CredentialStore.preferences) -> GeminiAPICredit? {
-        loadAll(preferences: preferences)[accountID] ?? (isPrimary ? load(preferences: preferences) : nil)
+    /// The credit for one account: under its current id, else under an id
+    /// discovery has since folded into it (`historyAliases`, when an
+    /// unverified route resolves to a verified account), so a figure saved
+    /// before that change still belongs to the same account.
+    public static func credit(for accountID: String, aliases: [String] = [],
+                              in all: [String: GeminiAPICredit]) -> GeminiAPICredit? {
+        all[accountID] ?? aliases.lazy.compactMap { all[$0] }.first
     }
 
-    /// Saves or clears one account's credit. The primary account's save also
-    /// clears the older single credit, so a removed figure cannot come back
-    /// through the fallback.
-    public static func save(_ credit: GeminiAPICredit?, accountID: String, isPrimary: Bool,
-                            preferences: UserDefaults = CredentialStore.preferences) {
+    /// The credit for one account: its own (by id or alias), or for the
+    /// primary account the older single credit.
+    public static func load(accountID: String, aliases: [String] = [], isPrimary: Bool,
+                            preferences: UserDefaults = CredentialStore.preferences) -> GeminiAPICredit? {
+        credit(for: accountID, aliases: aliases, in: loadAll(preferences: preferences))
+            ?? (isPrimary ? load(preferences: preferences) : nil)
+    }
+
+    /// Saves or clears one account's credit under its current id, dropping
+    /// any copy under an alias so the account has one figure. The primary
+    /// account's save also clears the older single credit, so a removed
+    /// figure cannot come back through the fallback.
+    public static func save(_ credit: GeminiAPICredit?, accountID: String, aliases: [String] = [],
+                            isPrimary: Bool, preferences: UserDefaults = CredentialStore.preferences) {
         var stored = preferences.dictionary(forKey: accountsDefaultsKey) ?? [:]
+        for alias in aliases { stored[alias] = nil }
         if let credit {
             guard let data = try? JSONEncoder().encode(credit) else {
                 NSLog("frugalbar: configured Gemini API credit failed to encode — save was dropped")

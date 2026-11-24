@@ -152,7 +152,7 @@ struct GeminiAPICreditSettingsView: View {
     }
 
     private func load() {
-        let stored = account.map { GeminiAPICreditStore.load(accountID: $0.id, isPrimary: $0.isPrimary) }
+        let stored = account.map { GeminiAPICreditStore.load(accountID: $0.id, aliases: $0.historyAliases, isPrimary: $0.isPrimary) }
             ?? GeminiAPICreditStore.load()
         guard let stored else {
             configured = false
@@ -169,7 +169,7 @@ struct GeminiAPICreditSettingsView: View {
 
     private func store(_ credit: GeminiAPICredit?) {
         if let account {
-            GeminiAPICreditStore.save(credit, accountID: account.id, isPrimary: account.isPrimary)
+            GeminiAPICreditStore.save(credit, accountID: account.id, aliases: account.historyAliases, isPrimary: account.isPrimary)
         } else {
             GeminiAPICreditStore.save(credit)
         }

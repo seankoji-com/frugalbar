@@ -130,6 +130,14 @@ struct GeminiAPICreditTests {
         #expect(GeminiAPICreditStore.load(accountID: "main", isPrimary: true, preferences: defaults) == nil)
         #expect(GeminiAPICreditStore.load(preferences: defaults) == nil)
         #expect(GeminiAPICreditStore.load(accountID: "burner", isPrimary: false, preferences: defaults) == burner)
+
+        // An account discovery folded "burner" into keeps its figure, and a
+        // save under the new id leaves one copy, not two.
+        #expect(GeminiAPICreditStore.load(accountID: "verified", aliases: ["burner"], isPrimary: false,
+                                          preferences: defaults) == burner)
+        GeminiAPICreditStore.save(burner, accountID: "verified", aliases: ["burner"], isPrimary: false,
+                                  preferences: defaults)
+        #expect(GeminiAPICreditStore.loadAll(preferences: defaults) == ["verified": burner])
     }
 
     @Test("a configured credit is not a quota, a bar or a balance-history series")

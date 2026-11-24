@@ -186,7 +186,6 @@ struct WalletPresentationTests {
         let grid = ProviderGridPresentation(snapshots: snapshots,
                                             serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now)
         #expect(!grid.groups.contains { $0.id == .openrouter })
-        #expect(grid.groups.allSatisfy { $0.balances.isEmpty })
         #expect(!grid.groups.flatMap(\.pools).contains { $0.id == "deepseek" || $0.id == "openrouter" })
 
         let rows = WalletPresentation(snapshots: GlancePresentation(snapshots: snapshots, now: now).walletSnapshots,
@@ -198,5 +197,68 @@ struct WalletPresentationTests {
         let openRouter = try #require(rows.first { $0.id == "openrouter#balance" })
         #expect(openRouter.figure == "$0.00")
         #expect(openRouter.tone == .normal)
+    }
+
+    @Test("a balance that could not be read is still a Wallet line, saying why, and in Subscriptions nowhere")
+    func unreadableBalanceStaysVisible() throws {
+        // The placeholder `QuotaManager.unavailableSnapshot` builds before a
+        // first good poll: no balance, so its metric is not currency.
+        let failed = QuotaSnapshot(id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter",
+            category: .apiSpendAndCredits,
+            metric: .subscription(tierName: UnavailableReason.offline.headline, renewalDate: nil),
+            status: .unavailable(.offline), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        let snapshots = F.batch.filter { $0.vendorId != .openrouter } + [failed]
+        let grid = ProviderGridPresentation(snapshots: snapshots,
+                                            serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now)
+        #expect(!grid.groups.flatMap(\.pools).contains { $0.id == "openrouter" })
+        let rows = WalletPresentation(snapshots: GlancePresentation(snapshots: snapshots, now: now).walletSnapshots,
+                                      now: now).rows
+        let line = try #require(rows.first { $0.id == "openrouter#balance" })
+        #expect(line.figure == UnavailableReason.offline.headline)
+        #expect(line.tone == .unknown)
+    }
+
+    @Test("every Wallet line opens the inspector of the snapshot it came from")
+    func linesOpenTheirSnapshot() throws {
+        let snapshots = GlancePresentation(snapshots: F.batchWithWallet, now: now).walletSnapshots
+        let rows = WalletPresentation(snapshots: snapshots, now: now).rows
+        #expect(!rows.isEmpty)
+        for row in rows {
+            let source = try #require(snapshots.first { $0.id == row.snapshotID }, "\(row.title)")
+            #expect(source.vendorId == row.vendor, "\(row.title)")
+        }
+        // The Console credit opens its Claude account's inspector.
+        let console = try #require(rows.first { $0.title == "Claude Console · Primary" })
+        #expect(snapshots.first { $0.id == console.snapshotID }?.claudeAccount?.id == F.primary.id)
+    }
+
+    @Test("a credit read on its own says LAST READING from its own read, not the quota poll's")
+    func creditFreshnessIsItsOwn() throws {
+        var snapshots = F.batchWithWallet
+        let ai = try #require(snapshots.firstIndex { $0.vendorId == .openai })
+        let claude = try #require(snapshots.firstIndex { $0.claudeAccount?.id == F.primary.id })
+        func tags(_ batch: [QuotaSnapshot]) -> [String: String?] {
+            let rows = WalletPresentation(snapshots: GlancePresentation(snapshots: batch, now: now).walletSnapshots,
+                                          now: now).rows
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.title, $0.tag) })
+        }
+        // Quota polls failed; both credits' own reads are fresh: no tag.
+        snapshots[ai].staleReading = StaleReading(reason: .offline, at: now)
+        snapshots[claude].staleReading = StaleReading(reason: .offline, at: now)
+        var t = tags(snapshots)
+        #expect(t["ChatGPT API"] == .some(nil))
+        #expect(t["Claude Console · Primary"] == .some(nil))
+        // The bonus credit rides the quota poll, so it is stale with it.
+        #expect(t["ChatGPT bonus"] == .some("last reading"))
+
+        // Quota fresh; the credits' own reads failed: tagged.
+        snapshots[ai].staleReading = nil
+        snapshots[claude].staleReading = nil
+        snapshots[ai].openAIMonthlyCredit?.refreshFailed = true
+        snapshots[claude].monthlyAPICredit?.refreshFailed = true
+        t = tags(snapshots)
+        #expect(t["ChatGPT API"] == .some("last reading"))
+        #expect(t["Claude Console · Primary"] == .some("last reading"))
+        #expect(t["ChatGPT bonus"] == .some(nil))
     }
 }

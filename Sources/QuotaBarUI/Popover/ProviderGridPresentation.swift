@@ -101,7 +101,6 @@ struct ProviderGridPresentation {
     struct Group: Identifiable {
         let id: VendorIdentifier
         let pools: [Pool]
-        let balances: [QuotaSnapshot]
 
         var title: String {
             switch id {
@@ -116,11 +115,7 @@ struct ProviderGridPresentation {
         var nextReturn: Date? { allSpent ? pools.compactMap(\.returnsAt).min() : nil }
 
         var subtitle: String? {
-            if pools.isEmpty {
-                guard let balance = balances.first else { return nil }
-                if balance.staleReading != nil { return "Last balance · " + MetricRowPresentation.value(for: balance.metric) }
-                return balance.status.unavailableReason?.headline ?? MetricRowPresentation.value(for: balance.metric)
-            }
+            if pools.isEmpty { return nil }
             if allSpent { return pools.count == 1 ? "1 spent" : "All \(pools.count) spent" }
             let usable = pools.filter(\.isUsable).count
             let spent = pools.filter(\.isSpent).count
@@ -167,7 +162,7 @@ struct ProviderGridPresentation {
             let pools = snapshots.filter { !Self.isDirectBalance($0) }
                 .map { Pool(snapshot: $0, group: id, now: now) }
             guard !pools.isEmpty else { return nil }
-            return Group(id: id, pools: pools, balances: [])
+            return Group(id: id, pools: pools)
         }
     }
 

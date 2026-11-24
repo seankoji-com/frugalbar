@@ -24,7 +24,7 @@ struct ProviderGridPresentationTests {
         let deepSeek = try #require(grid.groups.first { $0.id == .deepseek })
         #expect(deepSeek.pools.count == 7)
         // Direct balances live in the Wallet only (24 Nov 2026).
-        #expect(deepSeek.balances.isEmpty)
+        #expect(!deepSeek.pools.contains { ProviderGridPresentation.isDirectBalance($0.snapshot) })
         #expect(!grid.groups.contains { $0.id == .openrouter })
         #expect(grid.groups.allSatisfy {
             ![.opencode, .commandcode, .opendesign, .antigravityClaude, .antigravityArgon].contains($0.id)

@@ -189,7 +189,12 @@ public struct PopoverRootView: View {
                 }
             )
             if !wallet.rows.isEmpty {
-                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now)
+                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now) { id in
+                    guard let snap = store.snapshots.first(where: { $0.id == id }) else { return }
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        selectedSnapshot = snap
+                    }
+                }
             }
 
             // Developer limits are not coding pools: they never enter the
