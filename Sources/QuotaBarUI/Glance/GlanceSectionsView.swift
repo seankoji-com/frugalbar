@@ -726,23 +726,47 @@ private struct WalletRowView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color(red: 0.96, green: 0.78, blue: 0.29))
             }
-            Text(row.title)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.onSurface)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .layoutPriority(1)
-            if let tag = row.tag {
-                Text(tag.uppercased())
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(Theme.outline)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 0.75))
-                    .lineLimit(1)
-                    .fixedSize()
+            // The tag says its word when the title fits beside it, and shrinks
+            // to its glyph when it does not, so an account name is never cut
+            // to make room for "CONFIGURED". The tooltip and spoken label
+            // always carry the word.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    title.fixedSize()
+                    if let tag = row.tag { tagCapsule { Text(tag.uppercased()) } }
+                }
+                HStack(spacing: 6) {
+                    title
+                    if let tag = row.tag { tagCapsule { Image(systemName: Self.glyph(for: tag)) } }
+                }
             }
         }
+    }
+
+    private var title: some View {
+        Text(row.title)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.onSurface)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .layoutPriority(1)
+    }
+
+    private func tagCapsule<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .font(.system(size: 8.5, weight: .semibold))
+            .foregroundStyle(Theme.outline)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 0.75))
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    /// The compact form of a tag: a pencil for a figure the user typed, a
+    /// clock for a carried-over reading.
+    static func glyph(for tag: String) -> String {
+        tag == "configured" ? "pencil" : "clock.arrow.circlepath"
     }
 
     private func color(_ tone: WalletPresentation.Tone) -> Color {

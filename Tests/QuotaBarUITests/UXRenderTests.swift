@@ -527,6 +527,13 @@ struct UXRenderTests {
                 creditGrant: OpenAICreditGrant(total: 62_500, expiresAt: now.addingTimeInterval(37 * 86_400),
                                                grantedAt: now.addingTimeInterval(-55 * 86_400)))]
         }
+        // A second Google account with its own Gemini API credit: two pools.
+        if let i = walletBatch.firstIndex(where: {
+            $0.vendorId == .gemini && $0.antigravityAccount?.id == GlanceFixtures.account2.id
+        }) {
+            walletBatch[i].geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                             configuredAt: now.addingTimeInterval(-86_400))
+        }
         let wallet = WalletPresentation(
             snapshots: GlancePresentation(snapshots: walletBatch, now: now).walletSnapshots, now: now)
         // A week of recorded balances for each balance line, so its trend draws.

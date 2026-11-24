@@ -455,7 +455,9 @@ headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
 and the account when the reading carries a named one ("ChatGPT API",
 "ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
 CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
-text beside the title. ChatGPT has two lines: the monthly API credit grant and
+text beside the title. When the title needs the room, the tag shrinks to its
+glyph (pencil, clock) rather than cutting the account name; the tooltip and
+spoken label still say the word. ChatGPT has two lines: the monthly API credit grant and
 the bonus credit count. Each Google account's configured Gemini API credit is
 its own "Gemini API · <account>" line in the Wallet, never under an Antigravity
 row in Subscriptions. A model's reset
