@@ -131,6 +131,10 @@ struct GlanceAccessibilityInvariantTests {
             ("MenuBar critical on light menu bar (#f0f0f0)", resolveNSColor(MenuBarGlance.color(for: .critical), appearance: .aqua), hex(0xf0f0f0)),
             ("MenuBar critical on white menu bar", resolveNSColor(MenuBarGlance.color(for: .critical), appearance: .aqua), hex(0xffffff)),
 
+            // Inspector segmented control text (selected dark text on primary pill; unselected on well)
+            ("chart mode selected text on primary pill", resolve(Theme.surfaceContainerLowest), resolve(Theme.primary)),
+            ("chart mode unselected text on well", resolve(Theme.onSurfaceVariant), containerLowest),
+
             // Out-of-scope Settings light appearance secondary text coherence
             ("systemSecondaryText on light Settings form", resolve(Theme.systemSecondaryText, appearance: .aqua), lightSettingsBg),
         ]
@@ -164,6 +168,7 @@ struct GlanceAccessibilityInvariantTests {
             ("primary fill on card", resolve(Theme.primary), card),
             ("primary fill on track", resolve(Theme.primary), track),
             ("pace marker (onSurface) on track", resolve(Theme.onSurface), track),
+            ("chart mode selected pill (primary) on well", resolve(Theme.primary), resolve(Theme.surfaceContainerLowest)),
             ("MenuBar critical on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .critical)), card),
         ]
 
@@ -300,5 +305,28 @@ struct GlanceAccessibilityInvariantTests {
         let undatedResult = try #require(InspectorRunOut.compute(for: undatedBar, snapshotID: "opencode-go", readings: undatedReadings, now: now))
         #expect(!undatedResult.runsOutBeforeReset)
         #expect(!undatedResult.text.contains("before the reset"))
+    }
+
+    @Test("Collapsed group subtitle distinguishes vendor-blocked pools from exhausted ones")
+    func collapsedGroupSubtitleDistinguishesBlockedFromSpent() {
+        let now = Date(timeIntervalSinceReferenceDate: 790_000_000)
+        let blockedBar = DualBarMetrics(
+            primaryFraction: 0.40,
+            label: "MO",
+            isBlocked: true,
+            resetsAt: now.addingTimeInterval(48 * 3600),
+            windowLength: 30 * 86_400
+        )
+        let blockedSnap = GlanceFixtures.snapshot("opencode", .opencode, "OpenCode Go", [blockedBar])
+        let exhaustedBar = DualBarMetrics(
+            primaryFraction: 1.0,
+            label: "WK",
+            resetsAt: now.addingTimeInterval(24 * 3600),
+            windowLength: 168 * 3600
+        )
+        let exhaustedSnap = GlanceFixtures.snapshot("claude-spent", .claude, "Secondary", [exhaustedBar])
+        let grid = ProviderGridPresentation(snapshots: [blockedSnap, exhaustedSnap], serviceOrder: [.deepseek, .claude], now: now)
+        #expect(grid.groups.first(where: { $0.id == .deepseek })?.subtitle == "1 blocked")
+        #expect(grid.groups.first(where: { $0.id == .claude })?.subtitle == "1 spent")
     }
 }

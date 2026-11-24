@@ -20,6 +20,12 @@ struct ProviderGridPresentation {
         var isStale: Bool { snapshot.staleReading != nil }
         var isUsable: Bool { !isStale && (state == .usable || state == .onBonus) }
         var isSpent: Bool { !isStale && state == .spent }
+        /// True when the pool is unusable because the vendor explicitly blocked
+        /// a plan window, rather than the user exhausting measured quota.
+        var isBlocked: Bool {
+            isSpent && (windows.values.contains { $0.bar.isBlocked }
+                        || extraBars.contains { $0.allowanceRole == .plan && $0.isBlocked })
+        }
 
         var nonstandardPlanBar: DualBarMetrics? {
             extraBars.first {
@@ -116,12 +122,23 @@ struct ProviderGridPresentation {
 
         var subtitle: String? {
             if pools.isEmpty { return nil }
-            if allSpent { return pools.count == 1 ? "1 spent" : "All \(pools.count) spent" }
+            let blocked = pools.filter(\.isBlocked).count
+            let exhausted = pools.filter { $0.isSpent && !$0.isBlocked }.count
+            if allSpent {
+                if blocked == pools.count {
+                    return pools.count == 1 ? "1 blocked" : "All \(pools.count) blocked"
+                }
+                if exhausted == pools.count {
+                    return pools.count == 1 ? "1 spent" : "All \(pools.count) spent"
+                }
+                return ["\(blocked) blocked", "\(exhausted) spent"].joined(separator: " · ")
+            }
             let usable = pools.filter(\.isUsable).count
-            let spent = pools.filter(\.isSpent).count
             let stale = pools.filter(\.isStale).count
-            let unreadable = pools.count - usable - spent - stale
-            return ["\(usable) usable", spent > 0 ? "\(spent) spent" : nil,
+            let unreadable = pools.count - usable - blocked - exhausted - stale
+            return ["\(usable) usable",
+                    blocked > 0 ? "\(blocked) blocked" : nil,
+                    exhausted > 0 ? "\(exhausted) spent" : nil,
                     stale > 0 ? "\(stale) stale" : nil,
                     unreadable > 0 ? "\(unreadable) unreadable" : nil]
                 .compactMap { $0 }.joined(separator: " · ")

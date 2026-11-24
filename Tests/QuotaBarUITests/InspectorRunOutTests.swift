@@ -68,6 +68,33 @@ struct InspectorRunOutTests {
         #expect(result.text.contains("no reset published"))
     }
 
+    @Test("mismatched history reset does not warn against a revised snapshot reset")
+    func mismatchedResetDoesNotContradictSummary() {
+        let historyReset = now.addingTimeInterval(5 * 3600)
+        let revisedReset = now.addingTimeInterval(2 * 3600)
+        // History says 60%, 62%, 64% at -20m, -10m, now with a 5h reset -> projected exhaustion ~3h.
+        let history = [0, 1, 2].map { i in
+            QuotaHistoryStore.ReadingRecord(
+                vendor: "claude", barLabel: "WK",
+                measuredAt: now.addingTimeInterval(-Double(20 - i * 10) * 60),
+                fraction: 0.60 + Double(i) * 0.02,
+                isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: historyReset, windowLength: 168 * 3600, elapsedOnly: false
+            )
+        }
+        // Snapshot WK bar has a revised 2h reset (earlier than the 3h projected exhaustion).
+        let revisedBar = DualBarMetrics(
+            primaryFraction: 0.64,
+            expectedPaceFraction: DualBarMetrics.proRataPace(resetsAt: revisedReset, windowLength: 168 * 3600, now: now),
+            label: "WK",
+            resetsAt: revisedReset,
+            windowLength: 168 * 3600
+        )
+        let result = InspectorRunOut.compute(for: revisedBar, snapshotID: "claude", readings: history, now: now)
+        #expect(result?.runsOutBeforeReset != true)
+        #expect(result?.text.contains("At your recent rate, runs out") != true)
+    }
+
     @Test("the window lines no longer carry their own unlabelled projection")
     func windowLinesCarryNoProjection() {
         let line = MetricDetailPresentation.windowLine(bar(0.9), now: now)

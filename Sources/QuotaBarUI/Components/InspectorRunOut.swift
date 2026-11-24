@@ -27,26 +27,33 @@ enum InspectorRunOut {
            let burndown = BurndownPresentation.burndown(readings: readings, instanceID: snapshotID,
                                                        barLabel: bar.label, now: now),
            burndown.projection != nil {
-            let hasPublishedReset = bar.resetsAt != nil && burndown.resetsAt != nil
-            if let out = burndown.projectedExhaustion, out > now {
-                if hasPublishedReset {
+            if let barReset = bar.resetsAt {
+                // Only use the history-derived recent-rate projection when its
+                // recorded reset matches the live snapshot bar's reset; if the
+                // vendor revised the reset, fall through to the snapshot's own
+                // window metrics so the verdict never contradicts the summary.
+                if let burndownReset = burndown.resetsAt,
+                   abs(barReset.timeIntervalSince(burndownReset)) <= 60 {
+                    if let out = burndown.projectedExhaustion, out > now, out < barReset {
+                        return Result(
+                            text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
+                            runsOutBeforeReset: true
+                        )
+                    }
                     return Result(
-                        text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
-                        runsOutBeforeReset: true
+                        text: "At your recent rate, lasts until the reset",
+                        runsOutBeforeReset: false
                     )
                 }
-                return Result(
-                    text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)) (no reset published)",
-                    runsOutBeforeReset: false
-                )
+            } else if burndown.resetsAt == nil {
+                if let out = burndown.projectedExhaustion, out > now {
+                    return Result(
+                        text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)) (no reset published)",
+                        runsOutBeforeReset: false
+                    )
+                }
+                return nil
             }
-            if hasPublishedReset {
-                return Result(
-                    text: "At your recent rate, lasts until the reset",
-                    runsOutBeforeReset: false
-                )
-            }
-            return nil
         }
 
         // No usable history: the window's own average, from its published

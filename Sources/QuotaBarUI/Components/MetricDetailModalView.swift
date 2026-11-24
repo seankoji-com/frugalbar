@@ -718,15 +718,12 @@ public struct MetricDetailModalView: View {
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Picker("Chart", selection: $chartMode) {
-                    ForEach(ChartMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 170)
-                .accessibilityLabel("Chart type")
+                GlanceSegmentedControl(
+                    options: ChartMode.allCases,
+                    selection: $chartMode,
+                    title: \.rawValue,
+                    accessibilityLabel: "Chart type"
+                )
 
                 Spacer(minLength: 0)
 
@@ -745,15 +742,12 @@ public struct MetricDetailModalView: View {
                         .accessibilityLabel("Burndown window")
                     }
                 case .history:
-                    Picker("Range", selection: $historyRange) {
-                        ForEach(Self.historyRanges) { range in
-                            Text(range.rawValue).tag(range)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityLabel("History range")
+                    GlanceSegmentedControl(
+                        options: Self.historyRanges,
+                        selection: $historyRange,
+                        title: \.rawValue,
+                        accessibilityLabel: "History range"
+                    )
                 }
             }
 
@@ -875,6 +869,55 @@ public struct MetricDetailModalView: View {
             context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, dash: dash))
         }
         .frame(width: 14, height: 6)
+    }
+
+    /// High-contrast dark-mode segmented control replacing macOS's native
+    /// segmented picker (whose selected capsule measured ~2.3:1 on dark cards).
+    /// Selected pill (`Theme.primary`) clears > 11:1 against the well
+    /// (`Theme.surfaceContainerLowest`), and both selected and unselected text
+    /// clear > 11:1 against their backgrounds.
+    private struct GlanceSegmentedControl<Option: Hashable & Identifiable>: View {
+        let options: [Option]
+        @Binding var selection: Option
+        let title: (Option) -> String
+        let accessibilityLabel: String
+
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(options) { option in
+                    let isSelected = selection == option
+                    Button {
+                        selection = option
+                    } label: {
+                        Text(title(option))
+                            .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? Theme.surfaceContainerLowest : Theme.onSurfaceVariant)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3.5)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(isSelected ? Theme.primary : Color.clear)
+                            )
+                            .contentShape(Capsule(style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title(option))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+            .padding(2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Theme.surfaceContainerLowest)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Theme.outlineVariant.opacity(0.6), lineWidth: 0.75)
+            )
+            .fixedSize()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel)
+        }
     }
 
     @ViewBuilder
