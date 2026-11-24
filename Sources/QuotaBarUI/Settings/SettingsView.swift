@@ -476,8 +476,19 @@ public struct SettingsView: View {
             AntigravityAccountSettingsView()
             googleConnectionSection
             Section("API billing") {
-                GeminiAPICreditSettingsView {
-                    Task { await store?.reloadConfiguredCredit() }
+                // One credit per Google account: each AI Studio key bills to
+                // its own Cloud Billing account (owner, 24 Nov 2026).
+                let accounts = AntigravityAccountStore.all()
+                if accounts.isEmpty {
+                    GeminiAPICreditSettingsView {
+                        Task { await store?.reloadConfiguredCredit() }
+                    }
+                } else {
+                    ForEach(accounts) { account in
+                        GeminiAPICreditSettingsView(account: account) {
+                            Task { await store?.reloadConfiguredCredit() }
+                        }
+                    }
                 }
             }
         case .opencode:

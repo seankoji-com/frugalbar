@@ -279,7 +279,14 @@ by every project and key on it. The Gemini API
 (`generativelanguage.googleapis.com`) has no billing operation and
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
-It is drawn in the Wallet as one "Gemini API" line tagged CONFIGURED, with an
+Each Google account's AI Studio key bills to its own Cloud Billing account, so
+each account has its own credit (owner, 24 Nov 2026): `GeminiAPICreditStore`
+keeps one per Antigravity account id (`accountsDefaultsKey`), and the older
+single credit (`defaultsKey`) reads as the primary account's until the primary
+saves its own; removing the primary's also removes the older one, so it cannot
+return through that fallback. Settings has one editor per account. Each is
+drawn in the Wallet as its own "Gemini API · <account>" line tagged CONFIGURED,
+once per account however many routes read it, with an
 elapsed-month meter ("MO 63%" and the countdown beneath). The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
@@ -298,7 +305,8 @@ prefix, so "1,234.50" and "30abc" would have saved 1 and 30. It lives in its own
 snapshot field, attached on read from `GeminiAPICreditStore` rather than stored
 in the poll cache — so a failed Antigravity poll neither erases nor stales it,
 a change takes effect without a poll, and only a Gemini snapshot ever carries
-it (Argon and the shared Claude/GPT pool are separate allowances). Read it on read:
+it (Argon and the shared Claude/GPT pool are separate allowances), each account's
+on that account's Gemini snapshot. Read it on read:
 `QuotaManager.attachingGeminiCredit` is applied in `visibleCache` and
 `sortedSnapshots`, not in the fetch path. Saving from Settings replaces the
 snapshot list (`QuotaStore.reloadConfiguredCredit`): it never force-repolls a
@@ -448,8 +456,9 @@ and the account when the reading carries a named one ("ChatGPT API",
 "ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
 CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
 text beside the title. ChatGPT has two lines: the monthly API credit grant and
-the bonus credit count. The Gemini AI Studio key's configured credit is one
-"Gemini API" line of its own, never an Antigravity account's. A model's reset
+the bonus credit count. Each Google account's configured Gemini API credit is
+its own "Gemini API · <account>" line in the Wallet, never under an Antigravity
+row in Subscriptions. A model's reset
 tickets (Fable) sit beside that model's line in its Claude account's Subscriptions
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
 model line to sit beside, are Wallet lines. The Wallet is a `Grid`: a fixed

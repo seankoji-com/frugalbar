@@ -16,7 +16,7 @@ struct WalletPresentationTests {
     @Test("one line per credit, each naming its provider and any named account, with no group headers")
     func singleLines() {
         #expect(wallet.rows.map(\.title) == [
-            "Claude Console · Primary", "Gemini API", "ChatGPT bonus", "ChatGPT API",
+            "Claude Console · Primary", "Gemini API · Account 1", "ChatGPT bonus", "ChatGPT API",
             "OpenRouter", "DeepSeek",
         ])
     }
@@ -79,7 +79,7 @@ struct WalletPresentationTests {
 
     @Test("a time-only credit draws an elapsed-month meter, never a spend bar")
     func elapsedMeters() throws {
-        for title in ["Claude Console · Primary", "Gemini API"] {
+        for title in ["Claude Console · Primary", "Gemini API · Account 1"] {
             let row = try #require(wallet.rows.first { $0.title == title })
             guard case .elapsed(let fraction, let countdown)? = row.meter else {
                 Issue.record("\(title) has no elapsed meter"); continue
@@ -132,16 +132,28 @@ struct WalletPresentationTests {
         #expect(chatGPT.allSatisfy { !$0.title.contains("·") })
     }
 
-    @Test("the Gemini API key's credit is one configured line, never an Antigravity account's")
-    func geminiKeyCredit() throws {
+    @Test("each Google account's Gemini API credit is its own configured line, named for the account")
+    func geminiCreditPerAccount() throws {
+        // main and burner each bill to their own Cloud Billing account
+        // (owner, 24 Nov 2026): two pools, two lines.
         var snapshots = GlancePresentation(snapshots: F.batchWithWallet, now: now).walletSnapshots
-        let credit = try #require(snapshots.compactMap(\.geminiAPICredit).first)
         var second = try #require(F.batch.first { $0.vendorId == .gemini && $0.antigravityAccount?.id == F.account2.id })
-        second.geminiAPICredit = credit
+        second.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                 configuredAt: now.addingTimeInterval(-86_400))
         snapshots.append(second)
-        let rows = WalletPresentation(snapshots: snapshots, now: now).rows.filter { $0.title == "Gemini API" }
-        #expect(rows.count == 1)
-        #expect(rows.first?.tag == "configured")
+        let rows = WalletPresentation(snapshots: snapshots, now: now).rows.filter { $0.title.hasPrefix("Gemini API") }
+        #expect(rows.map(\.title) == ["Gemini API · Account 1", "Gemini API · Account 2"])
+        #expect(rows.map(\.figure) == ["A$25.00/mo", "A$14.00/mo"])
+        #expect(rows.allSatisfy { $0.tag == "configured" })
+    }
+
+    @Test("one account's credit is one line however many of its routes carry it")
+    func geminiCreditOncePerAccount() throws {
+        var snapshots = GlancePresentation(snapshots: F.batchWithWallet, now: now).walletSnapshots
+        // The same account read through a second route carries the credit too.
+        snapshots.append(try #require(snapshots.first { $0.geminiAPICredit != nil }))
+        let rows = WalletPresentation(snapshots: snapshots, now: now).rows.filter { $0.title.hasPrefix("Gemini API") }
+        #expect(rows.map(\.title) == ["Gemini API · Account 1"])
     }
 
     @Test("an unreadable pool carrying a credit adds no 'Not configured' line")

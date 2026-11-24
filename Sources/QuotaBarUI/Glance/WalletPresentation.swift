@@ -51,7 +51,7 @@ struct WalletPresentation: Equatable, Sendable {
 
     init(snapshots: [QuotaSnapshot], now: Date) {
         var rows: [Row] = []
-        var geminiCreditDone = false
+        var geminiCreditAccounts: Set<String> = []
         for snapshot in snapshots where snapshot.category != .developerLimits {
             let p = MetricRowPresentation(snapshot: snapshot, now: now)
             let provider = Self.providerName(snapshot.vendorId)
@@ -140,14 +140,19 @@ struct WalletPresentation: Equatable, Sendable {
                 }
             }
 
-            // The AI Studio key's credit belongs to the Gemini API key, not to
-            // an Antigravity account: one row of its own, once. Always tagged
-            // configured: it is the user's figure, never a reading.
-            if !geminiCreditDone, let credit = p.geminiAPICredit {
-                geminiCreditDone = true
+            // Each Google account's AI Studio key bills to its own Cloud
+            // Billing account, so each has its own line (owner, 24 Nov 2026),
+            // named for the account: one line per account however many of its
+            // routes carry the credit. Always tagged configured: it is the
+            // user's figure, never a reading.
+            let geminiKey = snapshot.antigravityAccount?.id ?? "gemini"
+            if !geminiCreditAccounts.contains(geminiKey), let credit = p.geminiAPICredit {
+                geminiCreditAccounts.insert(geminiKey)
                 let b = credit.budget
                 rows.append(Row(
-                    id: "gemini-api-key", vendor: .gemini, title: "Gemini API", tag: "configured",
+                    id: "gemini-api-key:\(geminiKey)", vendor: .gemini,
+                    title: snapshot.antigravityAccount.map { "Gemini API · \($0.name)" } ?? "Gemini API",
+                    tag: "configured",
                     figure: "\(b.amountText)/mo",
                     meter: .elapsed(fraction: b.fraction, countdown: b.countdown),
                     spoken: credit.spoken))

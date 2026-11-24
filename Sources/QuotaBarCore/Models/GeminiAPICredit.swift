@@ -195,4 +195,46 @@ public enum GeminiAPICreditStore {
         }
         preferences.set(data, forKey: defaultsKey)
     }
+
+    // MARK: One credit per Google account (owner, 24 Nov 2026)
+
+    /// Each Google account with its own paid AI Studio key bills to its own
+    /// Cloud Billing account, so its credit is a separate pool. Keyed by the
+    /// Antigravity account id (`agy-account:…`). The single credit under
+    /// `defaultsKey` predates this and belongs to the primary account: it is
+    /// read as that account's until the primary saves its own.
+    public static let accountsDefaultsKey = "QuotaBarGeminiAPICreditsByAccount"
+
+    public static func loadAll(preferences: UserDefaults = CredentialStore.preferences) -> [String: GeminiAPICredit] {
+        guard let stored = preferences.dictionary(forKey: accountsDefaultsKey) else { return [:] }
+        return stored.compactMapValues { value in
+            (value as? Data).flatMap { try? JSONDecoder().decode(GeminiAPICredit.self, from: $0) }
+        }
+    }
+
+    /// The credit for one account: its own, or for the primary account the
+    /// older single credit.
+    public static func load(accountID: String, isPrimary: Bool,
+                            preferences: UserDefaults = CredentialStore.preferences) -> GeminiAPICredit? {
+        loadAll(preferences: preferences)[accountID] ?? (isPrimary ? load(preferences: preferences) : nil)
+    }
+
+    /// Saves or clears one account's credit. The primary account's save also
+    /// clears the older single credit, so a removed figure cannot come back
+    /// through the fallback.
+    public static func save(_ credit: GeminiAPICredit?, accountID: String, isPrimary: Bool,
+                            preferences: UserDefaults = CredentialStore.preferences) {
+        var stored = preferences.dictionary(forKey: accountsDefaultsKey) ?? [:]
+        if let credit {
+            guard let data = try? JSONEncoder().encode(credit) else {
+                NSLog("frugalbar: configured Gemini API credit failed to encode — save was dropped")
+                return
+            }
+            stored[accountID] = data
+        } else {
+            stored[accountID] = nil
+        }
+        preferences.set(stored, forKey: accountsDefaultsKey)
+        if isPrimary { save(nil, preferences: preferences) }
+    }
 }
