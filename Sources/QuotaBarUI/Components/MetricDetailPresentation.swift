@@ -155,7 +155,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // line as in the popover. They are never the summary's focus or its
         // verdict (`focusBar` reads `quotaBars`, which excludes them).
         self.windows = snapshot.status.confidence == .measured
-            ? (snapshot.displayBars + snapshot.scopedBars)
+            ? (snapshot.displayBars.map(snapshot.applyingAccountBlock(to:)) + snapshot.scopedBars)
                 .map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
             : []
         self.windowsAsOf = failedPoll == nil || windows.isEmpty ? nil : snapshot.lastUpdated
@@ -348,7 +348,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     ) -> [ProvenanceRow] {
         var rows: [ProvenanceRow] = [
             ProvenanceRow(label: "Source", value: snapshot.cliSource),
-            ProvenanceRow(label: "Last fetched", value: lastFetchedText(snapshot.lastUpdated, now: now)),
+            // An unreadable snapshot is stamped when the fetch was tried, not
+            // when figures arrived: "fetched" claimed a reading that never came.
+            ProvenanceRow(label: snapshot.status.confidence == .measured ? "Last fetched" : "Last attempted",
+                          value: lastFetchedText(snapshot.lastUpdated, now: now)),
             ProvenanceRow(label: "Latency", value: snapshot.latencyMs.map { "\($0) ms" }),
             // Only a real `planName`: a badge or vendor name in this slot is a
             // plan nobody measured.
@@ -373,11 +376,16 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         switch history {
         case .loading:
             break
+        // Quota readings, named as such: beside a Balance history card's own
+        // count, a bare "History · 0 readings" read as "the balance was never
+        // logged". A provider with no quota window has none to count.
         case .unreadable:
-            rows.append(ProvenanceRow(label: "History", value: "Could not be read"))
+            rows.append(ProvenanceRow(label: "Quota history", value: "Could not be read"))
+        case .counted(_, _) where ProviderGridPresentation.isDirectBalance(snapshot):
+            break
         case .counted(let count, let since):
             rows.append(ProvenanceRow(
-                label: "History",
+                label: "Quota history",
                 value: "\(count) reading\(count == 1 ? "" : "s") recorded since \(sinceText(since, now: now))"))
         }
         return rows

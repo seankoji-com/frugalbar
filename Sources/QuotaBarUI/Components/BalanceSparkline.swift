@@ -100,6 +100,18 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
     ///
     /// A flat series is said as *unchanged* rather than as "▲ 0": every figure
     /// is the same, so there was no movement to describe.
+    /// The inline strip's direction in words, for the Wallet line's label:
+    /// the strip itself is hidden from VoiceOver, so without this the trend a
+    /// sighted user reads at a glance was only reachable in the inspector.
+    public var spokenTrend: String {
+        guard !isFlat else { return "unchanged across \(sampleCount) readings" }
+        switch Trend.of(change: change) {
+        case .rose: return "rising across \(sampleCount) readings"
+        case .fell: return "falling across \(sampleCount) readings"
+        case .returned: return "back where it started across \(sampleCount) readings"
+        }
+    }
+
     public func caption(in unit: BalanceSeries.Unit) -> String {
         let latest = unit.format(latestValue)
         guard !isFlat else {

@@ -3,6 +3,8 @@ import QuotaBarCore
 
 struct ProviderGridView: View {
     let presentation: ProviderGridPresentation
+    /// The pick and the soonest return, drawn under the title.
+    var useNow: UseNowPresentation? = nil
     var onSelect: (QuotaSnapshot) -> Void = { _ in }
     @State var expanded: VendorIdentifier?
     @State private var hoveredGroup: VendorIdentifier?
@@ -18,6 +20,14 @@ struct ProviderGridView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 9)
                 Divider()
+                if let useNow {
+                    UseNowStrip(presentation: useNow) { id in
+                        if let snap = presentation.groups.lazy.flatMap(\.pools).first(where: { $0.id == id })?.snapshot {
+                            onSelect(snap)
+                        }
+                    }
+                    Divider()
+                }
                 line {
                     Text("% used").foregroundStyle(Theme.outline)
                 } figures: {

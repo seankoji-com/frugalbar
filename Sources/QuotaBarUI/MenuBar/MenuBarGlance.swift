@@ -20,7 +20,13 @@ public enum MenuBarGlance {
         public let accessibilityLabel: String
     }
 
-    public static func presentation(snapshots: [QuotaSnapshot], now: Date) -> Presentation {
+    /// - Parameter hasLoaded: false before the first poll has finished. An
+    ///   empty list then means "not read yet", never "no subscriptions".
+    public static func presentation(snapshots: [QuotaSnapshot], now: Date, hasLoaded: Bool = true) -> Presentation {
+        if !hasLoaded && snapshots.isEmpty {
+            return Presentation(vendor: nil, symbolName: "ellipsis.circle", text: "Loading…", tone: .unknown,
+                                accessibilityLabel: "FrugalBar. Reading your subscriptions")
+        }
         let title = GlancePresentation(snapshots: snapshots, now: now).menuTitle
         let symbol: String? = switch title.tone {
         case .normal: title.vendor == nil ? "gauge.with.dots.needle.67percent" : nil

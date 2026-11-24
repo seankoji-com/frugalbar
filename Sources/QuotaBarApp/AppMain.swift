@@ -391,7 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The title is the top Use-now pick, from the same presentation the
         // popover's strip is drawn from, so the two can never disagree.
-        let glance = MenuBarGlance.presentation(snapshots: snapshots, now: Date())
+        let glance = MenuBarGlance.presentation(snapshots: snapshots, now: Date(), hasLoaded: store.hasLoaded)
         if let vendorId = glance.vendor, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
             let icon = NSImage(size: NSSize(width: 18, height: 18))
             icon.isTemplate = false
@@ -437,6 +437,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(sender)
             return
         }
+        // However the popover last closed (a click outside, the status item,
+        // Escape on the list), a new glance opens on the list. A retained
+        // selection reopened the old inspector over it. Cleared here, before
+        // showing, rather than in `popoverDidClose`, whose late delivery could
+        // clear a selection made after the popover had already reopened.
+        inspection.dismiss(reduceMotion: true)
         // Show immediately with cached values, then update in place.
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()

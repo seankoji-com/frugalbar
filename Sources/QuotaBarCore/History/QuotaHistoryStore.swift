@@ -216,7 +216,7 @@ public actor QuotaHistoryStore {
                     elapsedOnly: false
                 ))
             } else {
-                for bar in bars {
+                for bar in bars.map(snapshot.applyingAccountBlock(to:)) {
                     preparedRows.append(RowToWrite(
                         vendor: key,
                         barLabel: bar.label,

@@ -54,6 +54,33 @@ enum SystemHealthPresentation {
         return parts.joined(separator: " · ")
     }
 
+    /// What the popover footer says about the last check, for sight and
+    /// speech alike: only the check's own failures. Quota and balance
+    /// pressure live in Subscriptions and the Wallet; the worst-urgency
+    /// wording here counted a low OpenRouter balance as "1 critical", and its
+    /// glyph showed a green check beside an offline provider.
+    enum CheckState: Equatable { case noReadings, partial, complete }
+
+    nonisolated static func checkState(for summary: SystemHealthSummary) -> CheckState {
+        if !summary.hasAnyReading { return .noReadings }
+        return summary.failedCount > 0 || summary.staleCount > 0 ? .partial : .complete
+    }
+
+    /// "1 not readable · 1 stale", or nil when the check read everything.
+    nonisolated static func checkProblems(for summary: SystemHealthSummary) -> String? {
+        let parts = [summary.failedCount > 0 ? "\(summary.failedCount) not readable" : nil,
+                     summary.staleCount > 0 ? "\(summary.staleCount) stale" : nil].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    nonisolated static func checkSpoken(for summary: SystemHealthSummary) -> String {
+        switch checkState(for: summary) {
+        case .noReadings: "No provider could be read"
+        case .complete: "Every provider was read"
+        case .partial: checkProblems(for: summary) ?? "Some providers could not be read"
+        }
+    }
+
     /// `now` is a parameter, not a captured `Date()`, so a test can assert an
     /// exact boundary ("59s", not "60s") instead of racing the clock between
     /// building the input date and reading it back.

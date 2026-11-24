@@ -131,7 +131,12 @@ public struct PopoverRootView: View {
         .allowsHitTesting(selectedSnapshot == nil)
         .accessibilityHidden(selectedSnapshot != nil)
         .overlay {
-            if let snap = selectedSnapshot {
+            if let selected = selectedSnapshot {
+                // The store's current copy of the selected pool, not the copy
+                // taken when it was opened: a poll that lands while the
+                // inspector is open must reach it (its summary, windows and
+                // forecast), as it reaches the list beneath and the menu bar.
+                let snap = store.snapshots.first { $0.id == selected.id } ?? selected
                 MetricDetailModalView(
                     snapshot: snap,
                     readingsLoader: store.readings(for:since:),
@@ -202,12 +207,13 @@ public struct PopoverRootView: View {
         let grid = ProviderGridPresentation(snapshots: store.snapshots, serviceOrder: order, now: now)
         // Every credit and balance, direct balances (OpenRouter, DeepSeek)
         // included, under the provider it belongs to.
-        let wallet = WalletPresentation(
-            snapshots: GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order).walletSnapshots,
-            now: now)
+        let glance = GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order)
+        let wallet = WalletPresentation(snapshots: glance.walletSnapshots, now: now)
         return VStack(spacing: Theme.sectionGap) {
             ProviderGridView(
                 presentation: grid,
+                // The menu bar's pick, from the same presentation.
+                useNow: UseNowPresentation(glance: glance),
                 onSelect: { snap in
                     if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
                         withAnimation(anim) { selectedSnapshot = snap }

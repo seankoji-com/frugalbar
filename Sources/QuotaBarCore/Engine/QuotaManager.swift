@@ -1316,6 +1316,10 @@ public struct SystemHealthSummary: Sendable {
     /// read" grey. Counting it as unreadable here is exactly the inversion that
     /// once made the icon a permanent error triangle.
     public let staleCount: Int
+    /// Providers whose newest poll failed with nothing retained: unavailable
+    /// for any reason but `.notConfigured`. A provider nobody set up is not a
+    /// failed check; one that is offline or rejected the credential is.
+    public let failedCount: Int
     /// Oldest reading in the set — the honest "data as of" timestamp.
     public let oldestReading: Date?
     /// Newest provider check, including failed polls that retained an older
@@ -1327,7 +1331,7 @@ public struct SystemHealthSummary: Sendable {
     public var hasAnyReading: Bool { totalProviders > unavailableCount }
 
     public static func compute(from snapshots: [QuotaSnapshot]) -> SystemHealthSummary {
-        var healthy = 0, warning = 0, critical = 0, unavailable = 0, stale = 0
+        var healthy = 0, warning = 0, critical = 0, unavailable = 0, stale = 0, failed = 0
         var worst: Urgency = .none
         var oldest: Date?
         var lastAttempt: Date?
@@ -1338,6 +1342,7 @@ public struct SystemHealthSummary: Sendable {
             switch snap.status.confidence {
             case .unavailable:
                 unavailable += 1
+                if snap.status.unavailableReason != .notConfigured { failed += 1 }
             case .measured:
                 if snap.staleReading != nil { stale += 1 }
                 switch snap.status.urgency {
@@ -1364,6 +1369,7 @@ public struct SystemHealthSummary: Sendable {
             warningCount: warning,
             criticalCount: critical,
             staleCount: stale,
+            failedCount: failed,
             oldestReading: oldest,
             lastAttemptAt: lastAttempt,
             totalProviders: snapshots.count

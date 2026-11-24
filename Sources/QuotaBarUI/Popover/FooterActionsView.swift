@@ -40,9 +40,11 @@ struct FooterActionsView: View {
     /// Subscriptions already showed the spent pool. Stale figures are the
     /// check's own failure, and the only one it reports.
     private var checkSymbol: (name: String, color: Color) {
-        if !summary.hasAnyReading { return ("minus.circle", Theme.outline) }
-        if summary.staleCount > 0 { return ("exclamationmark.triangle.fill", Theme.tertiary) }
-        return ("checkmark.circle.fill", Theme.secondary)
+        switch SystemHealthPresentation.checkState(for: summary) {
+        case .noReadings: ("minus.circle", Theme.outline)
+        case .partial: ("exclamationmark.triangle.fill", Theme.tertiary)
+        case .complete: ("checkmark.circle.fill", Theme.secondary)
+        }
     }
 
     private func statusCluster(now: Date, wordmark: Bool, version: Bool) -> some View {
@@ -77,12 +79,15 @@ struct FooterActionsView: View {
 
             // A completed check can still leave old figures. Keep that
             // failure visible beside the check time.
-            if summary.staleCount > 0 {
-                Text("\(summary.staleCount) stale")
+            // The check's failures, beside the check time: an offline provider
+            // with nothing retained, and figures carried over from an earlier
+            // poll. The same words VoiceOver reads.
+            if let problems = SystemHealthPresentation.checkProblems(for: summary) {
+                Text(problems)
                     .font(Theme.Typography.footerMeta)
                     .foregroundStyle(Theme.tertiary)
                     .fixedSize()
-                    .help("A provider's newest poll failed, so its figures are from an earlier one")
+                    .help("Not readable: the newest poll returned nothing. Stale: it failed, so the figures are from an earlier one.")
             }
         }
         .fixedSize()
@@ -232,9 +237,10 @@ struct FooterActionsView: View {
     private func footerAccessibilityLabel(now: Date) -> String {
         // The version token is on screen, so it is spoken too — in the long
         // form, since "vee one point four" is not how anyone says a version.
-        "FrugalBar, \(AppInfo.versionDisplay). \(SystemHealthPresentation.text(for: summary)). "
+        "FrugalBar, \(AppInfo.versionDisplay). "
             + SystemHealthPresentation.pollStatus(
                 lastAttemptAt: summary.lastAttemptAt, isRefreshing: isRefreshing, now: now)
+            + ". \(SystemHealthPresentation.checkSpoken(for: summary))"
     }
 }
 

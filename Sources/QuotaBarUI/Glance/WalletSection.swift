@@ -55,6 +55,7 @@ struct GlanceCard<Content: View>: View {
 struct UsageBar: View {
     let window: GlancePresentation.Window
     var height: CGFloat = 4
+    static let knockoutWidth: CGFloat = 3.5
 
     var body: some View {
         GeometryReader { proxy in
@@ -64,10 +65,16 @@ struct UsageBar: View {
                     Capsule().fill(GlanceColors.fill(for: window))
                         .frame(width: max(height, proxy.size.width * used), height: height)
                 }
+                // A light core in a dark knockout: over the track the core
+                // carries the contrast, over the fill the knockout does. The
+                // light line alone measured 1.3:1 on the green and amber fills,
+                // so the mark vanished exactly once usage had passed it.
                 if let pace = window.bar.paceMarker {
-                    Rectangle().fill(Theme.onSurface)
-                        .frame(width: 1.5, height: height + 4)
-                        .offset(x: proxy.size.width * pace - 0.75)
+                    ZStack {
+                        Rectangle().fill(Theme.surface).frame(width: Self.knockoutWidth, height: height + 4)
+                        Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: height + 4)
+                    }
+                    .offset(x: proxy.size.width * pace - Self.knockoutWidth / 2)
                 }
             }
         }
@@ -264,10 +271,18 @@ private struct WalletRowView: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+        .accessibilityLabel(spokenLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Open usage details")
         .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
+    }
+
+    /// The line's own words plus the drawn strip's direction, when a strip
+    /// is drawn (a meter, when present, already speaks for itself).
+    private var spokenLabel: String {
+        let base = row.spoken.isEmpty ? row.title : row.spoken
+        guard row.meter == nil, let trend else { return base }
+        return "\(base), recorded balance \(trend.spokenTrend)"
     }
 
     private var nameCell: some View {

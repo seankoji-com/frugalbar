@@ -168,6 +168,12 @@ struct GlanceAccessibilityInvariantTests {
             ("primary fill on card", resolve(Theme.primary), card),
             ("primary fill on track", resolve(Theme.primary), track),
             ("pace marker (onSurface) on track", resolve(Theme.onSurface), track),
+            // Over a fill the tick's knockout (Theme.surface) is its edge.
+            ("pace marker knockout on healthy fill", resolve(Theme.surface), resolve(Theme.healthy)),
+            ("pace marker knockout on tertiary fill", resolve(Theme.surface), resolve(Theme.tertiary)),
+            ("pace marker knockout on error fill", resolve(Theme.surface), resolve(Theme.error)),
+            ("pace marker knockout on stale healthy fill",
+             resolve(Theme.surface), resolve(Theme.healthy.opacity(0.55)).over(card)),
             ("chart mode selected pill (primary) on well", resolve(Theme.primary), resolve(Theme.surfaceContainerLowest)),
             ("MenuBar critical on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .critical)), card),
         ]

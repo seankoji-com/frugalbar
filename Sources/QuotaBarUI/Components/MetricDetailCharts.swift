@@ -345,9 +345,11 @@ struct ChartEmptyState: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            // A failure's triangle is the state's non-colour channel, drawn
+            // at full strength in amber (it measured 2.72:1 at 40% grey).
             Image(systemName: symbol)
                 .font(.system(size: 20))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.4))
+                .foregroundStyle(symbol.hasPrefix("exclamationmark") ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.6))
             Text(message)
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))

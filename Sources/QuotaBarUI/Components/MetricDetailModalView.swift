@@ -118,6 +118,7 @@ public struct MetricDetailModalView: View {
     @State private var balanceSeries: [BalanceSeriesRead] = []
     @State private var selectedBalanceID: String?
     @State private var isLoading = true
+    @State private var loadedSnapshotID: String?
     /// The readings or events could not be read. Each is then said as a
     /// failure to read, never as "no readings" or "no events".
     @State private var readingsFailed = false
@@ -228,7 +229,11 @@ public struct MetricDetailModalView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: snapshot.id) { await load() }
+        // Re-read whenever the poll behind the snapshot changes, not only when
+        // another pool is opened: the popover passes the store's current copy
+        // (`PopoverRootView`), and a pass that fails, blocks or spends this
+        // pool must not leave the open inspector describing the earlier poll.
+        .task(id: Self.loadKey(for: snapshot)) { await load() }
         .onExitCommand(perform: onClose)
     }
 
@@ -243,8 +248,17 @@ public struct MetricDetailModalView: View {
     /// every layer in one image instead of the first screenful.
     var maxBody: CGFloat = maxBodyHeight
 
+    /// Which poll the inspector is showing: the pool, when it was fetched,
+    /// and whether (and when) a later poll failed.
+    nonisolated static func loadKey(for snapshot: QuotaSnapshot) -> String {
+        "\(snapshot.id)|\(snapshot.lastUpdated.timeIntervalSince1970)|\(snapshot.staleReading?.at.timeIntervalSince1970 ?? 0)"
+    }
+
     private func load() async {
-        isLoading = true
+        // A refresh of the same pool keeps the drawn history until the new
+        // read lands; only opening another pool starts from the loading state.
+        if loadedSnapshotID != snapshot.id { isLoading = true }
+        defer { loadedSnapshotID = snapshot.id }
         let vendor = snapshot.vendorId
         let loadTime = Date()
         // Far enough back for the longest offered range and for the start
@@ -590,7 +604,7 @@ public struct MetricDetailModalView: View {
     private var focusWindow: GlancePresentation.Window? {
         guard let label = presentation.summary.focusLabel,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
-        return GlancePresentation.window(for: bar, now: now)
+        return GlancePresentation.window(for: snapshot.applyingAccountBlock(to: bar), now: now)
     }
 
     private var runOutResult: InspectorRunOut.Result? {
@@ -804,7 +818,12 @@ public struct MetricDetailModalView: View {
                     // which is the run-out warning whenever there is one
                     // ("58% used · resets in 5d · at recent rate, out in 41h"
                     // is 293pt in a 234pt column).
-                    Text(BurndownPresentation.summaryLine(for: burndown, now: now))
+                    // The chart reads the recorded series, which can trail the
+                    // live poll by a reading; its figure says when it is from,
+                    // so "63%" under a live "62%" reads as history, not conflict.
+                    Text((burndown.latestReading.map {
+                        "Recorded \(MetricDetailPresentation.clockText($0.measuredAt, now: now)) · "
+                    } ?? "") + BurndownPresentation.summaryLine(for: burndown, now: now))
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
@@ -938,7 +957,17 @@ public struct MetricDetailModalView: View {
                 message: absence.message
             )
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                // The qualification comes before the plot it qualifies: below
+                // it, the warning sat under the fold while the whole chart
+                // read as complete.
+                if markersFailed {
+                    Label("Reset markers could not be read, so resets may be missing from this chart.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 UsageHistoryChartView(
                     series: series,
                     range: historyRange,
@@ -947,13 +976,6 @@ public struct MetricDetailModalView: View {
                     ),
                     now: now
                 )
-                if markersFailed {
-                    Label("Reset markers could not be read, so resets may be missing from this chart.",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.outline)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
     }
@@ -995,7 +1017,7 @@ public struct MetricDetailModalView: View {
                 case .readFailed:
                     ChartEmptyState(
                         symbol: "exclamationmark.triangle",
-                        message: "Could not read the recorded balance. This is a failure to read, not an absence of readings."
+                        message: "Could not read the recorded balance. This is a failure to read, not an absence of readings. It is read again with the next poll, or when you reopen these details."
                     )
                 case .trend(let trend, let unit):
                     VStack(alignment: .leading, spacing: 4) {

@@ -279,7 +279,7 @@ struct GlancePresentationTests {
         #expect(glance.ranking.count == 1)
         #expect(glance.ranking.first?.pool.name == "Low")
         #expect(glance.ranking.first?.isCaveat == true)
-        #expect(glance.ranking.first?.reason == "only 12% WK left")
+        #expect(glance.ranking.first?.reason == "only 12% WK left · resets in 4d")
         #expect(glance.menuTitle.tone == .caveat)
     }
 

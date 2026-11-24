@@ -167,7 +167,8 @@ public struct GlancePresentation: Equatable, Sendable {
                 (rank[Self.serviceName(for: $0.vendorId)] ?? .max) < (rank[Self.serviceName(for: $1.vendorId)] ?? .max)
             }
         }
-        menuTitle = Self.menuTitle(ranking: ranking, pools: pools, backSoon: backSoon, now: now)
+        menuTitle = Self.menuTitle(ranking: ranking, pools: pools, backSoon: backSoon, now: now,
+                                   hasWallet: !walletSnapshots.isEmpty)
     }
 
     // MARK: Pools
@@ -345,9 +346,15 @@ public struct GlancePresentation: Equatable, Sendable {
                         reason: w.remaining.map { "on bonus · \(percent($0))% left" } ?? "on bonus",
                         isCaveat: true, score: nil)
         }
+        // The reset is part of the reason, as for a qualifying pick: the title
+        // shows it, so the spoken label must say it too.
+        let resetClause = binding.bar.resetsAt.map { reset -> String in
+            let when = countdown(reset, now: now)
+            return when == "due" ? " · reset due" : " · resets in \(when)"
+        } ?? ""
         let text = pool.state == .onBonus
             ? "on bonus"
-            : "only \(percent(binding.remaining!))% \(binding.bar.label) left"
+            : "only \(percent(binding.remaining!))% \(binding.bar.label) left\(resetClause)"
         return Pick(pool: pool, binding: binding, reason: text, isCaveat: true, score: binding.headroomAtRisk)
     }
 
@@ -470,7 +477,14 @@ public struct GlancePresentation: Equatable, Sendable {
 
     // MARK: Menu bar
 
-    static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date) -> MenuTitle {
+    /// The pool's spoken name: "Codex", not "Codex Codex"; "Claude Code
+    /// Primary" when the pool has its own name.
+    static func spokenName(_ pool: Pool) -> String {
+        pool.name == pool.service || pool.name.hasPrefix(pool.service) ? pool.name : "\(pool.service) \(pool.name)"
+    }
+
+    static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date,
+                          hasWallet: Bool = true) -> MenuTitle {
         if let pick = ranking.first {
             let who = pick.pool.accountTag ?? pick.pool.name
             // % used, as the popover's bars print it (owner, 24 Nov 2026), and
@@ -480,7 +494,7 @@ public struct GlancePresentation: Equatable, Sendable {
             let used = pick.binding.used.map { "\(usedPercentText($0)) \(pick.binding.bar.label) used" }
             let reset = pick.binding.bar.resetsAt.map { countdown($0, now: now) }
             let text = ([who] + [used, reset].compactMap { $0 }).joined(separator: " · ")
-            let spoken = "Use \(pick.pool.service) \(pick.pool.name): \(pick.reason)"
+            let spoken = "Use \(spokenName(pick.pool)): \(pick.reason)"
                 + (pick.isCaveat ? ". Best available, not a strong pick" : "")
             return MenuTitle(vendor: pick.pool.snapshot.vendorId, text: text,
                              tone: pick.isCaveat ? .caveat : .normal, spoken: spoken)
@@ -491,7 +505,8 @@ public struct GlancePresentation: Equatable, Sendable {
         // nothing failed, there is simply no subscription to pick from.
         if pools.isEmpty {
             return MenuTitle(vendor: nil, text: "No subscriptions", tone: .unknown,
-                             spoken: "No subscription quota to pick from; balances are in the Wallet")
+                             spoken: "No subscription quota to pick from"
+                                + (hasWallet ? "; balances are in the Wallet" : ""))
         }
         let readable = pools.filter { $0.state != .unreadable }
         if readable.isEmpty {

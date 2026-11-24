@@ -90,10 +90,8 @@ struct ProviderGridPresentation {
             // as plain percentages these read as healthy green bars beside a
             // red-ringed avatar.
             let poolWindows = (pool?.windows ?? []).map { window -> Window in
-                guard snapshot.isAccountBlocked, !window.bar.isBlocked else { return window }
-                var bar = window.bar
-                bar.isBlocked = true
-                return GlancePresentation.window(for: bar, now: now)
+                let bar = snapshot.applyingAccountBlock(to: window.bar)
+                return bar.isBlocked == window.bar.isBlocked ? window : GlancePresentation.window(for: bar, now: now)
             }
             var columns: [WindowColumn: Window] = [:]
             for window in poolWindows {

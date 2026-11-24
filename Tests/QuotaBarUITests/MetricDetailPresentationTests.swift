@@ -186,9 +186,9 @@ struct MetricDetailPresentationTests {
         let failed = MetricDetailPresentation(snapshot: snapshot(bars: [weekly(used: 0.4, elapsed: 0.5)]),
                                               history: .unreadable, now: now)
         let rows = Dictionary(uniqueKeysWithValues: failed.provenance.map { ($0.label, $0.value) })
-        #expect(rows["History"] == "Could not be read")
+        #expect(rows["Quota history"] == "Could not be read")
         let loading = MetricDetailPresentation(snapshot: snapshot(bars: [weekly(used: 0.4, elapsed: 0.5)]), now: now)
-        #expect(!loading.provenance.contains { $0.label == "History" })
+        #expect(!loading.provenance.contains { $0.label == "Quota history" })
     }
 
     @Test("a provider with no window leads with its measured figure, and a tier is not a figure")
@@ -212,7 +212,7 @@ struct MetricDetailPresentationTests {
         #expect(rows["Plan"] == .some(nil))
         #expect(rows["Source"] == .some(nil))
         #expect(rows["Raw figure"] == "600 of 1,000 points remaining")
-        #expect(rows["History"]??.hasPrefix("12 readings recorded since ") == true)
+        #expect(rows["Quota history"]??.hasPrefix("12 readings recorded since ") == true)
         #expect(rows["Last fetched"]??.contains("3 min ago") == true)
     }
 
