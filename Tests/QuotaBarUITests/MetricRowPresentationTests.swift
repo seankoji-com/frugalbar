@@ -240,8 +240,8 @@ struct MetricRowPresentationTests {
     }
 }
 
-@Suite("MenuBarPresentation")
-struct MenuBarPresentationTests {
+@Suite("SystemHealthSummary in the UI")
+struct SystemHealthSummaryUITests {
 
     private func snap(_ status: ProviderStatus, at date: Date = Date()) -> QuotaSnapshot {
         QuotaSnapshot(
@@ -254,7 +254,7 @@ struct MenuBarPresentationTests {
 
     /// The regression this whole model exists to prevent: a provider with no
     /// data source must not pin the menu bar icon to a permanent error state.
-    @Test("an unreadable provider does not colour the icon")
+    @Test("an unreadable provider does not raise the worst urgency")
     func unreadableDoesNotDominate() {
         let summary = SystemHealthSummary.compute(from: [
             snap(.unavailable(.unsupported("no API"))),
@@ -262,8 +262,6 @@ struct MenuBarPresentationTests {
         ])
         #expect(summary.worstUrgency == .none)
         #expect(summary.unavailableCount == 1)
-        #expect(MenuBarPresentation.tint(for: summary) == nil)
-        #expect(MenuBarPresentation.showsUnavailableBadge(for: summary))
     }
 
     @Test("a critical quota is never masked by an unreadable provider")
@@ -274,24 +272,14 @@ struct MenuBarPresentationTests {
             snap(.measured(.critical)),
         ])
         #expect(summary.worstUrgency == .critical)
-        #expect(MenuBarPresentation.tint(for: summary) == .systemRed)
-        #expect(MenuBarPresentation.accessibilityDescription(for: summary).contains("critically low"))
     }
 
-    @Test("warning tints orange")
-    func warningTint() {
-        let summary = SystemHealthSummary.compute(from: [snap(.measured(.warning))])
-        #expect(MenuBarPresentation.tint(for: summary) == .systemOrange)
-    }
-
-    @Test("with no readings at all the icon stays untinted and says so")
+    @Test("with no readings at all the summary says so")
     func noReadings() {
         let summary = SystemHealthSummary.compute(from: [
             snap(.unavailable(.notConfigured)), snap(.unavailable(.offline)),
         ])
         #expect(summary.hasAnyReading == false)
-        #expect(MenuBarPresentation.tint(for: summary) == nil)
-        #expect(MenuBarPresentation.accessibilityDescription(for: summary).contains("no readings"))
     }
 
     @Test("staleness reports the oldest reading, not the newest")
@@ -332,176 +320,5 @@ struct MenuBarPresentationTests {
             == "All quotas healthy")
     }
 
-    @Test("recommendationDetails extracts lowest remaining bar and time left for recommended platform")
-    func recommendationDetailsExtractsLowestQuota() {
-        let gemini = QuotaSnapshot(
-            id: "gemini",
-            vendorId: .gemini,
-            displayName: "Gemini",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .healthy,
-            resetsAt: nil,
-            lastUpdated: Date(),
-            auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.59, label: "5H", resetText: "Resets in 3h 29m"),
-            row2: DualBarMetrics(primaryFraction: 0.04, label: "WK", resetText: "Refreshes in 167h 25m")
-        )
-        let advice = QuotaAdvice(
-            headline: "Use Gemini",
-            message: "Gemini high remaining.",
-            vendorId: .gemini
-        )
-        let summary = SystemHealthSummary.compute(from: [gemini])
-
-        let details = MenuBarPresentation.recommendationDetails(
-            advice: advice,
-            snapshots: [gemini],
-            summary: summary
-        )
-
-        #expect(details.vendorId == .gemini)
-        #expect(details.remainingPctText == "41%")
-        #expect(details.timeLeftText == "3h 29m")
-        #expect(details.displayText == "41% 3h 29m")
-        let spoken = MenuBarPresentation.accessibilityDescription(for: summary, recommendation: details)
-        #expect(spoken.contains("Gemini 41% remaining"))
-        #expect(spoken.contains("resets in 3h 29m"))
-    }
-
-    @Test("recommendationDetails picks the healthy measured vendor over one merely first in order")
-    func recommendationDetailsFallbackPrefersHealthy() {
-        // Claude sorts first but is at 75% used (warning); Gemini sorts
-        // second but is healthy at 10% used with no headline vendor named —
-        // the fallback must recommend the one with real headroom, not
-        // whichever measured vendor happens to come first.
-        let claude = QuotaSnapshot(
-            id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "Max", renewalDate: nil),
-            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.75, label: "5H")
-        )
-        let gemini = QuotaSnapshot(
-            id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.10, label: "5H")
-        )
-        let advice = QuotaAdvice(headline: "All Quotas Healthy & Balanced", message: "")
-        let summary = SystemHealthSummary.compute(from: [claude, gemini])
-
-        let details = MenuBarPresentation.recommendationDetails(
-            advice: advice,
-            snapshots: [claude, gemini],
-            summary: summary
-        )
-
-        #expect(details.vendorId == .gemini)
-    }
-
-    @Test("recommended tint follows the recommended vendor, not the whole-summary worst urgency")
-    func recommendedTintFollowsRecommendedVendor() {
-        // The recommended (advised) vendor is healthy, while a *different*
-        // vendor is critical. The summary's worst urgency is critical, but the
-        // carried tint must reflect the healthy recommendation — so nil, not
-        // red. This is the regression: the previous title colour re-derived
-        // from the whole-summary worst urgency and painted the healthy number
-        // red.
-        let gemini = QuotaSnapshot(
-            id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.10, label: "5H")
-        )
-        let claude = QuotaSnapshot(
-            id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "Max", renewalDate: nil),
-            status: .measured(.critical), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.99, label: "5H")
-        )
-        // Name the healthy vendor directly to isolate the tint logic from the
-        // advisor's own selection.
-        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
-        let summary = SystemHealthSummary.compute(from: [gemini, claude])
-        #expect(summary.worstUrgency == .critical)
-
-        let details = MenuBarPresentation.recommendationDetails(
-            advice: advice,
-            snapshots: [gemini, claude],
-            summary: summary
-        )
-
-        #expect(details.vendorId == .gemini)
-        #expect(details.recommendedTint == nil)
-        #expect(MenuBarPresentation.tint(for: summary) == .systemRed)
-    }
-
-    @Test("recommended tint is orange when the recommended vendor itself is under warning pressure")
-    func recommendedVendorWarningTintsOrange() {
-        let gemini = QuotaSnapshot(
-            id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .measured(.warning), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.75, label: "5H")
-        )
-        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
-        let summary = SystemHealthSummary.compute(from: [gemini])
-
-        let details = MenuBarPresentation.recommendationDetails(
-            advice: advice,
-            snapshots: [gemini],
-            summary: summary
-        )
-
-        #expect(details.recommendedTint == .systemOrange)
-    }
-
-    @Test("recommended tint is nil when the recommended vendor is unreadable")
-    func unavailableRecommendedHasNoTint() {
-        let gemini = QuotaSnapshot(
-            id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "AI Studio", renewalDate: nil),
-            status: .unavailable(.unsupported("no API")), resetsAt: nil, lastUpdated: Date(), auxiliaryInfo: nil
-        )
-        let advice = QuotaAdvice(headline: "Use Gemini", message: "", vendorId: .gemini)
-        let summary = SystemHealthSummary.compute(from: [gemini])
-
-        let details = MenuBarPresentation.recommendationDetails(
-            advice: advice,
-            snapshots: [gemini],
-            summary: summary
-        )
-
-        #expect(details.recommendedTint == nil)
-    }
-
-    @Test("formatTimeLeft parses various duration formats")
-    func formatTimeLeftParsesDurations() {
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3h 29m") == "3h 29m")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 2h 10m") == "2h 10m")
-        #expect(MenuBarPresentation.formatTimeLeft("42m") == "42m")
-        #expect(MenuBarPresentation.formatTimeLeft("4d 6h") == "4d 6h")
-        #expect(MenuBarPresentation.formatTimeLeft("167h 25m") == "167h 25m")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3 hours") == "3h")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 42 minutes") == "42m")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 4 days") == "4d")
-        #expect(MenuBarPresentation.formatTimeLeft("3 hrs 29 mins") == "3h 29m")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 1 week") == "1w")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 3 weeks") == "3w")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 1 month") == "1mo")
-        #expect(MenuBarPresentation.formatTimeLeft("Resets in 2 months") == "2mo")
-        #expect(MenuBarPresentation.formatTimeLeft("1mo 2w") == "1mo 2w")
-        #expect(MenuBarPresentation.formatTimeLeft("3m") == "3m")
-        #expect(MenuBarPresentation.formatTimeLeft("3 models") == nil)
-        #expect(MenuBarPresentation.formatTimeLeft("1.5 hours") == nil)
-        #expect(MenuBarPresentation.formatTimeLeft(nil) == nil)
-        #expect(MenuBarPresentation.formatTimeLeft("Not reported") == nil)
-    }
 }
 

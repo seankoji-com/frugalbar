@@ -46,9 +46,9 @@ struct UXRenderTests {
         ]
         let openDesign = snapshot("OpenDesign", .opendesign, "OpenDesign Go · Pro",
                                   [bar("5H", 0.08, 2), bar("WK", 0.31, 3 * 24)])
-        try await save(MetricSectionView(category: .aiSubscriptions,
-            snapshots: [primary, commandCode] + workspaces + [openDesign], onSelect: { _ in }, now: now)
-            .padding(12).frame(width: 384).background(Theme.surface), name: "exhausted-and-new-rows", directory: directory)
+        try await save(livePopover([primary, commandCode] + workspaces + [openDesign], expanded: .deepseek, now: now)
+            .padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "exhausted-and-new-rows", directory: directory)
         try await save(HStack(spacing: 24) {
             VendorAvatarView(vendorId: .claude, status: .healthy, size: 28)
             VendorAvatarView(vendorId: .claude, status: .healthy, isExhausted: true,
@@ -56,67 +56,6 @@ struct UXRenderTests {
             VendorAvatarView(vendorId: .commandcode, status: .healthy, isExhausted: true,
                              showsResetOverlay: true, size: 28)
         }.padding(20).background(Theme.card), name: "exhausted-avatar", directory: directory)
-    }
-
-    @Test func renderReadabilityGroups() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = ClaudeAccountFixtures.now
-        func bar(_ label: String, _ fraction: Double?, _ hours: Double, blocked: Bool = false) -> DualBarMetrics {
-            let length: TimeInterval = label == "5H" ? QuotaWindow.fiveHours
-                : label == "WK" ? QuotaWindow.week : 30 * 86400
-            return DualBarMetrics(primaryFraction: fraction,
-                expectedPaceFraction: DualBarMetrics.proRataPace(resetsAt: now.addingTimeInterval(hours * 3600),
-                    windowLength: length, now: now), label: label,
-                blockedColor: blocked ? "#FFB4AB" : nil, isBlocked: blocked,
-                resetsAt: now.addingTimeInterval(hours * 3600), windowLength: length)
-        }
-        func snapshot(_ id: String, _ vendor: VendorIdentifier, _ plan: String?,
-                      _ first: DualBarMetrics, _ second: DualBarMetrics? = nil) -> QuotaSnapshot {
-            QuotaSnapshot(id: id, vendorId: vendor, displayName: id, category: .aiSubscriptions,
-                metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
-                resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil, row1: first, row2: second, planName: plan)
-        }
-        var primary = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 0.04, fable: 0.03)
-        primary.row1 = nil
-        primary.row2 = bar("WK", 0.04, 7 * 24)
-        var secondary = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.work, weekly: 0.35, fable: 0.21)
-        secondary.row1 = bar("5H", 1, 2)
-        secondary.row2 = bar("WK", 0.35, 5 * 24)
-        var codex = snapshot("openai", .openai, "Pro 200", bar("WK", 0.64, 5 * 24))
-        codex.resetCreditsAvailable = 2
-        codex.resetCreditExpiries = [now.addingTimeInterval(17 * 86400), now.addingTimeInterval(28 * 86400)]
-        let pools = [snapshot("Gemini", .gemini, "Google AI Pro", bar("5H", 0.27, 3), bar("WK", 0.30, 6 * 24)),
-                     snapshot("Claude", .antigravityClaude, "Google AI Pro", bar("5H", 0, 5), bar("WK", 0.51, 5 * 24)),
-                     snapshot("Argon", .antigravityArgon, "Google AI Pro", bar("WK", 0.82, 6 * 24))]
-        let workspaces = [
-            snapshot("Alpha", .opencode, "OpenCode Go", bar("WK", 1, 23, blocked: true), bar("MO", 0.50, 25 * 24)),
-            snapshot("Beta", .opencode, "OpenCode Go", bar("WK", 1, 23, blocked: true), bar("MO", 0.50, 25 * 24)),
-            snapshot("Gamma", .opencode, "OpenCode Go Plus", bar("MO", 1, 7 * 24, blocked: true)),
-            snapshot("Delta", .opencode, "OpenCode Go Plus", bar("WK", 1, 23, blocked: true), bar("MO", 0.98, 10 * 24)),
-            snapshot("Epsilon", .opencode, "OpenCode Go Plus", bar("5H", 0.16, 0.6), bar("WK", 0.20, 24)),
-        ]
-        try await save(MetricSectionView(category: .aiSubscriptions,
-            snapshots: [primary, secondary, codex] + pools + workspaces, onSelect: { _ in }, now: now)
-            .padding(12).frame(width: 384).background(Theme.surface), name: "readability-groups", directory: directory)
-
-        let missingReset = snapshot("No published reset", .opencode, nil,
-            DualBarMetrics(primaryFraction: 1, label: "WK"))
-        let textOnlyReset = snapshot("Text-only reset", .opencode, "OpenCode Go",
-            DualBarMetrics(primaryFraction: 1, label: "WK", resetText: "Resets on 1st of month"))
-        let unmeasured = snapshot("Blocked without a figure", .opencode, nil, bar("WK", nil, 23, blocked: true))
-        var elapsed = bar("CYCLE", 1, 24)
-        elapsed.measuresElapsedTimeOnly = true
-        try await save(MetricSectionView(category: .aiSubscriptions,
-            snapshots: [missingReset, textOnlyReset, unmeasured, snapshot("Billing cycle", .devpass, nil, elapsed)], now: now)
-            .padding(12).frame(width: 384).background(Theme.surface), name: "readability-edge-states", directory: directory)
-        let bonus = DualBarMetrics(primaryFraction: 1, label: "BN", resetText: "Expires in 40 days",
-            resetsAt: now.addingTimeInterval(40 * 86400))
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
-            snapshot("Kiro plan spent", .kiro, "Pro", bar("MO", 1, 10 * 24), bonus),
-            snapshot("Kiro bonus spent", .kiro, "Pro", bar("MO", 0.3, 10 * 24), bonus),
-        ], now: now).padding(12).frame(width: 384).background(Theme.surface),
-            name: "readability-bonus-expiry", directory: directory)
     }
 
     @Test func renderClaudeAliasHistory() async throws {
@@ -137,56 +76,6 @@ struct UXRenderTests {
         try await save(HistoryOverviewCardView(card: card, isSelected: true, onSelect: {})
             .padding(12).frame(width: 260).background(Theme.surface),
             name: "claude-account-alias-overview", directory: directory)
-    }
-
-    @Test func renderClaudeAccountRailB1() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = ClaudeAccountFixtures.now
-        let both = ClaudeAccountFixtures.both
-        let legacy = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
-            status: .measured(.none), resetsAt: both[0].resetsAt, lastUpdated: now, auxiliaryInfo: nil,
-            row1: both[0].row1, row2: both[0].row2, planName: "Max")
-        let codex = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.12, label: "5H"),
-            row2: DualBarMetrics(primaryFraction: 0.43, label: "WK"), planName: "Pro")
-        let cases: [(String, [QuotaSnapshot])] = [
-            ("both", both),
-            ("unavailable", [both[0], ClaudeAccountFixtures.unavailable]),
-            ("stale", [both[0], ClaudeAccountFixtures.stale]),
-            ("single", [both[0]]),
-            ("legacy", [legacy]),
-            ("mixed-vendors", [codex] + both)
-        ]
-        for (name, snapshots) in cases {
-            try await save(MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
-                onSelect: { _ in }, now: now)
-                .padding(12).frame(width: 384).background(Theme.surface),
-                name: "claude-account-b1-\(name)", directory: directory)
-        }
-        var personal = ClaudeAccountFixtures.personal
-        personal.nickname = "Personal subscription with a very long account nickname"
-        var work = ClaudeAccountFixtures.work
-        work.nickname = "Work subscription with another very long account nickname"
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
-            ClaudeAccountFixtures.snapshot(personal, weekly: 0.61, fable: 0.35),
-            ClaudeAccountFixtures.snapshot(work, weekly: 0.27, fable: 0.12)
-        ], onSelect: { _ in }, now: now)
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "claude-account-b1-long-nicknames", directory: directory)
-    }
-
-    @Test func renderClaudeAccountHighFable() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        var account = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 0.99, fable: 0.95)
-        account.row1 = nil
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [account],
-            onSelect: { _ in }, now: ClaudeAccountFixtures.now)
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "claude-account-high-fable", directory: directory)
     }
 
     @Test func renderClaudeAccountConfigurationB1() async throws {
@@ -226,81 +115,17 @@ struct UXRenderTests {
         snapshot.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
             label: "Usage credits", metric: .credits(remaining: 59_641, unitName: "credits"),
             creditGrant: OpenAICreditGrant(total: 75_000, expiresAt: now.addingTimeInterval(68 * 86_400)))]
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
-            .padding(12).frame(width: 384).background(Theme.surface), name: "chatgpt-agreed-layout", directory: directory)
+        try await save(livePopover([snapshot], expanded: .openai, now: now)
+            .padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "chatgpt-agreed-layout", directory: directory)
         snapshot.resetCreditsAvailable = 7
         snapshot.resetCreditExpiries = [now.addingTimeInterval(86_400), nil, now, now.addingTimeInterval(12 * 86_400)]
         snapshot.staleReading = StaleReading(reason: .offline, at: now)
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
-            .padding(12).frame(width: 384).background(Theme.surface), name: "chatgpt-ticket-overflow-stale", directory: directory)
+        try await save(livePopover([snapshot], expanded: .openai, now: now)
+            .padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "chatgpt-ticket-overflow-stale", directory: directory)
         try await save(Form { OpenAIAccountSettingsView(accountKey: "render-fixture") }
             .formStyle(.grouped).frame(width: 500, height: 360), name: "chatgpt-account-settings", directory: directory)
-    }
-
-    @Test func renderClaudeMonthlyCreditAndSplitTickets() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = Date()
-        let nextGrant = now.addingTimeInterval(4 * 86_400)
-        let credit = try #require(try ClaudeMonthlyCredit.decode(Data(
-            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
-            now: now))
-        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions,
-            metric: .subscription(tierName: "Max (20x)", renewalDate: nil),
-            status: .measured(.none), resetsAt: nextGrant, lastUpdated: now, auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.85, expectedPaceFraction: 0.43,
-                                 label: "WK", resetsAt: nextGrant,
-                                 windowLength: QuotaWindow.week),
-            planName: "Max (20x)")
-        snapshot.scopedBars = [DualBarMetrics(
-            primaryFraction: 0.42, expectedPaceFraction: 0.47, label: "Fable",
-            resetsAt: nextGrant, windowLength: QuotaWindow.week)]
-        snapshot.resetCreditsAvailable = 4
-        snapshot.resetCreditGroups = [
-            ResetCreditGroup(scope: .plan, count: 1,
-                             expiries: [now.addingTimeInterval(30 * 86_400)]),
-            ResetCreditGroup(scope: .model("Fable"), count: 3,
-                             expiries: [now.addingTimeInterval(119 * 86_400),
-                                        now.addingTimeInterval(119 * 86_400),
-                                        now.addingTimeInterval(119 * 86_400)]),
-        ]
-        snapshot.monthlyAPICredit = credit
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "claude-monthly-credit-split-tickets", directory: directory)
-    }
-
-    @Test func renderOpenCodeGoPlus() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        let now = Date()
-        func snapshot(_ name: String, plus: Bool, blocked: Bool) -> QuotaSnapshot {
-            let reset = now.addingTimeInterval(86_400)
-            return QuotaSnapshot(id: "opencode-go:\(name)", vendorId: .opencode, displayName: name,
-                category: .aiSubscriptions,
-                metric: .subscription(tierName: plus ? "Go Plus" : "Go", renewalDate: nil),
-                status: .measured(blocked ? .critical : .none), resetsAt: reset,
-                lastUpdated: now, auxiliaryInfo: nil,
-                row1: DualBarMetrics(primaryFraction: blocked ? 1 : 0.2, label: "5H",
-                    blockedColor: blocked ? "#ffb4ab" : nil,
-                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
-                row2: DualBarMetrics(primaryFraction: blocked ? 1 : 0.4, label: "WK",
-                    blockedColor: blocked ? "#ffb4ab" : nil,
-                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
-                row3: DualBarMetrics(primaryFraction: blocked ? 1 : 0.22, label: "MO",
-                    blockedColor: blocked ? "#ffb4ab" : nil,
-                    isBlocked: blocked, resetText: "Resets in 1 day", resetsAt: reset),
-                planName: plus ? "OpenCode Go Plus" : "OpenCode Go")
-        }
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [
-            snapshot("Alpha", plus: false, blocked: true),
-            snapshot("Beta", plus: false, blocked: true),
-            snapshot("Gamma", plus: true, blocked: true),
-            snapshot("Delta", plus: true, blocked: false),
-            snapshot("Epsilon", plus: false, blocked: false),
-            snapshot("Long workspace name", plus: true, blocked: false)
-        ]).padding(12).frame(width: 384).background(Theme.surface),
-            name: "opencode-go-plus", directory: directory)
     }
 
     @Test func renderRestoredMuseTeamSelection() async throws {
@@ -332,6 +157,24 @@ struct UXRenderTests {
         }
     }
 
+    /// The popover as it is drawn now: Subscriptions with one group
+    /// expanded, then the Wallet when anything carries a credit or balance.
+    /// Fixtures render this rather than the legacy `MetricSectionView`, which
+    /// the app draws only for developer limits and which omits every credit.
+    private func livePopover(_ snapshots: [QuotaSnapshot], expanded: VendorIdentifier? = nil,
+                             now: Date, balanceSeries: [String: [BalancePoint]] = [:]) -> some View {
+        let wallet = WalletPresentation(
+            snapshots: GlancePresentation(snapshots: snapshots, now: now).walletSnapshots, now: now)
+        return VStack(spacing: Theme.sectionGap) {
+            ProviderGridView(presentation: ProviderGridPresentation(
+                snapshots: snapshots, serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now),
+                expanded: expanded)
+            if !wallet.rows.isEmpty {
+                WalletSection(presentation: wallet, balanceSeries: balanceSeries, now: now)
+            }
+        }
+    }
+
     private struct FixtureProvider: QuotaProvider {
         let snapshot: QuotaSnapshot
         var vendorId: VendorIdentifier { snapshot.vendorId }
@@ -339,65 +182,6 @@ struct UXRenderTests {
         var category: MetricCategory { snapshot.category }
         var instanceID: String { snapshot.id }
         func fetchSnapshot() async throws -> QuotaSnapshot { snapshot }
-    }
-
-    @Test func renderSubscriptionCreditLayout() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = Date()
-        let end = now.addingTimeInterval(12 * 86_400)
-        var codex = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.22, label: "WK", resetsAt: now.addingTimeInterval(7 * 86_400),
-                                 windowLength: QuotaWindow.week), planName: "Pro")
-        codex.resetCreditsAvailable = 2
-        codex.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
-            metric: .credits(remaining: Decimal(string: "60085.422977")!, unitName: "credits"))]
-        var claude = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 0.38, label: "WK"), planName: "Max")
-        func promo(balance: Decimal, limit: Decimal?, end: Date?) -> APICreditEntry {
-            APICreditEntry(id: "claude.promo-credit", vendorId: .claude, label: "Promo credit",
-                metric: .currency(balance: balance, limit: limit, spent: nil, currencyCode: "USD"),
-                currencyBasis: .prepaidCredit, monthlyPeriodEnd: end)
-        }
-        claude.apiCredits = [promo(balance: 0, limit: 100, end: end)]
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [codex, claude])
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "subscription-credit-layout", directory: directory)
-        codex.resetCreditsAvailable = 7
-        claude.apiCredits = [promo(balance: 35, limit: 100, end: end)]
-        claude.staleReading = StaleReading(reason: .offline, at: now)
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [codex, claude])
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "subscription-credit-stale-overflow", directory: directory)
-        claude.staleReading = nil
-        claude.apiCredits = [promo(balance: 15, limit: nil, end: nil)]
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [claude])
-            .padding(12).frame(width: 384).background(Theme.surface),
-            name: "subscription-credit-no-limit-or-date", directory: directory)
-    }
-
-    /// Visual fixture only. ProviderHTTPTests exercises project selection and
-    /// parsing; this checks how its weekly-only output fits the production row.
-    @Test func renderGemini() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = Date()
-        let reset = now.addingTimeInterval(85 * 3600 + 12 * 60)
-        let snapshot = QuotaSnapshot(id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
-            status: .measured(.critical), resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
-            row1: DualBarMetrics(primaryFraction: 1, label: "WK", usedText: "100% used",
-                resetText: "Resets in 85h 12m", resetsAt: reset, windowLength: QuotaWindow.week),
-            badgeText: "0% left", planName: "Google AI Pro")
-        try await save(VStack(spacing: 12) {
-            Text("Representative fixture · weekly exhausted, 5H disabled").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: [snapshot])
-        }.padding(12).frame(width: 384).background(Theme.surface),
-            name: "gemini-weekly-exhausted", directory: directory)
     }
 
     @Test func renderAntigravityPools() async throws {
@@ -422,17 +206,15 @@ struct UXRenderTests {
                     snapshot(.gemini, name: "Gemini", weekly: 0.6)]
         try await save(VStack(spacing: 12) {
             Text("Fixture · service groups, separate pools").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: rows)
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools", directory: directory)
+            livePopover(rows, expanded: .gemini, now: now)
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "agy-pools", directory: directory)
         let exhaustedRows = Array(rows.dropLast()) + [snapshot(.gemini, name: "Gemini", weekly: 1)]
         try await save(VStack(spacing: 12) {
             Text("Fixture · mixed exhaustion stays in its service").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: exhaustedRows)
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-exhausted", directory: directory)
-        try await save(VStack(spacing: 12) {
-            Text("Fixture · custom service blocks").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: rows, ordering: .custom)
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "agy-pools-custom", directory: directory)
+            livePopover(exhaustedRows, expanded: .gemini, now: now)
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "agy-pools-exhausted", directory: directory)
         try await save(HStack(spacing: 16) {
             VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, size: 28)
             VendorAvatarView(vendorId: .antigravityClaude, status: .healthy, isExhausted: true, size: 28)
@@ -441,18 +223,16 @@ struct UXRenderTests {
         }.padding(12).background(Theme.surface), name: "agy-claude-icons", directory: directory)
     }
 
-    /// The redesigned popover (A2 + B1-F2 hero) with a synthetic mixed-provider batch,
-    /// and the menu-bar title in each tone.
-    @Test func renderGlancePopover() async throws {
+    /// The menu-bar title in each tone, and Subscriptions with stale, weak and
+    /// unreadable pools.
+    @Test func renderGlanceStates() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let now = GlanceFixtures.now
-        let glance = GlancePresentation(snapshots: GlanceFixtures.batchWithWallet, now: now)
-        try await save(VStack(spacing: 0) {
-            GlanceSectionsView(glance: glance).padding(Theme.edgeMargin)
-            FooterActionsView(summary: .compute(from: GlanceFixtures.batch), isRefreshing: false,
-                              onOpenSettings: {}, onQuit: {}, onRefresh: {}, eventCount: 1)
-        }.frame(width: PopoverRootView.popoverWidth).background(Theme.surface), name: "glance-popover", directory: directory)
+        func grid(_ snapshots: [QuotaSnapshot]) -> ProviderGridView {
+            ProviderGridView(presentation: ProviderGridPresentation(
+                snapshots: snapshots, serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now))
+        }
 
         func spent(_ hours: Double?) -> QuotaSnapshot {
             GlanceFixtures.snapshot("s\(hours ?? -1)", .opencode, "Spent",
@@ -481,7 +261,7 @@ struct UXRenderTests {
                         .foregroundStyle(Color(nsColor: MenuBarGlance.color(for: title.tone)))
                 }
             }
-            GlanceSectionsView(glance: GlancePresentation(snapshots: [stale, weak], now: now))
+            grid([stale, weak])
         }.padding(12).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
             name: "glance-states", directory: directory)
 
@@ -492,7 +272,7 @@ struct UXRenderTests {
                                     status: .unavailable(.timedOut)),
         ]
         try await save(
-            GlanceSectionsView(glance: GlancePresentation(snapshots: unreadableClaude + [weak], now: now))
+            grid(unreadableClaude + [weak])
                 .padding(Theme.edgeMargin)
                 .frame(width: PopoverRootView.popoverWidth)
                 .background(Theme.surface),
@@ -723,31 +503,6 @@ struct UXRenderTests {
         }
     }
 
-    @Test func renderPopoverRegressionStates() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let now = ClaudeAccountFixtures.now
-        let reset = now.addingTimeInterval(4 * 86_400)
-        var claude = ClaudeAccountFixtures.snapshot(ClaudeAccountFixtures.personal, weekly: 1, fable: 0.95)
-        claude.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
-            #"{"status":"linked","monthly_credit_usd":"200","next_grant_at":"2026-11-15T00:00:00Z"}"#.utf8),
-            now: now)
-        var gemini = QuotaSnapshot(id: "gemini", vendorId: .gemini, displayName: "Gemini",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
-            status: .healthy, resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
-            row2: DualBarMetrics(primaryFraction: 0.4, label: "WK", resetsAt: reset,
-                                 windowLength: QuotaWindow.week), planName: "Google AI Pro")
-        gemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 25, configuredAt: now)
-        let command = QuotaSnapshot(id: "commandcode", vendorId: .commandcode, displayName: "Command Code",
-            category: .aiSubscriptions, metric: .subscription(tierName: "GOAT", renewalDate: nil),
-            status: .critical, resetsAt: reset, lastUpdated: now, auxiliaryInfo: nil,
-            row3: DualBarMetrics(primaryFraction: (70 - 0.0506) / 70, label: "MO",
-                                 resetsAt: reset, windowLength: 30 * 86_400), planName: "GOAT")
-        try await save(MetricSectionView(category: .aiSubscriptions, snapshots: [claude, gemini, command],
-            now: now).padding(12).frame(width: 384).background(Theme.surface),
-            name: "popover-regression-states", directory: directory)
-    }
-
     /// The Settings Keychain vault banner in each state it can show (#186), at
     /// the width of the Settings content pane (780pt window minus the 190pt
     /// sidebar and divider).
@@ -814,9 +569,9 @@ struct UXRenderTests {
             reason: .unsupported("OpenAI returned no usage window"), at: now)
         try await save(VStack(spacing: 12) {
             Text("Subscription credits · current and failed poll").font(.caption)
-            MetricRowView(snapshot: subscription)
-            MetricRowView(snapshot: staleSubscription)
-        }.padding(12).frame(width: 384).background(Theme.surface),
+            livePopover([subscription], expanded: .openai, now: now)
+            livePopover([staleSubscription], expanded: .openai, now: now)
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
             name: "subscription-credits", directory: directory)
         var claudeMonthly = snapshot(.claude, "Claude", 0.65)
         claudeMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
@@ -831,34 +586,22 @@ struct UXRenderTests {
         staleMonthly.monthlyAPICredit = try ClaudeMonthlyCredit.decode(Data(
             #"{"status":"linked","monthly_credit_usd":"123.45","next_grant_at":"2027-02-15T14:49:22Z"}"#.utf8), now: Date().addingTimeInterval(-600))
         staleMonthly.monthlyAPICredit?.refreshFailed = true
-        // Use the actual card so the 384pt popover's 12pt margins and
-        // 14pt card padding leave exactly 332pt for each production row.
         try await save(VStack(spacing: 12) {
             Text("Usage credits · the entitlement is not repeated above it").font(.caption)
-            MetricSectionView(category: .aiSubscriptions, snapshots: [claudeMonthly, subscription])
-            MetricSectionView(category: .aiSubscriptions, snapshots: [staleMonthly, staleSubscription])
-        }.padding(12).frame(width: 384).background(Theme.surface),
+            livePopover([claudeMonthly, subscription], expanded: .claude, now: Date())
+            livePopover([staleMonthly, staleSubscription], expanded: .claude, now: Date())
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
             name: "monthly-credit-and-openai", directory: directory)
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · no live account data").font(.caption).foregroundStyle(Theme.outline)
-            MetricSectionView(category: .aiSubscriptions, snapshots: snapshots,
-                              balanceSeries: balanceFixtures(now: now), onSelect: { _ in })
-            APICreditSectionView(entries: creditFixtures(), balanceSeries: balanceFixtures(now: now))
+            livePopover(snapshots, expanded: .claude, now: now, balanceSeries: balanceFixtures(now: now))
             FooterActionsView(summary: .compute(from: snapshots), isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "popover", directory: directory)
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "popover", directory: directory)
         try await save(MetricDetailModalView(snapshot: snapshots[1], readingsLoader: { _, _ in [] },
             eventsLoader: { _, _, _, _, _ in [] }, balanceLoader: { _, _, _, _ in [] }, onClose: {}).frame(width: 384, height: 400),
             name: "inspector-short", directory: directory)
-        // A vendor's failed poll retains its balances, and the card must not
-        // present them as this poll's reading. OpenAI's row here is stale;
-        // Claude's, in the same card, is not — a whole card marked stale would
-        // not show that the marker belongs to the vendor.
-        try await save(VStack(spacing: 12) {
-            Text("Credit card · OpenAI's newest poll failed").font(.caption).foregroundStyle(Theme.outline)
-            APICreditSectionView(entries: creditFixtures(), staleVendors: ["openai"])
-        }.padding(12).frame(width: 384).background(Theme.surface),
-            name: "credit-section-stale", directory: directory)
         // The inspector's balance card, against a money row that has a month of
         // recorded history — the surface the inline strip only gestures at.
         let balanceHistory = balanceFixtures(now: now)
@@ -912,19 +655,15 @@ struct UXRenderTests {
         let providers = (snapshots + [graphQL]).map { FixtureProvider(snapshot: $0) }
         let store = QuotaStore(manager: QuotaManager(providerFactory: { providers }, displayPreferences: { .default }))
         await store.load()
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .used, layout: .overview))
-            .frame(width: 320, height: 300), name: "widget-used", directory: directory)
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(vendors: [.githubGraphql], metric: .remaining, layout: .overview))
-            .frame(width: 320, height: 240), name: "widget-graphql", directory: directory)
-        try await save(DesktopWidgetView(store: store, filters: WidgetFilters(metric: .remaining, layout: .overview))
-            .frame(width: 360, height: 300), name: "widget-two-columns", directory: directory)
+        try await save(DesktopWidgetView(store: store, filters: WidgetFilters())
+            .frame(width: 320, height: 300), name: "widget-story", directory: directory)
         let unreadable = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
             category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
             status: .unavailable(.offline), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
         let unreadableStore = QuotaStore(manager: QuotaManager(
             providerFactory: { [FixtureProvider(snapshot: unreadable)] }, displayPreferences: { .default }))
         await unreadableStore.load()
-        try await save(DesktopWidgetView(store: unreadableStore, filters: WidgetFilters(layout: .overview))
+        try await save(DesktopWidgetView(store: unreadableStore, filters: WidgetFilters())
             .frame(width: 320, height: 240).background(Theme.surface),
             name: "widget-unreadable", directory: directory)
         let tokenChart = TokenUsagePresentation.chart(usage: .init(buckets: [
@@ -1106,10 +845,11 @@ struct UXRenderTests {
         try await save(VStack(spacing: 12) {
             Text("Review fixtures · automatic order · workspaces in the user's order").font(.caption)
                 .foregroundStyle(Theme.outline)
-            MetricSectionView(category: .aiSubscriptions, snapshots: store.snapshots, onSelect: { _ in })
+            livePopover(store.snapshots, expanded: .deepseek, now: Date())
             FooterActionsView(summary: store.summary, isRefreshing: false,
                 onOpenSettings: {}, onQuit: {}, onRefresh: {})
-        }.padding(12).frame(width: 384).background(Theme.surface), name: "popover-workspaces", directory: directory)
+        }.padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
+            name: "popover-workspaces", directory: directory)
 
         // MARK: Readings for the inspector and the History window
         let history = QuotaHistoryStore(databaseURL: directory.appendingPathComponent("rework-fixture-\(UUID().uuidString).sqlite"))
@@ -1285,25 +1025,6 @@ struct UXRenderTests {
             HistoryOverviewCardView(card: blockedCard, isSelected: false, onSelect: {})
                 .padding(14).frame(width: 260).background(Theme.card),
             name: "history-card-blocked", directory: directory)
-
-        // The widget's Chart layout when history reads fail: wholly, then for
-        // one of two vendors.
-        let widgetFixtures = [claude, goBeta].map { FixtureProvider(snapshot: $0) }
-        for (name, failing) in [("widget-chart-read-failed", Set<VendorIdentifier>([.claude, .opencode])),
-                                ("widget-chart-read-partial", Set<VendorIdentifier>([.opencode]))] {
-            let widgetStore = QuotaStore(
-                manager: QuotaManager(
-                    providerFactory: { widgetFixtures },
-                    displayPreferences: { ProviderDisplayPreferences(ordering: .automatic) }),
-                vendorReadingsLoader: { [readings] vendor, _ in
-                    failing.contains(vendor) ? nil : readings.filter { $0.vendor == vendor.rawValue }
-                })
-            await widgetStore.load()
-            try await save(
-                DesktopWidgetView(store: widgetStore, filters: WidgetFilters(layout: .chart))
-                    .frame(width: 420, height: 320).background(Theme.surface),
-                name: name, directory: directory)
-        }
 
         // MARK: Attempt-4 states: provider-level failed polls, blocked readout
         // Measured polls, an offline poll stored under the provider's own

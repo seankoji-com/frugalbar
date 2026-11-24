@@ -230,8 +230,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
 
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
-        let reset = focus?.resetsAt.map { ResetCountdownBadge.description($0, now: now) }
-            ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.description($0, now: now) } : nil)
+        let reset = focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
+            ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil)
         let pace = focus.flatMap(paceVerdict(for:))
         // A provider with no window still has a measured figure worth leading
         // with: a balance, a count. A subscription tier is not a figure.
@@ -288,7 +288,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             parts.append("Billing cycle you entered, elapsed time only")
         }
         if let resetsAt = bar.resetsAt {
-            parts.append(ResetCountdownBadge.description(resetsAt, now: now))
+            parts.append(ResetCountdownBadge.compactDescription(resetsAt, now: now))
         } else if let text = bar.resetText {
             parts.append(text)
         }

@@ -45,11 +45,6 @@ struct OpenAIUsageCreditTests {
         #expect(spoken.contains("12 days remaining"))
         #expect(spoken.contains("Expires in 68 days"))
         #expect(!spoken.contains("credits remaining"))
-        let group = try #require(PopoverRowGrouping.groups(for: [snap]).first)
-        #expect(group.header == "ChatGPT")
-        #expect(group.headerPlan == "Pro 200")
-        #expect(group.suppressPlan)
-        #expect(PopoverRowGrouping.subtitle(for: snap, suppressPlan: group.suppressPlan, presentation: p).isEmpty)
     }
 
     @Test("missing grant, unmetered credits or a new top-up cannot fabricate usage")
@@ -100,28 +95,4 @@ struct OpenAIUsageCreditTests {
         #expect(stale.spoken.contains("stale"))
     }
 
-    @Test("production row renders the blue credit bar at the 332pt content width")
-    @MainActor func renderedBar() throws {
-        func bluePixels(_ grant: Bool) throws -> Int {
-            var snap = snapshot()
-            if !grant { snap.apiCredits = [] }
-            let host = NSHostingView(rootView: MetricRowView(snapshot: snap, isGrouped: true, suppressPlan: true)
-                .frame(width: 332).background(Theme.card).environment(\.colorScheme, .dark))
-            host.frame.size = host.fittingSize
-            host.layoutSubtreeIfNeeded()
-            #expect(host.fittingSize.width == 332)
-            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            var count = 0
-            for y in 0..<bitmap.pixelsHigh {
-                for x in 0..<bitmap.pixelsWide {
-                    let c = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                    if c.blueComponent > 0.9, c.blueComponent - c.redComponent > 0.25,
-                       c.greenComponent > 0.65 { count += 1 }
-                }
-            }
-            return count
-        }
-        #expect(try bluePixels(true) > bluePixels(false) + 100)
-    }
 }

@@ -131,10 +131,10 @@ name in `scope.model.display_name` (currently "Fable"). `ClaudeQuotaProvider`
 puts those in `QuotaSnapshot.scopedBars`, which is deliberately outside `bars`:
 a scoped cap only blocks one model, while every `bars` consumer reads a window
 as plan-wide (exhaustion sorting, the advice engine's worst bar, the menu bar,
-the widget's average, `displayBars`' collapse). The popover draws them under the
-row with their own percentage and reset while the plan's 5H and WK windows
-are usable. A spent or blocked plan window hides the scoped rows in the
-popover. `percent` is a percentage, so it is
+the widget's story, `displayBars`' collapse). Subscriptions draws each on its
+own line under its Claude account row, with its own percentage and reset, while
+the pool is usable (`ProviderGridPresentation`'s extra bars). A spent or blocked
+plan window hides them. `percent` is a percentage, so it is
 divided by 100 directly — running it through the flat windows'
 fraction-or-percentage heuristic would turn 1% into 100%.
 
@@ -249,19 +249,21 @@ bump drops the table set, which deletes the user's readings. New tables go in
 and `feed_item` did). A change to an existing table's shape needs a real
 migration, not a version bump.
 
-**The desktop widget's average is not a quota.** It is the mean of real
-readings from the selected windows, labelled with how many contributed
-(`sampleCount`, never padded), and it appears only with two or more windows.
-Don't add, normalise or sum windows across vendors into a "total" or "combined"
-figure: vendors meter different things over different windows. The widget's Overview layout is per-provider tiles only: it carries no
-total, and a configured-but-unreadable provider keeps its tile. The widget is an
-app-owned `NSPanel`, not WidgetKit, because there is no `.app` bundle.
+**The desktop widget tells one pool's story or stacks tokens; it never totals
+quota.** Its two layouts are Story (one pool, `ProviderStoryPresentation`,
+following the Use-now pick unless the user chose a pool) and Tokens (see token
+totals below). The Chart and Overview layouts were removed; a stored `chart` or `overview` choice is an unknown value that `WidgetFilters`
+decodes as Story, keeping the rest of the saved filters. Keep windows from
+different vendors apart: vendors meter different things over different
+windows, so no "total" or "combined" quota figure belongs on any layout. The
+widget is an app-owned `NSPanel`, not WidgetKit, because there is no `.app`
+bundle.
 
 **A prepaid API credit balance rides the snapshot that already read it, and is
 never a quota.** `QuotaSnapshot.apiCredits` holds `APICreditEntry` values —
 deliberately *not* snapshots — so no balance can reach `consumptionFraction`,
 the urgency bands, exhaustion sorting, `displayBars`, the advice engine, the
-history recorder or the widget's average, all of which read snapshots. That is
+history recorder or the widget's story, all of which read snapshots. That is
 the structural half of "balances stay out of quota maths". The other half is
 that the figure arrives in a response the snapshot already made (OpenAI's
 `credits` block, Anthropic's `spend`/`extra_usage`/`iguana_necktie`), so a
@@ -522,24 +524,32 @@ pool keeps its service identity and opens its own inspector.
   is used, full when spent, so the fill reads the way vendors' consoles and the
   red spent "100%" read. A full bar for an unused window was read as
   exhausted. The figure under the bar is always printed, 0% included, and the
-  header, group averages, inspector and spoken labels say "used" too. The tick
-  is where an even pace would be (`paceMarker`), drawn only when `paceMarker`
-  is. Text that names its direction ("12% WK left" in a pick reason, the
-  widget's story, History's "% left over time") is unchanged.
+  header, group averages, inspector (its burndown caption included), the
+  menu-bar title ("Primary · 55% WK used · 3d", rounded as the pick's cell
+  rounds) and spoken labels say "used" too. The tick is where an even pace
+  would be (`paceMarker`), drawn only when `paceMarker` is. Text that names its
+  direction ("12% WK left" in a pick reason and the title's spoken label, the
+  widget's story, the "% left over time" charts in History and the inspector)
+  is unchanged.
 - Use one unit per countdown. Subscriptions uses `ResetCountdownBadge.compact`
-  so the badge and cell both switch to days at 24 hours. The menu bar and
-  Story use `GlancePresentation.countdown`, which switches at 48 hours.
+  so the badge and cell both switch to days at 24 hours, and the inspector
+  opened from it says the same (`compactDescription`, `spanSpoken`). The menu
+  bar and Story use `GlancePresentation.countdown`, which switches at 48 hours.
 - A measured exhausted month fills the quota lane. A measured exhausted week
   can fill it when neither an exhausted 5H window nor a monthly reading
   needs its own column. Simultaneously exhausted 5H and WK windows show their
   own red used percentages. Unpublished cells stay blank.
-- The Wallet hosts the existing credit views (`MonthlyCreditBarView`,
-  `GeminiAPICreditView`, `MonthlyPromoCreditView`, `OpenAIUsageCreditView`,
-  `APICreditEntryPresentation`), so every credit rule below still governs its
-  line; it only moves them out from under quota rows.
+- The Wallet builds each line from the existing credit presentations
+  (`APICreditEntryPresentation`, `OpenAIUsageCreditPresentation`,
+  `MonthlyPromoCreditPresentation`, `MonthlyCreditBarPresentation`,
+  `GeminiAPICreditPresentation`, `MetricRowPresentation.ResetCredits`), so
+  every credit rule below still governs its figures.
 
-The legacy provider row (`MetricRowView`, still used by the developer-limits
-card and the inspector) keeps the constraints below.
+The legacy provider row (`MetricRowView`) is drawn only by the popover's
+developer-limits card (GitHub REST, shown while it is near its limit). It has
+no grouping, credits, tickets or model-scoped lines; those live in
+Subscriptions and the Wallet. It keeps the constraints below, and its fallback
+bar shows % used like every other bar.
 
 Legacy rows are 384pt wide (`Theme.popoverWidth`); with the 12pt edge margin and 14pt card padding a row
 has **332pt**: avatar 28 + 8 + name 112 + 8 + a 176pt grid of three window
@@ -578,24 +588,23 @@ coral), and its workspaces drew pink hatching beside Command Code's deep red.
 avatar in the popover is the logo in greyscale at 55% opacity inside a 1.5pt
 red ring, with the countdown (or `nosign` when no reset was published) in a red
 capsule on the top-left corner, so the logo stays recognisable. The ring and
-tag draw outside the 28pt frame and do not move it, so the grouped-workspace
-connector still lines up. The inspector and widget keep the struck-through mark.
+tag draw outside the 28pt frame and do not move it. The inspector and widget
+keep the struck-through mark.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
 entire product.
 
-A row's banked reset credits draw as one gold `ticket.fill` glyph per credit
-(`GoldenTicketView`, from `MetricRowPresentation.ResetCredits`), capped at
+Banked reset credits draw as gold `ticket.fill` glyphs (`GoldenTicketView`,
+from `MetricRowPresentation.ResetCredits`), capped at
 `ResetCreditTicketLimit.maxCount` per scope group, with an exact `+n` for the
-remainder. Each ticket is its own line, with the credit's visible expiry to the
-right ("20d remaining"), matching the OpenAI Codex rows; an expiry the
-vendor did not publish says "Expiry not published" rather than borrowing the
-reset window's date. Claude splits the grant set by the allowance it resets: the
-plan-wide ticket sits under `Claude Code`, and a model's tickets sit under that
-model's scoped row (Fable). A spent or blocked plan window hides model-scoped
-tickets, including tickets without a matching scoped row. The plan ticket
-stays visible, and the spoken label still describes the model tickets.
+remainder. Claude splits the grant set by the allowance it resets: a plan-wide
+ticket is a Wallet line of its own, with the credit's visible expiry as its
+figure ("20d remaining"), and a model's tickets sit beside that model's line in
+Subscriptions (`ModelTicketsBadge`), which a spent or blocked plan window hides.
+A model ticket with no model line to sit beside is a Wallet line too. An expiry
+the vendor did not publish says "Expiry not published" rather than borrowing
+the reset window's date.
 
 The grant **id** names the model first: an id containing Fable is
 model-scoped even when it also clears a shared plan window
@@ -608,11 +617,9 @@ nor `clears` is present. The split is never inferred from ticket order or a
 split. A payload with no per-grant scope (OpenAI, or an older Claude read)
 keeps the flat strip.
 
-The glyph strip carries no accessibility label — the row is one accessibility
-element (`children: .ignore`), so a label on a child is never announced; the
-count, scope and every expiry are spoken by `combinedAccessibilityLabel`
-instead. Each glyph carries a `.help` tooltip with that credit's absolute
-published expiry. Glints are staggered and disabled under Reduce Motion. A
+The model badge speaks its count, scope and every expiry in one label
+(`ResetCredits.spoken`); a Wallet ticket line speaks its own. Each glyph
+carries a `.help` tooltip with that credit's absolute published expiry. Glints are staggered and disabled under Reduce Motion. A
 vendor that published no figure and a vendor that published zero both draw
 nothing.
 
@@ -622,18 +629,14 @@ table and in the sync export. A figure like "60,085.422977 credits" is noise at
 a glance and implies a precision the vendor's own console does not show. The
 rounding is display-only: no balance, series or quota figure is altered.
 
-**The Claude promo credit is drawn in the window anatomy, not as a second
-kind of row.** It has a published limit, so `MonthlyPromoCreditView` draws it
-with the same name/bar/percentage/countdown alignment as a window cell:
-"Usage credits", the amount beneath the title when a positive limit is
-published, the bar, the percentage and the day countdown. It is still not
-quota: no snapshot fraction, urgency, sorting or advice reads it. The visible
-"Resets in N days" subtitle is deliberately not drawn anywhere in the popover;
-the compact countdown on the right is the only reset-style figure.
+**The Claude promo credit is drawn in the window anatomy.** It has a published
+limit, so its Wallet line draws the Subscriptions bar from
+`MonthlyPromoCreditPresentation.barMetrics`: % used, the day countdown beneath
+and the promo's own pace tick, with the amount as the line's figure ("$200.00/mo").
+It is still not quota: no snapshot fraction, urgency, sorting or advice reads
+it. The compact countdown is the only reset-style figure drawn;
 `MonthlyPromoCreditPresentation.resetText` remains populated and is read by
-`spoken` (the row's VoiceOver label and tooltip); it is not drawn as a
-subtitle. The inspector's quota-window reset text is a different field and is
-unchanged. Both the countdown and the promo's reset text come from the promo's
+`spoken` (the line's VoiceOver label and tooltip). Both the countdown and the promo's reset text come from the promo's
 own published period end (`monthlyPeriodEnd`); never substitute the subscription
 renewal or a hardcoded day count.
 
@@ -642,9 +645,9 @@ renewal or a hardcoded day count.
 billing web session (`ClaudeMonthlyCredit`), not the promo/usage-credit pool
 above and not a balance or quota. The billing client reads that amount with
 `Number(value)`, so the decoder accepts both a JSON number and a numeric string;
-accepting only `String?` silently dropped a live entitlement. It draws under the
-row as an **API credit** line with the amount beneath the title (through
-`MoneyText.format`, so a whole USD amount keeps its cents) and an `MO` meter.
+accepting only `String?` silently dropped a live entitlement. It is the
+"Claude Console" Wallet line, its amount as the figure (through
+`MoneyText.format`, so a whole USD amount keeps its cents) beside an `MO` meter.
 
 **The credit belongs to one named row, chosen by identity.** With multi-account
 discovery every Claude row is a named account, and named rows used to drop the

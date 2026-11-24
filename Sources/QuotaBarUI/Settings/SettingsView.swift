@@ -1374,7 +1374,7 @@ public struct SettingsView: View {
                   detail: "A full bar: nothing left in the window until it resets. In the popover, diagonal stripes and the blocked-or-spent sign replace the redundant percentage label.",
                   tint: swatch(LegendSample.spent)),
             .init(symbol: BlockedGlyph.symbolName, title: "Blocked",
-                  detail: "In the vendor's own colour when it gives one, whatever the percentage says, with this sign beside its figure, or a dashed outline in place of a fill when there is no figure. The popover also uses this sign for a spent window.",
+                  detail: "In the same red as a spent window, whatever the percentage says. Subscriptions draws the striped spent bar labelled Blocked; the usage details keep the vendor's figure with this sign beside it.",
                   tint: swatch(LegendSample.blocked)),
             .init(symbol: "minus", title: "Not published",
                   detail: "A faint dash, never an empty bar, which would read as nothing used.",

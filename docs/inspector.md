@@ -20,7 +20,7 @@ The chart card has two views. Readings come from the local history database (`~/
 | **Projection** (dotted) | Where remaining would reach at the recent pace, to the earlier of exhaustion and the reset | `BurnRateForecast` can fit a pace: at least 3 readings spanning 10 minutes in the last hour, usage is rising, and the vendor has not blocked the window | No projection. A flat window has nothing to project, and a blocked one has no usable headroom to run out of |
 | **Now** (vertical rule) | The current time | Always | — |
 
-The summary line under the chart is built from the same facts and omits any clause whose input is missing: "27% left · 21h 0m to reset · out in 2h 15m". A blocked window leads with the block and calls its figure reported, not usable: "Blocked by the vendor · 4% reported remaining · 24h 0m to reset".
+The summary line under the chart is built from the same facts and omits any clause whose input is missing: "73% used · resets in 21h · at recent rate, out in 2h". It says "% used" like the summary and window lines above it, and formats the share the same way. Each countdown is one unit: the reset as the window lines print it, the run-out as the summary's run-out line does. A blocked window leads with the block and calls its figure reported, not usable: "Blocked by the vendor · 96% reported used · resets in 1d".
 
 Points carry urgency as a shape (circle, diamond, triangle, square for blocked), not colour alone.
 

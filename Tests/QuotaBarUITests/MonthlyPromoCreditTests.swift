@@ -95,39 +95,11 @@ struct MonthlyPromoCreditTests {
         let nearlySpent = MonthlyPromoCreditPresentation(entry: entry(balance: Decimal(string: "0.01")!, end: end),
             now: now, isStale: false)
         #expect(nearlySpent.isExhausted)
-        #expect(MonthlyPromoCreditView.figureColor(for: nearlySpent) ==
-            DualBarProgressView.stateColor(for: nearlySpent.barMetrics,
-                                           presentedPaceMarker: nearlySpent.paceMarker))
+        #expect(DualBarProgressView.stateColor(for: nearlySpent.barMetrics,
+            presentedPaceMarker: nearlySpent.paceMarker) == Theme.errorBold)
         let ahead = MonthlyPromoCreditPresentation(entry: entry(balance: 10, end: end), now: now, isStale: false)
         #expect(DualBarProgressView.stateColor(for: ahead.barMetrics,
             presentedPaceMarker: ahead.paceMarker) == Color(red: 0.96, green: 0.72, blue: 0.15))
-    }
-
-    @Test("the promo row draws its even-use tick even when fully used")
-    @MainActor
-    func renderedSpentMarker() throws {
-        func whitePixels(_ presentation: MonthlyPromoCreditPresentation) throws -> Int {
-            let host = NSHostingView(rootView: MonthlyPromoCreditView(presentation: presentation)
-                .frame(width: 332).background(Theme.card).environment(\.colorScheme, .dark))
-            host.frame.size = host.fittingSize
-            host.layoutSubtreeIfNeeded()
-            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            var count = 0
-            for y in 0..<bitmap.pixelsHigh {
-                for x in 0..<bitmap.pixelsWide {
-                    guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                    if c.redComponent > 0.9, c.greenComponent > 0.9, c.blueComponent > 0.9 { count += 1 }
-                }
-            }
-            return count
-        }
-        let spent = MonthlyPromoCreditPresentation(entry: entry(end: end), now: now, isStale: false)
-        let withoutMarker = MonthlyPromoCreditPresentation(entry: entry(end: nil), now: now, isStale: false)
-        #expect(withoutMarker.paceMarker == nil)
-        // The tick is the only near-white mark in the row; its fill, figure
-        // and labels are all darker tones.
-        #expect(try whitePixels(spent) > whitePixels(withoutMarker) + 8)
     }
 
     @Test("the promo uses the shared calendar month across Sydney daylight saving")
@@ -164,47 +136,6 @@ struct MonthlyPromoCreditTests {
         #expect(before.paceMarker == nil)
     }
 
-    @Test("ticket expiry lines fit the name column and preserve a separate balance fallback")
-    @MainActor
-    func creditLineFits() {
-        var snapshot = QuotaSnapshot(id: "openai", vendorId: .openai, displayName: "OpenAI",
-            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        snapshot.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
-            label: "Usage credits", metric: .credits(remaining: Decimal(string: "60085.422977")!, unitName: "credits"))]
-        let creditOnly = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true).frame(width: 332))
-        let creditOnlyHeight = creditOnly.fittingSize.height
-        for count in [2, 5, 7] {
-            snapshot.resetCreditsAvailable = count
-            let p = MetricRowPresentation(snapshot: snapshot, now: now)
-            let natural = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p, showsTickets: false).fixedSize())
-            let constrained = NSHostingView(rootView: SubscriptionCreditLineView(presentation: p, showsTickets: false).frame(width: 332))
-            #expect(natural.fittingSize.width <= 332)
-            #expect(constrained.fittingSize.height < 22)
-            let tickets = NSHostingView(rootView: ResetTicketsView(credits: p.resetCredits!).frame(width: 112))
-            #expect(tickets.fittingSize.width == 112)
-            #expect(tickets.fittingSize.height >= CGFloat(min(count, ResetCreditTicketLimit.maxCount)) * 12)
-            #expect(tickets.fittingSize.height < 125)
-            let row = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true).frame(width: 332))
-            #expect(row.fittingSize.width == 332)
-            #expect(row.fittingSize.height > creditOnlyHeight)
-        }
-    }
-
-    @Test("the production Claude row actually draws its promo credit")
-    @MainActor
-    func promoIsRenderedInsideRow() {
-        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
-            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
-            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
-        let without = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
-        snapshot.apiCredits = [entry(end: end)]
-        let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot).frame(width: 332)).fittingSize.height
-        // The promo row no longer spends a second line on "Resets in …"; the
-        // title and bar still add a visible block beneath the provider row.
-        #expect(withPromo - without > 20)
-    }
-
     /// The OpenAI grant is the same monthly-credit anatomy as Claude's promo.
     /// Its grant issue date is not the subscription cycle start, so the row
     /// derives a calendar month ending at the subscription cycle end.
@@ -223,7 +154,7 @@ struct MonthlyPromoCreditTests {
         #expect(presentation.spoken.components(separatedBy: "$200.00").count == 2)
     }
 
-    @Test("the OpenAI monthly grant uses the subscription month and draws in the row")
+    @Test("the OpenAI monthly grant uses the subscription month")
     @MainActor
     func openAIMonthlyCredit() throws {
         let start = date("2026-10-19T00:25:31Z")
@@ -256,8 +187,6 @@ struct MonthlyPromoCreditTests {
             category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
             status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
             row1: DualBarMetrics(primaryFraction: 0.2, label: "5H"))
-        let without = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
-            .frame(width: 332)).fittingSize.height
         snapshot.openAIMonthlyCredit = credit
         let row = MetricRowPresentation(snapshot: snapshot, now: date("2026-11-09T00:25:31Z"))
         let promo = try #require(row.monthlyPromo)
@@ -284,9 +213,6 @@ struct MonthlyPromoCreditTests {
         let stale = try #require(MetricRowPresentation(snapshot: billingFailed,
             now: date("2026-11-09T00:25:31Z")).monthlyPromo)
         #expect(stale.spoken.contains("stale, the last poll failed"))
-        let withPromo = NSHostingView(rootView: MetricRowView(snapshot: snapshot, isGrouped: true)
-            .frame(width: 332)).fittingSize.height
-        #expect(withPromo - without > 30)
     }
 
     /// The API-credits grant is prorated from its issue date, but the row is a

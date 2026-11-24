@@ -58,13 +58,12 @@ Billing tab and enters in **Settings → Antigravity → Gemini API prepaid cred
 | Monthly spend cap | The project's spend limit | AI Studio → Billing |
 
 Settings records all three figures. The popover draws only the spend cap, as
-the account's **API credit** line under the **Gemini** row inside the
-**Antigravity** service block. The prepaid balance and monthly credit remain
-Settings values and are not drawn.
+the account's own **Gemini API · <account>** line in the **Wallet**, tagged
+CONFIGURED. The prepaid balance and monthly credit remain Settings values and
+are not drawn.
 
-The spend cap is drawn as its own line in the same anatomy as Codex's separate
-monthly credit: the title and cap in the name column, one bar across the meter
-area, and the percentage and countdown beneath. The bar's fill is **elapsed
+The spend cap is drawn as one Wallet line: the title, an elapsed-month meter
+with its countdown beneath, and the cap as the figure. The bar's fill is **elapsed
 calendar time**, never spend. Google publishes no spend figure for a Gemini API
 key, and the prepaid balance is a separate pool drawn down after the monthly
 grant, so neither can serve as the numerator. The visible figure is `MO 63%`;
@@ -81,7 +80,7 @@ percentage of the A$30 spent.
 - **Not a measured vendor balance.** Nothing in the line claims a poll produced
   it. The tooltip says when the cap was saved.
 - **Not a quota.** It never reaches `consumptionFraction`, urgency, exhaustion
-  sorting, the advice engine, the menu-bar icon, the widget's average or the
+  sorting, the advice engine, the menu-bar icon, the widget or the
   sync export.
 - **Not a spend bar.** The API credit meter is elapsed calendar time. It draws
   no percentage of the cap spent, because a balance with no measured usage has
@@ -95,9 +94,9 @@ percentage of the A$30 spent.
   Antigravity poll neither erases it nor marks it stale — and a figure change in
   Settings shows immediately, without waiting out the poll floor.
 
-Only the Gemini row hosts it. The AI Studio key is a Gemini API surface, not
+Only Gemini snapshots carry it. The AI Studio key is a Gemini API surface, not
 the Argon pool or the shared Claude/GPT pool, and a key that serves both does
-not move the same credit onto either of those rows.
+not move the same credit onto either of those pools.
 
 ## Regression coverage
 

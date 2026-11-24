@@ -366,8 +366,15 @@ public enum BurndownPresentation {
 
     // MARK: - Text
 
-    /// e.g. "27% left · 21h 0m to reset · out in 3h 10m". Each clause
-    /// appears only when its input was measured.
+    /// e.g. "73% used · resets in 21h · at recent rate, out in 3h". Each
+    /// clause appears only when its input was measured.
+    ///
+    /// It sits in the inspector beside the summary's and window lines' "%
+    /// used", so it says used too. Each countdown is one unit and matches
+    /// its neighbour in the inspector: the reset as the window lines print
+    /// it (`ResetCountdownBadge.compact`), the run-out as the summary's
+    /// `InspectorRunOut` does (`GlancePresentation.countdown`), so the same
+    /// projection never reads "30h" in one place and "1d" in the other.
     ///
     /// No pace clause: the inspector's summary and window lines state the
     /// pace from `DualBarMetrics.paceMarker`, the popover's own definition.
@@ -377,22 +384,23 @@ public enum BurndownPresentation {
     ///
     /// A blocked window leads with the block and calls its figure "reported":
     /// OpenCode Go still publishes a percentage for a window it has stopped,
-    /// and "4% left" under it would promise capacity that is not usable.
+    /// and a figure under it would read as a usable window.
     public static func summaryLine(for burndown: Burndown, now: Date) -> String {
         var parts: [String] = []
         if burndown.isBlocked {
             parts.append("Blocked by the vendor")
             if let remaining = burndown.nowRemaining {
-                parts.append("\(percent(remaining))% reported remaining")
+                parts.append("\(GlancePresentation.usedPercentText(1 - remaining)) reported used")
             }
         } else if let remaining = burndown.nowRemaining {
-            parts.append("\(percent(remaining))% left")
+            parts.append("\(GlancePresentation.usedPercentText(1 - remaining)) used")
         }
-        if let resetsAt = burndown.resetsAt, resetsAt > now {
-            parts.append("\(BurnRateForecast.formatDuration(resetsAt.timeIntervalSince(now))) to reset")
+        if let resetsAt = burndown.resetsAt, resetsAt > now,
+           let reset = ResetCountdownBadge.compact(resetsAt, now: now) {
+            parts.append("resets in \(reset)")
         }
         if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent rate, out in \(BurnRateForecast.formatDuration(exhaustion.timeIntervalSince(now)))")
+            parts.append("at recent rate, out in \(GlancePresentation.countdown(exhaustion, now: now))")
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
     }
@@ -408,8 +416,9 @@ public enum BurndownPresentation {
         } else if let remaining = burndown.nowRemaining {
             parts.append("\(percent(remaining)) percent remaining")
         }
-        if let resetsAt = burndown.resetsAt, resetsAt > now {
-            parts.append("resets in \(BurnRateForecast.formatDuration(resetsAt.timeIntervalSince(now)))")
+        if let resetsAt = burndown.resetsAt, resetsAt > now,
+           let reset = ResetCountdownBadge.spanSpoken(resetsAt, now: now) {
+            parts.append("resets in \(reset)")
         }
         if burndown.actual.contains(where: \.isBlocked) {
             parts.append("blocked during this window")
@@ -419,7 +428,7 @@ public enum BurndownPresentation {
             parts.append("ideal pace line shown")
         }
         if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent pace runs out in \(BurnRateForecast.formatDuration(exhaustion.timeIntervalSince(now)))")
+            parts.append("at recent pace runs out in \(GlancePresentation.countdownSpoken(exhaustion, now: now))")
         } else if burndown.projection != nil {
             parts.append("at recent pace resets before running out")
         }

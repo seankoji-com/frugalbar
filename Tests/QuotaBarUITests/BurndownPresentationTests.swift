@@ -285,13 +285,18 @@ struct BurndownPresentationTests {
 
     // MARK: - Text
 
-    @Test("summary line names remaining, reset and run-out, and leaves pace to the summary card")
+    @Test("summary line names used, reset and run-out in one unit each, and leaves pace to the summary card")
     func summaryLineFull() throws {
         let b = try #require(P.burndown(readings: burning, instanceID: VendorIdentifier.claude.rawValue, barLabel: "5H", now: now))
         // No pace clause: the inspector states pace once, from the bar's own
         // pace marker, so a second verdict on a different margin cannot
         // contradict it.
-        #expect(P.summaryLine(for: b, now: now) == "42% left · 2h 0m to reset · at recent rate, out in 1h 45m")
+        // % used, as the inspector's figures above it say, and one unit per
+        // countdown, rounded as the Subscriptions cells round (1h 45m → 2h).
+        #expect(P.summaryLine(for: b, now: now) == "58% used · resets in 2h · at recent rate, out in 2h")
+        let spoken = P.accessibilityDescription(for: b, now: now)
+        #expect(spoken.contains("resets in 2 hours"))
+        #expect(spoken.contains("runs out in 2 hours"))
     }
 
     @Test("summary line omits every clause whose input is missing")
@@ -306,7 +311,22 @@ struct BurndownPresentationTests {
             barLabel: "5H", windowStart: nil, resetsAt: nil, actual: [],
             ideal: nil, projection: nil, nowRemaining: 0.27, latestReading: nil
         )
-        #expect(P.summaryLine(for: remainingOnly, now: now) == "27% left")
+        #expect(P.summaryLine(for: remainingOnly, now: now) == "73% used")
+    }
+
+    /// Review R2: the caption and the summary's `InspectorRunOut` sit in one
+    /// inspector, so a run-out 30 hours out must read "30h" in both, not
+    /// "1d" under a summary that says "30h".
+    @Test("the run-out clause counts down as the inspector summary does")
+    func runOutMatchesSummary() {
+        let out = now.addingTimeInterval(30 * 3_600)
+        let b = P.Burndown(
+            barLabel: "WK", windowStart: nil, resetsAt: nil, actual: [], ideal: nil,
+            projection: [P.LinePoint(date: now, remainingFraction: 0.4),
+                         P.LinePoint(date: out, remainingFraction: 0)],
+            nowRemaining: 0.4, latestReading: nil)
+        #expect(P.summaryLine(for: b, now: now) == "60% used · at recent rate, out in 30h")
+        #expect(P.accessibilityDescription(for: b, now: now).contains("runs out in 30 hours"))
     }
 
     @Test("reset credits text appears only when published")
@@ -354,7 +374,7 @@ struct BurndownPresentationTests {
 
         let line = P.summaryLine(for: b, now: now)
         #expect(line.hasPrefix("Blocked by the vendor"))
-        #expect(line.contains("2% reported remaining"))
+        #expect(line.contains("98% reported used"))
         #expect(!line.contains("% left"))
         #expect(!line.contains("out in"))
         let spoken = P.accessibilityDescription(for: b, now: now)
@@ -370,7 +390,7 @@ struct BurndownPresentationTests {
         }
         let unblocked = try #require(P.burndown(readings: open, instanceID: "claude", barLabel: "5H", now: now))
         #expect(unblocked.projection != nil)
-        #expect(P.summaryLine(for: unblocked, now: now).hasPrefix("2% left"))
+        #expect(P.summaryLine(for: unblocked, now: now).hasPrefix("98% used"))
     }
 
     // MARK: - Inspection keeps the recorded figure

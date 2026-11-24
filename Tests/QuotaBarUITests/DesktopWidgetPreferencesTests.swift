@@ -67,7 +67,7 @@ struct DesktopWidgetPreferencesTests {
         clear()
         defer { clear() }
         #expect(WidgetFilters.decode(CredentialStore.desktopWidgetFiltersData) == WidgetFilters())
-        let filters = WidgetFilters(vendors: [.openai], windowLabel: "5H", range: .last30Days, metric: .used)
+        let filters = WidgetFilters(vendors: [.openai], range: .last30Days, layout: .tokens)
         CredentialStore.desktopWidgetFiltersData = filters.encoded()
         #expect(WidgetFilters.decode(CredentialStore.desktopWidgetFiltersData) == filters)
     }
