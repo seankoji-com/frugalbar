@@ -24,8 +24,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Sync to phone & watch. nil in a build with no sync client, which then
     /// never contacts Google and shows no sync setting.
     private let sync: SyncController?
+    /// Active only when launched with `FRUGALBAR_LIVE_HARNESS_DIR` set: keeps
+    /// all state isolated from Keychain, live preferences, history and network
+    /// while driving the exact production `NSStatusItem` / `NSPopover` lifecycle.
+    private let liveHarness: LiveGlanceHarness?
 
     override init() {
+        if let harnessDir = LiveGlanceHarness.outputDirectory {
+            let harness = LiveGlanceHarness(outputDir: harnessDir)
+            self.liveHarness = harness
+            self.historyStore = harness.historyStore
+            self.activityEngine = ActivityIngestionEngine(store: harness.historyStore, adapters: [])
+            self.eventEngine = AIEventEngine(store: harness.historyStore)
+            self.store = harness.store
+            self.sync = nil
+            super.init()
+            return
+        }
+        self.liveHarness = nil
         let hStore = QuotaHistoryStore()
         let aEngine = ActivityIngestionEngine(store: hStore)
         self.historyStore = hStore
@@ -130,22 +146,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the accessory policy explicit for bare and wrapped executables.
         NSApp.setActivationPolicy(.accessory)
 
-        let activity = activityEngine
-        HistoryWindow.activityStatusLoader = { await activity.status() }
+        if liveHarness == nil {
+            let activity = activityEngine
+            HistoryWindow.activityStatusLoader = { await activity.status() }
 
-        // Adopt a choice made under an older, process-name-keyed preference
-        // domain before deciding whether this is a first launch — otherwise
-        // renaming the binary reads as a fresh install.
-        CredentialStore.migrateLegacyPreferences()
+            // Adopt a choice made under an older, process-name-keyed preference
+            // domain before deciding whether this is a first launch — otherwise
+            // renaming the binary reads as a fresh install.
+            CredentialStore.migrateLegacyPreferences()
 
-        // The banner identity and (when a banner kind is on) the one-time
-        // macOS permission prompt. No-op outside an app bundle.
-        NotificationDelivery.prepare()
+            // The banner identity and (when a banner kind is on) the one-time
+            // macOS permission prompt. No-op outside an app bundle.
+            NotificationDelivery.prepare()
 
-        // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
-        // the fetch path (`resolved()` reads without writing) so a poll never
-        // writes preferences or posts the refresh such a write triggers.
-        OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
+            // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
+            // the fetch path (`resolved()` reads without writing) so a poll never
+            // writes preferences or posts the refresh such a write triggers.
+            OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
+        }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -180,22 +198,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.delegate = self
         self.popover = popover
 
+        // One owner for status item redraws.
+        store.onSummaryChange = { [weak self] _ in
+            self?.applyStatusItemPresentation()
+        }
+        applyStatusItemPresentation()
+
+        if let liveHarness {
+            Task { @MainActor [weak self] in
+                guard let self else { exit(1) }
+                let code = await liveHarness.run(
+                    statusItem: statusItem,
+                    popover: popover,
+                    inspection: inspection,
+                    applyStatusItemPresentation: { [weak self] in
+                        self?.applyStatusItemPresentation()
+                    }
+                )
+                exit(code)
+            }
+            return
+        }
+
         // A clicked banner with no link of its own opens this popover; see
         // `NotificationPresenter.didReceive`.
         NotificationPresenter.activateHandler = { [weak self] in
             self?.presentPopoverFromNotification()
         }
 
-
-
-        // One owner for status item redraws.
-        store.onSummaryChange = { [weak self] _ in
-            self?.applyStatusItemPresentation()
-        }
         store.onQuotaRefreshCompleted = { [weak self] snapshots in
             await self?.checkForQuotaTransitions(snapshots)
         }
-        applyStatusItemPresentation()
         DesktopWidgetWindow.configure(store: store)
 
         // A change in Settings → Services takes effect now rather than on
