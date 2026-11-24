@@ -350,6 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func presentPopoverFromNotification() {
         NSApp.activate(ignoringOtherApps: true)
         guard let button = statusItem?.button, let popover, !popover.isShown else { return }
+        // Opens on the list, as the status item does (`togglePopover`).
+        inspection.dismiss(reduceMotion: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         Task { await store.load() }

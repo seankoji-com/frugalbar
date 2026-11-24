@@ -119,7 +119,8 @@ public struct PopoverRootView: View {
                 },
                 onQuit: { NSApp.terminate(nil) },
                 onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } },
-                eventCount: EventsPresentation.popoverEvents(store.recentEvents).count
+                eventCount: EventsPresentation.popoverEvents(store.recentEvents).count,
+                eventsReadFailed: store.recentEventsReadFailed
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 footerHeight = $0
@@ -131,12 +132,14 @@ public struct PopoverRootView: View {
         .allowsHitTesting(selectedSnapshot == nil)
         .accessibilityHidden(selectedSnapshot != nil)
         .overlay {
-            if let selected = selectedSnapshot {
-                // The store's current copy of the selected pool, not the copy
-                // taken when it was opened: a poll that lands while the
-                // inspector is open must reach it (its summary, windows and
-                // forecast), as it reaches the list beneath and the menu bar.
-                let snap = store.snapshots.first { $0.id == selected.id } ?? selected
+            // The store's current copy of the selected pool, not the copy taken
+            // when it was opened: a poll that lands while the inspector is open
+            // must reach it (its summary, windows and forecast), as it reaches
+            // the list beneath and the menu bar. A pool the store no longer
+            // publishes (disconnected, hidden) has no current copy, so nothing
+            // is drawn and the selection is dropped below.
+            if let selected = selectedSnapshot,
+               let snap = Self.currentSnapshot(for: selected, in: store.snapshots, hasLoaded: store.hasLoaded) {
                 MetricDetailModalView(
                     snapshot: snap,
                     readingsLoader: store.readings(for:since:),
@@ -163,6 +166,12 @@ public struct PopoverRootView: View {
             }
         }
         .animation(PopoverInspection.closeAnimation(reduceMotion: reduceMotion), value: selectedSnapshot != nil)
+        .onChange(of: store.snapshots.map(\.id)) {
+            if let selected = selectedSnapshot,
+               Self.currentSnapshot(for: selected, in: store.snapshots, hasLoaded: store.hasLoaded) == nil {
+                inspection.dismiss(reduceMotion: reduceMotion)
+            }
+        }
         .onAppear(perform: updateAvailableHeight)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             updateAvailableHeight()
@@ -175,6 +184,14 @@ public struct PopoverRootView: View {
             // owns the store. Registering here too ran every tick twice.
             await store.load()
         }
+    }
+
+    /// The selected pool as the store publishes it now. Before the first load
+    /// the selection is all there is; after it, a pool the store dropped has
+    /// no current copy and must not be shown as if it did.
+    nonisolated static func currentSnapshot(for selected: QuotaSnapshot, in snapshots: [QuotaSnapshot],
+                                hasLoaded: Bool) -> QuotaSnapshot? {
+        snapshots.first { $0.id == selected.id } ?? (hasLoaded ? nil : selected)
     }
 
     private var scrollHeight: CGFloat {

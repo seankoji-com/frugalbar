@@ -42,11 +42,16 @@ struct GlancePresentationTests {
     @Test("every spent pool is in Back soon, soonest first")
     func realBatchBackSoon() {
         let glance = GlancePresentation(snapshots: F.batch, now: now)
+        // The three OpenCode workspaces are blocked on their account badge, so
+        // their windows' resets are not offered as returns; they sort last.
         #expect(glance.backSoon.map(\.pool.name) == [
-            "Delta", "Codex", "Claude · Account 1", "Secondary", "Argon · Account 1",
-            "OpenDesign", "Command Code", "Alpha", "Beta",
+            "Codex", "Claude · Account 1", "Secondary", "Argon · Account 1",
+            "OpenDesign", "Command Code", "Alpha", "Beta", "Delta",
         ])
-        #expect(glance.backSoon.map(\.returnText) == ["39h", "44h", "2d", "3d", "5d", "5d", "12d", "17d", "17d"])
+        #expect(glance.backSoon.map(\.returnText) == [
+            "44h", "2d", "3d", "5d", "5d", "12d",
+            "Return not published", "Return not published", "Return not published",
+        ])
         #expect(glance.backSoon.allSatisfy { $0.pool.state == .spent })
     }
 

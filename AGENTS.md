@@ -622,6 +622,10 @@ and into the grid pool's windows; a used share is `GlancePresentation.usedPercen
 (never "100%" under the spent threshold, "<1%" for a sliver); a countdown that
 has passed is "due", never "now". Each of these was once derived locally and
 drifted, one surface per review round, until it was moved to one place.
+A return hint ("Back soonest", the menu bar's "next …") is
+`GlancePresentation.soonestReturn`: never a stale pool's old reset, and never
+for an account blocked on its badge, whose windows' resets do not say when the
+account-wide block lifts (its return is "not published").
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the

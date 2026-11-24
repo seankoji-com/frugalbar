@@ -32,10 +32,8 @@ struct UseNowPresentation: Equatable {
             let used = pick.binding.used.map {
                 "\(GlancePresentation.usedPercentText($0)) \(pick.binding.bar.label) used"
             }
-            let reset = pick.binding.bar.resetsAt.map { reset -> String in
-                let when = GlancePresentation.countdown(reset, now: now)
-                return when == "due" ? "reset due" : "resets in \(when)"
-            } ?? "reset not published"
+            let reset = pick.binding.bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
+                .map { $0 == "due" ? "reset due" : "resets in \($0)" } ?? "reset not published"
             detail = [used, reset].compactMap { $0 }.joined(separator: " · ")
             snapshotID = pick.pool.id
             vendor = pick.pool.snapshot.vendorId
@@ -49,10 +47,13 @@ struct UseNowPresentation: Equatable {
         }
         // The soonest published return among spent pools; with nothing usable
         // the headline already names it, so it is not repeated.
+        // Subscriptions' countdown unit (`ResetCountdownBadge.compact`), so the
+        // line matches the badge and cell of the row it names.
         if glance.ranking.first != nil,
-           let entry = glance.backSoon.first(where: { ($0.pool.returnsAt ?? .distantPast) > now }) {
+           let entry = GlancePresentation.soonestReturn(glance.backSoon, now: now),
+           let at = entry.pool.returnsAt, let when = ResetCountdownBadge.compact(at, now: now) {
             let verb = entry.isBlocked ? "Unblocks soonest" : "Back soonest"
-            backSoon = "\(verb): \(GlancePresentation.spokenName(entry.pool)) · \(entry.returnText)"
+            backSoon = "\(verb): \(GlancePresentation.spokenName(entry.pool)) · \(when)"
         } else {
             backSoon = nil
         }

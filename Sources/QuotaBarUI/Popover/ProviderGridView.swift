@@ -421,9 +421,7 @@ struct ProviderGridView: View {
 
     private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool, stale: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Capsule()
-                .fill(Theme.errorBold.opacity(0.6))
-                .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+            SpentTrack()
                 .frame(height: trackHeight)
                 .opacity(stale ? 0.55 : 1)
                 .accessibilityHidden(true)

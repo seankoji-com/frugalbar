@@ -83,7 +83,24 @@ struct UsageBar: View {
     }
 }
 
+/// A spent or blocked window's track: errorBold stripes on a dark errorBold
+/// wash. The stripes are the state's pattern, so they must stand off their own
+/// base: on a 60% wash they measured 1.8:1; on this 22% wash they clear 3:1,
+/// and the stripes against the row clear it too, so the bar keeps its shape.
+struct SpentTrack: View {
+    static let baseOpacity = 0.22
+
+    var body: some View {
+        Capsule()
+            .fill(Theme.errorBold.opacity(Self.baseOpacity))
+            .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+    }
+}
+
 enum GlanceColors {
+    /// The elapsed-month meter's outline (`Theme.primary` at this opacity).
+    static let elapsedOutlineOpacity = 0.75
+
     /// Spent is the one red; ahead of pace or under 30% left is amber; low but
     /// not spent is the pale coral; otherwise healthy green.
     static func fill(for window: GlancePresentation.Window) -> Color {
@@ -163,9 +180,7 @@ private struct WalletMeterCell: View {
             let reset = bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
             if window.isSpent {
                 VStack(alignment: .leading, spacing: 3) {
-                    Capsule()
-                        .fill(Theme.errorBold.opacity(0.6))
-                        .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+                    SpentTrack()
                         .frame(height: trackHeight)
                     caption("100%", reset: reset, color: Theme.error)
                 }
@@ -180,8 +195,10 @@ private struct WalletMeterCell: View {
             VStack(alignment: .leading, spacing: 2) {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
+                        // The outline is the remaining month's only edge, so
+                        // it clears 3:1 against the row (at 35% it was 2.67:1).
                         Capsule()
-                            .strokeBorder(Theme.primary.opacity(0.35), lineWidth: 0.75)
+                            .strokeBorder(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity), lineWidth: 0.75)
                             .background(Capsule().fill(Theme.surfaceContainerHighest.opacity(0.5)))
                         Capsule().fill(Theme.primary)
                             .frame(width: max(0, proxy.size.width * min(max(fraction, 0), 1)))

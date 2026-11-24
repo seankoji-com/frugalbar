@@ -62,7 +62,8 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             tone = pool.isAheadOfPace ? .caution : .good
         case (_, let e?, _):
             standing = e.pool.returnsAt != nil && !e.returnText.hasPrefix("Reset passed")
-                ? "\(e.isBlocked ? "Blocked" : "Spent") · back in \(e.returnText)" : e.returnText
+                ? "\(e.isBlocked ? "Blocked" : "Spent") · back in \(e.returnText)"
+                : (e.isBlocked ? "Blocked · \(e.returnText.lowercased())" : e.returnText)
             tone = .spent
         case (_, _, .unreadable):
             standing = pool.snapshot.status.unavailableReason?.headline ?? "No reading"

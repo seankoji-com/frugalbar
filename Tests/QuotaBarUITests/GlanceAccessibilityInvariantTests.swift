@@ -172,6 +172,13 @@ struct GlanceAccessibilityInvariantTests {
             ("pace marker knockout on healthy fill", resolve(Theme.surface), resolve(Theme.healthy)),
             ("pace marker knockout on tertiary fill", resolve(Theme.surface), resolve(Theme.tertiary)),
             ("pace marker knockout on error fill", resolve(Theme.surface), resolve(Theme.error)),
+            // A spent track's stripes against their own wash, and against the
+            // row (hovered included), which carries the bar's shape.
+            ("spent stripes on spent wash (card)", resolve(Theme.errorBold),
+             resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(card)),
+            ("spent stripes on spent wash (row hover)", resolve(Theme.errorBold),
+             resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(resolve(Theme.rowHover).over(card))),
+            ("elapsed meter outline on card", resolve(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity)).over(card), card),
             ("pace marker knockout on stale healthy fill",
              resolve(Theme.surface), resolve(Theme.healthy.opacity(0.55)).over(card)),
             ("chart mode selected pill (primary) on well", resolve(Theme.primary), resolve(Theme.surfaceContainerLowest)),

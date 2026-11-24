@@ -36,7 +36,9 @@ struct ProviderStoryTests {
     @Test("a blocked pool's story says when it comes back and draws no figure")
     func blocked() throws {
         let s = try story("Delta")
-        #expect(s.standing == "Blocked · back in 39h")
+        // The account is blocked on its badge: its window's 39h reset is not
+        // when the block lifts, so no return is promised.
+        #expect(s.standing == "Blocked · return not published")
         #expect(s.tone == .spent)
         #expect(s.lines.first?.text == "The vendor has blocked the monthly window.")
         #expect(!s.lines.contains { $0.symbol == "hourglass" })

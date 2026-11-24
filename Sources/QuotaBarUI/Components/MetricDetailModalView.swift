@@ -248,6 +248,11 @@ public struct MetricDetailModalView: View {
     /// every layer in one image instead of the first screenful.
     var maxBody: CGFloat = maxBodyHeight
 
+    nonisolated static func balanceSelection(keeping current: String?, in ids: [String]) -> String? {
+        if let current, ids.contains(current) { return current }
+        return ids.first
+    }
+
     /// Which poll the inspector is showing: the pool, when it was fetched,
     /// and whether (and when) a later poll failed.
     nonisolated static func loadKey(for snapshot: QuotaSnapshot) -> String {
@@ -302,7 +307,10 @@ public struct MetricDetailModalView: View {
         }
         readingsFailed = r == nil
         balanceSeries = reads
-        selectedBalanceID = selectedBalanceID ?? reads.first?.series.id
+        // Keep the chosen series only while this poll still publishes it: a
+        // reload that drops it left the card on "Loading balance history"
+        // with no picker to choose another.
+        selectedBalanceID = Self.balanceSelection(keeping: selectedBalanceID, in: reads.map(\.series.id))
         historySince = since
         recentEvents = e ?? []
         eventsFailed = e == nil
@@ -1021,11 +1029,14 @@ public struct MetricDetailModalView: View {
                     )
                 case .trend(let trend, let unit):
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(trend.caption(in: unit))
+                        // The span and the newest reading's time, so a fall
+                        // over two days does not read like one over twelve,
+                        // and the last point is not mistaken for the live figure.
+                        Text("\(trend.caption(in: unit)) \(trend.spanDescription) · "
+                             + "last recorded \(MetricDetailPresentation.clockText(trend.lastMeasuredAt, now: now))")
                             .font(Theme.Typography.subtitle)
                             .foregroundStyle(Theme.onSurfaceVariant)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: false, vertical: true)
                         BalanceChartView(presentation: trend) { value in
                             unit.format(value)
                         }

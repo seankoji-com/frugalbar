@@ -202,7 +202,10 @@ public struct GlancePresentation: Equatable, Sendable {
         }
 
         let spentResets = windows.filter(\.isSpent).map(\.bar.resetsAt)
-        let returnsAt: Date? = (accountBlocked && spentResets.isEmpty) || spentResets.contains(where: { $0 == nil })
+        // An account the vendor blocked on its badge has no published return:
+        // its windows' resets say when each window turns over, not when the
+        // account-wide block lifts, so neither is offered as the pool's return.
+        let returnsAt: Date? = accountBlocked || spentResets.contains(where: { $0 == nil })
             ? nil : spentResets.compactMap { $0 }.max()
         let paidOpen = supplementary.contains {
             $0.allowanceRole == .paidOverage && !$0.isBlocked
@@ -483,6 +486,14 @@ public struct GlancePresentation: Equatable, Sendable {
         pool.name == pool.service || pool.name.hasPrefix(pool.service) ? pool.name : "\(pool.service) \(pool.name)"
     }
 
+    /// The return a hint may promise: the soonest published one still ahead,
+    /// from a current reading. A stale pool's reset is the schedule of a poll
+    /// that has since failed, so it is not offered as the next return (the
+    /// menu bar's "next …" and the popover's "Back soonest" both read this).
+    static func soonestReturn(_ backSoon: [ReturnEntry], now: Date) -> ReturnEntry? {
+        backSoon.first { !$0.pool.isStale && ($0.pool.returnsAt ?? .distantPast) > now }
+    }
+
     static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date,
                           hasWallet: Bool = true) -> MenuTitle {
         if let pick = ranking.first {
@@ -499,8 +510,7 @@ public struct GlancePresentation: Equatable, Sendable {
             return MenuTitle(vendor: pick.pool.snapshot.vendorId, text: text,
                              tone: pick.isCaveat ? .caveat : .normal, spoken: spoken)
         }
-        let next = backSoon.first { ($0.pool.returnsAt ?? .distantPast) > now }
-            .map { countdown($0.pool.returnsAt!, now: now) }
+        let next = soonestReturn(backSoon, now: now).map { countdown($0.pool.returnsAt!, now: now) }
         // Only balances (OpenRouter, DeepSeek's API credit) and no quota pool:
         // nothing failed, there is simply no subscription to pick from.
         if pools.isEmpty {
@@ -510,8 +520,10 @@ public struct GlancePresentation: Equatable, Sendable {
         }
         let readable = pools.filter { $0.state != .unreadable }
         if readable.isEmpty {
+            // About subscription pools only: a Wallet balance may well have
+            // been read.
             return MenuTitle(vendor: nil, text: "No readings", tone: .unknown,
-                             spoken: "No provider could be read")
+                             spoken: "No subscription could be read")
         }
         let uncertain = pools.contains { $0.state == .unreadable || $0.isStale }
         if uncertain {

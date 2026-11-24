@@ -12,6 +12,13 @@ struct FooterActionsView: View {
     /// Recent surfaced events. Events no longer take the popover's top slot;
     /// a labelled pill here opens the list. Nil hides the pill.
     var eventCount: Int? = nil
+    /// The latest recent-events read failed (`QuotaStore.recentEventsReadFailed`).
+    var eventsReadFailed = false
+
+    nonisolated static func eventsLabel(count: Int, readFailed: Bool) -> String {
+        if readFailed { return "Recent events could not be read. Open the events list" }
+        return count == 1 ? "1 recent event. Open the events list" : "\(count) recent events. Open the events list"
+    }
     var onOpenEvents: () -> Void = { HistoryWindow.show(tab: .events) }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -117,21 +124,23 @@ struct FooterActionsView: View {
             if let eventCount {
                 Button(action: onOpenEvents) {
                     HStack(spacing: 4) {
-                        Image(systemName: "bell.fill").font(.system(size: 10))
+                        // A failed read wears a warning, not a quiet zero.
+                        Image(systemName: eventsReadFailed ? "exclamationmark.triangle.fill" : "bell.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(eventsReadFailed ? Theme.tertiary : (eventCount > 0 ? Theme.primary : Theme.onSurfaceVariant))
                         // "recent", not "new": nothing records which events
                         // have been seen, so "new" would claim a fact we lack.
-                        Text(eventCount == 0 ? "Events" : "\(eventCount) recent")
+                        Text(eventCount == 0 || eventsReadFailed ? "Events" : "\(eventCount) recent")
                     }
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(eventCount > 0 ? Theme.primary : Theme.onSurfaceVariant)
+                    .foregroundStyle(eventCount > 0 && !eventsReadFailed ? Theme.primary : Theme.onSurfaceVariant)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(Theme.primary.opacity(eventCount > 0 ? 0.14 : 0.06)))
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(eventCount == 1 ? "1 recent event. Open the events list"
-                                    : "\(eventCount) recent events. Open the events list")
+                .accessibilityLabel(Self.eventsLabel(count: eventCount, readFailed: eventsReadFailed))
                 .help("Open the events list in the History window")
             }
 

@@ -27,6 +27,8 @@ public final class QuotaStore {
     /// The most recent AI-platform events, newest first, for the popover's
     /// events section. Empty when no `eventsLoader` was given.
     public private(set) var recentEvents: [AIEvent] = []
+    /// The latest `recentEvents` read failed; `recentEvents` is the last good one.
+    public private(set) var recentEventsReadFailed = false
     /// Recorded balance-over-time points per series id, for the popover's inline
     /// sparklines. Empty when no loader was given or a series has no history.
     /// A short window on purpose: the strip answers "which way is this moving",
@@ -178,7 +180,11 @@ public final class QuotaStore {
     /// records new events, so the popover section is never a poll behind.
     public func reloadRecentEvents() async {
         guard let eventsLoader else { return }
-        recentEvents = await eventsLoader(nil, nil, Self.recentEventKinds, nil, Self.recentEventsLimit) ?? []
+        let read = await eventsLoader(nil, nil, Self.recentEventKinds, nil, Self.recentEventsLimit)
+        // A failed read keeps what was last read and says it failed: an
+        // empty list here was announced as "0 recent events", a known zero.
+        recentEventsReadFailed = read == nil
+        if let read { recentEvents = read }
     }
 
     /// Loads from cache when fresh, otherwise fetches.

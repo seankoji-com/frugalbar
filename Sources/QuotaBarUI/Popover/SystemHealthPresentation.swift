@@ -74,9 +74,12 @@ enum SystemHealthPresentation {
     }
 
     nonisolated static func checkSpoken(for summary: SystemHealthSummary) -> String {
+        // Said about what was checked: a provider nobody set up was skipped,
+        // not failed, and "every provider" overstated a check that skipped some.
         switch checkState(for: summary) {
-        case .noReadings: "No provider could be read"
-        case .complete: "Every provider was read"
+        case .noReadings:
+            summary.failedCount > 0 ? "No provider could be read" : "Nothing set up to check"
+        case .complete: "Every configured provider was read"
         case .partial: checkProblems(for: summary) ?? "Some providers could not be read"
         }
     }
