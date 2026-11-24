@@ -642,26 +642,40 @@ public actor QuotaManager {
             allProviders.insert(contentsOf: accounts, at: min(insertion, allProviders.count))
         }
         let antigravityVendors: Set<VendorIdentifier> = [.gemini, .antigravityClaude, .antigravityArgon]
+        // A discovery pass that could not inventory this machine's accounts is
+        // not evidence that an account's retired Argon pool was removed. Keep
+        // its cache entry and poll clocks through that failure.
+        var antigravityDiscoveryFailed = false
         if !antigravityVendors.isSubset(of: hidden), let discoverAGY = antigravityProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
                 await QuotaFetchContext.$isUserInitiated.withValue(force) { await discoverAGY() }
             }
             let agyProviders: [any QuotaProvider]
             switch discovery {
-            case .success(let found): agyProviders = found
+            case .success(let found):
+                agyProviders = found
+                antigravityDiscoveryFailed = found.contains { $0 is AntigravityDiscoveryFailureProvider }
             case .failure(let reason):
+                antigravityDiscoveryFailed = true
                 let previous = cache.values.map(\.snapshot).filter {
                     antigravityVendors.contains($0.vendorId) && !Self.isRetiredPool($0)
                 }
-                agyProviders = previous.isEmpty
-                    ? [
+                let hasRetiredPool = cache.values.contains { Self.isRetiredPool($0.snapshot) }
+                if previous.isEmpty {
+                    // A retired pool is the only evidence this account has
+                    // published, so do not invent an Argon failure placeholder
+                    // for it; the entry and its clocks stay in the cache.
+                    agyProviders = [
                         UnavailableAntigravityInstance(id: VendorIdentifier.gemini.rawValue, vendorId: .gemini, name: VendorIdentifier.gemini.displayName, account: nil, reason: reason),
                         UnavailableAntigravityInstance(id: VendorIdentifier.antigravityClaude.rawValue, vendorId: .antigravityClaude, name: VendorIdentifier.antigravityClaude.displayName, account: nil, reason: reason),
+                    ] + (hasRetiredPool ? [] : [
                         UnavailableAntigravityInstance(id: VendorIdentifier.antigravityArgon.rawValue, vendorId: .antigravityArgon, name: VendorIdentifier.antigravityArgon.displayName, account: nil, reason: reason),
-                    ]
-                    : previous.map {
+                    ])
+                } else {
+                    agyProviders = previous.map {
                         UnavailableAntigravityInstance(id: $0.id, vendorId: $0.vendorId, name: $0.displayName, account: $0.antigravityAccount, reason: reason)
                     }
+                }
             }
             let insertion = allProviders.firstIndex { antigravityVendors.contains($0.vendorId) } ?? allProviders.count
             allProviders.removeAll { antigravityVendors.contains($0.vendorId) }
@@ -691,6 +705,9 @@ public actor QuotaManager {
             let legacyAGYKeys = Set(antigravityVendors.map(\.rawValue))
             for key in Array(cache.keys) where (legacyAGYKeys.contains(key)
                 || key.hasPrefix(AntigravityAccount.instancePrefix)) && !liveAntigravity.contains(key) {
+                if antigravityDiscoveryFailed, let entry = cache[key], Self.isRetiredPool(entry.snapshot) {
+                    continue
+                }
                 cache[key] = nil
             }
         }

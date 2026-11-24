@@ -95,13 +95,15 @@ last published fraction, and drawing it would report a window nothing is
 metered against. A configured `FRUGALBAR_GEMINI_API_BASE` is the operator's
 answer and is asked alone, so its failure stays this provider's answer.
 
-**Argon is a row only while Antigravity publishes an Argon quota group.** The
-vendor used to meter it as a separate weekly pool ("Gemini 4 Argon · Separate on
-Pro"). On some accounts that group is gone and the `Gemini Models` group's own
-description names Argon among the models it covers. Then Argon is metered by
-Gemini's windows, so `GeminiQuotaProvider` reports
-`argonMeteredWithGeminiReason` and every `QuotaManager` read filters the pool
-out. The entry stays in the cache only so the poll floor and a vendor's backoff
+**Argon is retired only when Antigravity states the merge.** The vendor used to
+meter it as a separate weekly pool ("Gemini 4 Argon · Separate on Pro"). On some
+accounts that group is gone and the `Gemini Models` group's own description
+names Argon among the models it covers. Then Argon is metered by Gemini's
+windows, so `GeminiQuotaProvider` reports `argonMeteredWithGeminiReason` and
+every `QuotaManager` read filters the pool out. A summary that omits the Argon
+group without stating that merge, or whose group inventory could not be read,
+keeps the unavailable row: absence alone is not a statement that the pool is
+gone. The entry stays in the cache only so the poll floor and a vendor's backoff
 still apply to it; deleting it made every manual refresh re-hit the vendor for a
 pool nobody can see. Never draw Gemini's windows under an Argon label: two pools
 with one allowance would double its headroom in Use now and the widget.

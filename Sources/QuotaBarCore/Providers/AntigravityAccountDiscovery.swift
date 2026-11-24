@@ -711,7 +711,7 @@ actor AntigravityAccountDiscovery {
     }
 }
 
-private struct AntigravityDiscoveryFailureProvider: QuotaProvider {
+struct AntigravityDiscoveryFailureProvider: QuotaProvider {
     let allowance: GeminiQuotaProvider.Allowance
     let reason: UnavailableReason
     var vendorId: VendorIdentifier {

@@ -195,6 +195,18 @@ private let githubPayload = #"""
 
 // MARK: - Suite
 
+/// Counts discovery calls and makes the second one outlive a short deadline,
+/// simulating a transient discovery timeout without a network.
+private actor DiscoveryGate {
+    private var calls = 0
+
+    func providers(_ make: @Sendable () -> [any QuotaProvider]) async -> [any QuotaProvider] {
+        calls += 1
+        if calls == 2 { try? await Task.sleep(for: .seconds(1.5)) }
+        return make()
+    }
+}
+
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
 
@@ -465,6 +477,78 @@ struct ProviderHTTPTests {
         #expect(first["antigravity_argon"] == nil)
         #expect(second["antigravity_argon"] == nil)
         #expect(first["gemini"]?.status.confidence == .measured)
+    }
+
+
+    @Test("a later throttle outranks an earlier generic failure")
+    func laterThrottleOutranksEarlierBadResponse() async throws {
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.url!.host!.hasPrefix("daily-")
+                ? canned(status: 503, body: "{}")
+                : canned(status: 429, body: "{}", headers: ["Retry-After": "300"])
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon)
+                .fetchSnapshot()
+        }
+        guard case .rateLimited(let retryAfter) = snapshot.status.unavailableReason else {
+            Issue.record("expected the later throttle, got \(String(describing: snapshot.status.unavailableReason))")
+            return
+        }
+        #expect(try #require(retryAfter).timeIntervalSinceNow > 200)
+    }
+
+    @Test("an unreadable group inventory cannot confirm retirement")
+    func unreadableGroupInventoryKeepsRow() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.url!.host!.hasPrefix("daily-")
+                ? canned(body: merge)
+                : canned(body: #"{"groups":[42]}"#)
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon)
+                .fetchSnapshot()
+        }
+        #expect(snapshot.status == .unavailable(.badResponse))
+    }
+
+    @Test("a discovery timeout keeps a retired pool and its poll clocks")
+    func discoveryTimeoutKeepsRetiredPool() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":1}]}]}"#
+        let gate = DiscoveryGate()
+        let policy = CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                 perProviderTimeout: 0.6, minPollInterval: 120)
+        let manager = QuotaManager(
+            cachePolicy: policy,
+            providerFactory: { [] },
+            antigravityProviderFactory: {
+                await gate.providers {
+                    let batch = AntigravityRequestBatch()
+                    return [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                            GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch),
+                            GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+                }
+            }
+        )
+        try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: merge)
+        }) {
+            let first = await manager.forceRefresh()
+            #expect(first["antigravity_argon"] == nil)
+            #expect(URLProtocolStub.requestCount == 4)
+            let second = await manager.forceRefresh()
+            #expect(second["antigravity_argon"] == nil)
+            let third = await manager.forceRefresh()
+            #expect(third["antigravity_argon"] == nil)
+            #expect(URLProtocolStub.requestCount == 4,
+                    "a retired entry must survive the discovery timeout and its floor")
+        }
     }
 
 

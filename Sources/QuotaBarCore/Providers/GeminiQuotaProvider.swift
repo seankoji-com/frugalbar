@@ -205,6 +205,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
         let groups: [Group]?
 
+        /// True when the payload's `groups` array held an entry the strict
+        /// decoder rejected. Such an entry may have been the Argon group, so
+        /// the summary cannot confirm that Argon is absent.
+        let rejectedGroupEntries: Bool
+
         /// Every group's name and bucket ids, read independently of the
         /// stricter `groups` values. A group whose buckets fail that strict
         /// decode is still evidence the vendor publishes the pool — which is
@@ -250,7 +255,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // A malformed independent pool cannot invalidate another pool's
             // real reading. Reject the entire malformed group, never its fields
             // individually (an invalid disabled flag must not become enabled).
-            groups = try container.decodeIfPresent([GroupEntry].self, forKey: .groups)?.compactMap(\.value)
+            let entries = try container.decodeIfPresent([GroupEntry].self, forKey: .groups)
+            groups = entries?.compactMap(\.value)
+            rejectedGroupEntries = entries?.contains { $0.value == nil } ?? false
             groupIdentities = (try? container.decodeIfPresent([IdentityEntry].self, forKey: .groups))?
                 .compactMap(\.value) ?? []
         }
@@ -352,11 +359,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // generic one.
         var lastFailure: UnavailableReason?
         // The first failure that is more than "this host publishes no such
-        // pool". A later host's no-quota answer must not overwrite an earlier
-        // 429, rejection or unparseable body: that is the failure the user and
-        // the poll backoff need to see. Read only for Argon, where retirement
-        // would otherwise hide it.
-        var strongerFailure: UnavailableReason?
+        // pool". Read only when the last host said only "no quota": a later
+        // host must not erase an earlier 429, rejection or unparseable body.
+        var firstRealFailure: UnavailableReason?
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
         // than turned into a reason here. It stands while no host has supplied
@@ -376,7 +381,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 if let googleReason = Self.googleErrorReason(statusCode: assistHTTP.statusCode, data: assistData) {
                     lastFailure = googleReason
-                    strongerFailure = strongerFailure ?? googleReason
+                    firstRealFailure = firstRealFailure ?? googleReason
                     transportFailure = nil
                     break
                 }
@@ -386,7 +391,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     now: now
                 ) {
                     lastFailure = reason
-                    strongerFailure = strongerFailure ?? reason
+                    firstRealFailure = firstRealFailure ?? reason
                     if reason == .credentialRejected {
                         transportFailure = nil
                         break
@@ -395,13 +400,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 guard let assist = try? JSONDecoder().decode(CodeAssist.self, from: assistData) else {
                     lastFailure = .badResponse
-                    strongerFailure = strongerFailure ?? .badResponse
+                    firstRealFailure = firstRealFailure ?? .badResponse
                     continue
                 }
                 guard let project = assist.cloudaicompanionProject?.trimmed, !project.isEmpty else {
                     let reason = UnavailableReason.unsupported("Antigravity did not identify a quota project")
                     lastFailure = reason
-                    strongerFailure = strongerFailure ?? reason
+                    firstRealFailure = firstRealFailure ?? reason
                     continue
                 }
                 let (data, http) = try await requests.response(
@@ -412,7 +417,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 if let googleReason = Self.googleErrorReason(statusCode: http.statusCode, data: data) {
                     lastFailure = googleReason
-                    strongerFailure = strongerFailure ?? googleReason
+                    firstRealFailure = firstRealFailure ?? googleReason
                     transportFailure = nil
                     break
                 }
@@ -422,7 +427,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     now: now
                 ) {
                     lastFailure = reason
-                    strongerFailure = strongerFailure ?? reason
+                    firstRealFailure = firstRealFailure ?? reason
                     // A rejected credential is a verdict on the token, not on
                     // the host: the next host would receive the same token and
                     // answer the same way. Everything else — a route missing on
@@ -442,7 +447,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
                     lastFailure = .badResponse
-                    strongerFailure = strongerFailure ?? .badResponse
+                    firstRealFailure = firstRealFailure ?? .badResponse
                     continue
                 }
                 if allowance == .argon {
@@ -450,6 +455,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                         || Self.publishesArgonGroup(summary)
                     argonMeteredWithGemini = argonMeteredWithGemini
                         || Self.argonIsMeteredWithGemini(summary)
+                    // A group entry the decoder could not read may have been
+                    // the Argon group. Unless the lenient scan recognised it,
+                    // this summary cannot confirm Argon is absent, so it is an
+                    // unreadable inventory rather than a merge statement.
+                    if summary.rejectedGroupEntries, !Self.publishesArgonGroup(summary) {
+                        lastFailure = .badResponse
+                        firstRealFailure = firstRealFailure ?? .badResponse
+                        continue
+                    }
                 }
                 guard let group = quotaGroup(in: summary) else {
                     lastFailure = noQuotaReason
@@ -471,7 +485,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 break
             } catch let error as ProviderError {
                 lastFailure = error.reason
-                strongerFailure = strongerFailure ?? error.reason
+                firstRealFailure = firstRealFailure ?? error.reason
                 if error.reason == .credentialRejected {
                     transportFailure = nil
                     break
@@ -492,18 +506,21 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // exception, cleared above, because the token is the same wherever
             // it is presented.
             if let transportFailure { return .transportError(transportFailure) }
-            // A stronger failure on any host outranks retirement. A later host
-            // saying only "no Argon group" must not turn an earlier throttle or
-            // unparseable body into a silent merge: the row keeps that reason
-            // and the manager keeps the vendor's backoff.
-            if allowance == .argon, let strongerFailure {
-                return .failed(strongerFailure)
+            // The last host's real failure is the answer. Only when it said
+            // merely "no such pool" does an earlier real failure take over, so
+            // a later no-quota host cannot erase a 429, rejection or
+            // unparseable body — and a later 429 is not erased by an earlier
+            // 503. A host that never answered is handled above.
+            if allowance == .argon, lastFailure == noQuotaReason, let firstRealFailure {
+                return .failed(firstRealFailure)
             }
             // Only a host that actually answered may retire the pool, and only
-            // while no host published an Argon group. A stronger failure — a
-            // rejected credential, a throttle, an unparseable body — stays this
-            // provider's answer, because the vendor never said Argon is gone.
-            if allowance == .argon, !argonGroupPublished, argonMeteredWithGemini {
+            // while no host published an Argon group. A real failure — a
+            // rejected credential, a throttle, an unparseable body — stays
+            // this provider's answer, because the vendor never said Argon is
+            // gone.
+            if allowance == .argon, !argonGroupPublished, argonMeteredWithGemini,
+               lastFailure == nil || lastFailure == noQuotaReason {
                 return .failed(Self.argonMeteredWithGeminiReason)
             }
             return .failed(lastFailure ?? .badResponse)
