@@ -214,9 +214,16 @@ public struct MetricDetailModalView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                        .stroke(Theme.outlineVariant.opacity(0.4), lineWidth: 0.5)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Theme.cardRimTop, Theme.outlineVariant.opacity(0.35)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.75
+                        )
                 )
-                .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(0.62), radius: 22, x: 0, y: 12)
                 .padding(Theme.edgeMargin)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -734,6 +741,11 @@ public struct MetricDetailModalView: View {
                         .lineLimit(burndown.isBlocked ? 2 : 1)
                         .minimumScaleFactor(0.85)
                         .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Text("Axis: % left")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Theme.outline)
+                        .fixedSize()
                 }
                 .accessibilityHidden(true)
                 BurndownChartView(burndown: burndown, now: now)

@@ -114,6 +114,11 @@ struct GlanceAccessibilityInvariantTests {
             ("error on card", resolve(Theme.error), card),
             ("error on inspectorInnerCard", resolve(Theme.error), inspectorInnerCard),
 
+            // Exhausted countdown badge small text (9.5pt white on Theme.errorBadge)
+            ("exhausted countdown badge white text on errorBadge", hex(0xffffff), resolve(Theme.errorBadge)),
+            // Stale reset caption on expanded row surface (full opacity Theme.outline)
+            ("stale reset caption (outline) on expandedRow", resolve(Theme.outline), resolve(Theme.surfaceContainerHighest.opacity(0.22)).over(card)),
+
             // Menu bar caveat text on dark menu bar
             ("MenuBar caveat on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .caveat)), card),
 
@@ -144,12 +149,12 @@ struct GlanceAccessibilityInvariantTests {
             ("error fill on card", resolve(Theme.error), card),
             ("error fill on track", resolve(Theme.error), track),
             ("errorBold fill on card", resolve(Theme.errorBold), card),
+            ("errorBold fill on track", resolve(Theme.errorBold), track),
             ("errorBold fill on surface", resolve(Theme.errorBold), surface),
             ("errorBold fill on inspectorInnerCard", resolve(Theme.errorBold), inspectorInnerCard),
             ("primary fill on card", resolve(Theme.primary), card),
             ("primary fill on track", resolve(Theme.primary), track),
             ("pace marker (onSurface) on track", resolve(Theme.onSurface), track),
-            ("exhausted badge white text on errorBold", hex(0xffffff), resolve(Theme.errorBold)),
             ("MenuBar critical on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .critical)), card),
         ]
 
@@ -180,13 +185,27 @@ struct GlanceAccessibilityInvariantTests {
         #expect(bitmap.pixelsWide > 0 && bitmap.pixelsHigh > 0)
     }
 
-    @Test("PopoverInspection dismiss remains deterministic under Reduce Motion")
-    func popoverInspectionDismissDeterministic() {
+    @Test("PopoverInspection and FooterActionsView disable motion under Reduce Motion")
+    func reduceMotionDisablesInspectorAndRefreshMotion() {
+        // Inspector open/close animations & scale transition
+        #expect(PopoverInspection.openAnimation(reduceMotion: true) == nil)
+        #expect(PopoverInspection.closeAnimation(reduceMotion: true) == nil)
+        #expect(!PopoverInspection.usesScaleTransition(reduceMotion: true))
+        #expect(PopoverInspection.openAnimation(reduceMotion: false) != nil)
+        #expect(PopoverInspection.closeAnimation(reduceMotion: false) != nil)
+        #expect(PopoverInspection.usesScaleTransition(reduceMotion: false))
+
         let inspection = PopoverInspection()
         inspection.snapshot = GlanceFixtures.batch.first
         #expect(inspection.snapshot != nil)
-        #expect(inspection.dismiss())
+        #expect(inspection.dismiss(reduceMotion: true))
         #expect(inspection.snapshot == nil)
-        #expect(!inspection.dismiss())
+        #expect(!inspection.dismiss(reduceMotion: true))
+
+        // Footer refresh icon rotation
+        #expect(FooterActionsView.refreshRotationDegrees(isRefreshing: true, reduceMotion: true) == 0)
+        #expect(FooterActionsView.refreshAnimation(isRefreshing: true, reduceMotion: true) == nil)
+        #expect(FooterActionsView.refreshRotationDegrees(isRefreshing: true, reduceMotion: false) == 360)
+        #expect(FooterActionsView.refreshAnimation(isRefreshing: true, reduceMotion: false) != nil)
     }
 }

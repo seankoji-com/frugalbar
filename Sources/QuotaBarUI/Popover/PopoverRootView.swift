@@ -27,17 +27,37 @@ public final class PopoverInspection {
     public var snapshot: QuotaSnapshot?
     public init() {}
 
+    /// Pure motion policy for inspector open/close transitions so Reduce Motion
+    /// is respected consistently across SwiftUI views and AppKit Escape handling.
+    public static func openAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84)
+    }
+
+    public static func closeAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.18)
+    }
+
+    public static func usesScaleTransition(reduceMotion: Bool) -> Bool {
+        !reduceMotion
+    }
+
     /// Closes the open inspector, if any. Returns whether one was open.
     @discardableResult
-    public func dismiss() -> Bool {
+    public func dismiss(reduceMotion: Bool? = nil) -> Bool {
         guard snapshot != nil else { return false }
-        withAnimation(.easeOut(duration: 0.2)) { snapshot = nil }
+        let reduced = reduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if let anim = Self.closeAnimation(reduceMotion: reduced) {
+            withAnimation(anim) { snapshot = nil }
+        } else {
+            snapshot = nil
+        }
         return true
     }
 }
 
 public struct PopoverRootView: View {
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var store: QuotaStore
     @State private var inspection: PopoverInspection
     private var selectedSnapshot: QuotaSnapshot? {
@@ -122,16 +142,22 @@ public struct PopoverRootView: View {
                         await store.balancePoints(seriesId: id, since: since, until: until, bucketSeconds: bucket)
                     },
                     onClose: {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        if let anim = PopoverInspection.closeAnimation(reduceMotion: reduceMotion) {
+                            withAnimation(anim) { selectedSnapshot = nil }
+                        } else {
                             selectedSnapshot = nil
                         }
                     }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .transition(
+                    PopoverInspection.usesScaleTransition(reduceMotion: reduceMotion)
+                        ? .opacity.combined(with: .scale(scale: 0.98))
+                        : .identity
+                )
                 .zIndex(100)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedSnapshot != nil)
+        .animation(PopoverInspection.closeAnimation(reduceMotion: reduceMotion), value: selectedSnapshot != nil)
         .onAppear(perform: updateAvailableHeight)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             updateAvailableHeight()
@@ -183,7 +209,9 @@ public struct PopoverRootView: View {
             ProviderGridView(
                 presentation: grid,
                 onSelect: { snap in
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                        withAnimation(anim) { selectedSnapshot = snap }
+                    } else {
                         selectedSnapshot = snap
                     }
                 }
@@ -191,7 +219,9 @@ public struct PopoverRootView: View {
             if !wallet.rows.isEmpty {
                 WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now) { id in
                     guard let snap = store.snapshots.first(where: { $0.id == id }) else { return }
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                        withAnimation(anim) { selectedSnapshot = snap }
+                    } else {
                         selectedSnapshot = snap
                     }
                 }
@@ -213,7 +243,9 @@ public struct PopoverRootView: View {
                     forecasts: store.forecasts,
                     balanceSeries: store.balanceSeries,
                     onSelect: { snap in
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                            withAnimation(anim) { selectedSnapshot = snap }
+                        } else {
                             selectedSnapshot = snap
                         }
                     }
@@ -225,31 +257,52 @@ public struct PopoverRootView: View {
                 if store.hasLoaded {
                     // Loaded, and nothing came back: only possible when every
                     // provider is hidden, so say how to fix that.
-                    VStack(spacing: 10) {
-                        Text("Nothing to show")
-                            .font(Theme.Typography.title)
-                            .foregroundStyle(Theme.onSurface)
-                        Text("Every provider is hidden. Open Settings → Services to turn monitoring on.")
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.onSurfaceVariant)
-                            .multilineTextAlignment(.center)
-                        Button("Open Preferences") {
-                            if let onOpenSettings {
-                                onOpenSettings()
-                            } else {
-                                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    GlanceCard {
+                        VStack(spacing: 10) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(Theme.outline)
+                                .accessibilityHidden(true)
+                            Text("Nothing to show")
+                                .font(Theme.Typography.title)
+                                .foregroundStyle(Theme.onSurface)
+                            Text("Every provider is hidden. Open Settings → Services to turn monitoring on.")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.onSurfaceVariant)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                if let onOpenSettings {
+                                    onOpenSettings()
+                                } else {
+                                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                                }
+                            } label: {
+                                Text("Open Preferences")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.onSurface)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(Theme.surfaceContainerHigh))
+                                    .overlay(Capsule().strokeBorder(Theme.outlineVariant.opacity(0.6), lineWidth: 0.75))
                             }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
-                    .accessibilityElement(children: .combine)
-                } else {
-                    Text("Loading…")
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.outline)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 32)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 26)
+                    }
+                } else {
+                    GlanceCard {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading…")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.outline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 28)
+                    }
                 }
             }
         }

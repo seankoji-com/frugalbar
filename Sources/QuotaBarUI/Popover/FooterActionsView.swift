@@ -14,8 +14,20 @@ struct FooterActionsView: View {
     var eventCount: Int? = nil
     var onOpenEvents: () -> Void = { HistoryWindow.show(tab: .events) }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isGearHovered = false
     @State private var isRefreshHovered = false
+
+    /// Pure motion policy for the refresh button so Reduce Motion disables
+    /// continuous spin deterministically.
+    static func refreshRotationDegrees(isRefreshing: Bool, reduceMotion: Bool) -> Double {
+        (isRefreshing && !reduceMotion) ? 360 : 0
+    }
+
+    static func refreshAnimation(isRefreshing: Bool, reduceMotion: Bool) -> Animation? {
+        guard !reduceMotion else { return nil }
+        return isRefreshing ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -98,17 +110,16 @@ struct FooterActionsView: View {
             // Manual Refresh Button
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 13.5, weight: .medium))
                     .foregroundStyle(isRefreshHovered ? Theme.onSurface : Theme.onSurfaceVariant.opacity(0.85))
-                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                    .rotationEffect(.degrees(Self.refreshRotationDegrees(isRefreshing: isRefreshing, reduceMotion: reduceMotion)))
                     .animation(
-                        isRefreshing
-                            ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                            : .default,
+                        Self.refreshAnimation(isRefreshing: isRefreshing, reduceMotion: reduceMotion),
                         value: isRefreshing
                     )
                     .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .background(Circle().fill(isRefreshHovered ? Theme.rowHover : Color.clear))
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(isRefreshing)

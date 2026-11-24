@@ -297,6 +297,7 @@ public struct VendorAvatarView: View {
         static let badgeFontSize: CGFloat = 9.5
         static let badgeBorderWidth: CGFloat = 1.5
         static let badgeTextColor = Color.white
+        static let badgeBackground = Theme.errorBadge
         static let badgeBorderColor = Theme.card
     }
 
@@ -385,7 +386,7 @@ public struct VendorAvatarView: View {
         .foregroundStyle(ExhaustedStyle.badgeTextColor)
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
-        .background(Capsule().fill(Overlay.exhaustedTint))
+        .background(Capsule().fill(ExhaustedStyle.badgeBackground))
         .overlay(Capsule().strokeBorder(ExhaustedStyle.badgeBorderColor, lineWidth: ExhaustedStyle.badgeBorderWidth))
     }
 }

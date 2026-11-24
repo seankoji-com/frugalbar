@@ -79,10 +79,10 @@ struct BurndownChartView: View {
                         .foregroundStyle(Theme.outlineVariant.opacity(0.35))
                     AxisValueLabel {
                         if let v = value.as(Int.self) {
-                            Text("\(v)%")
-                                .font(.system(size: 10, weight: .medium))
+                            Text("\(v)% left")
+                                .font(.system(size: 9.5, weight: .medium))
                                 .monospacedDigit()
-                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         }
                     }
                 }
@@ -123,6 +123,20 @@ struct BurndownChartView: View {
             }
 
             ForEach(burndown.actual) { point in
+                AreaMark(
+                    x: .value("Time", point.timestamp),
+                    yStart: .value("Floor", 0),
+                    yEnd: .value("Remaining %", point.remainingFraction * 100)
+                )
+                .interpolationMethod(.monotone)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [DetailChartStyle.color(for: point).opacity(0.18), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
                 LineMark(
                     x: .value("Time", point.timestamp),
                     y: .value("Remaining %", point.remainingFraction * 100),
@@ -292,10 +306,10 @@ struct UsageHistoryChartView: View {
                     .foregroundStyle(Theme.outlineVariant.opacity(0.35))
                 AxisValueLabel {
                     if let v = value.as(Int.self) {
-                        Text("\(v)%")
-                            .font(.system(size: 10, weight: .medium))
+                        Text("\(v)% left")
+                            .font(.system(size: 9.5, weight: .medium))
                             .monospacedDigit()
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     }
                 }
             }

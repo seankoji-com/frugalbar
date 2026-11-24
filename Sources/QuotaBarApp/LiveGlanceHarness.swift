@@ -22,8 +22,6 @@ final class LiveGlanceHarness {
         return URL(fileURLWithPath: raw)
     }
 
-    static var isActive: Bool { outputDirectory != nil }
-
     private struct FixtureProvider: QuotaProvider {
         let snapshot: QuotaSnapshot
         var vendorId: VendorIdentifier { snapshot.vendorId }
@@ -86,6 +84,7 @@ final class LiveGlanceHarness {
     let outputDir: URL
     let tempDir: URL
     let historyStore: QuotaHistoryStore
+    let manager: QuotaManager
     let store: QuotaStore
     private let fixtureSource = FixtureSource()
     private let now = Date()
@@ -110,6 +109,7 @@ final class LiveGlanceHarness {
             },
             displayPreferences: { .default }
         )
+        self.manager = manager
 
         self.store = QuotaStore(
             manager: manager,
@@ -171,12 +171,20 @@ final class LiveGlanceHarness {
 
             var captures: [String] = []
             var captureMethod = "screencapture-window"
+            var statusItemClicked = false
+            var popoverOpened = false
+            var rowExpanded = false
+            var inspectorOpened = false
+            var escape1ClosedInspectorOnly = false
+            var escape2ClosedPopover = false
 
             // 1. Real status-item click -> Popover open
             button.performClick(nil)
+            statusItemClicked = true
             try waitUntil(timeout: 5.0, description: "NSPopover to open after status-item click") {
                 popover.isShown && popover.contentViewController?.view.window != nil
             }
+            popoverOpened = popover.isShown
             guard let popoverWindow = popover.contentViewController?.view.window else {
                 throw HarnessError("NSPopover window is nil after opening")
             }
@@ -198,6 +206,7 @@ final class LiveGlanceHarness {
             guard axFind(where: { $0.hasPrefix("Primary") }) else {
                 throw HarnessError("Expanded Claude group did not expose Primary account row")
             }
+            rowExpanded = true
             let (expandedPath, _) = try captureWindow(popoverWindow, name: "live-popover-expanded-claude")
             captures.append(expandedPath)
 
@@ -208,6 +217,7 @@ final class LiveGlanceHarness {
             try await waitUntilAsync(timeout: 5.0, description: "Inline inspector to open") {
                 inspection.snapshot != nil && popover.isShown
             }
+            inspectorOpened = inspection.snapshot != nil
             await pumpEventsAsync(seconds: 0.9)
             let (inspectorPath, _) = try captureWindow(popoverWindow, name: "live-inspector-open")
             captures.append(inspectorPath)
@@ -223,6 +233,7 @@ final class LiveGlanceHarness {
             guard popover.isShown else {
                 throw HarnessError("Escape #1 closed the entire NSPopover instead of only the inspector")
             }
+            escape1ClosedInspectorOnly = inspection.snapshot == nil && popover.isShown
             await pumpEventsAsync(seconds: 0.2)
             let (afterEsc1Path, _) = try captureWindow(popoverWindow, name: "live-after-escape-1")
             captures.append(afterEsc1Path)
@@ -235,6 +246,7 @@ final class LiveGlanceHarness {
             try await waitUntilAsync(timeout: 3.0, description: "Escape #2 to close NSPopover") {
                 !popover.isShown
             }
+            escape2ClosedPopover = !popover.isShown
 
             // 6. State-matrix live captures (when scenarios != "core")
             let scenarioMode = ProcessInfo.processInfo.environment[Self.scenariosEnvKey] ?? "all"
@@ -248,17 +260,20 @@ final class LiveGlanceHarness {
                 )
             }
 
-            let menuStates = makeMenuBarStateSummaries()
+            let menuStates = try await sampleLiveMenuBarStates(
+                button: button,
+                applyStatusItemPresentation: applyStatusItemPresentation
+            )
             let report = Report(
                 gitHead: ProcessInfo.processInfo.environment["FRUGALBAR_GIT_HEAD"] ?? "unknown",
                 statusItemTitle: statusTitle,
                 statusItemAccessibilityLabel: statusLabel,
-                statusItemClicked: true,
-                popoverOpened: true,
-                rowExpanded: true,
-                inspectorOpened: true,
-                escape1ClosedInspectorOnly: true,
-                escape2ClosedPopover: true,
+                statusItemClicked: statusItemClicked,
+                popoverOpened: popoverOpened,
+                rowExpanded: rowExpanded,
+                inspectorOpened: inspectorOpened,
+                escape1ClosedInspectorOnly: escape1ClosedInspectorOnly,
+                escape2ClosedPopover: escape2ClosedPopover,
                 captureMethod: captureMethod,
                 captures: captures,
                 menuBarStates: menuStates
@@ -291,56 +306,98 @@ final class LiveGlanceHarness {
             throw HarnessError("NSPopover window missing on reopen")
         }
         try waitUntilVisible(popoverWindow, timeout: 3.0)
-        pumpEvents(seconds: 0.35)
+        NSApp.activate(ignoringOtherApps: true)
+        popoverWindow.makeKeyAndOrderFront(nil)
+        await pumpEventsAsync(seconds: 0.35)
 
         // Inspector: Balance sparkline trend (OpenRouter)
-        if let openRouter = store.snapshots.first(where: { $0.id == "openrouter" }) {
-            fixtureSource.failBalances = false
-            inspection.snapshot = openRouter
-            await pumpEventsAsync(seconds: 0.7)
-            captures.append(try captureWindow(popoverWindow, name: "live-inspector-balance-trend").0)
-            inspection.snapshot = nil
-            await pumpEventsAsync(seconds: 0.25)
-
-            // Inspector: Balance readFailed
-            fixtureSource.failBalances = true
-            inspection.snapshot = openRouter
-            await pumpEventsAsync(seconds: 0.7)
-            captures.append(try captureWindow(popoverWindow, name: "live-inspector-balance-read-failed").0)
-            inspection.snapshot = nil
-            fixtureSource.failBalances = false
-            await pumpEventsAsync(seconds: 0.25)
+        guard let openRouter = store.snapshots.first(where: { $0.id == "openrouter" }) else {
+            throw HarnessError("OpenRouter fixture snapshot missing for balance inspector captures")
         }
+        fixtureSource.failBalances = false
+        inspection.snapshot = openRouter
+        await pumpEventsAsync(seconds: 0.7)
+        guard axFindText(where: { $0.localizedCaseInsensitiveContains("Balance history") }),
+              !axFindText(where: { $0.contains("Could not read the recorded balance") }) else {
+            let seen = axSampleLabels(limit: 20).joined(separator: " | ")
+            throw HarnessError("Balance trend inspector did not render healthy Balance history (seen: \(seen))")
+        }
+        captures.append(try captureWindow(popoverWindow, name: "live-inspector-balance-trend").0)
+        inspection.snapshot = nil
+        await pumpEventsAsync(seconds: 0.25)
+
+        // Inspector: Balance readFailed
+        fixtureSource.failBalances = true
+        inspection.snapshot = openRouter
+        await pumpEventsAsync(seconds: 0.7)
+        guard axFindText(where: { $0.contains("Could not read the recorded balance") }) else {
+            let seen = axSampleLabels(limit: 20).joined(separator: " | ")
+            throw HarnessError("Balance readFailed inspector did not render BalanceCardState.readFailed message (seen: \(seen))")
+        }
+        captures.append(try captureWindow(popoverWindow, name: "live-inspector-balance-read-failed").0)
+        inspection.snapshot = nil
+        fixtureSource.failBalances = false
+        await pumpEventsAsync(seconds: 0.25)
 
         // Inspector: History with markersFailed
-        if let claude = store.snapshots.first(where: { $0.vendorId == .claude }) {
-            fixtureSource.failMarkers = true
-            inspection.snapshot = claude
-            await pumpEventsAsync(seconds: 0.7)
-            _ = axPress(where: { $0 == "History" })
-            await pumpEventsAsync(seconds: 0.6)
-            captures.append(try captureWindow(popoverWindow, name: "live-inspector-history-markers-failed").0)
-            inspection.snapshot = nil
-            fixtureSource.failMarkers = false
-            await pumpEventsAsync(seconds: 0.25)
+        guard let claude = store.snapshots.first(where: { $0.vendorId == .claude }) else {
+            throw HarnessError("Claude fixture snapshot missing for History markersFailed capture")
         }
+        fixtureSource.failMarkers = true
+        inspection.snapshot = claude
+        await pumpEventsAsync(seconds: 0.7)
+        guard axPress(where: { $0 == "History" }) else {
+            let seen = axSampleLabels(limit: 20).joined(separator: " | ")
+            throw HarnessError("Could not AXPress History tab in inline inspector (seen: \(seen))")
+        }
+        await pumpEventsAsync(seconds: 0.6)
+        guard axFindText(where: { $0.contains("Reset markers could not be read") }) else {
+            let seen = axSampleLabels(limit: 20).joined(separator: " | ")
+            throw HarnessError("History inspector did not render markersFailed warning banner (seen: \(seen))")
+        }
+        captures.append(try captureWindow(popoverWindow, name: "live-inspector-history-markers-failed").0)
+        inspection.snapshot = nil
+        fixtureSource.failMarkers = false
+        await pumpEventsAsync(seconds: 0.25)
 
         // Popover: Stale + Exhausted + Blocked + Elevated Developer Limits
-        fixtureSource.snapshots = makeStaleExhaustedDevLimitsBatch()
-        await store.forceRefresh(allowInteractiveUnlock: false)
-        applyStatusItemPresentation()
-        await pumpEventsAsync(seconds: 0.5)
+        try await replaceSnapshots(makeStaleExhaustedDevLimitsBatch(), applyStatusItemPresentation: applyStatusItemPresentation)
+        await pumpEventsAsync(seconds: 0.6)
+        guard axFindText(where: { $0.contains("GitHub REST") }),
+              axFindText(where: { $0.contains("1 stale") }),
+              axFindText(where: { $0.contains("OpenAI") || $0.contains("Codex") }),
+              axFindText(where: { $0.localizedCaseInsensitiveContains("spent") || $0.contains("100%") || $0.contains("0% left") }),
+              axFindText(where: { $0.contains("DeepSeek") || $0.contains("OpenCode") }) else {
+            let seen = axSampleLabels(limit: 25).joined(separator: " | ")
+            throw HarnessError("Stale/Exhausted/DevLimits state did not render expected indicators (seen: \(seen))")
+        }
         captures.append(try captureWindow(popoverWindow, name: "live-popover-stale-exhausted-devlimits").0)
 
         // Popover: Empty / all-hidden
-        fixtureSource.snapshots = []
-        await store.forceRefresh(allowInteractiveUnlock: false)
-        applyStatusItemPresentation()
-        await pumpEventsAsync(seconds: 0.4)
+        try await replaceSnapshots([], applyStatusItemPresentation: applyStatusItemPresentation)
+        await pumpEventsAsync(seconds: 0.5)
+        guard axFindText(where: { $0.contains("Nothing to show") }) else {
+            throw HarnessError("Empty popover state did not render 'Nothing to show' (stale rows remained)")
+        }
         captures.append(try captureWindow(popoverWindow, name: "live-popover-empty").0)
 
         popover.performClose(nil)
         await pumpEventsAsync(seconds: 0.3)
+    }
+
+    /// Clears all cached readings in `QuotaManager` before refreshing the next
+    /// fixture batch so replacement batches never inherit earlier providers or
+    /// hit `minPollInterval`.
+    private func replaceSnapshots(
+        _ snapshots: [QuotaSnapshot],
+        applyStatusItemPresentation: @escaping @MainActor () -> Void
+    ) async throws {
+        for vendor in VendorIdentifier.allCases {
+            await manager.forgetReadings(of: vendor)
+        }
+        fixtureSource.snapshots = snapshots
+        await store.forceRefresh(allowInteractiveUnlock: false)
+        applyStatusItemPresentation()
     }
 
     // MARK: - Fixtures
@@ -470,23 +527,52 @@ final class LiveGlanceHarness {
     }
 
     private func makeStaleExhaustedDevLimitsBatch() -> [QuotaSnapshot] {
-        var staleClaude = QuotaSnapshot(
-            id: "claude-account:stale", vendorId: .claude, displayName: "Primary",
+        var usableClaude = QuotaSnapshot(
+            id: "claude-account:mixed-usable", vendorId: .claude, displayName: "Primary",
             category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bar("5H", 0.12, resetsInHours: 3.5, windowHours: 5),
+            row2: bar("WK", 0.42, resetsInHours: 112, windowHours: 168),
+            planName: "Max"
+        )
+        usableClaude.claudeAccount = ClaudeAccount(id: "mixed-usable", badge: "1", sourceLabel: "fixture", fallbackName: "Primary", planName: "Max")
+
+        var spentClaude = QuotaSnapshot(
+            id: "claude-account:mixed-spent", vendorId: .claude, displayName: "Secondary",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bar("WK", 1.0, resetsInHours: 40, windowHours: 168)
+        )
+        spentClaude.claudeAccount = ClaudeAccount(id: "mixed-spent", badge: "2", sourceLabel: "fixture", fallbackName: "Secondary")
+
+        var staleClaude = QuotaSnapshot(
+            id: "claude-account:stale", vendorId: .claude, displayName: "Tertiary",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
             status: .measured(.warning), resetsAt: nil, lastUpdated: now.addingTimeInterval(-1800),
             auxiliaryInfo: nil,
             row1: bar("WK", 0.65, resetsInHours: 80, windowHours: 168),
-            planName: "Max"
+            planName: "Pro"
         )
+        staleClaude.claudeAccount = ClaudeAccount(id: "stale", badge: "3", sourceLabel: "fixture", fallbackName: "Tertiary", planName: "Pro")
         staleClaude.staleReading = StaleReading(reason: .rateLimited(retryAfter: now.addingTimeInterval(300)), at: now)
 
         let spentOpenAI = QuotaSnapshot(
-            id: "openai", vendorId: .openai, displayName: "OpenAI",
+            id: "openai-spent", vendorId: .openai, displayName: "OpenAI",
             category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
             status: .measured(.critical), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
             row1: bar("WK", 1.0, resetsInHours: 28, windowHours: 168),
             planName: "Pro"
         )
+
+        var opencodeBlocked = QuotaSnapshot(
+            id: "opencode-go:blocked-batch", vendorId: .opencode, displayName: "Alpha",
+            category: .aiSubscriptions, metric: .subscription(tierName: "OpenCode Go", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bar("5H", 0.0, resetsInHours: 5.0, windowHours: 5),
+            row2: bar("WK", 0.0, resetsInHours: 159, windowHours: 168),
+            badgeText: "Blocked", planName: "OpenCode Go"
+        )
+        opencodeBlocked.row3 = bar("MO", 1.0, resetsInHours: 39.2, windowHours: 720, blocked: true)
 
         let githubElevated = QuotaSnapshot(
             id: "githubRest", vendorId: .githubRest, displayName: "GitHub REST",
@@ -496,10 +582,13 @@ final class LiveGlanceHarness {
             row1: bar("1H", 0.84, resetsInHours: 0.5, windowHours: 1)
         )
 
-        return [staleClaude, spentOpenAI, githubElevated]
+        return [usableClaude, spentClaude, staleClaude, spentOpenAI, opencodeBlocked, githubElevated]
     }
 
-    private func makeMenuBarStateSummaries() -> [MenuBarStateSummary] {
+    private func sampleLiveMenuBarStates(
+        button: NSStatusBarButton,
+        applyStatusItemPresentation: @escaping @MainActor () -> Void
+    ) async throws -> [MenuBarStateSummary] {
         let primary = makePrimaryFixtureBatch()
         let weak = QuotaSnapshot(
             id: "weak", vendorId: .opencode, displayName: "Low",
@@ -519,15 +608,37 @@ final class LiveGlanceHarness {
             ("critical", [spent]),
             ("unknown", []),
         ]
-        return cases.map { name, snaps in
-            let p = MenuBarGlance.presentation(snapshots: snaps, now: now)
-            return MenuBarStateSummary(
+        var summaries: [MenuBarStateSummary] = []
+        for (name, snaps) in cases {
+            try await replaceSnapshots(snaps, applyStatusItemPresentation: applyStatusItemPresentation)
+            await pumpEventsAsync(seconds: 0.15)
+            let p = MenuBarGlance.presentation(snapshots: store.snapshots, now: Date())
+            let liveTitle = button.attributedTitle.string.trimmingCharacters(in: .whitespaces)
+            let liveLabel = button.accessibilityLabel() ?? ""
+            let observedTone = String(describing: p.tone)
+            guard !liveTitle.isEmpty, !liveLabel.isEmpty else {
+                throw HarnessError("Live NSStatusItem missing title or accessibility label for tone \(name)")
+            }
+            guard observedTone == name else {
+                throw HarnessError("MenuBarGlance tone mismatch for \(name): got \(observedTone)")
+            }
+            guard liveTitle == p.text else {
+                throw HarnessError("Live NSStatusItem title mismatch for \(name): live='\(liveTitle)' expected='\(p.text)'")
+            }
+            guard liveLabel == p.accessibilityLabel else {
+                throw HarnessError("Live NSStatusItem label mismatch for \(name): live='\(liveLabel)' expected='\(p.accessibilityLabel)'")
+            }
+            summaries.append(MenuBarStateSummary(
                 state: name,
-                text: p.text,
-                tone: String(describing: p.tone),
-                accessibilityLabel: p.accessibilityLabel
-            )
+                text: liveTitle,
+                tone: observedTone,
+                accessibilityLabel: liveLabel
+            ))
         }
+        guard Set(summaries.map(\.tone)).count == cases.count else {
+            throw HarnessError("MenuBar state matrix did not cover all \(cases.count) distinct tones")
+        }
+        return summaries
     }
 
     private func seedHistory(for batch: [QuotaSnapshot]) async throws {
@@ -610,7 +721,7 @@ final class LiveGlanceHarness {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             while let event = NSApp.nextEvent(
-                matching: .any, until: nil,
+                matching: .any, until: .distantPast,
                 inMode: .default, dequeue: true
             ) {
                 NSApp.sendEvent(event)
@@ -671,6 +782,31 @@ final class LiveGlanceHarness {
         for _ in 0..<8 {
             if Self.element(in: app, where: match) != nil {
                 return true
+            }
+            pumpEvents(seconds: 0.15)
+        }
+        return false
+    }
+
+    private func axFindText(where match: (String) -> Bool) -> Bool {
+        let app = AXUIElementCreateApplication(getpid())
+        AXUIElementSetMessagingTimeout(app, 3)
+        for _ in 0..<6 {
+            var queue = Self.rootElements(from: app)
+            var visited = 0
+            while !queue.isEmpty, visited < 5_000 {
+                let element = queue.removeFirst()
+                visited += 1
+                for attribute in [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute] {
+                    var value: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                       let text = value as? String, match(text) {
+                        return true
+                    }
+                }
+                var children: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
+                queue += (children as? [AXUIElement]) ?? []
             }
             pumpEvents(seconds: 0.15)
         }

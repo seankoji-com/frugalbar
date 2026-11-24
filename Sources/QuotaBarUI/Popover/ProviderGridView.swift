@@ -5,9 +5,11 @@ struct ProviderGridView: View {
     let presentation: ProviderGridPresentation
     var onSelect: (QuotaSnapshot) -> Void = { _ in }
     @State var expanded: VendorIdentifier?
+    @State private var hoveredGroup: VendorIdentifier?
+    @State private var hoveredPool: String?
 
-    private let nameWidth: CGFloat = 129
-    private let trackHeight: CGFloat = 3
+    private let nameWidth: CGFloat = 136
+    private let trackHeight: CGFloat = 3.5
 
     var body: some View {
         if !presentation.groups.isEmpty {
@@ -29,16 +31,16 @@ struct ProviderGridView: View {
                 .padding(.vertical, 5)
                 .accessibilityHidden(true)
                 ForEach(presentation.groups) { group in
-                    Divider()
+                    Divider().overlay(Theme.outlineVariant.opacity(0.28))
                     groupButton(group)
                     if expanded == group.id {
                         VStack(spacing: 0) {
                             ForEach(group.pools) { pool in
-                                Divider()
-                                poolButton(pool)
+                                Divider().overlay(Theme.outlineVariant.opacity(0.22))
+                                poolButton(pool, accentHex: group.id.accentColorHex)
                             }
                         }
-                        .background(Theme.surfaceContainerHighest.opacity(0.25))
+                        .background(Theme.surfaceContainerHighest.opacity(0.22))
                     }
                 }
                 Divider()
@@ -53,13 +55,17 @@ struct ProviderGridView: View {
     }
 
     private func groupButton(_ group: ProviderGridPresentation.Group) -> some View {
-        Button {
-            expanded = expanded == group.id ? nil : group.id
+        let staleCount = group.pools.filter(\.isStale).count
+        let isExpanded = expanded == group.id
+        let isHovered = hoveredGroup == group.id
+        return Button {
+            expanded = isExpanded ? nil : group.id
         } label: {
             line {
                 identity(
                     group.title, subtitle: group.subtitle, vendor: group.id, status: .measured(.none),
-                    spent: group.allSpent, reset: presentation.countdown(group.nextReturn), size: 23
+                    spent: group.allSpent, reset: presentation.countdown(group.nextReturn), size: 23,
+                    staleBadgeCount: staleCount
                 )
                 .accessibilityHidden(true)
             } figures: {
@@ -81,22 +87,29 @@ struct ProviderGridView: View {
                     }
                 }
             } trailing: {
-                Image(systemName: expanded == group.id ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(Theme.outline)
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(isHovered || isExpanded ? Theme.onSurfaceVariant : Theme.outline)
                     .accessibilityHidden(true)
             }
             .frame(minHeight: 48)
-            .background(expanded == group.id ? Theme.surfaceContainerHighest.opacity(0.25) : Color.clear)
+            .background(
+                isExpanded
+                    ? Theme.surfaceContainerHighest.opacity(0.24)
+                    : (isHovered ? Theme.rowHover : Color.clear)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hoveredGroup = $0 ? group.id : (hoveredGroup == group.id ? nil : hoveredGroup) }
         .accessibilityLabel(groupAccessibilityLabel(group))
-        .accessibilityHint(expanded == group.id ? "Collapse accounts" : "Expand accounts")
+        .accessibilityHint(isExpanded ? "Collapse accounts" : "Expand accounts")
     }
 
-    private func poolButton(_ pool: ProviderGridPresentation.Pool) -> some View {
-        Button { onSelect(pool.snapshot) } label: {
+    private func poolButton(_ pool: ProviderGridPresentation.Pool, accentHex: String) -> some View {
+        let isHovered = hoveredPool == pool.id
+        let railColor = Color(hexString: accentHex) ?? Theme.primary
+        return Button { onSelect(pool.snapshot) } label: {
             VStack(alignment: .leading, spacing: 5) {
                 line {
                     identity(
@@ -104,7 +117,7 @@ struct ProviderGridView: View {
                         status: pool.snapshot.status, spent: pool.state == .spent,
                         reset: presentation.countdown(pool.returnsAt, stale: pool.isStale), size: 18
                     )
-                    .padding(.leading, 3)
+                    .padding(.leading, 4)
                 } figures: {
                     if let column = pool.spanningColumn, let window = pool.windows[column] {
                         windowCell(window, label: column.label, stale: pool.isStale)
@@ -126,15 +139,17 @@ struct ProviderGridView: View {
                 }
                 if pool.isStale || pool.state == .onBonus {
                     Text(pool.isStale ? "Last reading · refresh failed" : "On bonus allowance")
-                        .font(.system(size: 10))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, 14)
+                        .padding(.leading, 4)
                 }
                 if pool.windows.isEmpty, case .unsupported(let detail)? = pool.snapshot.status.unavailableReason {
                     Text(detail)
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.outline)
                         .padding(.horizontal, 14)
+                        .padding(.leading, 4)
                 }
                 ForEach(Array(pool.extraBars.enumerated()), id: \.offset) { _, bar in
                     let window = GlancePresentation.window(for: bar, now: presentation.now)
@@ -144,6 +159,7 @@ struct ProviderGridView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.outline)
                                 .padding(.horizontal, 14)
+                                .padding(.leading, 4)
                         }
                     } else {
                         // The shared `line`, so this bar keeps the trailing
@@ -153,24 +169,33 @@ struct ProviderGridView: View {
                             // line, in the account they reset (owner, 24 Nov 2026).
                             HStack(spacing: 4) {
                                 Text(bar.label)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Theme.outline)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Theme.onSurfaceVariant)
                                 if let tickets = MetricRowPresentation(snapshot: pool.snapshot, now: presentation.now)
                                     .modelResetCredits(for: bar.label) {
                                     ModelTicketsBadge(credits: tickets)
                                 }
                             }
+                            .padding(.leading, 4)
                         } figures: {
                             windowCell(window, label: bar.label, stale: pool.isStale, showSpentPercent: true)
                         }
                     }
                 }
             }
-            .padding(.vertical, 5)
-            .frame(minHeight: 39)
+            .padding(.vertical, 6)
+            .frame(minHeight: 40)
+            .background(isHovered ? Theme.rowHover : Color.clear)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(railColor.opacity(isHovered ? 0.85 : 0.45))
+                    .frame(width: 2)
+                    .padding(.vertical, 4)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hoveredPool = $0 ? pool.id : (hoveredPool == pool.id ? nil : hoveredPool) }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Open usage details")
     }
@@ -206,7 +231,7 @@ struct ProviderGridView: View {
 
     private func identity(
         _ title: String, subtitle: String?, vendor: VendorIdentifier, status: ProviderStatus,
-        spent: Bool, reset: String?, size: CGFloat
+        spent: Bool, reset: String?, size: CGFloat, staleBadgeCount: Int = 0
     ) -> some View {
         HStack(spacing: 8) {
             VendorAvatarView(
@@ -215,10 +240,28 @@ struct ProviderGridView: View {
             )
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onSurface)
-                    .truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.onSurface)
+                        .truncationMode(.middle)
+                    if staleBadgeCount > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 7.5, weight: .bold))
+                            Text("\(staleBadgeCount)")
+                                .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        }
+                        .foregroundStyle(Theme.tertiary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.tertiary.opacity(0.16)))
+                        .fixedSize()
+                    }
+                }
                 if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle).font(.system(size: 10)).foregroundStyle(Theme.outline)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.outline)
+                        .minimumScaleFactor(0.82)
                 }
             }
             .lineLimit(1)
@@ -331,17 +374,18 @@ struct ProviderGridView: View {
             let exhausted = WindowGridPresentation.isExhausted(window.bar)
             let title = exhausted ? (showSpentPercent ? "100%" : label) : "Blocked"
             spentCell(title, reset: reset, spoken: "\(label), \(spentDescription(window))",
-                      showsBlockedGlyph: exhausted && window.bar.isBlocked)
-                .opacity(stale ? 0.65 : 1)
+                      showsBlockedGlyph: exhausted && window.bar.isBlocked, stale: stale)
         } else if let used = window.used {
             VStack(alignment: .leading, spacing: 3) {
+                // Dim only the bar track/fill on stale readings, never the
+                // caption text — dimming Theme.outline dropped contrast below AA.
                 UsageBar(window: window, height: trackHeight)
+                    .opacity(stale ? 0.55 : 1)
                 // Always printed, 0% included: an empty bar with no figure
                 // reads as "no reading".
                 meterCaption(GlancePresentation.usedPercentText(used),
                              reset: reset, color: GlanceColors.text(for: window))
             }
-            .opacity(stale ? 0.65 : 1)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel([ "\(label), \(used.formatted(.percent)) used",
                                  reset.map { "resets in \($0)" } ].compactMap { $0 }.joined(separator: ", "))
@@ -355,12 +399,13 @@ struct ProviderGridView: View {
         return "blocked"
     }
 
-    private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool) -> some View {
+    private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool, stale: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Capsule()
                 .fill(Theme.errorBold.opacity(0.6))
                 .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
                 .frame(height: trackHeight)
+                .opacity(stale ? 0.55 : 1)
                 .accessibilityHidden(true)
             meterCaption(title, reset: reset, color: Theme.error, showsBlockedGlyph: showsBlockedGlyph)
         }

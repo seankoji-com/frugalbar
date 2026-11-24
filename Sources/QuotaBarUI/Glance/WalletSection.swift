@@ -32,8 +32,19 @@ struct GlanceCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.outlineVariant.opacity(0.35), lineWidth: 0.5))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.card))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Theme.cardRimTop, Theme.outlineVariant.opacity(0.28)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.75
+                    )
+            )
     }
 }
 
@@ -94,24 +105,38 @@ struct WalletSection: View {
     /// (`WalletPresentation.Row.snapshotID`), as a Subscriptions row does.
     var onSelect: (String) -> Void = { _ in }
 
+    @State private var figureColumnWidth: CGFloat = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                // A grid, not stacked rows: the figure column is as wide as the
-                // widest figure ("60,085 credits"), so every meter starts and
-                // ends in the same place. A fixed figure width let a wider
-                // figure push its bar out of line.
-                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
-                        WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
-                            BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
-                        }, now: now, onSelect: { onSelect(row.snapshotID) })
+                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.28)) }
+                        WalletRowView(
+                            row: row,
+                            trend: row.balanceSeriesID.flatMap {
+                                BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
+                            },
+                            now: now,
+                            figureColumnWidth: figureColumnWidth,
+                            onSelect: { onSelect(row.snapshotID) }
+                        )
                     }
+                }
+                .onPreferenceChange(WalletFigureWidthKey.self) { width in
+                    if width > 0 { figureColumnWidth = width }
                 }
             }
         }
+    }
+}
+
+private struct WalletFigureWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -174,49 +199,53 @@ private struct WalletRowView: View {
     let row: WalletPresentation.Row
     let trend: BalanceSparklinePresentation?
     let now: Date
+    let figureColumnWidth: CGFloat
     let onSelect: () -> Void
 
-    /// The meter column's width. With the grid's shared figure column, every
-    /// line's bar starts and ends at the same place.
+    @State private var isHovered = false
+
+    /// The meter column's width. Combined with the measured shared figure
+    /// column width, every line's bar starts and ends in the same place.
     private let meterWidth: CGFloat = 76
 
     var body: some View {
-        GridRow {
-            nameCell
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 14)
-                .padding(.vertical, 8)
-                // The grid has no row element, so the name cell speaks for the
-                // whole line and the other cells stay silent.
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityHint("Open usage details")
-                .accessibilityAction { onSelect() }
-                .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
-                .selectsWalletLine(onSelect)
-            Group {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                nameCell
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if let meter = row.meter {
                     WalletMeterCell(meter: meter, now: now)
+                        .frame(width: meterWidth)
                 } else if let trend {
                     BalanceSparklineView(presentation: trend)
+                        .frame(width: meterWidth)
                 } else {
-                    Color.clear.frame(height: 1)
+                    Color.clear.frame(width: meterWidth, height: 1)
                 }
+                Text(row.figure ?? "")
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(color(row.tone))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: WalletFigureWidthKey.self, value: proxy.size.width)
+                        }
+                    )
+                    .frame(minWidth: figureColumnWidth > 0 ? figureColumnWidth : nil, alignment: .trailing)
             }
-            .frame(width: meterWidth)
-            .accessibilityHidden(true)
-            .selectsWalletLine(onSelect)
-            Text(row.figure ?? "")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundStyle(color(row.tone))
-                .lineLimit(1)
-                .fixedSize()
-                .gridColumnAlignment(.trailing)
-                .padding(.trailing, 14)
-                .accessibilityHidden(true)
-                .selectsWalletLine(onSelect)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8.5)
+            .background(isHovered ? Theme.rowHover : Color.clear)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Open usage details")
+        .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
     }
 
     private var nameCell: some View {
@@ -277,13 +306,5 @@ private struct WalletRowView: View {
         case .exhausted: Theme.errorBold
         case .unknown: Theme.outline
         }
-    }
-}
-
-private extension View {
-    /// A grid row is not one view, so each cell of a Wallet line takes the
-    /// click: anywhere on the line opens its inspector.
-    func selectsWalletLine(_ action: @escaping () -> Void) -> some View {
-        contentShape(Rectangle()).onTapGesture(perform: action)
     }
 }
