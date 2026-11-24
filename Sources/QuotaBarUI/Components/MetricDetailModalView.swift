@@ -417,7 +417,24 @@ public struct MetricDetailModalView: View {
             readings: readingsFailed ? nil : readings, instanceID: snapshot.id, since: historySince ?? now)
     }
 
-    private var summaryColor: Color { Self.color(for: presentation.summary.state) }
+    /// True when the snapshot's raw quota band is still `.healthy` yet the
+    /// observed burn rate already forecasts running out before reset. Leading
+    /// with a green "Healthy" verdict contradicts the forecast directly below.
+    private var forecastWarnsEarlyRunOut: Bool {
+        presentation.summary.state == .healthy && runOutText != nil
+    }
+
+    private var summaryColor: Color {
+        forecastWarnsEarlyRunOut ? Theme.tertiary : Self.color(for: presentation.summary.state)
+    }
+
+    private var summaryHeadline: String {
+        forecastWarnsEarlyRunOut ? "On track to run out" : presentation.summary.headline
+    }
+
+    private var summarySymbol: String {
+        forecastWarnsEarlyRunOut ? "exclamationmark.triangle.fill" : presentation.summary.symbol
+    }
 
     /// Read by Settings' legend as well, so its swatches are the inspector's.
     nonisolated static func color(for state: MetricDetailPresentation.State) -> Color {
@@ -438,7 +455,7 @@ public struct MetricDetailModalView: View {
     private var summaryCard: some View {
         let summary = presentation.summary
         return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: summary.symbol)
+            Image(systemName: summarySymbol)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(summaryColor)
                 .frame(width: 24)
@@ -446,7 +463,7 @@ public struct MetricDetailModalView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(summary.headline)
+                    Text(summaryHeadline)
                         .font(Theme.Typography.cardBody.weight(.semibold))
                         .foregroundStyle(summaryColor)
                     Spacer(minLength: 4)
@@ -512,7 +529,8 @@ public struct MetricDetailModalView: View {
                 .stroke(summaryColor.opacity(0.3), lineWidth: 0.5)
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([summary.accessibilityLabel]
+        .accessibilityLabel((
+            [forecastWarnsEarlyRunOut ? summaryHeadline : summary.accessibilityLabel]
             + [focusWindow?.isAheadOfPace == true ? "Ahead of even pace" : nil, runOutText].compactMap { $0 })
             .joined(separator: ". "))
     }

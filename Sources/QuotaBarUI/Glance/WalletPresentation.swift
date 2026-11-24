@@ -93,6 +93,9 @@ struct WalletPresentation: Equatable, Sendable {
             // The ChatGPT credit count that extends the plan: "bonus".
             if let usage = p.openAIUsageCredit,
                let entry = snapshot.apiCredits.first(where: { $0.id == "openai.api-credits" }) {
+                let usageSpoken = staleTag != nil && !usage.spoken.localizedCaseInsensitiveContains("stale")
+                    ? "\(usage.spoken), stale, the last poll failed"
+                    : usage.spoken
                 rows.append(Row(
                     id: snapshot.id + "#bonus", vendor: snapshot.vendorId, title: titled("\(provider) bonus"),
                     tag: staleTag,
@@ -101,7 +104,7 @@ struct WalletPresentation: Equatable, Sendable {
                     // A bar to the expiry; the even-use tick only when the
                     // grant date was confirmed too (`OpenAICreditGrant.periodLength`).
                     meter: usage.barMetrics.map { .credit($0) },
-                    spoken: usage.spoken))
+                    spoken: usageSpoken))
             }
             for (index, e) in p.subscriptionCredits.enumerated() {
                 let isBonus = snapshot.vendorId == .openai
@@ -109,7 +112,7 @@ struct WalletPresentation: Equatable, Sendable {
                 rows.append(Row(
                     id: "\(snapshot.id)#sub\(index)", vendor: snapshot.vendorId,
                     title: titled(isBonus ? "\(provider) bonus" : Self.prefixed(e.title, with: provider)),
-                    tag: staleTag, figure: e.figure, spoken: e.spoken))
+                    tag: staleTag, figure: e.figure, spoken: e.spoken(stale: staleTag != nil)))
             }
             if let promo = p.monthlyPromo {
                 rows.append(Row(
@@ -200,7 +203,8 @@ struct WalletPresentation: Equatable, Sendable {
         return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
                    title: title(prefixed(name, with: providerName(entry.vendorId))), tag: tag,
                    figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal,
-                   balanceSeriesID: BalanceSeries.of(entry)?.id, spoken: e.spoken)
+                   balanceSeriesID: BalanceSeries.of(entry)?.id,
+                   spoken: e.spoken(stale: tag == "last reading"))
     }
 
     /// "Extra usage" → "Claude extra usage"; a title that already names its

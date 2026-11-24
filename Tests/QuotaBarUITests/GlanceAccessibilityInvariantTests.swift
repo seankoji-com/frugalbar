@@ -119,8 +119,13 @@ struct GlanceAccessibilityInvariantTests {
             // Stale reset caption on expanded row surface (full opacity Theme.outline)
             ("stale reset caption (outline) on expandedRow", resolve(Theme.outline), resolve(Theme.surfaceContainerHighest.opacity(0.22)).over(card)),
 
-            // Menu bar caveat text on dark menu bar
-            ("MenuBar caveat on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .caveat)), card),
+            // Menu bar caveat & critical text on dark and light menu bars
+            ("MenuBar caveat on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .caveat), appearance: .darkAqua), card),
+            ("MenuBar caveat on light menu bar (#f0f0f0)", resolveNSColor(MenuBarGlance.color(for: .caveat), appearance: .aqua), hex(0xf0f0f0)),
+            ("MenuBar caveat on white menu bar", resolveNSColor(MenuBarGlance.color(for: .caveat), appearance: .aqua), hex(0xffffff)),
+            ("MenuBar critical on dark menu bar", resolveNSColor(MenuBarGlance.color(for: .critical), appearance: .darkAqua), card),
+            ("MenuBar critical on light menu bar (#f0f0f0)", resolveNSColor(MenuBarGlance.color(for: .critical), appearance: .aqua), hex(0xf0f0f0)),
+            ("MenuBar critical on white menu bar", resolveNSColor(MenuBarGlance.color(for: .critical), appearance: .aqua), hex(0xffffff)),
 
             // Out-of-scope Settings light appearance secondary text coherence
             ("systemSecondaryText on light Settings form", resolve(Theme.systemSecondaryText, appearance: .aqua), lightSettingsBg),
@@ -207,5 +212,31 @@ struct GlanceAccessibilityInvariantTests {
         #expect(FooterActionsView.refreshAnimation(isRefreshing: true, reduceMotion: true) == nil)
         #expect(FooterActionsView.refreshRotationDegrees(isRefreshing: true, reduceMotion: false) == 360)
         #expect(FooterActionsView.refreshAnimation(isRefreshing: true, reduceMotion: false) != nil)
+    }
+
+    @Test("Stale Wallet credit rows preserve freshness in spoken labels")
+    func staleWalletCreditRowsSpeakFreshness() {
+        let now = Date(timeIntervalSinceReferenceDate: 790_000_000)
+        var claude = GlanceFixtures.snapshot(
+            "claude-stale", .claude, "Claude", plan: "Max",
+            [GlanceFixtures.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)]
+        )
+        claude.apiCredits = [
+            APICreditEntry(
+                id: "claude-stale|claude.extra-usage",
+                vendorId: .claude,
+                label: "Extra usage",
+                metric: .currency(balance: 42, limit: 200, spent: nil, currencyCode: "USD"),
+                poolID: "claude.extra-usage",
+                accountID: claude.id
+            )
+        ]
+        claude.staleReading = StaleReading(reason: .offline, at: now)
+
+        let wallet = WalletPresentation(snapshots: [claude], now: now)
+        #expect(wallet.rows.count == 1)
+        #expect(wallet.rows[0].tag == "last reading")
+        #expect(wallet.rows[0].spoken.localizedCaseInsensitiveContains("stale"))
+        #expect(wallet.rows[0].spoken.localizedCaseInsensitiveContains("last poll failed"))
     }
 }

@@ -173,13 +173,31 @@ private struct WalletMeterCell: View {
             VStack(alignment: .leading, spacing: 3) {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.surfaceContainerHighest)
+                        Capsule()
+                            .strokeBorder(Theme.primary.opacity(0.35), lineWidth: 0.75)
+                            .background(Capsule().fill(Theme.surfaceContainerHighest.opacity(0.5)))
                         Capsule().fill(Theme.primary)
                             .frame(width: max(0, proxy.size.width * min(max(fraction, 0), 1)))
                     }
                 }
                 .frame(height: trackHeight)
-                caption("MO \(Int((fraction * 100).rounded()))%", reset: countdown, color: Theme.primary)
+                HStack(spacing: 2) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundStyle(Theme.primary)
+                    Text("MO \(Int((fraction * 100).rounded()))%")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.primary)
+                        .fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 1)
+                    if let countdown {
+                        Text(countdown)
+                            .foregroundStyle(Theme.outline)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .font(.system(size: 9.5).monospacedDigit())
+                .lineLimit(1)
             }
         }
     }
@@ -278,7 +296,7 @@ private struct WalletRowView: View {
             .font(.system(size: 12))
             .foregroundStyle(Theme.onSurface)
             .lineLimit(1)
-            .truncationMode(.middle)
+            .truncationMode(.tail)
             .layoutPriority(1)
     }
 
@@ -303,7 +321,7 @@ private struct WalletRowView: View {
         switch tone {
         case .normal: Theme.onSurface
         case .negative: Theme.error
-        case .exhausted: Theme.errorBold
+        case .exhausted: Theme.error
         case .unknown: Theme.outline
         }
     }
