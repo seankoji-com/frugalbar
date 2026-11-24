@@ -207,6 +207,18 @@ private actor DiscoveryGate {
     }
 }
 
+private actor InventoryGate {
+    private var calls = 0
+
+    func next(
+        _ real: @Sendable () -> [any QuotaProvider],
+        _ failure: @Sendable () -> [any QuotaProvider]
+    ) async -> [any QuotaProvider] {
+        calls += 1
+        return calls == 1 ? real() : failure()
+    }
+}
+
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
 
@@ -500,8 +512,11 @@ struct ProviderHTTPTests {
         #expect(try #require(retryAfter).timeIntervalSinceNow > 200)
     }
 
-    @Test("an unreadable group inventory cannot confirm retirement")
-    func unreadableGroupInventoryKeepsRow() async throws {
+    @Test("an unreadable group inventory cannot confirm retirement", arguments: [
+        #"{"groups":[42]}"#,
+        #"{"groups":[{}]}"#
+    ])
+    func unreadableGroupInventoryKeepsRow(payload: String) async throws {
         let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
         let snapshot = try await withStubbedHTTP({ request in
             if request.url!.path.hasSuffix("loadCodeAssist") {
@@ -509,7 +524,7 @@ struct ProviderHTTPTests {
             }
             return request.url!.host!.hasPrefix("daily-")
                 ? canned(body: merge)
-                : canned(body: #"{"groups":[42]}"#)
+                : canned(body: payload)
         }) {
             try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon)
                 .fetchSnapshot()
@@ -548,6 +563,39 @@ struct ProviderHTTPTests {
             #expect(third["antigravity_argon"] == nil)
             #expect(URLProtocolStub.requestCount == 4,
                     "a retired entry must survive the discovery timeout and its floor")
+        }
+    }
+
+
+    @Test("an inventory-failure provider cannot resurrect a retired Argon row")
+    func inventoryFailureDoesNotResurrectArgon() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let gate = InventoryGate()
+        let makeReal: @Sendable () -> [any QuotaProvider] = {
+            let batch = AntigravityRequestBatch()
+            return [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                    GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch),
+                    GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+        }
+        let makeFailure: @Sendable () -> [any QuotaProvider] = {
+            [AntigravityDiscoveryFailureProvider(allowance: .gemini, reason: .badResponse),
+             AntigravityDiscoveryFailureProvider(allowance: .claude, reason: .badResponse),
+             AntigravityDiscoveryFailureProvider(allowance: .argon, reason: .badResponse)]
+        }
+        let manager = QuotaManager(
+            providerFactory: { [] },
+            displayPreferences: { ProviderDisplayPreferences(hidden: [.gemini, .antigravityClaude]) },
+            antigravityProviderFactory: { await gate.next(makeReal, makeFailure) }
+        )
+        try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: merge)
+        }) {
+            let first = await manager.forceRefresh()
+            #expect(first["antigravity_argon"] == nil)
+            let second = await manager.forceRefresh()
+            #expect(!second.values.contains { $0.vendorId == .antigravityArgon },
+                    "a bare proxy-unavailable Argon placeholder must not replace the retired pool")
         }
     }
 

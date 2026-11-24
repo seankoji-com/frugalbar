@@ -210,6 +210,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         /// the summary cannot confirm that Argon is absent.
         let rejectedGroupEntries: Bool
 
+        /// True when a group decoded but carries no name and no bucket ids.
+        /// `{}` is a valid all-optional `Group`, but it identifies nothing, so
+        /// it cannot confirm that a particular pool is absent.
+        var hasUnidentifiableGroup: Bool {
+            (groups ?? []).contains {
+                ($0.displayName?.trimmed.isEmpty ?? true) && ($0.buckets ?? []).isEmpty
+            }
+        }
+
         /// Every group's name and bucket ids, read independently of the
         /// stricter `groups` values. A group whose buckets fail that strict
         /// decode is still evidence the vendor publishes the pool — which is
@@ -459,7 +468,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     // the Argon group. Unless the lenient scan recognised it,
                     // this summary cannot confirm Argon is absent, so it is an
                     // unreadable inventory rather than a merge statement.
-                    if summary.rejectedGroupEntries, !Self.publishesArgonGroup(summary) {
+                    if (summary.rejectedGroupEntries || summary.hasUnidentifiableGroup),
+                       !Self.publishesArgonGroup(summary) {
                         lastFailure = .badResponse
                         firstRealFailure = firstRealFailure ?? .badResponse
                         continue

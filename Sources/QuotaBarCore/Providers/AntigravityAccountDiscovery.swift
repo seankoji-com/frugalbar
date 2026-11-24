@@ -475,7 +475,11 @@ actor AntigravityAccountDiscovery {
                 result.append(GeminiQuotaProvider(
                     account: account,
                     transports: transports,
-                    initialFailure: transports.isEmpty ? initialFailure : nil,
+                    // A known route failure is evidence even when another
+                    // route has a transport: the route that failed never got
+                    // to say whether it publishes this pool, so it must
+                    // outrank a merge verdict from the route that answered.
+                    initialFailure: initialFailure,
                     environment: environment,
                     apiBaseOverride: apiBaseOverride?.count == 1 ? apiBaseOverride?[0] : nil,
                     allowance: allowance,

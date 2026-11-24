@@ -653,8 +653,17 @@ public actor QuotaManager {
             let agyProviders: [any QuotaProvider]
             switch discovery {
             case .success(let found):
-                agyProviders = found
-                antigravityDiscoveryFailed = found.contains { $0 is AntigravityDiscoveryFailureProvider }
+                // An inventory-failure provider list is not evidence about a
+                // pool's existence. When a retired entry is the pool's only
+                // evidence, drop the bare Argon failure placeholder so it
+                // cannot reappear in reads or history.
+                let inventoryFailed = found.contains { $0 is AntigravityDiscoveryFailureProvider }
+                antigravityDiscoveryFailed = inventoryFailed
+                if inventoryFailed, cache.values.contains(where: { Self.isRetiredPool($0.snapshot) }) {
+                    agyProviders = found.filter { $0.vendorId != .antigravityArgon }
+                } else {
+                    agyProviders = found
+                }
             case .failure(let reason):
                 antigravityDiscoveryFailed = true
                 let previous = cache.values.map(\.snapshot).filter {
