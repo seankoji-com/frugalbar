@@ -251,14 +251,29 @@ public actor QuotaManager {
         visibleCache()
     }
 
-    /// The cache minus hidden vendors. Every read goes through this, so the
-    /// fresh-cache fast path cannot return a provider the user just hid.
+    /// The cache minus hidden vendors and retired pools. Every read goes
+    /// through this, so the fresh-cache fast path cannot return a provider the
+    /// user just hid, or one the vendor has stopped metering.
     private func visibleCache() -> [String: QuotaSnapshot] {
         let hidden = displayPreferences().hidden
         let credit = geminiCreditLookup()
         let accountCredits = geminiAccountCreditLookup()
-        return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }
+        return cache.filter {
+            !hidden.contains($0.value.snapshot.vendorId) && !Self.isRetiredPool($0.value.snapshot)
+        }
             .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit, accountCredits: accountCredits) }
+    }
+
+    /// A pool the vendor has stopped metering separately.
+    ///
+    /// It stays in the cache so the poll floor and a vendor's own backoff still
+    /// apply to it — deleting the entry made every manual refresh re-hit the
+    /// vendor for a pool nobody can see. It is never drawn, recorded or
+    /// reported as a provider: there is no row, no figure and no failure to
+    /// show.
+    static func isRetiredPool(_ snapshot: QuotaSnapshot) -> Bool {
+        snapshot.vendorId == .antigravityArgon
+            && snapshot.status.unavailableReason == GeminiQuotaProvider.argonMeteredWithGeminiReason
     }
 
     /// Adds the user-configured Gemini API credit to the Gemini row.
@@ -323,7 +338,8 @@ public actor QuotaManager {
         let accountCredits = geminiAccountCreditLookup()
         return Self.arrange(
             cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit,
-                                                          accountCredits: accountCredits) },
+                                                          accountCredits: accountCredits) }
+                .filter { !Self.isRetiredPool($0) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )
@@ -634,7 +650,9 @@ public actor QuotaManager {
             switch discovery {
             case .success(let found): agyProviders = found
             case .failure(let reason):
-                let previous = cache.values.map(\.snapshot).filter { antigravityVendors.contains($0.vendorId) }
+                let previous = cache.values.map(\.snapshot).filter {
+                    antigravityVendors.contains($0.vendorId) && !Self.isRetiredPool($0)
+                }
                 agyProviders = previous.isEmpty
                     ? [
                         UnavailableAntigravityInstance(id: VendorIdentifier.gemini.rawValue, vendorId: .gemini, name: VendorIdentifier.gemini.displayName, account: nil, reason: reason),
@@ -865,21 +883,15 @@ public actor QuotaManager {
         where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
             results[provider.instanceID] = nil
         }
-        // Argon is no longer a separately metered allowance on an account whose
-        // Antigravity summary lists it inside the Gemini Models group. The
-        // provider reports that as `argonMeteredWithGeminiReason`; there is no
-        // pool to draw, so the row is dropped instead of being kept as a
-        // permanent unreadable provider beside Gemini's real windows. An
-        // account that still publishes an Argon group is measured and keeps its
-        // row, and any other failure stays visible.
-        for provider in providersToFetch where provider.vendorId == .antigravityArgon {
-            guard results[provider.instanceID]?.status.unavailableReason
-                    == GeminiQuotaProvider.argonMeteredWithGeminiReason else { continue }
-            results[provider.instanceID] = nil
-            cache[provider.instanceID] = nil
-        }
+        // A retired pool is kept in the cache (see `isRetiredPool`) so the poll
+        // floor and a vendor's backoff still apply, but every read filters it
+        // out. It is never shown and never recorded.
+        // A retired pool is a settled determination, not an unavailable outcome
+        // to retry: a queued user follow-up must not re-hit the vendor for a
+        // pool nobody can see, and the bump below then arms its user clock.
         successfulPassIDs = Set(results.compactMap { id, snapshot in
-            snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
+            (snapshot.status.confidence == .measured && snapshot.staleReading == nil)
+                || Self.isRetiredPool(snapshot) ? id : nil
         })
         let now = clock()
         for provider in providersToFetch {

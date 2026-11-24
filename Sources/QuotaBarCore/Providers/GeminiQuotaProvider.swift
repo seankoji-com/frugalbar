@@ -205,11 +205,45 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         }
         let groups: [Group]?
 
+        /// Every group's name and bucket ids, read independently of the
+        /// stricter `groups` values. A group whose buckets fail that strict
+        /// decode is still evidence the vendor publishes the pool — which is
+        /// what stops a malformed Argon group being mistaken for an absent one
+        /// and retired.
+        struct GroupIdentity: Sendable {
+            let displayName: String?
+            let bucketIDs: [String]
+        }
+        let groupIdentities: [GroupIdentity]
+
         private enum CodingKeys: String, CodingKey { case groups }
         private struct GroupEntry: Decodable {
             let value: Group?
             init(from decoder: any Decoder) { value = try? Group(from: decoder) }
         }
+        private struct BucketIdentity: Decodable {
+            let bucketId: String?
+        }
+        private struct BucketIdentityEntry: Decodable {
+            let value: BucketIdentity?
+            init(from decoder: any Decoder) { value = try? BucketIdentity(from: decoder) }
+        }
+        private struct IdentityEntry: Decodable {
+            let value: GroupIdentity?
+            init(from decoder: any Decoder) {
+                guard let container = try? decoder.container(
+                    keyedBy: IdentityCodingKeys.self) else {
+                    value = nil
+                    return
+                }
+                let displayName = try? container.decodeIfPresent(String.self, forKey: .displayName)
+                let buckets = (try? container.decodeIfPresent(
+                    [BucketIdentityEntry].self, forKey: .buckets))?
+                    .compactMap(\.value?.bucketId)
+                value = GroupIdentity(displayName: displayName, bucketIDs: buckets ?? [])
+            }
+        }
+        private enum IdentityCodingKeys: String, CodingKey { case displayName, buckets }
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -217,6 +251,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // real reading. Reject the entire malformed group, never its fields
             // individually (an invalid disabled flag must not become enabled).
             groups = try container.decodeIfPresent([GroupEntry].self, forKey: .groups)?.compactMap(\.value)
+            groupIdentities = (try? container.decodeIfPresent([IdentityEntry].self, forKey: .groups))?
+                .compactMap(\.value) ?? []
         }
     }
 
@@ -240,6 +276,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
         var firstFailure: UnavailableReason? = initialFailure
         var firstTransportFailure: Error?
+        var retired = false
 
         for transport in transports {
             let outcome = try await fetchSnapshot(transport: transport, bases: bases, requests: requests)
@@ -247,7 +284,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             case .measured(let snapshot):
                 return stamped(snapshot)
             case .failed(let reason):
-                firstFailure = firstFailure ?? reason
+                // A route that says Argon is metered with Gemini is a verdict
+                // about the pool, not a failure of the read. Keep it aside so a
+                // later route can publish an Argon group, refuse the credential
+                // or fail outright — any of which must outrank retirement.
+                if reason == Self.argonMeteredWithGeminiReason {
+                    retired = true
+                } else {
+                    firstFailure = firstFailure ?? reason
+                }
             case .transportError(let error):
                 firstTransportFailure = firstTransportFailure ?? error
             }
@@ -256,7 +301,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         if let firstTransportFailure, firstFailure == nil {
             throw firstTransportFailure
         }
-        return stamped(unavailable(firstFailure ?? .badResponse))
+        if let firstFailure { return stamped(unavailable(firstFailure)) }
+        if retired { return stamped(unavailable(Self.argonMeteredWithGeminiReason)) }
+        return stamped(unavailable(.badResponse))
     }
 
     private enum TransportOutcome {
@@ -304,6 +351,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         // Gemini window. Kept so the row names the real reason rather than a
         // generic one.
         var lastFailure: UnavailableReason?
+        // The first failure that is more than "this host publishes no such
+        // pool". A later host's no-quota answer must not overwrite an earlier
+        // 429, rejection or unparseable body: that is the failure the user and
+        // the poll backoff need to see. Read only for Argon, where retirement
+        // would otherwise hide it.
+        var strongerFailure: UnavailableReason?
         // A transport failure is the engine's to map — it alone knows the
         // difference between `offline` and `timedOut` — so it is held rather
         // than turned into a reason here. It stands while no host has supplied
@@ -323,6 +376,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 if let googleReason = Self.googleErrorReason(statusCode: assistHTTP.statusCode, data: assistData) {
                     lastFailure = googleReason
+                    strongerFailure = strongerFailure ?? googleReason
                     transportFailure = nil
                     break
                 }
@@ -332,6 +386,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     now: now
                 ) {
                     lastFailure = reason
+                    strongerFailure = strongerFailure ?? reason
                     if reason == .credentialRejected {
                         transportFailure = nil
                         break
@@ -340,10 +395,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 guard let assist = try? JSONDecoder().decode(CodeAssist.self, from: assistData) else {
                     lastFailure = .badResponse
+                    strongerFailure = strongerFailure ?? .badResponse
                     continue
                 }
                 guard let project = assist.cloudaicompanionProject?.trimmed, !project.isEmpty else {
-                    lastFailure = .unsupported("Antigravity did not identify a quota project")
+                    let reason = UnavailableReason.unsupported("Antigravity did not identify a quota project")
+                    lastFailure = reason
+                    strongerFailure = strongerFailure ?? reason
                     continue
                 }
                 let (data, http) = try await requests.response(
@@ -354,6 +412,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 if let googleReason = Self.googleErrorReason(statusCode: http.statusCode, data: data) {
                     lastFailure = googleReason
+                    strongerFailure = strongerFailure ?? googleReason
                     transportFailure = nil
                     break
                 }
@@ -363,6 +422,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     now: now
                 ) {
                     lastFailure = reason
+                    strongerFailure = strongerFailure ?? reason
                     // A rejected credential is a verdict on the token, not on
                     // the host: the next host would receive the same token and
                     // answer the same way. Everything else — a route missing on
@@ -382,11 +442,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 }
                 guard let summary = try? JSONDecoder().decode(QuotaSummary.self, from: data) else {
                     lastFailure = .badResponse
+                    strongerFailure = strongerFailure ?? .badResponse
                     continue
                 }
                 if allowance == .argon {
                     argonGroupPublished = argonGroupPublished
-                        || (summary.groups ?? []).contains(where: Self.isArgonGroup)
+                        || Self.publishesArgonGroup(summary)
                     argonMeteredWithGemini = argonMeteredWithGemini
                         || Self.argonIsMeteredWithGemini(summary)
                 }
@@ -410,6 +471,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                 break
             } catch let error as ProviderError {
                 lastFailure = error.reason
+                strongerFailure = strongerFailure ?? error.reason
                 if error.reason == .credentialRejected {
                     transportFailure = nil
                     break
@@ -430,12 +492,18 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // exception, cleared above, because the token is the same wherever
             // it is presented.
             if let transportFailure { return .transportError(transportFailure) }
+            // A stronger failure on any host outranks retirement. A later host
+            // saying only "no Argon group" must not turn an earlier throttle or
+            // unparseable body into a silent merge: the row keeps that reason
+            // and the manager keeps the vendor's backoff.
+            if allowance == .argon, let strongerFailure {
+                return .failed(strongerFailure)
+            }
             // Only a host that actually answered may retire the pool, and only
             // while no host published an Argon group. A stronger failure — a
             // rejected credential, a throttle, an unparseable body — stays this
             // provider's answer, because the vendor never said Argon is gone.
-            if allowance == .argon, !argonGroupPublished, argonMeteredWithGemini,
-               lastFailure == nil || lastFailure == noQuotaReason {
+            if allowance == .argon, !argonGroupPublished, argonMeteredWithGemini {
                 return .failed(Self.argonMeteredWithGeminiReason)
             }
             return .failed(lastFailure ?? .badResponse)
@@ -513,6 +581,17 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
     private static func claudeDisplayName(_ group: QuotaSummary.Group) -> String {
         group.displayName?.lowercased().contains("gpt") == true ? "AGY Claude/GPT" : "AGY Claude"
+    }
+
+    /// Whether the summary publishes an Argon group, read from the lenient
+    /// identities as well as the strict groups: a group whose buckets failed
+    /// the strict decode is still a published pool, not an absent one.
+    static func publishesArgonGroup(_ summary: QuotaSummary) -> Bool {
+        if (summary.groups ?? []).contains(where: isArgonGroup) { return true }
+        return summary.groupIdentities.contains { identity in
+            identity.displayName?.lowercased().contains("argon") == true
+                || identity.bucketIDs.contains { $0.lowercased().hasPrefix("gemini-argon-") }
+        }
     }
 
     /// Argon's quota summary group is distinct even though its bucket ids

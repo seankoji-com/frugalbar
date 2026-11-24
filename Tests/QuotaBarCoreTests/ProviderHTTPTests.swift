@@ -328,6 +328,146 @@ struct ProviderHTTPTests {
         #expect(abs(try #require(argon.row1?.primaryFraction) - 0.7) < 0.00001)
     }
 
+    @Test("an earlier host's throttle survives a later host's merge verdict")
+    func argonKeepsEarlierThrottle() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.url!.host!.hasPrefix("daily-")
+                ? canned(status: 429, body: "{}", headers: ["Retry-After": "300"])
+                : canned(body: merge)
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon)
+                .fetchSnapshot()
+        }
+        guard case .rateLimited(let retryAfter) = snapshot.status.unavailableReason else {
+            Issue.record("expected the daily host's throttle, got \(String(describing: snapshot.status.unavailableReason))")
+            return
+        }
+        let wait = try #require(retryAfter)
+        #expect(wait.timeIntervalSinceNow > 200)
+        #expect(URLProtocolStub.requestCount == 4)
+    }
+
+    @Test("a malformed published Argon group is not mistaken for a merged one")
+    func malformedArgonGroupKeepsRow() async throws {
+        let payload = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Gemini 4 Argon","buckets":[{"remainingFraction":1,"disabled":"false"}]}]}"#
+        let snapshots = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            let batch = AntigravityRequestBatch()
+            let manager = QuotaManager(providerFactory: {
+                [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                 GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+            })
+            return await manager.forceRefresh()
+        }
+        let argon = try #require(snapshots["antigravity_argon"])
+        #expect(argon.status == .unavailable(.unsupported("Antigravity reported no Argon quota")))
+    }
+
+    @Test("an Argon group published by a later route outranks an earlier route's merge")
+    func laterRoutePublishedArgonWins() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let published = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.3}]}]}"#
+        let account = AntigravityAccount(id: "agy-review", badge: "", sourceLabel: "test", fallbackName: "review")
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.value(forHTTPHeaderField: "Authorization")?.contains("merge-token") == true
+                ? canned(body: merge) : canned(body: published)
+        }) {
+            try await GeminiQuotaProvider(
+                account: account,
+                transports: [.direct(accessToken: "merge-token", batchKey: "merge"),
+                             .direct(accessToken: "published-token", batchKey: "published")],
+                allowance: .argon,
+                requests: AntigravityRequestBatch()
+            ).fetchSnapshot()
+        }
+        #expect(snapshot.status.confidence == .measured)
+        #expect(abs(try #require(snapshot.row1?.primaryFraction) - 0.7) < 0.00001)
+    }
+
+    @Test("a later route's disabled Argon group outranks an earlier route's merge")
+    func laterRouteDisabledArgonKeepsRow() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let disabled = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":1,"disabled":true}]}]}"#
+        let account = AntigravityAccount(id: "agy-review", badge: "", sourceLabel: "test", fallbackName: "review")
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.value(forHTTPHeaderField: "Authorization")?.contains("merge-token") == true
+                ? canned(body: merge) : canned(body: disabled)
+        }) {
+            try await GeminiQuotaProvider(
+                account: account,
+                transports: [.direct(accessToken: "merge-token", batchKey: "merge"),
+                             .direct(accessToken: "disabled-token", batchKey: "disabled")],
+                allowance: .argon,
+                requests: AntigravityRequestBatch()
+            ).fetchSnapshot()
+        }
+        #expect(snapshot.status == .unavailable(.unsupported("Antigravity reported no Argon quota")))
+    }
+
+    @Test("a later route's rejected credential outranks an earlier route's merge")
+    func laterRouteRejectionOutranksMerge() async throws {
+        let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
+        let account = AntigravityAccount(id: "agy-review", badge: "", sourceLabel: "test", fallbackName: "review")
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return request.value(forHTTPHeaderField: "Authorization")?.contains("merge-token") == true
+                ? canned(body: merge) : canned(status: 401, body: "{}")
+        }) {
+            try await GeminiQuotaProvider(
+                account: account,
+                transports: [.direct(accessToken: "merge-token", batchKey: "merge"),
+                             .direct(accessToken: "rejected-token", batchKey: "rejected")],
+                allowance: .argon,
+                requests: AntigravityRequestBatch()
+            ).fetchSnapshot()
+        }
+        #expect(snapshot.status == .unavailable(.credentialRejected))
+    }
+
+    @Test("a retired Argon pool stays inside the manual refresh floor")
+    func retiredArgonRespectsPollFloor() async throws {
+        let payload = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":1}]}]}"#
+        let policy = CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                 perProviderTimeout: 2, minPollInterval: 120)
+        let (first, second) = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            let manager = QuotaManager(cachePolicy: policy, providerFactory: {
+                let batch = AntigravityRequestBatch()
+                return [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                        GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch),
+                        GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+            })
+            let first = await manager.forceRefresh()
+            let firstCount = URLProtocolStub.requestCount
+            let second = await manager.forceRefresh()
+            #expect(URLProtocolStub.requestCount == firstCount,
+                    "the second forced refresh must be served from the floor, including retired Argon")
+            return (first, second)
+        }
+        #expect(URLProtocolStub.requestCount == 4,
+                "one shared daily request pair for the pools that measured, plus Argon's plain-host walk")
+        #expect(first["antigravity_argon"] == nil)
+        #expect(second["antigravity_argon"] == nil)
+        #expect(first["gemini"]?.status.confidence == .measured)
+    }
+
+
     @Test("Argon cannot replace Gemini or invalidate Claude, even with Claude-named buckets or malformed fields", arguments: [false, true])
     func argonDoesNotMaskOtherPools(malformed: Bool) async throws {
         let bad = malformed ? #""oops""# : "0.7"
