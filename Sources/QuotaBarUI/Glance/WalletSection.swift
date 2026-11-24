@@ -55,16 +55,23 @@ struct GlanceCard<Content: View>: View {
 struct UsageBar: View {
     let window: GlancePresentation.Window
     var height: CGFloat = 4
+    /// A carried-over reading: the track and fill recede, the pace tick does
+    /// not. Dimming the whole bar took the tick to 1.4:1 on the fill.
+    var dimmed: Bool = false
     static let knockoutWidth: CGFloat = 3.5
+    static let dimmedOpacity = 0.55
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
-                if let used = window.used, used > 0 {
-                    Capsule().fill(GlanceColors.fill(for: window))
-                        .frame(width: max(height, proxy.size.width * used), height: height)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
+                    if let used = window.used, used > 0 {
+                        Capsule().fill(GlanceColors.fill(for: window))
+                            .frame(width: max(height, proxy.size.width * used), height: height)
+                    }
                 }
+                .opacity(dimmed ? Self.dimmedOpacity : 1)
                 // A light core in a dark knockout: over the track the core
                 // carries the contrast, over the fill the knockout does. The
                 // light line alone measured 1.3:1 on the green and amber fills,
@@ -124,10 +131,14 @@ struct WalletSection: View {
     let presentation: WalletPresentation
     /// Recorded balance history by `BalanceSeries.id`, for each balance's trend.
     var balanceSeries: [String: [BalancePoint]] = [:]
+    /// The latest history read failed and these trends are the last good read
+    /// (`QuotaStore.balanceSeriesReadFailed`); they recede and say so.
+    var trendIsCarriedOver = false
     var now: Date = Date()
     /// Opens the inspector for the snapshot a line came from
-    /// (`WalletPresentation.Row.snapshotID`), as a Subscriptions row does.
-    var onSelect: (String) -> Void = { _ in }
+    /// (`WalletPresentation.Row.snapshotID`), with the line's own balance
+    /// series (`balanceSeriesID`) so the details open on its figure.
+    var onSelect: (String, String?) -> Void = { _, _ in }
 
     @State private var figureColumnWidth: CGFloat = 0
 
@@ -143,9 +154,10 @@ struct WalletSection: View {
                             trend: row.balanceSeriesID.flatMap {
                                 BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
                             },
+                            trendIsCarriedOver: trendIsCarriedOver,
                             now: now,
                             figureColumnWidth: figureColumnWidth,
-                            onSelect: { onSelect(row.snapshotID) }
+                            onSelect: { onSelect(row.snapshotID, row.balanceSeriesID) }
                         )
                     }
                 }
@@ -187,7 +199,9 @@ private struct WalletMeterCell: View {
             } else if let used = window.used {
                 VStack(alignment: .leading, spacing: 3) {
                     UsageBar(window: window, height: trackHeight)
-                    caption(GlancePresentation.usedPercentText(used),
+                    // Says its direction: beside "44,135 credits left", a bare
+                    // "29%" read as either share.
+                    caption("\(GlancePresentation.usedPercentText(used)) used",
                             reset: reset, color: GlanceColors.text(for: window))
                 }
             }
@@ -241,9 +255,20 @@ private struct WalletMeterCell: View {
     }
 }
 
+/// A Wallet line's spoken words for its balance trend.
+enum WalletRowViewSpeech {
+    nonisolated static func trendPhrase(base: String, trend: BalanceSparklinePresentation,
+                                        carriedOver: Bool, now: Date) -> String {
+        let when = MetricDetailPresentation.clockText(trend.lastMeasuredAt, now: now)
+        let kept = carriedOver ? " (kept from an earlier read; the latest history read failed)" : ""
+        return "\(base), recorded balance \(trend.spokenTrend), last recorded \(when)\(kept)"
+    }
+}
+
 private struct WalletRowView: View {
     let row: WalletPresentation.Row
     let trend: BalanceSparklinePresentation?
+    let trendIsCarriedOver: Bool
     let now: Date
     let figureColumnWidth: CGFloat
     let onSelect: () -> Void
@@ -263,14 +288,34 @@ private struct WalletRowView: View {
                     WalletMeterCell(meter: meter, now: now)
                         .frame(width: meterWidth)
                 } else if let trend {
-                    BalanceSparklineView(presentation: trend)
-                        .frame(width: meterWidth)
+                    // A trend kept from an earlier read recedes and wears the
+                    // carried-over clock, so it is not taken for fresh evidence.
+                    HStack(spacing: 3) {
+                        if trendIsCarriedOver {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundStyle(Theme.tertiary)
+                        }
+                        BalanceSparklineView(presentation: trend)
+                            .opacity(trendIsCarriedOver ? 0.45 : 1)
+                    }
+                    .frame(width: meterWidth)
                 } else {
                     Color.clear.frame(width: meterWidth, height: 1)
                 }
-                Text(row.figure ?? "")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(color(row.tone))
+                // The role word sits under the amount, small, so it names the
+                // figure without widening the shared figure column (on one
+                // line it squeezed long account names into broken wraps).
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(row.figure ?? "")
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(color(row.tone))
+                    if let role = row.figureRole {
+                        Text(role)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(Theme.outline)
+                    }
+                }
                     .lineLimit(1)
                     .fixedSize()
                     .background(
@@ -291,15 +336,18 @@ private struct WalletRowView: View {
         .accessibilityLabel(spokenLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Open usage details")
-        .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
+        .help(spokenLabel)
     }
 
-    /// The line's own words plus the drawn strip's direction, when a strip
-    /// is drawn (a meter, when present, already speaks for itself).
+    /// The line's own words plus the drawn strip's direction and when it was
+    /// last recorded, when a strip is drawn (a meter speaks for itself).
     private var spokenLabel: String {
-        let base = row.spoken.isEmpty ? row.title : row.spoken
+        let base = row.spoken.isEmpty
+            ? [row.title, [row.figure, row.figureRole].compactMap { $0 }.joined(separator: " ")]
+                .joined(separator: " · ")
+            : row.spoken
         guard row.meter == nil, let trend else { return base }
-        return "\(base), recorded balance \(trend.spokenTrend)"
+        return WalletRowViewSpeech.trendPhrase(base: base, trend: trend, carriedOver: trendIsCarriedOver, now: now)
     }
 
     private var nameCell: some View {

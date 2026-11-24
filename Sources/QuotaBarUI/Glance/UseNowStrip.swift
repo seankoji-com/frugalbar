@@ -32,13 +32,25 @@ struct UseNowPresentation: Equatable {
             let used = pick.binding.used.map {
                 "\(GlancePresentation.usedPercentText($0)) \(pick.binding.bar.label) used"
             }
-            let reset = pick.binding.bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
-                .map { $0 == "due" ? "reset due" : "resets in \($0)" } ?? "reset not published"
-            detail = [used, reset].compactMap { $0 }.joined(separator: " · ")
+            let onBonus = pick.binding.bar.allowanceRole == .bonus
+            let compact = pick.binding.bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
+            // A bonus allowance expires; a plan window resets. Starting a job
+            // on a bonus pick spends the bonus, and the line says so.
+            let reset = compact.map {
+                $0 == "due" ? (onBonus ? "expiry due" : "reset due")
+                    : (onBonus ? "expires in \($0)" : "resets in \($0)")
+            } ?? (onBonus ? "expiry not published" : "reset not published")
+            detail = ([onBonus ? "On bonus allowance" : nil, used, reset].compactMap { $0 })
+                .joined(separator: " · ")
             snapshotID = pick.pool.id
             vendor = pick.pool.snapshot.vendorId
         } else {
-            let title = glance.menuTitle
+            // The menu bar's words in Subscriptions' countdown unit, so "next
+            // 2d" here matches the "2d" under the spent bar below it.
+            let title = GlancePresentation.menuTitle(
+                ranking: glance.ranking, pools: glance.pools, backSoon: glance.backSoon, now: now,
+                hasWallet: !glance.walletSnapshots.isEmpty,
+                format: { ResetCountdownBadge.compact($0, now: $1) ?? GlancePresentation.countdown($0, now: $1) })
             tone = title.tone == .critical ? .none : .unknown
             headline = title.text
             detail = nil

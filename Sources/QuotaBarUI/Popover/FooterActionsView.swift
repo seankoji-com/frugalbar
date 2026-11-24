@@ -15,8 +15,12 @@ struct FooterActionsView: View {
     /// The latest recent-events read failed (`QuotaStore.recentEventsReadFailed`).
     var eventsReadFailed = false
 
-    nonisolated static func eventsLabel(count: Int, readFailed: Bool) -> String {
+    /// No events read has completed yet (`QuotaStore.recentEventsLoaded`).
+    var eventsNotYetRead = false
+
+    nonisolated static func eventsLabel(count: Int, readFailed: Bool, notYetRead: Bool = false) -> String {
         if readFailed { return "Recent events could not be read. Open the events list" }
+        if notYetRead { return "Recent events not read yet. Open the events list" }
         return count == 1 ? "1 recent event. Open the events list" : "\(count) recent events. Open the events list"
     }
     var onOpenEvents: () -> Void = { HistoryWindow.show(tab: .events) }
@@ -140,7 +144,8 @@ struct FooterActionsView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Self.eventsLabel(count: eventCount, readFailed: eventsReadFailed))
+                .accessibilityLabel(Self.eventsLabel(count: eventCount, readFailed: eventsReadFailed,
+                                                     notYetRead: eventsNotYetRead))
                 .help("Open the events list in the History window")
             }
 

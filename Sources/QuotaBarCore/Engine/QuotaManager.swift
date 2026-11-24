@@ -1338,7 +1338,10 @@ public struct SystemHealthSummary: Sendable {
 
         for snap in snapshots {
             let attemptedAt = snap.staleReading?.at ?? snap.lastUpdated
-            if lastAttempt.map({ attemptedAt > $0 }) ?? true { lastAttempt = attemptedAt }
+            // A provider nobody set up was skipped, not checked: its
+            // placeholder must not give an all-skipped pass a "Checked now".
+            if snap.status.unavailableReason != .notConfigured,
+               lastAttempt.map({ attemptedAt > $0 }) ?? true { lastAttempt = attemptedAt }
             switch snap.status.confidence {
             case .unavailable:
                 unavailable += 1

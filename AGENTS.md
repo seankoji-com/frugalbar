@@ -480,7 +480,14 @@ headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
 and the account when the reading carries a named one ("ChatGPT API",
 "ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
 CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
-text beside the title. When the title needs the room, the tag shrinks to its
+text beside the title. The figure carries its role word (owner, 25 Nov 2026)
+as a small caption under the amount (`Row.figureRole`: "left", "grant",
+"credit", "cap"; none under an overdrawn balance), and a credit meter says
+"29% used"; a bare amount made a remaining count, a monthly grant and a cap
+look alike. The caption sits under the amount, not beside it, so the figure
+column keeps its width and long account names do not break. Opening a line passes
+its balance series to the inspector, whose card for that series comes first.
+When the title needs the room, the tag shrinks to its
 glyph (pencil, clock) rather than cutting the account name; the tooltip and
 spoken label still say the word. A line is LAST READING by the read that
 produced it: the ChatGPT API grant and the Console credit have their own billing
@@ -625,7 +632,14 @@ drifted, one surface per review round, until it was moved to one place.
 A return hint ("Back soonest", the menu bar's "next …") is
 `GlancePresentation.soonestReturn`: never a stale pool's old reset, and never
 for an account blocked on its badge, whose windows' resets do not say when the
-account-wide block lifts (its return is "not published").
+account-wide block lifts (its return is "not published"); the grid's cells for
+such an account show the block with no countdown.
+Whether a pool's figures describe now is `GlancePresentation.Freshness`
+(current, stale, or awaitingReset when a window's published reset has passed
+with no reading since). Only a current pool is a pick; the grid notes
+"Window reset · awaiting a reading"; the inspector leads with
+`.awaitingReading`, never "Healthy"; and the burndown drops its projection when
+the snapshot is stale or blocked now (`Burndown.current(for:)`).
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the

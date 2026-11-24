@@ -377,6 +377,22 @@ final class LiveGlanceHarness {
         }
         captures.append(try captureWindow(popoverWindow, name: "live-popover-stale-exhausted-devlimits").0)
 
+        // Popover: edge states the judge found only in source until now — a
+        // window whose reset passed with no reading since, a bonus-only pick,
+        // a spent pool whose return is owed, and an account-wide block.
+        try await replaceSnapshots(makeEdgeStateBatch(), applyStatusItemPresentation: applyStatusItemPresentation)
+        await pumpEventsAsync(seconds: 0.6)
+        // Expand the Claude group so its awaiting-reading row is on screen.
+        _ = axPress { $0.hasPrefix("Claude") }
+        await pumpEventsAsync(seconds: 0.4)
+        guard axFindText(where: { $0.contains("On bonus allowance") }),
+              axFindText(where: { $0.localizedCaseInsensitiveContains("awaiting") }),
+              axFindText(where: { $0.contains("blocked") }) else {
+            let seen = axSampleLabels(limit: 25).joined(separator: " | ")
+            throw HarnessError("Edge-state popover did not render its bonus, awaiting-reading and blocked states (seen: \(seen))")
+        }
+        captures.append(try captureWindow(popoverWindow, name: "live-popover-edge-states").0)
+
         // Popover: Empty / all-hidden
         try await replaceSnapshots([], applyStatusItemPresentation: applyStatusItemPresentation)
         await pumpEventsAsync(seconds: 0.5)
@@ -587,6 +603,49 @@ final class LiveGlanceHarness {
         )
 
         return [usableClaude, spentClaude, staleClaude, spentOpenAI, opencodeBlocked, githubElevated]
+    }
+
+    /// No current plan anywhere, so the pick is Kiro's bonus (a caveat pick):
+    /// Claude's weekly window reset an hour ago with no reading since, Codex is
+    /// spent with a reset that passed, and Command Code is blocked on its badge.
+    private func makeEdgeStateBatch() -> [QuotaSnapshot] {
+        var expiredClaude = QuotaSnapshot(
+            id: "claude-account:edge-expired", vendorId: .claude, displayName: "Primary",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Max", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now.addingTimeInterval(-7200), auxiliaryInfo: nil,
+            row1: bar("WK", 0.45, resetsInHours: -1, windowHours: 168),
+            planName: "Max"
+        )
+        expiredClaude.claudeAccount = ClaudeAccount(id: "edge-expired", badge: "1", sourceLabel: "fixture",
+                                                    fallbackName: "Primary", planName: "Max")
+
+        let kiroOnBonus = QuotaSnapshot(
+            id: "kiro", vendorId: .kiro, displayName: "Kiro",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bar("MO", 1.0, resetsInHours: 300, windowHours: 720),
+            row2: bar("BN", 0.3, resetsInHours: 100, windowHours: nil, role: .bonus),
+            planName: "Pro"
+        )
+
+        let codexResetPassed = QuotaSnapshot(
+            id: "openai-reset-passed", vendorId: .openai, displayName: "OpenAI",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: now.addingTimeInterval(-3600), auxiliaryInfo: nil,
+            row1: bar("WK", 1.0, resetsInHours: -0.5, windowHours: 168),
+            planName: "Pro"
+        )
+
+        let commandLimited = QuotaSnapshot(
+            id: "commandcode", vendorId: .commandcode, displayName: "Command Code",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.critical), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: bar("5H", 0.2, resetsInHours: 3, windowHours: 5),
+            row2: bar("WK", 0.4, resetsInHours: 50, windowHours: 168),
+            badgeText: QuotaSnapshot.accountBlockedBadge, planName: "Pro"
+        )
+
+        return [expiredClaude, kiroOnBonus, codexResetPassed, commandLimited]
     }
 
     private func sampleLiveMenuBarStates(

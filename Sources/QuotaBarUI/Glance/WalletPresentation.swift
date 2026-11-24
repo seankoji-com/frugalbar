@@ -39,6 +39,10 @@ struct WalletPresentation: Equatable, Sendable {
         var tag: String? = nil
         /// The figure on the right: "$100.00/mo", "60,085 credits", "107d remaining".
         let figure: String?
+        /// What the figure is (owner, 25 Nov 2026): "left", "grant", "credit",
+        /// "cap". Drawn as a small caption under the amount; a bare amount made
+        /// a remaining count, a monthly grant and a spend cap look alike.
+        var figureRole: String? = nil
         var tone: Tone = .normal
         var symbol: String? = nil
         var meter: Meter? = nil
@@ -76,7 +80,10 @@ struct WalletPresentation: Equatable, Sendable {
                     rows.append(Row(
                         id: snapshot.id + "#balance", vendor: snapshot.vendorId, title: titled(provider),
                         tag: staleTag,
+                        // An overdrawn balance prints its signed figure alone:
+                        // "-$0.01 left" would claim money remains.
                         figure: unread ? (snapshot.status.unavailableReason?.headline ?? "No reading") : p.valueLabel,
+                        figureRole: unread || Self.isNegative(snapshot.metric) ? nil : "left",
                         tone: unread ? .unknown : (Self.isNegative(snapshot.metric) ? .negative : .normal),
                         balanceSeriesID: BalanceSeries.of(snapshot)?.id,
                         spoken: p.accessibilityLabel))
@@ -100,6 +107,7 @@ struct WalletPresentation: Equatable, Sendable {
                     id: snapshot.id + "#bonus", vendor: snapshot.vendorId, title: titled("\(provider) bonus"),
                     tag: staleTag,
                     figure: APICreditEntryPresentation(entry: entry).figure,
+                    figureRole: "left",
                     tone: usage.fraction >= QuotaSnapshot.exhaustionThreshold ? .exhausted : .normal,
                     // A bar to the expiry; the even-use tick only when the
                     // grant date was confirmed too (`OpenAICreditGrant.periodLength`).
@@ -123,6 +131,7 @@ struct WalletPresentation: Equatable, Sendable {
                     // failed billing read does even when quota is fresh.
                     tag: promo.isStale ? "last reading" : nil,
                     figure: promo.amountText.map { "\($0)/mo" },
+                    figureRole: promo.amountText == nil ? nil : "grant",
                     tone: promo.isExhausted ? .exhausted : .normal,
                     // The promo's own bar metrics: its period, so its tick.
                     meter: promo.fraction == nil ? nil : .credit(promo.barMetrics),
@@ -135,6 +144,7 @@ struct WalletPresentation: Equatable, Sendable {
                     // poll: only its own failed read makes it stale.
                     tag: credit.isStale ? "last reading" : nil,
                     figure: "\(credit.amountText)/mo",
+                    figureRole: "credit",
                     // Time through the billing month, not spend (no spend is published).
                     meter: credit.fraction.map { .elapsed(fraction: $0, countdown: credit.countdown) },
                     spoken: credit.spoken))
@@ -170,6 +180,7 @@ struct WalletPresentation: Equatable, Sendable {
                     title: snapshot.antigravityAccount.map { "Gemini API · \($0.name)" } ?? "Gemini API",
                     tag: "configured",
                     figure: "\(b.amountText)/mo",
+                    figureRole: "cap",
                     meter: .elapsed(fraction: b.fraction, countdown: b.countdown),
                     spoken: credit.spoken))
             }

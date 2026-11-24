@@ -25,6 +25,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case critical
         case exhausted
         case blocked
+        /// A window's published reset (`resetAt`) has passed and no reading
+        /// since has shown the new window, so its figures are the old window's.
+        case awaitingReading(resetAt: Date)
     }
 
     /// The words and shape a state leads with. Settings' legend reads this
@@ -37,6 +40,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case .exhausted:  ("Exhausted", "xmark.octagon.fill")
         case .blocked:    ("Blocked by the vendor", BlockedGlyph.symbolName)
         case .lastPollFailed: ("The last poll could not be read", "exclamationmark.triangle.fill")
+        case .awaitingReading: ("Window reset · awaiting a reading", "clock.arrow.circlepath")
         case .unavailable: ("", "minus.circle")
         }
     }
@@ -237,6 +241,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         } else if verdictBars(of: snapshot).contains(where: WindowGridPresentation.isExhausted)
                     || snapshot.isFullyBlockedWithoutReading {
             state = .exhausted
+        } else if let passed = verdictBars(of: snapshot).compactMap(\.resetsAt).filter({ $0 <= now }).max() {
+            // A window's published reset has passed and no reading since has
+            // shown the new window: its figure is the old window's, so the
+            // verdict is not "Healthy" (`GlancePresentation.Freshness`).
+            state = .awaitingReading(resetAt: passed)
         } else {
             switch snapshot.status.urgency {
             case .none: state = .healthy
@@ -246,9 +255,19 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
 
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
-        let reset = focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
-            ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil)
-        let pace = focus.flatMap(paceVerdict(for:))
+        // Under an account block no window's reset is the account's return,
+        // so the hero names none and says the unblock time is unpublished.
+        let accountBlocked = snapshot.isAccountBlocked
+        let reset = accountBlocked ? nil
+            : (focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
+               ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil))
+        let pace: String? = {
+            if case .awaitingReading = state { return nil }
+            return accountBlocked ? nil : focus.flatMap(paceVerdict(for:))
+        }()
+        let remedy: String? = accountBlocked
+            ? "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own."
+            : nil
         // A provider with no window still has a measured figure worth leading
         // with: a balance, a count. A subscription tier is not a figure.
         let figure: String? = {
@@ -269,11 +288,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
         if let reset { spoken.append(reset) }
         if let pace { spoken.append(pace) }
+        if let remedy { spoken.append(remedy) }
 
         return Summary(
             state: state, headline: headline, symbol: symbol,
             focusLabel: focus?.label, percentUsed: percent, figure: figure,
-            resetText: reset, paceVerdict: pace, remedy: nil,
+            resetText: reset, paceVerdict: pace, remedy: remedy,
             accessibilityLabel: spoken.joined(separator: ", "))
     }
 
@@ -365,6 +385,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
                 label: "Last poll",
                 value: "Could not be read\(staleReason.map { " (\($0.headline))" } ?? ""), "
                     + "\(lastFetchedText(failedPollAt, now: now))"))
+        }
+        // The configured Gemini API figure the Wallet line shows: opened from
+        // that line, the details must carry the figure the user selected.
+        if let credit = snapshot.geminiAPICredit, let cap = credit.monthlySpendCap {
+            rows.append(ProvenanceRow(
+                label: "Configured cap",
+                value: "\(MoneyText.format(cap, code: credit.currencyCode))/mo, entered \(sinceText(credit.configuredAt, now: now))"))
         }
         if let key = snapshot.keyMasked {
             rows.append(ProvenanceRow(label: "Key", value: key))

@@ -29,6 +29,11 @@ public final class QuotaStore {
     public private(set) var recentEvents: [AIEvent] = []
     /// The latest `recentEvents` read failed; `recentEvents` is the last good one.
     public private(set) var recentEventsReadFailed = false
+    /// A recent-events read has completed at least once. Before it, the
+    /// empty list is "not read yet", never "no events".
+    public private(set) var recentEventsLoaded = false
+    /// The latest balance-history read failed; `balanceSeries` is the last good one.
+    public private(set) var balanceSeriesReadFailed = false
     /// Recorded balance-over-time points per series id, for the popover's inline
     /// sparklines. Empty when no loader was given or a series has no history.
     /// A short window on purpose: the strip answers "which way is this moving",
@@ -184,7 +189,7 @@ public final class QuotaStore {
         // A failed read keeps what was last read and says it failed: an
         // empty list here was announced as "0 recent events", a known zero.
         recentEventsReadFailed = read == nil
-        if let read { recentEvents = read }
+        if let read { recentEvents = read; recentEventsLoaded = true }
     }
 
     /// Loads from cache when fresh, otherwise fetches.
@@ -309,14 +314,17 @@ public final class QuotaStore {
         // After recording, so this poll's balance is the strip's right-hand end.
         // A read that fails leaves the last good series in place rather than
         // blanking every strip on a transient error; the next reload replaces it.
+        // The kept series is said to be kept (`balanceSeriesReadFailed`), so
+        // the Wallet does not draw an older trend as fresh evidence.
         if let balanceSeriesLoader {
             let now = Date()
             let ids = BalanceSeries.seriesIDs(in: snaps)
-            if !ids.isEmpty,
-               let series = await balanceSeriesLoader(
-                   now.addingTimeInterval(-Self.balanceLookback), now,
-                   Self.balanceBucketSeconds, ids) {
-                self.balanceSeries = series
+            if !ids.isEmpty {
+                let series = await balanceSeriesLoader(
+                    now.addingTimeInterval(-Self.balanceLookback), now,
+                    Self.balanceBucketSeconds, ids)
+                balanceSeriesReadFailed = series == nil
+                if let series { self.balanceSeries = series }
             }
         }
         await reloadRecentEvents()

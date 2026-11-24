@@ -179,6 +179,10 @@ struct GlanceAccessibilityInvariantTests {
             ("spent stripes on spent wash (row hover)", resolve(Theme.errorBold),
              resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(resolve(Theme.rowHover).over(card))),
             ("elapsed meter outline on card", resolve(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity)).over(card), card),
+            // A stale bar dims its track and fill but not its tick
+            // (`UsageBar.dimmed`): the knockout against a dimmed fill.
+            ("pace marker knockout on dimmed tertiary fill",
+             resolve(Theme.surface), resolve(Theme.tertiary.opacity(UsageBar.dimmedOpacity)).over(card)),
             ("pace marker knockout on stale healthy fill",
              resolve(Theme.surface), resolve(Theme.healthy.opacity(0.55)).over(card)),
             ("chart mode selected pill (primary) on well", resolve(Theme.primary), resolve(Theme.surfaceContainerLowest)),

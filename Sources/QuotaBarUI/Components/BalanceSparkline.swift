@@ -47,7 +47,13 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
             let days = Int((span / 86_400).rounded())
             return "over \(days) day\(days == 1 ? "" : "s")"
         }
-        let hours = max(1, Int((span / 3600).rounded()))
+        // Under an hour is said in minutes: "over 1 hour" for two readings
+        // five minutes apart overstated how slowly the balance moved.
+        if span < 3600 {
+            let minutes = max(1, Int((span / 60).rounded()))
+            return "over \(minutes) minute\(minutes == 1 ? "" : "s")"
+        }
+        let hours = Int((span / 3600).rounded())
         return "over \(hours) hour\(hours == 1 ? "" : "s")"
     }
 

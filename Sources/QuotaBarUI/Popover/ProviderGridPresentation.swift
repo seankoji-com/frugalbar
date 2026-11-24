@@ -16,9 +16,14 @@ struct ProviderGridPresentation {
         let state: PoolState
         let returnsAt: Date?
 
+        /// `GlancePresentation.Pool.freshness`, so this row and the pick agree.
+        let freshness: GlancePresentation.Freshness
+
         var id: String { snapshot.id }
         var isStale: Bool { snapshot.staleReading != nil }
-        var isUsable: Bool { !isStale && (state == .usable || state == .onBonus) }
+        /// A window reset with no reading since; its figure is the old window's.
+        var isAwaitingReset: Bool { freshness == .awaitingReset }
+        var isUsable: Bool { freshness == .current && (state == .usable || state == .onBonus) }
         var isSpent: Bool { !isStale && state == .spent }
         /// True when the pool is unusable because the vendor blocked it — the
         /// account badge or a plan window — rather than the user exhausting
@@ -57,6 +62,7 @@ struct ProviderGridPresentation {
             state = pool?.state ?? .unreadable
             returnsAt = pool?.returnsAt
             blocksPool = pool?.isBlocked ?? snapshot.isAccountBlocked
+            freshness = pool?.freshness ?? (snapshot.staleReading != nil ? .stale : .current)
 
             if snapshot.vendorId == .antigravityClaude {
                 name = snapshot.antigravityAccount?.name ?? snapshot.displayName
@@ -89,9 +95,15 @@ struct ProviderGridPresentation {
             // the block from the bar, the one place they already look. Drawn
             // as plain percentages these read as healthy green bars beside a
             // red-ringed avatar.
+            // Under an account block, a window's reset is not when the block
+            // lifts, and "⊘ MO 2d" beside "1 blocked" read as the unblock date.
+            // The cells then show the block and no countdown; the inspector's
+            // window lines still give each window's own reset, labelled as such.
             let poolWindows = (pool?.windows ?? []).map { window -> Window in
-                let bar = snapshot.applyingAccountBlock(to: window.bar)
-                return bar.isBlocked == window.bar.isBlocked ? window : GlancePresentation.window(for: bar, now: now)
+                guard snapshot.isAccountBlocked else { return window }
+                var bar = snapshot.applyingAccountBlock(to: window.bar)
+                bar.resetsAt = nil
+                return GlancePresentation.window(for: bar, now: now)
             }
             var columns: [WindowColumn: Window] = [:]
             for window in poolWindows {
@@ -158,11 +170,13 @@ struct ProviderGridPresentation {
             }
             let usable = pools.filter(\.isUsable).count
             let stale = pools.filter(\.isStale).count
-            let unreadable = pools.count - usable - blocked - exhausted - stale
+            let awaiting = pools.filter { $0.isAwaitingReset && !$0.isSpent }.count
+            let unreadable = pools.count - usable - blocked - exhausted - stale - awaiting
             return ["\(usable) usable",
                     blocked > 0 ? "\(blocked) blocked" : nil,
                     exhausted > 0 ? "\(exhausted) spent" : nil,
                     stale > 0 ? "\(stale) stale" : nil,
+                    awaiting > 0 ? "\(awaiting) awaiting reading" : nil,
                     unreadable > 0 ? "\(unreadable) unreadable" : nil]
                 .compactMap { $0 }
         }

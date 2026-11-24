@@ -24,7 +24,11 @@ import QuotaBarCore
 @MainActor
 @Observable
 public final class PopoverInspection {
-    public var snapshot: QuotaSnapshot?
+    public var snapshot: QuotaSnapshot? {
+        didSet { if snapshot == nil { focusBalanceSeriesID = nil } }
+    }
+    /// The balance series of the Wallet line the inspector was opened from.
+    public var focusBalanceSeriesID: String?
     public init() {}
 
     /// Pure motion policy for inspector open/close transitions so Reduce Motion
@@ -120,7 +124,8 @@ public struct PopoverRootView: View {
                 onQuit: { NSApp.terminate(nil) },
                 onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } },
                 eventCount: EventsPresentation.popoverEvents(store.recentEvents).count,
-                eventsReadFailed: store.recentEventsReadFailed
+                eventsReadFailed: store.recentEventsReadFailed,
+                eventsNotYetRead: !store.recentEventsLoaded && !store.recentEventsReadFailed
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 footerHeight = $0
@@ -149,6 +154,7 @@ public struct PopoverRootView: View {
                     balanceLoader: { id, since, until, bucket in
                         await store.balancePoints(seriesId: id, since: since, until: until, bucketSeconds: bucket)
                     },
+                    focusBalanceSeriesID: inspection.focusBalanceSeriesID,
                     onClose: {
                         if let anim = PopoverInspection.closeAnimation(reduceMotion: reduceMotion) {
                             withAnimation(anim) { selectedSnapshot = nil }
@@ -163,6 +169,9 @@ public struct PopoverRootView: View {
                         : .identity
                 )
                 .zIndex(100)
+                // A fresh inspector per pool and entry point: its selections
+                // (chart mode, balance series) never carry over to another.
+                .id("\(snap.id)|\(inspection.focusBalanceSeriesID ?? "")")
             }
         }
         .animation(PopoverInspection.closeAnimation(reduceMotion: reduceMotion), value: selectedSnapshot != nil)
@@ -240,12 +249,18 @@ public struct PopoverRootView: View {
                 }
             )
             if !wallet.rows.isEmpty {
-                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now) { id in
+                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries,
+                              trendIsCarriedOver: store.balanceSeriesReadFailed, now: now) { id, seriesID in
                     guard let snap = store.snapshots.first(where: { $0.id == id }) else { return }
+                    // The line's own series, so its details open on its figure.
                     if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
-                        withAnimation(anim) { selectedSnapshot = snap }
+                        withAnimation(anim) {
+                            selectedSnapshot = snap
+                            inspection.focusBalanceSeriesID = seriesID
+                        }
                     } else {
                         selectedSnapshot = snap
+                        inspection.focusBalanceSeriesID = seriesID
                     }
                 }
             }

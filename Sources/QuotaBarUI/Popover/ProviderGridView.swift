@@ -150,8 +150,9 @@ struct ProviderGridView: View {
                         }
                     }
                 }
-                if pool.isStale || pool.state == .onBonus {
-                    Text(pool.isStale ? "Last reading · refresh failed" : "On bonus allowance")
+                if pool.isStale || pool.isAwaitingReset || pool.state == .onBonus {
+                    Text(pool.isStale ? "Last reading · refresh failed"
+                         : pool.isAwaitingReset ? "Window reset · awaiting a reading" : "On bonus allowance")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, 14)
@@ -399,8 +400,7 @@ struct ProviderGridView: View {
             VStack(alignment: .leading, spacing: 3) {
                 // Dim only the bar track/fill on stale readings, never the
                 // caption text — dimming Theme.outline dropped contrast below AA.
-                UsageBar(window: window, height: trackHeight)
-                    .opacity(stale ? 0.55 : 1)
+                UsageBar(window: window, height: trackHeight, dimmed: stale)
                 // Always printed, 0% included: an empty bar with no figure
                 // reads as "no reading".
                 meterCaption(GlancePresentation.usedPercentText(used),

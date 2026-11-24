@@ -97,6 +97,20 @@ public enum BurndownPresentation {
             self.latestReading = latestReading
         }
 
+        /// This chart as the current snapshot allows it: no recent-pace
+        /// projection when the snapshot says the pool is stale or blocked now.
+        /// The stored readings can predate the failure or the block (the store
+        /// publishes before it records, and a failed record leaves older rows
+        /// in place), and a projection from them implies headroom the summary
+        /// above has already refused to forecast.
+        public func current(for snapshot: QuotaSnapshot) -> Burndown {
+            let blockedNow = snapshot.isAccountBlocked
+                || snapshot.quotaBars.contains { $0.label == barLabel && $0.isBlocked }
+            guard snapshot.staleReading != nil || blockedNow else { return self }
+            return Burndown(barLabel: barLabel, windowStart: windowStart, resetsAt: resetsAt, actual: actual,
+                            ideal: ideal, projection: nil, nowRemaining: nowRemaining, latestReading: latestReading)
+        }
+
         /// True when the vendor blocked the window at the latest reading. Its
         /// remaining share is then a figure the vendor reported, not capacity
         /// the user can spend.
