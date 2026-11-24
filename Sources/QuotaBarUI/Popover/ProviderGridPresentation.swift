@@ -83,8 +83,20 @@ struct ProviderGridPresentation {
                     ? nil : GlancePresentation.serviceName(for: snapshot.vendorId)
             }
 
+            // An account the vendor blocked on its badge blocks every window it
+            // reads, whatever percentage each shows: the cells, the group's
+            // spent roll-up, its averages and the spoken labels then all read
+            // the block from the bar, the one place they already look. Drawn
+            // as plain percentages these read as healthy green bars beside a
+            // red-ringed avatar.
+            let poolWindows = (pool?.windows ?? []).map { window -> Window in
+                guard snapshot.isAccountBlocked, !window.bar.isBlocked else { return window }
+                var bar = window.bar
+                bar.isBlocked = true
+                return GlancePresentation.window(for: bar, now: now)
+            }
             var columns: [WindowColumn: Window] = [:]
-            for window in pool?.windows ?? [] {
+            for window in poolWindows {
                 guard window.remaining != nil || window.bar.isBlocked,
                       let column = WindowColumn.column(forLabel: window.bar.label),
                       columns[column] == nil else { continue }
@@ -159,7 +171,9 @@ struct ProviderGridPresentation {
 
         func summary(for column: WindowColumn) -> Summary? {
             if pools.count == 1 { return pools[0].windows[column].map(Summary.window) }
-            let published = pools.filter { !$0.isStale }.compactMap { $0.windows[column] }
+            // What the rows draw (`displayWindows`): a 5H column a spent week
+            // hides from its row must not be averaged into the group's 5H.
+            let published = pools.filter { !$0.isStale }.compactMap { $0.displayWindows[column] }
             guard !published.isEmpty else { return nil }
             if published.count == pools.count, published.allSatisfy(\.isSpent) {
                 return .spent(
@@ -168,7 +182,9 @@ struct ProviderGridPresentation {
                     includesBlocked: published.contains { $0.bar.isBlocked }
                 )
             }
-            let remaining = published.compactMap(\.remaining)
+            // A blocked window's figure is what the vendor reported, not
+            // capacity anyone can use, so it is not averaged as headroom.
+            let remaining = published.filter { !$0.bar.isBlocked }.compactMap(\.remaining)
             guard !remaining.isEmpty else { return nil }
             return .average(remaining: remaining.reduce(0, +) / Double(remaining.count),
                             reported: remaining.count, count: pools.count)

@@ -110,7 +110,7 @@ public struct WindowGridPresentation: Equatable, Sendable {
     /// then says why in words (`unmeasuredText`) instead of printing 0%.
     public static func percentText(for bar: DualBarMetrics) -> String? {
         guard let fraction = bar.primaryFraction else { return nil }
-        return "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
+        return GlancePresentation.usedPercentText(fraction)
     }
 
     /// Display-only treatment. Keep the actual percentage in spoken summaries

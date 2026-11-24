@@ -668,7 +668,9 @@ final class LiveGlanceHarness {
         if let orSnap = batch.first(where: { $0.id == "openrouter" }) {
             for i in 0..<12 {
                 let dayT = now.addingTimeInterval(-Double(11 - i) * 86_400)
-                let val = Decimal(string: "24.00")! - Decimal(i) * Decimal(string: "0.50")!
+                // Ends at the live reading ($18.42), so the headline balance
+                // and the chart's last point are the same figure.
+                let val = Decimal(string: "23.92")! - Decimal(i) * Decimal(string: "0.50")!
                 let point = QuotaSnapshot(
                     id: orSnap.id, vendorId: orSnap.vendorId, displayName: orSnap.displayName,
                     category: orSnap.category,

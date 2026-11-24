@@ -151,8 +151,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let failedPoll = stale?.at ?? Self.failedPollAfter(snapshot, readings: readings)
         self.summary = Self.summary(
             for: snapshot, failedPollAt: failedPoll, staleReason: stale?.reason, now: now)
+        // Model-scoped windows (Fable) follow the plan's, each on its own
+        // line as in the popover. They are never the summary's focus or its
+        // verdict (`focusBar` reads `quotaBars`, which excludes them).
         self.windows = snapshot.status.confidence == .measured
-            ? snapshot.displayBars.map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
+            ? (snapshot.displayBars + snapshot.scopedBars)
+                .map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
             : []
         self.windowsAsOf = failedPoll == nil || windows.isEmpty ? nil : snapshot.lastUpdated
         self.provenance = Self.provenance(
@@ -176,9 +180,18 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// whether the provider can be used at all), then the most consumed.
     /// Billing cycles measure elapsed time and are never the focus.
     static func focusBar(of snapshot: QuotaSnapshot) -> DualBarMetrics? {
-        let bars = snapshot.quotaBars
+        let bars = verdictBars(of: snapshot)
         return bars.first(where: \.isBlocked)
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
+    }
+
+    /// The windows the verdict is about: the plan's, as the popover's pool
+    /// state reads them. A spent bonus (Kiro `BN`) or paid overage (Grok
+    /// `OD`) never makes a usable plan "Exhausted"; a vendor that labels no
+    /// window as plan keeps all of its windows.
+    static func verdictBars(of snapshot: QuotaSnapshot) -> [DualBarMetrics] {
+        let plan = snapshot.quotaBars.filter { $0.allowanceRole == .plan }
+        return plan.isEmpty ? snapshot.quotaBars : plan
     }
 
     static func summary(
@@ -211,7 +224,6 @@ public struct MetricDetailPresentation: Equatable, Sendable {
                 accessibilityLabel: "\(snapshot.displayName), \(headline), \(note)")
         }
 
-        let row = MetricRowPresentation(snapshot: snapshot, now: now)
         let focus = focusBar(of: snapshot)
         let state: State
         // The focus is a blocked window whenever the vendor blocked one, with
@@ -222,7 +234,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // same pool "Healthy" (`QuotaSnapshot.isAccountBlocked`).
         if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading || snapshot.isAccountBlocked {
             state = .blocked
-        } else if row.isExhausted {
+        } else if verdictBars(of: snapshot).contains(where: WindowGridPresentation.isExhausted)
+                    || snapshot.isFullyBlockedWithoutReading {
             state = .exhausted
         } else {
             switch snapshot.status.urgency {
@@ -248,8 +261,8 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let (headline, symbol) = Self.headlineAndSymbol(for: state)
 
         var spoken = [snapshot.displayName, headline]
-        if let percent, let label = focus?.label {
-            spoken.append("\(WindowColumn.column(forLabel: label)?.spokenName ?? label) window \(percent) percent used")
+        if let fraction = focus?.primaryFraction, let label = focus?.label {
+            spoken.append("\(WindowColumn.column(forLabel: label)?.spokenName ?? label) window \(GlancePresentation.usedPercentWords(fraction)) used")
         } else if let figure {
             spoken.append(MetricRowPresentation.spoken(for: snapshot.metric).isEmpty
                           ? figure : MetricRowPresentation.spoken(for: snapshot.metric))
@@ -283,7 +296,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// run-out are forecasts from it, and are left out.
     static func windowLine(_ bar: DualBarMetrics, isCurrent: Bool = true, now: Date) -> WindowLine {
         let percent = bar.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
-        let percentText = percent.map { "\($0)%" }
+        // The popover's own figure for a used share, so the two never round
+        // one reading differently; a billing cycle's elapsed share is not a
+        // used share and keeps its plain percentage.
+        let percentText = bar.primaryFraction.map {
+            bar.measuresElapsedTimeOnly ? "\(Int((min(max($0, 0), 1) * 100).rounded()))%"
+                : GlancePresentation.usedPercentText($0)
+        }
         let noFigure: String? = percent != nil ? nil : (bar.isBlocked ? "Blocked" : (bar.balanceCaption ?? "No figure"))
 
         var parts: [String] = []
@@ -303,8 +322,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
         let name = WindowColumn.column(forLabel: bar.label)?.spokenName ?? bar.label
         var spoken = [bar.measuresElapsedTimeOnly ? "\(name) cycle" : "\(name) window"]
-        if let percent {
-            spoken.append(bar.measuresElapsedTimeOnly ? "\(percent) percent elapsed" : "\(percent) percent used")
+        if let percent, let fraction = bar.primaryFraction {
+            spoken.append(bar.measuresElapsedTimeOnly ? "\(percent) percent elapsed"
+                          : "\(GlancePresentation.usedPercentWords(fraction)) used")
         } else if bar.isBlocked {
             spoken.append("blocked")
         } else if let balance = bar.balanceCaption {

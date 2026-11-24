@@ -144,7 +144,7 @@ struct WindowGridPresentationTests {
             primaryFraction: nil, label: "MO",
             quantityRemaining: Decimal(500), quantityUnit: "credits")
         #expect(creditCount.balanceCaption == nil)
-        #expect(WindowGridPresentation.percentText(for: bar("5H", 0.425)) == "43%")
+        #expect(WindowGridPresentation.percentText(for: bar("5H", 0.425)) == GlancePresentation.usedPercentText(0.425))
         #expect(WindowGridPresentation.percentText(for: bar("5H", 0)) == "0%")
         let grid = WindowGridPresentation(snapshot: snap([bar("5H", nil, blocked: true), bar("WK", nil), balance]))
         #expect(grid.spokenSummary() == "5-hour blocked, weekly no reading, monthly $12.50 remaining, no percentage")
@@ -226,7 +226,7 @@ struct WindowGridSpokenResetTests {
         #expect(grid([bar("5H", 0.1, resetsIn: 60)]).spokenSummary(now: now) == "5-hour 10% used, resets in 1 minute")
         #expect(grid([bar("5H", 0.1, resetsIn: 45 * 60)]).spokenSummary(now: now) == "5-hour 10% used, resets in 45 minutes")
         #expect(grid([bar("WK", 0.1, resetsIn: 86_400)]).spokenSummary(now: now) == "weekly 10% used, resets in 1 day")
-        #expect(grid([bar("WK", 0.1, resetsIn: -30)]).spokenSummary(now: now) == "weekly 10% used, resets now")
+        #expect(grid([bar("WK", 0.1, resetsIn: -30)]).spokenSummary(now: now) == "weekly 10% used, reset due, awaiting a reading")
     }
 
     /// The spoken figure is the visible one: both come from `compactReset`.

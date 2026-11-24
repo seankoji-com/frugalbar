@@ -305,7 +305,9 @@ public struct MetricDetailModalView: View {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
-                isExhausted: MetricRowPresentation(snapshot: snapshot).isExhausted
+                // The summary's verdict, so the avatar and the headline beside
+                // it cannot disagree (a spent bonus pool, an account block).
+                isExhausted: [.exhausted, .blocked].contains(presentation.summary.state)
             )
 
             // The name and its badge claim the row's width before the close
@@ -330,7 +332,8 @@ public struct MetricDetailModalView: View {
                 Text(headerSubtitle)
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-                    .lineLimit(1)
+                    // Plan names arrive verbatim from vendors; wrap, never clip.
+                    .fixedSize(horizontal: false, vertical: true)
             }
             // The column takes the row's remaining width, so the close button is
             // pinned right and the name is not starved by a flexible `Spacer`
@@ -642,7 +645,9 @@ public struct MetricDetailModalView: View {
                         // above already says these predate the failed poll.
                         .opacity(asOf == nil ? 1 : 0.55)
                         HStack(spacing: 3) {
-                            if window.isSpent {
+                            // The nosign means "the vendor blocked this", as in
+                            // the popover; a window the user used up says "spent".
+                            if line.metrics.isBlocked {
                                 BlockedGlyph(color: Theme.errorBold)
                             }
                             Text(window.isSpent && !line.metrics.isBlocked ? "spent"
@@ -795,13 +800,13 @@ public struct MetricDetailModalView: View {
                     if burndown.isBlocked {
                         BlockedGlyph(color: Theme.onSurfaceVariant, size: 10)
                     }
-                    // A blocked caption carries an extra clause; it wraps
-                    // rather than cutting off the reset time.
+                    // The caption wraps rather than cutting its last clause,
+                    // which is the run-out warning whenever there is one
+                    // ("58% used · resets in 5d · at recent rate, out in 41h"
+                    // is 293pt in a 234pt column).
                     Text(BurndownPresentation.summaryLine(for: burndown, now: now))
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.onSurfaceVariant)
-                        .lineLimit(burndown.isBlocked ? 2 : 1)
-                        .minimumScaleFactor(0.85)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Text("Axis: % left")
@@ -816,8 +821,7 @@ public struct MetricDetailModalView: View {
                     Text("No window length published, so no pace line can be drawn")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.outline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     burndownLegend(for: burndown)
                 }
@@ -848,7 +852,7 @@ public struct MetricDetailModalView: View {
             if burndown.projection != nil {
                 HStack(spacing: 5) {
                     legendDashSwatch(
-                        color: burndown.projectedExhaustion != nil ? Theme.error : Theme.tertiary,
+                        color: burndown.runOutVerdict(now: now).warns ? Theme.error : Theme.tertiary,
                         dash: [1.5, 2.5],
                         lineWidth: 1.5
                     )

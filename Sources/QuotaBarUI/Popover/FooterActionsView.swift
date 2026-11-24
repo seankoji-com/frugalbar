@@ -35,46 +35,69 @@ struct FooterActionsView: View {
         }
     }
 
-    private func footer(now: Date) -> some View {
-        HStack(spacing: 8) {
-            // FrugalBar Branding + Live status dot
-            HStack(spacing: 6) {
+    /// The glyph beside the check time describes the check, not the quotas:
+    /// the worst quota's red octagon there read as "the check failed" while
+    /// Subscriptions already showed the spent pool. Stale figures are the
+    /// check's own failure, and the only one it reports.
+    private var checkSymbol: (name: String, color: Color) {
+        if !summary.hasAnyReading { return ("minus.circle", Theme.outline) }
+        if summary.staleCount > 0 { return ("exclamationmark.triangle.fill", Theme.tertiary) }
+        return ("checkmark.circle.fill", Theme.secondary)
+    }
+
+    private func statusCluster(now: Date, wordmark: Bool, version: Bool) -> some View {
+        HStack(spacing: 6) {
+            if wordmark {
                 Text("FrugalBar")
                     .font(Theme.Typography.footer)
                     .foregroundStyle(Theme.onSurface)
+            }
 
-                // The running version, as a token: "v1.4.2", or "dev" for a
-                // local build. Muted so the wordmark still leads; the tooltip
-                // carries the long form the About window shows.
+            // The running version, as a token: "v1.4.2", or "dev" for a
+            // local build. Muted so the wordmark still leads; the tooltip
+            // carries the long form the About window shows.
+            if version {
                 Text(AppInfo.compactVersion)
                     .font(Theme.Typography.footerMeta)
                     .foregroundStyle(Theme.outline)
                     .help(AppInfo.versionDisplay)
+            }
 
-                // A shape, not colour alone, carries the status (WCAG 1.4.1) —
-                // shares SystemHealthPresentation's symbol mapping so the
-                // header and footer indicators can never disagree about what a
-                // given summary means.
-                Image(systemName: SystemHealthPresentation.symbol(for: summary))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(SystemHealthPresentation.color(for: summary))
-                    .shadow(color: SystemHealthPresentation.color(for: summary).opacity(0.6), radius: 2)
+            // A shape, not colour alone, carries the status (WCAG 1.4.1).
+            Image(systemName: checkSymbol.name)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(checkSymbol.color)
 
-                Text(SystemHealthPresentation.pollStatus(
-                    lastAttemptAt: summary.lastAttemptAt, isRefreshing: isRefreshing, now: now))
+            Text(SystemHealthPresentation.pollStatus(
+                lastAttemptAt: summary.lastAttemptAt, isRefreshing: isRefreshing, now: now))
+                .font(Theme.Typography.footerMeta)
+                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
+                .fixedSize()
+                .help("Most recent provider check. A failed check keeps the previous figures, marked stale on that provider's row.")
+
+            // A completed check can still leave old figures. Keep that
+            // failure visible beside the check time.
+            if summary.staleCount > 0 {
+                Text("\(summary.staleCount) stale")
                     .font(Theme.Typography.footerMeta)
-                    .foregroundStyle(Theme.onSurfaceVariant.opacity(0.80))
-                    .lineLimit(1)
-                    .help("Most recent provider check. A failed check keeps the previous figures, marked stale on that provider's row.")
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize()
+                    .help("A provider's newest poll failed, so its figures are from an earlier one")
+            }
+        }
+        .fixedSize()
+    }
 
-                // A completed check can still leave old figures. Keep that
-                // failure visible beside the check time.
-                if summary.staleCount > 0 {
-                    Text("\(summary.staleCount) stale")
-                        .font(Theme.Typography.footerMeta)
-                        .foregroundStyle(Theme.tertiary)
-                        .help("A provider's newest poll failed, so its figures are from an earlier one")
-                }
+    private func footer(now: Date) -> some View {
+        HStack(spacing: 8) {
+            // FrugalBar Branding + Live status dot
+            // The check status never truncates: with a release version, an
+            // events pill and a stale count, "Checked 59m ago" had 55pt of the
+            // 96pt it needs. The version token goes first, then the wordmark.
+            ViewThatFits(in: .horizontal) {
+                statusCluster(now: now, wordmark: true, version: true)
+                statusCluster(now: now, wordmark: true, version: false)
+                statusCluster(now: now, wordmark: false, version: false)
             }
             .accessibilityElement(children: .combine)
             // The dot carries the health state in colour alone, so the label

@@ -217,6 +217,18 @@ public enum HistoryPresentation {
         }
     }
 
+    /// A charted point's band, from that window's own used share and the
+    /// thresholds its bar is coloured by (`GlanceColors.fill`: under 10% left
+    /// is critical, under 30% is low). The urgency recorded with a reading is
+    /// the whole snapshot's worst window, so charting it drew a 10%-used 5H
+    /// line as critical whenever the week was.
+    public static func windowUrgency(usedFraction: Double) -> Urgency {
+        let remaining = 1 - min(max(usedFraction, 0), 1)
+        if remaining < 0.10 { return .critical }
+        if remaining < 0.30 { return .warning }
+        return .none
+    }
+
     public static func segments(
         from readings: [QuotaHistoryStore.ReadingRecord],
         barLabel: String? = nil,
@@ -314,7 +326,7 @@ public enum HistoryPresentation {
                 fraction: fraction,
                 isBlocked: record.isBlocked,
                 confidence: record.confidence,
-                urgency: record.urgency
+                urgency: Self.windowUrgency(usedFraction: fraction)
             )
 
             if let prev = lastRecord {

@@ -64,7 +64,9 @@ public enum ResetCountdownBadge {
     public static func compact(_ date: Date?, now: Date = Date()) -> String? {
         switch compactReset(date, now: now) {
         case nil:             nil
-        case .now:            "now"
+        // Passed: the reset is owed and no reading has shown it yet. "now"
+        // beside a 100% bar read as "back now" while it was still spent.
+        case .now:            "due"
         case .minutes(let n): "\(n)m"
         case .hours(let n):   "\(n)h"
         case .days(let n):    "\(n)d"
@@ -76,15 +78,21 @@ public enum ResetCountdownBadge {
     /// label too. nil when there is no reset time.
     public static func compactSpoken(_ date: Date?, now: Date = Date()) -> String? {
         guard let span = spanSpoken(date, now: now) else { return nil }
-        return span == "now" ? "resets now" : "resets in \(span)"
+        return span == "now" ? "reset due, awaiting a reading" : "resets in \(span)"
     }
 
     /// `compact` as a phrase for the inspector: "Resets in 3h", "Resets in 6d",
     /// "Resets now". One unit, so it never disagrees with the Subscriptions
     /// cell the inspector was opened from.
     public static func compactDescription(_ date: Date, now: Date = Date()) -> String {
-        guard let span = compact(date, now: now), span != "now" else { return "Resets now" }
+        guard let span = compact(date, now: now), span != "due" else { return "Reset due · awaiting a reading" }
         return "Resets in \(span)"
+    }
+
+    /// A `compact` figure in a spoken sentence: "resets in 3h", or for a
+    /// passed reset "reset due, awaiting a reading" (never "resets in due").
+    public static func spokenClause(forCompact span: String) -> String {
+        span == "due" ? "reset due, awaiting a reading" : "resets in \(span)"
     }
 
     /// `compact`'s span in words, with no verb: "3 hours", "6 days", or "now"

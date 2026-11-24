@@ -41,6 +41,10 @@ struct AccountBlockedConsistencyTests {
         let gridPool = try #require(group.pools.first { $0.id == "commandcode" })
         #expect(gridPool.isBlocked)
         #expect(group.subtitle == "1 usable · 1 blocked")
+        // Its cells draw blocked, not as healthy 20% / 40% bars, and its
+        // figures are not averaged into the group as headroom.
+        #expect(!gridPool.windows.isEmpty && gridPool.windows.values.allSatisfy { $0.isSpent && $0.bar.isBlocked })
+        #expect(group.summary(for: .fiveHour) == .average(remaining: 0.9, reported: 1, count: 2))
 
         let solo = ProviderGridPresentation(snapshots: [limited],
                                             serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now)

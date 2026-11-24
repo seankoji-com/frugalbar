@@ -108,7 +108,7 @@ struct GlancePresentationTests {
         #expect(GlancePresentation.countdown(at(47.4), now: now) == "47h")
         #expect(GlancePresentation.countdown(at(48), now: now) == "2d")
         #expect(GlancePresentation.countdown(at(402.8), now: now) == "17d")
-        #expect(GlancePresentation.countdown(at(-1), now: now) == "now")
+        #expect(GlancePresentation.countdown(at(-1), now: now) == "due")
         #expect(GlancePresentation.countdownSpoken(at(1), now: now) == "1 hour")
         #expect(GlancePresentation.countdownSpoken(at(125), now: now) == "5 days")
     }

@@ -123,10 +123,13 @@ struct ProviderGridView: View {
                         windowCell(window, label: column.label, stale: pool.isStale)
                     } else if pool.state == .unreadable
                                 || (pool.state == .spent && pool.windows.isEmpty && pool.nonstandardPlanBar == nil) {
+                        // Text in the spent red uses `Theme.error`: errorBold
+                        // is a fill colour and measures 4.08:1 as 11pt text
+                        // on this row (3.58:1 hovered), under AA.
                         Text(pool.snapshot.status.unavailableReason?.headline
                              ?? (pool.state == .spent ? "Blocked" : "No quota reading"))
                             .font(.system(size: 11))
-                            .foregroundStyle(pool.state == .spent ? Theme.errorBold : Theme.outline)
+                            .foregroundStyle(pool.state == .spent ? Theme.error : Theme.outline)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         columns { column in
@@ -313,10 +316,10 @@ struct ProviderGridView: View {
             if window.isSpent {
                 parts.append("\(bar.label), \(spentDescription(window))")
             } else if let used = window.used {
-                parts.append("\(bar.label), \(used.formatted(.percent)) used")
+                parts.append("\(bar.label), \(GlancePresentation.usedPercentSpoken(used)) used")
             }
             if let reset = presentation.countdown(bar.resetsAt, stale: single.isStale) {
-                parts.append("resets in \(reset)")
+                parts.append(ResetCountdownBadge.spokenClause(forCompact: reset))
             }
         }
         let spokenColumns = single?.spanningColumn.map { [$0] } ?? WindowColumn.allCases
@@ -326,7 +329,7 @@ struct ProviderGridView: View {
             let reset: Date?
             switch summary {
             case .average(let remaining, let reported, let count):
-                result = "\((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools"
+                result = "\(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
                 reset = nil
             case .spent(let next, let exhausted, let blocked):
                 result = exhausted && !blocked ? "all spent" : "all blocked or spent"
@@ -335,14 +338,14 @@ struct ProviderGridView: View {
                 if window.isSpent {
                     result = spentDescription(window)
                 } else if let used = window.used {
-                    result = "\(used.formatted(.percent)) used"
+                    result = "\(GlancePresentation.usedPercentSpoken(used)) used"
                 } else {
                     continue
                 }
                 reset = window.bar.resetsAt
             }
             let resetText = presentation.countdown(reset, stale: single?.isStale == true)
-                .map { ", resets in \($0)" } ?? ""
+                .map { ", " + ResetCountdownBadge.spokenClause(forCompact: $0) } ?? ""
             parts.append("\(column.spokenName), \(result)\(resetText)")
         }
         return parts.joined(separator: ", ")
@@ -359,7 +362,7 @@ struct ProviderGridView: View {
                       showsBlockedGlyph: allMeasuredExhausted && includesBlocked)
         case .average(let remaining, let reported, let count):
             VStack(alignment: .trailing, spacing: 2) {
-                Text(1 - remaining, format: .percent.precision(.fractionLength(0...1)))
+                Text(GlancePresentation.usedPercentText(1 - remaining))
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
                 Text(reported == 1 ? "\(reported)/\(count)" : "avg · \(reported)/\(count)")
@@ -368,7 +371,7 @@ struct ProviderGridView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(column.spokenName): \((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools")
+            .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools")
         }
     }
 
@@ -394,8 +397,8 @@ struct ProviderGridView: View {
                              reset: reset, color: GlanceColors.text(for: window))
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel([ "\(label), \(used.formatted(.percent)) used",
-                                 reset.map { "resets in \($0)" } ].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityLabel([ "\(label), \(GlancePresentation.usedPercentSpoken(used)) used",
+                                 reset.map(ResetCountdownBadge.spokenClause(forCompact:)) ].compactMap { $0 }.joined(separator: ", "))
         }
     }
 
@@ -417,7 +420,7 @@ struct ProviderGridView: View {
             meterCaption(title, reset: reset, color: Theme.error, showsBlockedGlyph: showsBlockedGlyph)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken + (reset.map { ", resets in \($0)" } ?? ""))
+        .accessibilityLabel(spoken + (reset.map { ", " + ResetCountdownBadge.spokenClause(forCompact: $0) } ?? ""))
     }
 
     private func meterCaption(_ label: String?, reset: String?, color: Color, showsBlockedGlyph: Bool = false) -> some View {

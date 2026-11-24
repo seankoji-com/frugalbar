@@ -341,7 +341,8 @@ public struct GlancePresentation: Equatable, Sendable {
             guard let bonus = eligible.first(where: { $0.state == .onBonus }),
                   let bar = bonus.snapshot.quotaBars.first(where: { $0.allowanceRole == .bonus }) else { return nil }
             let w = window(for: bar, now: now)
-            return Pick(pool: bonus, binding: w, reason: "on bonus · \(percent(w.remaining ?? 0))% left",
+            return Pick(pool: bonus, binding: w,
+                        reason: w.remaining.map { "on bonus · \(percent($0))% left" } ?? "on bonus",
                         isCaveat: true, score: nil)
         }
         let text = pool.state == .onBonus
@@ -351,9 +352,12 @@ public struct GlancePresentation: Equatable, Sendable {
     }
 
     static func reason(_ window: Window, now: Date) -> String {
-        let left = "\(percent(window.remaining ?? 0))% \(window.bar.label) left"
+        // Never a "0% left" for a window that published no figure.
+        let left = window.remaining.map { "\(percent($0))% \(window.bar.label) left" }
+            ?? "\(window.bar.label) not measured"
         guard let reset = window.bar.resetsAt else { return "\(left) · reset not published" }
-        return "\(left) · resets in \(countdown(reset, now: now))"
+        let when = countdown(reset, now: now)
+        return when == "due" ? "\(left) · reset due" : "\(left) · resets in \(when)"
     }
 
     /// Floored, so a figure never overstates headroom (99.8% left reads 99%).
@@ -364,8 +368,27 @@ public struct GlancePresentation: Equatable, Sendable {
     /// A used share as every "% used" figure prints it: the Subscriptions
     /// cell, the Wallet meter and the menu-bar title. One formatter, so a tie
     /// such as 12.5% rounds the same way in all three.
+    ///
+    /// It never rounds across a state boundary: a window under the spent
+    /// threshold never prints "100%" (99.6% used is not spent, and draws no
+    /// stripes), and a nonzero share never prints "0%" beside a bar that
+    /// shows a sliver. Spoken labels use `usedPercentSpoken`, the same figure.
     static func usedPercentText(_ used: Double) -> String {
-        min(max(used, 0), 1).formatted(.percent.precision(.fractionLength(0)))
+        let clamped = min(max(used, 0), 1)
+        if clamped > 0, clamped < 0.005 { return "<1%" }
+        let shown = clamped >= QuotaSnapshot.exhaustionThreshold ? clamped : min(clamped, 0.99)
+        return shown.formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    /// `usedPercentText` as VoiceOver should read it.
+    static func usedPercentSpoken(_ used: Double) -> String {
+        let text = usedPercentText(used)
+        return text == "<1%" ? "under 1%" : text
+    }
+
+    /// `usedPercentSpoken` in words: "58 percent", "under 1 percent".
+    static func usedPercentWords(_ used: Double) -> String {
+        usedPercentSpoken(used).replacingOccurrences(of: "%", with: " percent")
     }
 
     // MARK: Back soon
@@ -398,10 +421,15 @@ public struct GlancePresentation: Equatable, Sendable {
     /// minutes under an hour, hours under two days, then days, each rounded.
     /// 43.9h is "44h"; 125h is "5d". Every countdown in the glance and the
     /// menu-bar title reads this, so no two can disagree in format.
+    ///
+    /// A time that has passed is "due" (the reset is owed, no reading has
+    /// shown it yet) and one under half a minute away is "<1m": "now" read
+    /// as "resets in now" in sentences and as "back now" beside a 100% bar.
     public static func countdown(_ date: Date, now: Date) -> String {
         let interval = date.timeIntervalSince(now)
+        guard interval > 0 else { return "due" }
         let minutes = Int((interval / 60).rounded())
-        guard minutes > 0 else { return "now" }
+        guard minutes > 0 else { return "<1m" }
         if minutes < 60 { return "\(minutes)m" }
         let hours = Int((interval / 3600).rounded())
         if hours < 48 { return "\(hours)h" }
@@ -411,7 +439,9 @@ public struct GlancePresentation: Equatable, Sendable {
     /// `countdown` in words, the same unit and rounding: "44 hours", "5 days".
     public static func countdownSpoken(_ date: Date, now: Date) -> String {
         let text = countdown(date, now: now)
-        guard text != "now", let unit = text.last, let value = Int(text.dropLast()) else { return text }
+        if text == "due" { return "now, awaiting a reading" }
+        if text == "<1m" { return "under a minute" }
+        guard let unit = text.last, let value = Int(text.dropLast()) else { return text }
         let word = switch unit { case "m": "minute"; case "h": "hour"; default: "day" }
         return "\(value) \(word)\(value == 1 ? "" : "s")"
     }
@@ -447,9 +477,9 @@ public struct GlancePresentation: Equatable, Sendable {
             // rounded as they round, so the title and the pick's cell agree.
             // The spoken label keeps the reason's "% left", which names its
             // direction.
-            let used = "\(usedPercentText(pick.binding.used ?? 0)) \(pick.binding.bar.label) used"
+            let used = pick.binding.used.map { "\(usedPercentText($0)) \(pick.binding.bar.label) used" }
             let reset = pick.binding.bar.resetsAt.map { countdown($0, now: now) }
-            let text = ([who, used] + [reset].compactMap { $0 }).joined(separator: " · ")
+            let text = ([who] + [used, reset].compactMap { $0 }).joined(separator: " · ")
             let spoken = "Use \(pick.pool.service) \(pick.pool.name): \(pick.reason)"
                 + (pick.isCaveat ? ". Best available, not a strong pick" : "")
             return MenuTitle(vendor: pick.pool.snapshot.vendorId, text: text,
@@ -457,6 +487,12 @@ public struct GlancePresentation: Equatable, Sendable {
         }
         let next = backSoon.first { ($0.pool.returnsAt ?? .distantPast) > now }
             .map { countdown($0.pool.returnsAt!, now: now) }
+        // Only balances (OpenRouter, DeepSeek's API credit) and no quota pool:
+        // nothing failed, there is simply no subscription to pick from.
+        if pools.isEmpty {
+            return MenuTitle(vendor: nil, text: "No subscriptions", tone: .unknown,
+                             spoken: "No subscription quota to pick from; balances are in the Wallet")
+        }
         let readable = pools.filter { $0.state != .unreadable }
         if readable.isEmpty {
             return MenuTitle(vendor: nil, text: "No readings", tone: .unknown,
@@ -464,9 +500,12 @@ public struct GlancePresentation: Equatable, Sendable {
         }
         let uncertain = pools.contains { $0.state == .unreadable || $0.isStale }
         if uncertain {
-            let tail = next.map { "next \($0)" } ?? "returns unknown"
-            return MenuTitle(vendor: nil, text: "None confirmed usable · \(tail)", tone: .unknown,
-                             spoken: "No pool confirmed usable; \(tail)")
+            // A return is claimed unknown only when something is waiting to
+            // return; with nothing spent there is no return to speak of.
+            let tail = next.map { "next \($0)" } ?? (backSoon.isEmpty ? nil : "returns unknown")
+            let text = ["None confirmed usable", tail].compactMap { $0 }.joined(separator: " · ")
+            return MenuTitle(vendor: nil, text: text, tone: .unknown,
+                             spoken: ["No pool confirmed usable", tail].compactMap { $0 }.joined(separator: "; "))
         }
         let unknownReturns = backSoon.contains { $0.pool.returnsAt == nil }
         let tail = next.map { "next \($0)" + (unknownReturns ? " · others unknown" : "") }

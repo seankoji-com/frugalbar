@@ -609,7 +609,19 @@ avatar in the popover is the logo in greyscale at 55% opacity inside a 1.5pt
 red ring, with the countdown (or `nosign` when no reset was published) in a red
 capsule on the top-left corner, so the logo stays recognisable. The ring and
 tag draw outside the 28pt frame and do not move it. The inspector and widget
-keep the struck-through mark.
+keep the struck-through mark. In Subscriptions, spent *text* (the caption under
+a striped bar and the "Blocked" fallback) is `Theme.error`: errorBold as 10–11pt
+text measures 4.08:1 on the row and 3.58:1 hovered, under AA. errorBold stays
+the fill, stripes, ring and tag.
+
+**Each glance verdict has one definition; surfaces word it, never re-derive it.**
+A run-out forecast is `RunOutVerdict` (total over reset × rate × projected
+run-out, including a run-out already due between polls); an account-level block
+is `QuotaSnapshot.isAccountBlocked`, read through `GlancePresentation.Pool.isBlocked`
+and into the grid pool's windows; a used share is `GlancePresentation.usedPercentText`
+(never "100%" under the spent threshold, "<1%" for a sliver); a countdown that
+has passed is "due", never "now". Each of these was once derived locally and
+drifted, one surface per review round, until it was moved to one place.
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the

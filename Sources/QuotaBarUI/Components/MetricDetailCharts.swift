@@ -67,7 +67,8 @@ struct BurndownChartView: View {
     }
 
     private var projectionColor: Color {
-        burndown.projectedExhaustion != nil ? Theme.error : Theme.tertiary
+        // The verdict's colour: red only when it says the window runs out.
+        burndown.runOutVerdict(now: now).warns ? Theme.error : Theme.tertiary
     }
 
     var body: some View {
