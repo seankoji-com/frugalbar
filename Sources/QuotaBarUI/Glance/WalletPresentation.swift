@@ -81,13 +81,15 @@ struct WalletPresentation: Equatable, Sendable {
                         balanceSeriesID: BalanceSeries.of(snapshot)?.id,
                         spoken: p.accessibilityLabel))
                 } else {
-                    rows += snapshot.apiCredits.map { Self.entryRow($0, title: titled, tag: staleTag) }
+                    rows += snapshot.apiCredits.map {
+                        Self.entryRow($0, title: titled, tag: staleTag, namesAccount: account != nil)
+                    }
                 }
                 continue
             }
 
             rows += snapshot.apiCredits.filter { !$0.extendsSubscription }
-                .map { Self.entryRow($0, title: titled, tag: staleTag) }
+                .map { Self.entryRow($0, title: titled, tag: staleTag, namesAccount: account != nil) }
             // The ChatGPT credit count that extends the plan: "bonus".
             if let usage = p.openAIUsageCredit,
                let entry = snapshot.apiCredits.first(where: { $0.id == "openai.api-credits" }) {
@@ -182,10 +184,21 @@ struct WalletPresentation: Equatable, Sendable {
         }
     }
 
-    static func entryRow(_ entry: APICreditEntry, title: (String) -> String, tag: String?) -> Row {
+    /// `namesAccount`: `title` already names the snapshot's account, so the
+    /// entry's own title must not name it too. A named Claude account's
+    /// entries carry `accountName`, and taking both printed
+    /// "Claude · Primary Extra usage · Primary".
+    static func entryRow(_ entry: APICreditEntry, title: (String) -> String, tag: String?,
+                         namesAccount: Bool) -> Row {
         let e = APICreditEntryPresentation(entry: entry)
+        var name = e.title
+        if namesAccount, entry.accountName != nil {
+            var unnamed = entry
+            unnamed.accountName = nil
+            name = APICreditEntryPresentation(entry: unnamed).title
+        }
         return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
-                   title: title(prefixed(e.title, with: providerName(entry.vendorId))), tag: tag,
+                   title: title(prefixed(name, with: providerName(entry.vendorId))), tag: tag,
                    figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal,
                    balanceSeriesID: BalanceSeries.of(entry)?.id, spoken: e.spoken)
     }

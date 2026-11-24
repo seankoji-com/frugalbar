@@ -2,6 +2,7 @@ import AppKit
 import Security
 import SwiftUI
 import Testing
+import Vision
 import WebKit
 @testable import QuotaBarCore
 @testable import QuotaBarUI
@@ -551,6 +552,127 @@ struct UXRenderTests {
         .padding(Theme.edgeMargin)
         .frame(width: PopoverRootView.popoverWidth)
         .background(Theme.surface), name: "provider-grid-gemini-wallet", directory: directory)
+    }
+
+    /// Three states v0.32.0's review checked by reading code only: the Gemini
+    /// group expanded with each row naming its route, Wallet tags at full
+    /// width beside their glyph-only form, and a spent Wallet credit bar.
+    @Test func renderSubscriptionsWalletStates() async throws {
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = GlanceFixtures.now
+
+        // 1. Gemini expanded: account 1 read through this Mac's Google
+        // sign-in (AGY), account 2 through the CLI Proxy.
+        var routed = GlanceFixtures.batch
+        for i in routed.indices where routed[i].vendorId == .gemini || routed[i].vendorId == .antigravityArgon {
+            routed[i].cliSource = routed[i].antigravityAccount?.id == GlanceFixtures.burner.id
+                ? "Google OAuth (this Mac)" : "CLI Proxy (localhost)"
+        }
+        let grid = ProviderGridPresentation(snapshots: routed, serviceOrder: ProviderDisplayPreferences.defaultOrder,
+                                            now: now)
+        let gemini = try #require(grid.groups.first { $0.id == .gemini })
+        #expect(gemini.pools.map { "\($0.name) | \($0.source ?? "")" } == [
+            "Account 1 | Gemini · AGY", "Account 1 | Argon · AGY",
+            "Account 2 | Gemini · CLI Proxy", "Account 2 | Argon · CLI Proxy",
+        ])
+        try await save(ProviderGridView(presentation: grid, expanded: .gemini)
+            .padding(Theme.edgeMargin)
+            .frame(width: PopoverRootView.popoverWidth)
+            .background(Theme.surface), name: "provider-grid-gemini-routes", directory: directory)
+        // The presentation can be right while the view drops it, and the
+        // offscreen accessibility tree is empty, so read the rendered pixels.
+        let gridText = try renderedText("provider-grid-gemini-routes", directory: directory)
+        #expect(gridText.filter { $0.contains("AGY") }.count == 2, "\(gridText)")
+        #expect(gridText.filter { $0.contains("CLI Proxy") }.count == 2, "\(gridText)")
+
+        // 2. Tags: short titles keep the word, long account names shrink the
+        // tag to its glyph (pencil for configured, clock for last reading).
+        var plainGemini = GlanceFixtures.snapshot("gemini", .gemini, "Gemini", plan: "Google AI Pro",
+            [GlanceFixtures.bar("WK", 0.4, resetsInHours: 100, windowHours: 168)])
+        plainGemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 25,
+                                                      configuredAt: now.addingTimeInterval(-4 * 86_400))
+        let longGoogle = AntigravityAccount(id: "agy-long", badge: "3", sourceLabel: "fixture",
+            fallbackName: "research-burner-account@example.com", planName: "Google AI Pro")
+        var longGemini = GlanceFixtures.agy(.gemini, longGoogle,
+            [GlanceFixtures.bar("WK", 0.2, resetsInHours: 100, windowHours: 168)])
+        longGemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                     configuredAt: now.addingTimeInterval(-86_400))
+        var staleBalance = GlanceFixtures.balance("openrouter", .openrouter, "OpenRouter", Decimal(string: "8.50")!)
+        staleBalance.staleReading = StaleReading(reason: .offline, at: now)
+        let longClaude = ClaudeAccount(id: "claude-long", badge: "3", sourceLabel: "fixture",
+                                       fallbackName: "Platform Engineering Shared Seat")
+        var staleClaude = GlanceFixtures.claude(longClaude,
+            [GlanceFixtures.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])
+        // Stamped with its account as `ClaudeQuotaProvider` stamps a named
+        // account's entries.
+        staleClaude.apiCredits = [APICreditEntry(id: longClaude.id + "|claude.extra-usage", vendorId: .claude,
+            label: "Extra usage", metric: .currency(balance: 42, limit: 200, spent: nil, currencyCode: "USD"),
+            poolID: "claude.extra-usage", accountID: staleClaude.id, accountName: longClaude.name)]
+        staleClaude.staleReading = StaleReading(reason: .offline, at: now)
+        // Names long enough to push out the tag's word but short enough to
+        // stay whole beside its glyph: the case the glyph exists for.
+        let midGoogle = AntigravityAccount(id: "agy-mid", badge: "4", sourceLabel: "fixture",
+            fallbackName: "Research", planName: "Google AI Pro")
+        var midGemini = GlanceFixtures.agy(.gemini, midGoogle,
+            [GlanceFixtures.bar("WK", 0.2, resetsInHours: 100, windowHours: 168)])
+        midGemini.geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                    configuredAt: now.addingTimeInterval(-86_400))
+        let midClaude = ClaudeAccount(id: "claude-mid", badge: "4", sourceLabel: "fixture", fallbackName: "Ops")
+        var midStale = GlanceFixtures.claude(midClaude,
+            [GlanceFixtures.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])
+        midStale.apiCredits = [APICreditEntry(id: midClaude.id + "|claude.extra-usage", vendorId: .claude,
+            label: "Extra usage", metric: .currency(balance: 42, limit: 200, spent: nil, currencyCode: "USD"),
+            poolID: "claude.extra-usage", accountID: midStale.id, accountName: midClaude.name)]
+        midStale.staleReading = StaleReading(reason: .offline, at: now)
+        let tagged = WalletPresentation(
+            snapshots: [plainGemini, midGemini, longGemini, staleBalance, midStale, staleClaude], now: now)
+        #expect(tagged.rows.map(\.title) == [
+            "Gemini API", "Gemini API · Research", "Gemini API · research-burner-account@example.com",
+            "OpenRouter", "Claude Extra usage · Ops", "Claude Extra usage · Platform Engineering Shared Seat",
+        ])
+        #expect(tagged.rows.map(\.tag) == ["configured", "configured", "configured",
+                                           "last reading", "last reading", "last reading"])
+        try await save(WalletSection(presentation: tagged, now: now)
+            .padding(Theme.edgeMargin)
+            .frame(width: PopoverRootView.popoverWidth)
+            .background(Theme.surface), name: "wallet-tags", directory: directory)
+        // The word is drawn only where the title leaves room for it: once
+        // each. The mid-length names stay whole beside their glyphs.
+        let tagText = try renderedText("wallet-tags", directory: directory)
+        #expect(tagText.filter { $0.contains("CONFIGURED") }.count == 1, "\(tagText)")
+        #expect(tagText.filter { $0.contains("LAST READING") }.count == 1, "\(tagText)")
+        #expect(tagText.contains { $0.contains("Research") }, "\(tagText)")
+        #expect(tagText.contains { $0.contains("usage · Ops") || $0.contains("usage • Ops") }, "\(tagText)")
+
+        // 3. Spent credits: ChatGPT bonus at 0 of 62,500 (grant date saved, so
+        // the tick would draw if it were not spent), the Claude promo at $0
+        // of $100, and an unspent monthly grant for contrast.
+        var openai = GlanceFixtures.snapshot("openai", .openai, "OpenAI", plan: "Pro",
+            [GlanceFixtures.bar("WK", 0.4, resetsInHours: 100, windowHours: 168)])
+        openai.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
+            metric: .credits(remaining: 0, unitName: "credits"),
+            creditGrant: OpenAICreditGrant(total: 62_500, expiresAt: now.addingTimeInterval(37 * 86_400),
+                                           grantedAt: now.addingTimeInterval(-55 * 86_400)))]
+        openai.openAIMonthlyCredit = OpenAIMonthlyCredit(
+            grantUSD: 100, remainingUSD: 64, periodStart: now.addingTimeInterval(-4 * 86_400),
+            periodEnd: now.addingTimeInterval(26 * 86_400), measuredAt: now)
+        var claude = GlanceFixtures.snapshot("claude", .claude, "Claude", plan: "Max",
+            [GlanceFixtures.bar("WK", 0.4, resetsInHours: 100, windowHours: 168)])
+        claude.apiCredits = [APICreditEntry(id: "claude.promo-credit", vendorId: .claude, label: "Promo credit",
+            metric: .currency(balance: 0, limit: 100, spent: nil, currencyCode: "USD"),
+            currencyBasis: .prepaidCredit, monthlyPeriodEnd: now.addingTimeInterval(12 * 86_400))]
+        let spent = WalletPresentation(snapshots: [openai, claude], now: now)
+        let spentRows = spent.rows.filter { $0.tone == .exhausted }
+        #expect(spentRows.count == 2)
+        for row in spentRows {
+            guard case .credit(let bar) = row.meter else { Issue.record("\(row.title) has no credit bar"); continue }
+            #expect(GlancePresentation.window(for: bar, now: now).isSpent)
+        }
+        try await save(WalletSection(presentation: spent, now: now)
+            .padding(Theme.edgeMargin)
+            .frame(width: PopoverRootView.popoverWidth)
+            .background(Theme.surface), name: "wallet-spent-credit", directory: directory)
     }
 
     /// The rebuilt detail view for a synthetic Gemini account, with a
@@ -1379,6 +1501,16 @@ struct UXRenderTests {
         try accessibility.write(to: directory.appendingPathComponent("\(name)-accessibility.txt"),
                                 atomically: true, encoding: .utf8)
         window.close()
+    }
+
+    /// The text lines Vision reads from a saved render, on device and offline.
+    private func renderedText(_ name: String, directory: URL) throws -> [String] {
+        let url = directory.appendingPathComponent("\(name).png")
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(url: url).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
     /// Read the hosted AppKit accessibility tree, including SwiftUI's combined

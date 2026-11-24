@@ -132,6 +132,20 @@ struct WalletPresentationTests {
         #expect(chatGPT.allSatisfy { !$0.title.contains("·") })
     }
 
+    @Test("a named account's credit names the account once, as the provider stamps it on the entry")
+    func namedAccountCreditNamedOnce() throws {
+        // `ClaudeQuotaProvider` gives a named account's entries its
+        // `accountName`; the Wallet already names the account from the
+        // snapshot, so taking the entry's own title as well printed
+        // "Claude · Primary Extra usage · Primary".
+        var claude = F.claude(F.primary, [F.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])
+        claude.apiCredits = [APICreditEntry(id: F.primary.id + "|claude.extra-usage", vendorId: .claude,
+            label: "Extra usage", metric: .currency(balance: 42, limit: nil, spent: nil, currencyCode: "USD"),
+            poolID: "claude.extra-usage", accountID: claude.id, accountName: F.primary.name)]
+        let rows = WalletPresentation(snapshots: [claude], now: now).rows
+        #expect(rows.map(\.title) == ["Claude Extra usage · Primary"])
+    }
+
     @Test("each Google account's Gemini API credit is its own configured line, named for the account")
     func geminiCreditPerAccount() throws {
         // main and burner each bill to their own Cloud Billing account
