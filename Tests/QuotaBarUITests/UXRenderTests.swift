@@ -2,6 +2,7 @@ import AppKit
 import Security
 import SwiftUI
 import Testing
+import Vision
 import WebKit
 @testable import QuotaBarCore
 @testable import QuotaBarUI
@@ -579,6 +580,11 @@ struct UXRenderTests {
             .padding(Theme.edgeMargin)
             .frame(width: PopoverRootView.popoverWidth)
             .background(Theme.surface), name: "provider-grid-gemini-routes", directory: directory)
+        // The presentation can be right while the view drops it, and the
+        // offscreen accessibility tree is empty, so read the rendered pixels.
+        let gridText = try renderedText("provider-grid-gemini-routes", directory: directory)
+        #expect(gridText.filter { $0.contains("AGY") }.count == 2, "\(gridText)")
+        #expect(gridText.filter { $0.contains("CLI Proxy") }.count == 2, "\(gridText)")
 
         // 2. Tags: short titles keep the word, long account names shrink the
         // tag to its glyph (pencil for configured, clock for last reading).
@@ -631,6 +637,13 @@ struct UXRenderTests {
             .padding(Theme.edgeMargin)
             .frame(width: PopoverRootView.popoverWidth)
             .background(Theme.surface), name: "wallet-tags", directory: directory)
+        // The word is drawn only where the title leaves room for it: once
+        // each. The mid-length names stay whole beside their glyphs.
+        let tagText = try renderedText("wallet-tags", directory: directory)
+        #expect(tagText.filter { $0.contains("CONFIGURED") }.count == 1, "\(tagText)")
+        #expect(tagText.filter { $0.contains("LAST READING") }.count == 1, "\(tagText)")
+        #expect(tagText.contains { $0.contains("Research") }, "\(tagText)")
+        #expect(tagText.contains { $0.contains("usage · Ops") || $0.contains("usage • Ops") }, "\(tagText)")
 
         // 3. Spent credits: ChatGPT bonus at 0 of 62,500 (grant date saved, so
         // the tick would draw if it were not spent), the Claude promo at $0
@@ -1488,6 +1501,16 @@ struct UXRenderTests {
         try accessibility.write(to: directory.appendingPathComponent("\(name)-accessibility.txt"),
                                 atomically: true, encoding: .utf8)
         window.close()
+    }
+
+    /// The text lines Vision reads from a saved render, on device and offline.
+    private func renderedText(_ name: String, directory: URL) throws -> [String] {
+        let url = directory.appendingPathComponent("\(name).png")
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(url: url).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
     /// Read the hosted AppKit accessibility tree, including SwiftUI's combined
