@@ -105,7 +105,7 @@ A `.app` posts banners through `UNUserNotificationCenter`, so macOS draws them a
 
 | Place | What you see |
 |---|---|
-| Popover | A "Latest event" card with the newest surfaced event and a "See all" link. Hidden when there are none. The row shows the vendor's logo, the title, its age and source. |
+| Popover footer | A bell button reading "3 recent" (or "Events" when there are none) that opens History → Events. It counts the surfaced events; it lists none. |
 | History → Events tab | Every listed event grouped by day. Filters: vendor, time range (24 Hours / 7 Days / 30 Days / All Time, default 7 Days), and kind chips for the kinds above (all on). Each row has a detail line and a link to the post, incident or vendor page (http/https only). Sample mode shows a note: the fixture records no events. A read failure shows an error card, never an empty list. |
 | History → timeline | Dashed vertical markers for Usage reset, Usage restored, Reset credit and Vendor reset on the vendor you are viewing. Outages and models say nothing about the allowance the chart plots, so they are never markers. |
 | Inspector | "Recent events" for that vendor (the newest five surfaced). See [inspector.md](inspector.md). |

@@ -390,10 +390,10 @@ public enum BurndownPresentation {
         if burndown.isBlocked {
             parts.append("Blocked by the vendor")
             if let remaining = burndown.nowRemaining {
-                parts.append("\(percent(1 - remaining))% reported used")
+                parts.append("\(GlancePresentation.usedPercentText(1 - remaining)) reported used")
             }
         } else if let remaining = burndown.nowRemaining {
-            parts.append("\(percent(1 - remaining))% used")
+            parts.append("\(GlancePresentation.usedPercentText(1 - remaining)) used")
         }
         if let resetsAt = burndown.resetsAt, resetsAt > now,
            let reset = ResetCountdownBadge.compact(resetsAt, now: now) {

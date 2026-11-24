@@ -450,9 +450,10 @@ public struct MetricDetailModalView: View {
                             if summary.focusIsBlocked {
                                 BlockedGlyph(color: summaryColor, size: 14)
                             }
-                            // "% used", as the popover's bars say it: one unit
-                            // across the glance and the detail.
-                            Text("\(GlancePresentation.percent(used))%")
+                            // "% used", formatted as the popover's bars print
+                            // it, so the summary, the window lines and the
+                            // burndown caption never round one reading apart.
+                            Text(GlancePresentation.usedPercentText(used))
                                 .font(.system(size: 24, weight: .semibold).monospacedDigit())
                                 .foregroundStyle(Theme.onSurface)
                             Text("\(label) used")
@@ -540,7 +541,7 @@ public struct MetricDetailModalView: View {
                 let window = GlancePresentation.window(for: line.metrics, now: now)
                 let leftText: String? = line.metrics.measuresElapsedTimeOnly
                     ? line.percentText.map { "\($0) elapsed" }
-                    : window.used.map { "\(GlancePresentation.percent($0))% used" }
+                    : window.used.map { "\(GlancePresentation.usedPercentText($0)) used" }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(line.label)

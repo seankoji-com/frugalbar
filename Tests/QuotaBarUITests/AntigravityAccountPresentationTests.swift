@@ -163,9 +163,16 @@ struct AntigravityAccountPresentationTests {
             makeSnapshot(account: secondary, allowance: .claude, fraction: 0.61, plan: "Google AI Pro"),
             restrictedSnap
         ]
+        // The live Subscriptions grid, Gemini expanded: the legacy
+        // `MetricSectionView` now draws only developer limits.
+        func grid(_ snapshots: [QuotaSnapshot]) -> some View {
+            ProviderGridView(presentation: ProviderGridPresentation(
+                snapshots: snapshots, serviceOrder: ProviderDisplayPreferences.defaultOrder, now: now),
+                expanded: .gemini)
+        }
         try await savePNG(
-            MetricSectionView(category: .aiSubscriptions, snapshots: multiSnaps, now: now),
-            width: 390,
+            grid(multiSnaps),
+            width: PopoverRootView.popoverWidth,
             name: "agy-popover-multi-account"
         )
 
@@ -176,8 +183,8 @@ struct AntigravityAccountPresentationTests {
             makeSnapshot(account: primary, allowance: .argon, fraction: 0.10, plan: "Google AI Ultra")
         ]
         try await savePNG(
-            MetricSectionView(category: .aiSubscriptions, snapshots: singleSnaps, now: now),
-            width: 390,
+            grid(singleSnaps),
+            width: PopoverRootView.popoverWidth,
             name: "agy-popover-single-account"
         )
 

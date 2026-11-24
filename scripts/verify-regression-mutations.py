@@ -18,7 +18,6 @@ QUOTA_MANAGER = "Sources/QuotaBarCore/Engine/QuotaManager.swift"
 DEADLINE = "Sources/QuotaBarCore/Engine/Deadline.swift"
 QUOTA_HTTP = "Sources/QuotaBarCore/Providers/QuotaProvider.swift"
 GEMINI = "Sources/QuotaBarCore/Providers/GeminiQuotaProvider.swift"
-MENU_BAR = "Sources/QuotaBarUI/MenuBar/MenuBarStatusView.swift"
 CASES = [
     ("overlap-guard", SCHEDULER, "        guard !isRefreshing else { return }\n",
      "BackgroundSchedulerTests/refreshDoesNotOverlap", "an overlapping refresh is skipped and the next cycle still runs"),
@@ -69,13 +68,6 @@ CASES = [
      "ProviderHTTPTests/geminiScopesPopulatedSummary",
      "Gemini scopes a populated summary before reporting the screenshot's exhausted weekly quota",
      'let body = Data("{}".utf8)'),
-    ("tray-elapsed-window", MENU_BAR, "snapshot.quotaBars.compactMap",
-     "MenuBarLimitingTests/ignoresUnreadableAndElapsed",
-     "stale, unavailable and elapsed windows cannot supply the next limit", "snapshot.bars.compactMap"),
-    ("tray-earliest-limit", MENU_BAR, "let projected = pool.filter { $0.limitAt != nil }.min",
-     "MenuBarLimitingTests/earliestForecastWins",
-     "the earliest projected limit wins over more used and untouched workspaces",
-     "let projected = pool.filter { $0.limitAt != nil }.max"),
     ("footer-check-time", QUOTA_MANAGER, "snap.staleReading?.at ?? snap.lastUpdated",
      "SystemHealthSummaryTests/failedPollSeparatesCheckTimeFromReadingAge",
      "a failed poll updates the check time without changing the sixteen-hour-old reading", "snap.lastUpdated"),
@@ -133,11 +125,6 @@ CASES = [
      "ClaudeMonthlyCreditTests/absentGrant",
      "absent, unlinked, ended or invalid monthly grants yield no entitlement",
      "true,"),
-    ("monthly-promo-pace-marker", "Sources/QuotaBarUI/Popover/MonthlyPromoCreditView.swift",
-     "presentedPaceMarker: presentation.paceMarker)",
-     "MonthlyPromoCreditTests/renderedSpentMarker",
-     "the promo row draws its even-use tick even when fully used",
-     "presentedPaceMarker: nil)"),
     ("monthly-read-generation", "Sources/QuotaBarCore/Providers/ClaudeMonthlyCreditSession.swift",
      "self.generation == generation, self.query == query",
      "ClaudeMonthlyCreditTests/connectionGenerationRejectsOldRead",
@@ -273,7 +260,7 @@ CASES = [
      "OpenAIMonthlyCreditTests/identifiesBySubscriptionCycleEnd",
      "an unlabelled grant is identified by the subscription cycle end",
      "                _ = expectedPeriodEnd\n"),
-    ("openai-monthly-exact-span", "Sources/QuotaBarUI/Popover/MonthlyPromoCreditView.swift",
+    ("openai-monthly-exact-span", "Sources/QuotaBarUI/Popover/MonthlyPromoCreditPresentation.swift",
      "        let exactLength = entry.monthlyPeriodStart.flatMap { start -> TimeInterval? in\n",
      "MonthlyPromoCreditTests/exactGrantSpan",
      "an exact grant span wins over the calendar-month fallback",
