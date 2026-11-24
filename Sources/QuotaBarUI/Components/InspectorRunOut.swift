@@ -12,8 +12,13 @@ import QuotaBarCore
 /// and window length behind it.
 enum InspectorRunOut {
 
-    static func text(for bar: DualBarMetrics, snapshotID: String,
-                     readings: [QuotaHistoryStore.ReadingRecord]?, now: Date) -> String? {
+    struct Result: Equatable, Sendable {
+        let text: String
+        let runsOutBeforeReset: Bool
+    }
+
+    static func compute(for bar: DualBarMetrics, snapshotID: String,
+                        readings: [QuotaHistoryStore.ReadingRecord]?, now: Date) -> Result? {
         guard !bar.isBlocked, !bar.measuresElapsedTimeOnly,
               let used = bar.primaryFraction, used < QuotaSnapshot.exhaustionThreshold
         else { return nil }
@@ -23,19 +28,34 @@ enum InspectorRunOut {
                                                        barLabel: bar.label, now: now),
            burndown.projection != nil {
             if let out = burndown.projectedExhaustion, out > now {
-                return "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now))"
-                    + ", before the reset"
+                return Result(
+                    text: "At your recent rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
+                    runsOutBeforeReset: true
+                )
             }
-            return "At your recent rate, lasts until the reset"
+            return Result(
+                text: "At your recent rate, lasts until the reset",
+                runsOutBeforeReset: false
+            )
         }
 
         // No usable history: the window's own average, from its published
         // reset and length (the pace tick's figures), labelled as that.
         guard bar.paceMarker != nil else { return nil }
         if let out = bar.projectedExhaustionDate, out > now {
-            return "At this window's average rate, runs out in \(GlancePresentation.countdown(out, now: now))"
-                + ", before the reset"
+            return Result(
+                text: "At this window's average rate, runs out in \(GlancePresentation.countdown(out, now: now)), before the reset",
+                runsOutBeforeReset: true
+            )
         }
-        return "At this window's average rate, lasts until the reset"
+        return Result(
+            text: "At this window's average rate, lasts until the reset",
+            runsOutBeforeReset: false
+        )
+    }
+
+    static func text(for bar: DualBarMetrics, snapshotID: String,
+                     readings: [QuotaHistoryStore.ReadingRecord]?, now: Date) -> String? {
+        compute(for: bar, snapshotID: snapshotID, readings: readings, now: now)?.text
     }
 }

@@ -329,6 +329,8 @@ final class LiveGlanceHarness {
         // Inspector: Balance readFailed
         fixtureSource.failBalances = true
         inspection.snapshot = openRouter
+        NSApp.activate(ignoringOtherApps: true)
+        popoverWindow.makeKeyAndOrderFront(nil)
         await pumpEventsAsync(seconds: 0.7)
         guard axFindText(where: { $0.contains("Could not read the recorded balance") }) else {
             let seen = axSampleLabels(limit: 20).joined(separator: " | ")
@@ -345,6 +347,8 @@ final class LiveGlanceHarness {
         }
         fixtureSource.failMarkers = true
         inspection.snapshot = claude
+        NSApp.activate(ignoringOtherApps: true)
+        popoverWindow.makeKeyAndOrderFront(nil)
         await pumpEventsAsync(seconds: 0.7)
         guard axPress(where: { $0 == "History" }) else {
             let seen = axSampleLabels(limit: 20).joined(separator: " | ")

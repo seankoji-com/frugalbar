@@ -116,6 +116,10 @@ struct GlanceAccessibilityInvariantTests {
 
             // Exhausted countdown badge small text (9.5pt white on Theme.errorBadge)
             ("exhausted countdown badge white text on errorBadge", hex(0xffffff), resolve(Theme.errorBadge)),
+            // Blocked / exhausted inspector headline (14.5pt semibold) on tinted errorBold summary card
+            ("blocked inspector headline on tinted errorBold card",
+             resolve(MetricDetailModalView.headlineColor(for: .blocked, warnsEarlyRunOut: false)),
+             resolve(Theme.errorBold.opacity(0.12)).over(card)),
             // Stale reset caption on expanded row surface (full opacity Theme.outline)
             ("stale reset caption (outline) on expandedRow", resolve(Theme.outline), resolve(Theme.surfaceContainerHighest.opacity(0.22)).over(card)),
 
@@ -238,5 +242,48 @@ struct GlanceAccessibilityInvariantTests {
         #expect(wallet.rows[0].tag == "last reading")
         #expect(wallet.rows[0].spoken.localizedCaseInsensitiveContains("stale"))
         #expect(wallet.rows[0].spoken.localizedCaseInsensitiveContains("last poll failed"))
+    }
+
+    @Test("Inspector forecast verdict warns only on early run-out and preserves spoken facts")
+    func inspectorForecastVerdictOnlyWarnsOnEarlyRunOutAndPreservesSpeech() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 790_000_000)
+        // Behind pace: 20% used at 50% elapsed -> lasts until the reset (must NOT warn)
+        let lastingBar = DualBarMetrics(
+            primaryFraction: 0.20,
+            expectedPaceFraction: 0.50,
+            label: "WK",
+            resetsAt: now.addingTimeInterval(84 * 3600),
+            windowLength: 168 * 3600
+        )
+        let lastingResult = try #require(InspectorRunOut.compute(for: lastingBar, snapshotID: "c1", readings: nil, now: now))
+        #expect(!lastingResult.runsOutBeforeReset)
+        #expect(lastingResult.text.contains("lasts until the reset"))
+
+        // Ahead of pace: 58% used at 28% elapsed -> runs out before reset (MUST warn)
+        let earlyBar = DualBarMetrics(
+            primaryFraction: 0.58,
+            expectedPaceFraction: 0.28,
+            label: "WK",
+            resetsAt: now.addingTimeInterval(120 * 3600),
+            windowLength: 168 * 3600
+        )
+        let earlyResult = try #require(InspectorRunOut.compute(for: earlyBar, snapshotID: "c2", readings: nil, now: now))
+        #expect(earlyResult.runsOutBeforeReset)
+        #expect(earlyResult.text.contains("before the reset"))
+
+        let snap = GlanceFixtures.snapshot("c2", .claude, "Primary", plan: "Max", [earlyBar])
+        let detail = MetricDetailPresentation(snapshot: snap, now: now)
+        let spoken = MetricDetailModalView.summaryAccessibilityLabel(
+            summary: detail.summary,
+            warnsEarlyRunOut: true,
+            isAheadOfPace: true,
+            runOutText: earlyResult.text
+        )
+        #expect(spoken.contains("Primary"))
+        #expect(spoken.contains("On track to run out"))
+        #expect(!spoken.contains("Healthy"))
+        #expect(spoken.contains("58 percent used"))
+        #expect(spoken.contains("Resets in"))
+        #expect(spoken.contains("before the reset"))
     }
 }

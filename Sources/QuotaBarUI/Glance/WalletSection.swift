@@ -280,23 +280,24 @@ private struct WalletRowView: View {
             // always carry the word.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
-                    title.fixedSize()
+                    title(lineLimit: 1).fixedSize()
                     if let tag = row.tag { tagCapsule { Text(tag.uppercased()) } }
                 }
                 HStack(spacing: 6) {
-                    title
+                    title(lineLimit: 2)
                     if let tag = row.tag { tagCapsule { Image(systemName: Self.glyph(for: tag)) } }
                 }
             }
         }
     }
 
-    private var title: some View {
+    private func title(lineLimit: Int) -> some View {
         Text(row.title)
             .font(.system(size: 12))
             .foregroundStyle(Theme.onSurface)
-            .lineLimit(1)
+            .lineLimit(lineLimit)
             .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: lineLimit > 1)
             .layoutPriority(1)
     }
 

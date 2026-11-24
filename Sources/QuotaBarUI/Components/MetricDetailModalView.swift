@@ -418,14 +418,32 @@ public struct MetricDetailModalView: View {
     }
 
     /// True when the snapshot's raw quota band is still `.healthy` yet the
-    /// observed burn rate already forecasts running out before reset. Leading
-    /// with a green "Healthy" verdict contradicts the forecast directly below.
+    /// observed burn rate explicitly forecasts running out *before* reset.
+    /// Forecasts that say "lasts until the reset" never trigger this warning.
     private var forecastWarnsEarlyRunOut: Bool {
-        presentation.summary.state == .healthy && runOutText != nil
+        presentation.summary.state == .healthy && runOutResult?.runsOutBeforeReset == true
     }
 
     private var summaryColor: Color {
         forecastWarnsEarlyRunOut ? Theme.tertiary : Self.color(for: presentation.summary.state)
+    }
+
+    /// Headline text color on the tinted summary card. Exhausted/blocked cards
+    /// tint with `Theme.errorBold`, so their 14.5pt headline uses `Theme.error`
+    /// (#FFB4AB, > 9:1 on the tinted card) to clear WCAG small-text AA (>= 4.5:1).
+    private var summaryHeadlineColor: Color {
+        Self.headlineColor(for: presentation.summary.state, warnsEarlyRunOut: forecastWarnsEarlyRunOut)
+    }
+
+    nonisolated static func headlineColor(
+        for state: MetricDetailPresentation.State,
+        warnsEarlyRunOut: Bool
+    ) -> Color {
+        if warnsEarlyRunOut { return Theme.tertiary }
+        switch state {
+        case .exhausted, .blocked: return Theme.error
+        default: return Self.color(for: state)
+        }
     }
 
     private var summaryHeadline: String {
@@ -434,6 +452,33 @@ public struct MetricDetailModalView: View {
 
     private var summarySymbol: String {
         forecastWarnsEarlyRunOut ? "exclamationmark.triangle.fill" : presentation.summary.symbol
+    }
+
+    nonisolated static func summaryAccessibilityLabel(
+        summary: MetricDetailPresentation.Summary,
+        warnsEarlyRunOut: Bool,
+        isAheadOfPace: Bool,
+        runOutText: String?
+    ) -> String {
+        let base: String
+        if warnsEarlyRunOut {
+            let needle = ", \(summary.headline)"
+            if let range = summary.accessibilityLabel.range(of: needle) {
+                base = summary.accessibilityLabel.replacingCharacters(in: range, with: ", On track to run out")
+            } else {
+                base = "On track to run out, \(summary.accessibilityLabel)"
+            }
+        } else {
+            base = summary.accessibilityLabel
+        }
+        var parts = [base]
+        if isAheadOfPace, !base.localizedCaseInsensitiveContains("ahead of even pace") {
+            parts.append("Ahead of even pace")
+        }
+        if let runOutText {
+            parts.append(runOutText)
+        }
+        return parts.joined(separator: ". ")
     }
 
     /// Read by Settings' legend as well, so its swatches are the inspector's.
@@ -465,7 +510,7 @@ public struct MetricDetailModalView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(summaryHeadline)
                         .font(Theme.Typography.cardBody.weight(.semibold))
-                        .foregroundStyle(summaryColor)
+                        .foregroundStyle(summaryHeadlineColor)
                     Spacer(minLength: 4)
                     if let focus = focusWindow, let used = focus.used, let label = summary.focusLabel {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -529,10 +574,12 @@ public struct MetricDetailModalView: View {
                 .stroke(summaryColor.opacity(0.3), lineWidth: 0.5)
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel((
-            [forecastWarnsEarlyRunOut ? summaryHeadline : summary.accessibilityLabel]
-            + [focusWindow?.isAheadOfPace == true ? "Ahead of even pace" : nil, runOutText].compactMap { $0 })
-            .joined(separator: ". "))
+        .accessibilityLabel(Self.summaryAccessibilityLabel(
+            summary: summary,
+            warnsEarlyRunOut: forecastWarnsEarlyRunOut,
+            isAheadOfPace: focusWindow?.isAheadOfPace == true,
+            runOutText: runOutText
+        ))
     }
 
     /// The verdict's window, read the way the popover reads it.
@@ -542,12 +589,14 @@ public struct MetricDetailModalView: View {
         return GlancePresentation.window(for: bar, now: now)
     }
 
-    private var runOutText: String? {
+    private var runOutResult: InspectorRunOut.Result? {
         guard let label = presentation.summary.focusLabel, snapshot.staleReading == nil,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
-        return InspectorRunOut.text(for: bar, snapshotID: snapshot.id,
-                                    readings: isLoading || readingsFailed ? nil : readings, now: now)
+        return InspectorRunOut.compute(for: bar, snapshotID: snapshot.id,
+                                       readings: isLoading || readingsFailed ? nil : readings, now: now)
     }
+
+    private var runOutText: String? { runOutResult?.text }
 
     // MARK: Windows
 
