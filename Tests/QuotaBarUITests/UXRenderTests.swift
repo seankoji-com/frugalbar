@@ -1333,7 +1333,7 @@ struct UXRenderTests {
     private func saveAfterKeys<V: View>(
         _ view: V, keys: [(UInt16, String)], name: String, directory: URL
     ) async throws {
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        let host = NSHostingView(rootView: renderRoot(view))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame.size = host.fittingSize
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -1361,8 +1361,22 @@ struct UXRenderTests {
         window.close()
     }
 
+    /// Lays `view` out at its ideal height, as the popover does. The popover
+    /// hosts its sections in a `ScrollView` under
+    /// `.fixedSize(horizontal: false, vertical: true)`, so every row gets the
+    /// height it asks for. A bare `NSHostingView` sized to `fittingSize`
+    /// instead proposes that height, and a `VStack` given a definite height
+    /// shares it out by flexibility: a row with a vertically greedy child
+    /// (`Color.clear` in a provider-grid line) took extra room and a
+    /// compressible two-line row (a Claude account with its Fable line) was
+    /// squeezed below its content, which spilled over the row dividers. A
+    /// view with a fixed `.frame(height:)` is unaffected.
+    private func renderRoot<V: View>(_ view: V) -> some View {
+        view.fixedSize(horizontal: false, vertical: true).environment(\.colorScheme, .dark)
+    }
+
     private func save<V: View>(_ view: V, name: String, directory: URL) async throws {
-        let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
+        let host = NSHostingView(rootView: renderRoot(view))
         host.appearance = NSAppearance(named: .darkAqua)
         host.frame.size = host.fittingSize
         let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
