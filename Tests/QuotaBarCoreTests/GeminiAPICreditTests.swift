@@ -104,6 +104,42 @@ struct GeminiAPICreditTests {
         #expect(GeminiAPICreditStore.load(preferences: defaults) == nil)
     }
 
+    @Test("each account keeps its own credit, and the older single credit is the primary's")
+    func storePerAccount() throws {
+        let name = "frugalbar.tests.gemini-api-credit.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let legacy = try credit()
+        let burner = try #require(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 9,
+                                                  configuredAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        GeminiAPICreditStore.save(legacy, preferences: defaults)
+        // The older single credit reads as the primary's, never another's.
+        #expect(GeminiAPICreditStore.load(accountID: "main", isPrimary: true, preferences: defaults) == legacy)
+        #expect(GeminiAPICreditStore.load(accountID: "burner", isPrimary: false, preferences: defaults) == nil)
+
+        GeminiAPICreditStore.save(burner, accountID: "burner", isPrimary: false, preferences: defaults)
+        #expect(GeminiAPICreditStore.load(accountID: "burner", isPrimary: false, preferences: defaults) == burner)
+        #expect(GeminiAPICreditStore.loadAll(preferences: defaults) == ["burner": burner])
+        // Saving one account leaves the other alone.
+        #expect(GeminiAPICreditStore.load(accountID: "main", isPrimary: true, preferences: defaults) == legacy)
+
+        // Removing the primary's credit removes the older one too, so it
+        // cannot come back through the fallback.
+        GeminiAPICreditStore.save(nil, accountID: "main", isPrimary: true, preferences: defaults)
+        #expect(GeminiAPICreditStore.load(accountID: "main", isPrimary: true, preferences: defaults) == nil)
+        #expect(GeminiAPICreditStore.load(preferences: defaults) == nil)
+        #expect(GeminiAPICreditStore.load(accountID: "burner", isPrimary: false, preferences: defaults) == burner)
+
+        // An account discovery folded "burner" into keeps its figure, and a
+        // save under the new id leaves one copy, not two.
+        #expect(GeminiAPICreditStore.load(accountID: "verified", aliases: ["burner"], isPrimary: false,
+                                          preferences: defaults) == burner)
+        GeminiAPICreditStore.save(burner, accountID: "verified", aliases: ["burner"], isPrimary: false,
+                                  preferences: defaults)
+        #expect(GeminiAPICreditStore.loadAll(preferences: defaults) == ["verified": burner])
+    }
+
     @Test("a configured credit is not a quota, a bar or a balance-history series")
     func staysOutOfQuotaMaths() throws {
         var snapshot = QuotaSnapshot(

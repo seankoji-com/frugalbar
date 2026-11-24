@@ -50,6 +50,9 @@ public struct GlancePresentation: Equatable, Sendable {
         public let headroomAtRisk: Double?
         public let isAheadOfPace: Bool
         public let isSpent: Bool
+        /// The share used, as the bars draw it: 1 − `remaining`, nil when no
+        /// fraction was published.
+        public var used: Double? { remaining.map { 1 - $0 } }
     }
 
     public struct Pool: Identifiable, Equatable, Sendable {
@@ -434,6 +437,12 @@ public struct GlancePresentation: Equatable, Sendable {
         if !snapshot.apiCredits.isEmpty || snapshot.monthlyAPICredit != nil
             || snapshot.openAIMonthlyCredit != nil || snapshot.geminiAPICredit != nil { return true }
         if (snapshot.resetCreditsAvailable ?? 0) > 0 { return true }
+        // A direct balance (OpenRouter, DeepSeek's own credit) lives only in
+        // the Wallet, so the Wallet takes it whatever its reading: a failed
+        // read carries a placeholder metric, and dropping it here would hide
+        // the failure from both sections. The same predicate keeps it out of
+        // Subscriptions.
+        if ProviderGridPresentation.isDirectBalance(snapshot) { return true }
         // A balance-only vendor: its whole row is a balance.
         if snapshot.quotaBars.allSatisfy({ $0.allowanceRole != .plan }), snapshot.category != .developerLimits {
             switch snapshot.metric {

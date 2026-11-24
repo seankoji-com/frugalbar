@@ -53,7 +53,7 @@ struct ProviderGridPresentation {
 
             if snapshot.vendorId == .antigravityClaude {
                 name = snapshot.antigravityAccount?.name ?? snapshot.displayName
-                source = snapshot.vendorId.displayName
+                source = ["Claude/GPT pool", ProviderGridPresentation.route(for: snapshot)].compactMap { $0 }.joined(separator: " · ")
             } else if snapshot.vendorId == .claude {
                 name = pool?.name ?? snapshot.displayName
                 source = name == "Claude Code" ? nil : "Claude Code"
@@ -61,8 +61,12 @@ struct ProviderGridPresentation {
                 name = snapshot.planName ?? "ChatGPT"
                 source = snapshot.planName == nil ? nil : "ChatGPT"
             } else if snapshot.vendorId == .gemini || snapshot.vendorId == .antigravityArgon {
+                // Gemini and Argon share one group, so the line names the
+                // model, then the route that read it: AGY (this Mac's Google
+                // sign-in) or the CLI Proxy. Owner, 24 Nov 2026.
                 name = snapshot.antigravityAccount?.name ?? snapshot.rowTitle
-                source = "Antigravity"
+                let model = snapshot.vendorId == .antigravityArgon ? "Argon" : "Gemini"
+                source = [model, ProviderGridPresentation.route(for: snapshot)].compactMap { $0 }.joined(separator: " · ")
             } else if snapshot.vendorId == .opencode {
                 name = snapshot.rowTitle
                 source = snapshot.planName ?? "OpenCode Go"
@@ -97,7 +101,6 @@ struct ProviderGridPresentation {
     struct Group: Identifiable {
         let id: VendorIdentifier
         let pools: [Pool]
-        let balances: [QuotaSnapshot]
 
         var title: String {
             switch id {
@@ -112,11 +115,7 @@ struct ProviderGridPresentation {
         var nextReturn: Date? { allSpent ? pools.compactMap(\.returnsAt).min() : nil }
 
         var subtitle: String? {
-            if pools.isEmpty {
-                guard let balance = balances.first else { return nil }
-                if balance.staleReading != nil { return "Last balance · " + MetricRowPresentation.value(for: balance.metric) }
-                return balance.status.unavailableReason?.headline ?? MetricRowPresentation.value(for: balance.metric)
-            }
+            if pools.isEmpty { return nil }
             if allSpent { return pools.count == 1 ? "1 spent" : "All \(pools.count) spent" }
             let usable = pools.filter(\.isUsable).count
             let spent = pools.filter(\.isSpent).count
@@ -155,21 +154,36 @@ struct ProviderGridPresentation {
         let grouped = Dictionary(grouping: visible, by: { Self.groupID(for: $0.vendorId) })
         var seen: Set<VendorIdentifier> = []
         let order = (serviceOrder + visible.map(\.vendorId)).map(Self.groupID(for:)).filter { seen.insert($0).inserted }
+        // Direct balances (OpenRouter, DeepSeek's own API credit) live in the
+        // Wallet only (owner, 24 Nov 2026), so a group needs a quota pool to
+        // appear here.
         groups = order.compactMap { id in
             guard let snapshots = grouped[id] else { return nil }
-            return Group(id: id,
-                         pools: snapshots.filter { !Self.isDirectBalance($0) }
-                             .map { Pool(snapshot: $0, group: id, now: now) },
-                         balances: snapshots.filter(Self.isDirectBalance))
+            let pools = snapshots.filter { !Self.isDirectBalance($0) }
+                .map { Pool(snapshot: $0, group: id, now: now) }
+            guard !pools.isEmpty else { return nil }
+            return Group(id: id, pools: pools)
         }
     }
 
     static func groupID(for vendor: VendorIdentifier) -> VendorIdentifier {
         switch vendor {
         case .antigravityClaude: .claude
+        case .antigravityArgon: .gemini
         case .opencode, .commandcode, .opendesign: .deepseek
         default: vendor
         }
+    }
+
+    /// The route that read an Antigravity pool: "AGY" (this Mac's Google
+    /// sign-in) or "CLI Proxy". The reading's own source first, since it is
+    /// the route actually used; the account's known routes when no reading
+    /// arrived. Nil when neither names one.
+    static func route(for snapshot: QuotaSnapshot) -> String? {
+        let label = snapshot.cliSource ?? snapshot.antigravityAccount?.sourceLabel ?? ""
+        let routes = [label.contains("Google OAuth") ? "AGY" : nil,
+                      label.contains("CLI Proxy") ? "CLI Proxy" : nil].compactMap { $0 }
+        return routes.isEmpty ? nil : routes.joined(separator: " + ")
     }
 
     static func isDirectBalance(_ snapshot: QuotaSnapshot) -> Bool {

@@ -51,25 +51,43 @@ public struct OpenAIAccountPreferences: Codable, Equatable, Sendable {
 public struct OpenAICreditGrant: Codable, Equatable, Sendable {
     public let total: Decimal
     public let expiresAt: Date?
+    /// When the grant was added, as the account holder confirmed it. OpenAI's
+    /// usage payload publishes only the balance, so this is the user's figure
+    /// like the total and expiry. With the expiry it gives the grant a period,
+    /// and only then does its bar draw an even-use tick.
+    public let grantedAt: Date?
 
     public static func parseTotal(_ text: String) -> Decimal? {
         OpenAIQuotaProvider.creditCount(text).flatMap { $0 > 0 ? $0 : nil }
     }
 
-    public init?(total: Decimal, expiresAt: Date? = nil) {
+    /// Nil for a non-positive total, a non-finite date, or a grant date that is
+    /// not before its expiry: such a period has no length to pace against.
+    public init?(total: Decimal, expiresAt: Date? = nil, grantedAt: Date? = nil) {
         guard !total.isNaN, total > 0,
-              expiresAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { return nil }
+              expiresAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true,
+              grantedAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { return nil }
+        if let grantedAt, let expiresAt, grantedAt >= expiresAt { return nil }
         self.total = total
         self.expiresAt = expiresAt
+        self.grantedAt = grantedAt
     }
 
-    private enum CodingKeys: String, CodingKey { case total, expiresAt }
+    /// The grant's period, start to expiry, when both were confirmed.
+    public var periodLength: TimeInterval? {
+        guard let grantedAt, let expiresAt else { return nil }
+        let length = expiresAt.timeIntervalSince(grantedAt)
+        return length > 0 ? length : nil
+    }
+
+    private enum CodingKeys: String, CodingKey { case total, expiresAt, grantedAt }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let total = try c.decode(Decimal.self, forKey: .total)
         let end = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
-        guard let grant = Self(total: total, expiresAt: end) else {
+        let start = try c.decodeIfPresent(Date.self, forKey: .grantedAt)
+        guard let grant = Self(total: total, expiresAt: end, grantedAt: start) else {
             throw DecodingError.dataCorruptedError(forKey: .total, in: c, debugDescription: "Invalid credit grant")
         }
         self = grant

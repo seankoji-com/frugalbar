@@ -19,6 +19,7 @@ public actor QuotaManager {
         },
         displayPreferences: { CredentialStore.providerDisplayPreferences },
         geminiCreditLookup: { GeminiAPICreditStore.load() },
+        geminiAccountCreditLookup: { GeminiAPICreditStore.loadAll() },
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         knownClaudeAccounts: { ClaudeAccountStore.all() },
         antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
@@ -57,6 +58,10 @@ public actor QuotaManager {
     /// takes effect without a poll, and a cached reading can never present an
     /// old figure as the current one.
     private let geminiCreditLookup: @Sendable () -> GeminiAPICredit?
+    /// One configured credit per Google account, keyed by Antigravity account
+    /// id (`GeminiAPICreditStore.loadAll`). An account's own credit wins over
+    /// the single credit above, which belongs to the primary account.
+    private let geminiAccountCreditLookup: @Sendable () -> [String: GeminiAPICredit]
     private var activeTask: Task<[String: QuotaSnapshot], Never>?
     private let monthlyCreditConnection: @Sendable () async -> String?
     private let monthlyCreditIdentities: (@Sendable () async -> Set<String>?)?
@@ -119,6 +124,7 @@ public actor QuotaManager {
         // the process-wide preference store unless it injects one. `.shared`
         // opts into the live store above.
         geminiCreditLookup: @escaping @Sendable () -> GeminiAPICredit? = { nil },
+        geminiAccountCreditLookup: @escaping @Sendable () -> [String: GeminiAPICredit] = { [:] },
         // Only the live manager opts into account discovery. Test factories
         // retain full control and never read ambient credentials or preferences.
         claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])? = nil,
@@ -149,6 +155,7 @@ public actor QuotaManager {
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
         self.geminiCreditLookup = geminiCreditLookup
+        self.geminiAccountCreditLookup = geminiAccountCreditLookup
         self.monthlyCreditConnection = monthlyCreditConnection
         self.monthlyCreditIdentities = monthlyCreditIdentities
         self.vaultWarmUp = vaultWarmUp
@@ -249,8 +256,9 @@ public actor QuotaManager {
     private func visibleCache() -> [String: QuotaSnapshot] {
         let hidden = displayPreferences().hidden
         let credit = geminiCreditLookup()
+        let accountCredits = geminiAccountCreditLookup()
         return cache.filter { !hidden.contains($0.value.snapshot.vendorId) }
-            .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit) }
+            .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit, accountCredits: accountCredits) }
     }
 
     /// Adds the user-configured Gemini API credit to the Gemini row.
@@ -262,19 +270,27 @@ public actor QuotaManager {
     /// Only the Gemini row hosts it: the AI Studio key is a Gemini API surface,
     /// not Argon's or the shared Claude/GPT pool's allowance.
     static func attachingGeminiCredit(
-        to snapshot: QuotaSnapshot, credit: GeminiAPICredit?
+        to snapshot: QuotaSnapshot, credit: GeminiAPICredit?,
+        accountCredits: [String: GeminiAPICredit] = [:]
     ) -> QuotaSnapshot {
-        guard let credit, snapshot.vendorId == .gemini else { return snapshot }
-        // Only the primary local account (or legacy bare "gemini" id) hosts
-        // the user-configured Gemini API credit; secondary accounts and
-        // proxy-only outage placeholders never attach it.
+        guard snapshot.vendorId == .gemini else { return snapshot }
+        // Each Google account hosts its own configured credit (owner, 24 Nov
+        // 2026). The single older credit belongs to the primary local account
+        // (or the legacy bare "gemini" id); proxy-only outage placeholders,
+        // which name no account, never attach one.
+        let attached: GeminiAPICredit?
         if let account = snapshot.antigravityAccount {
-            guard account.isPrimary else { return snapshot }
-        } else if snapshot.id != VendorIdentifier.gemini.rawValue {
-            return snapshot
+            attached = GeminiAPICreditStore.credit(for: account.id, aliases: account.historyAliases,
+                                                   in: accountCredits)
+                ?? (account.isPrimary ? credit : nil)
+        } else if snapshot.id == VendorIdentifier.gemini.rawValue {
+            attached = credit
+        } else {
+            attached = nil
         }
+        guard let attached else { return snapshot }
         var updated = snapshot
-        updated.geminiAPICredit = credit
+        updated.geminiAPICredit = attached
         return updated
     }
 
@@ -304,8 +320,10 @@ public actor QuotaManager {
     ///      not somewhere to send work however soon it refills.
     public func sortedSnapshots() -> [QuotaSnapshot] {
         let credit = geminiCreditLookup()
+        let accountCredits = geminiAccountCreditLookup()
         return Self.arrange(
-            cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit) },
+            cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit,
+                                                          accountCredits: accountCredits) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )

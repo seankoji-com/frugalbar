@@ -356,4 +356,19 @@ struct GlancePresentationTests {
         #expect(glance.services.isEmpty)
         #expect(glance.walletSnapshots.map(\.id) == ["openrouter"])
     }
+
+    @Test("bars fill with what was used: an unused window is empty, not full")
+    func barsFillWithUse() {
+        // OpenCode Go's Gamma workspace on 24 Nov 2026: 0% of its 5H window
+        // used, which a full "% left" bar made look exhausted.
+        let unused = GlancePresentation.window(for: GlanceFixtures.bar("5H", 0.0, resetsInHours: 3, windowHours: 5),
+                                               now: now)
+        #expect(unused.used == 0)
+        let partly = GlancePresentation.window(for: GlanceFixtures.bar("WK", 0.61, resetsInHours: 132, windowHours: 168),
+                                               now: now)
+        #expect(abs((partly.used ?? -1) - 0.61) < 1e-9)
+        let unread = GlancePresentation.window(for: GlanceFixtures.bar("WK", nil, resetsInHours: 132, windowHours: 168),
+                                               now: now)
+        #expect(unread.used == nil)
+    }
 }

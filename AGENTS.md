@@ -279,9 +279,18 @@ by every project and key on it. The Gemini API
 (`generativelanguage.googleapis.com`) has no billing operation and
 an API key carries no billing IAM scope, so no documented API returns them —
 `GeminiAPICredit` is therefore the user's own figure, never a vendor reading.
-It is drawn in the Wallet as the **API credit** line, under a "Gemini API ·
-<account>" caption tagged CONFIGURED: name column, one bar, and a percentage and
-countdown beneath. The prepaid balance and
+Each Google account's AI Studio key bills to its own Cloud Billing account, so
+each account has its own credit (owner, 24 Nov 2026): `GeminiAPICreditStore`
+keeps one per Antigravity account id (`accountsDefaultsKey`), and the older
+single credit (`defaultsKey`) reads as the primary account's until the primary
+saves its own; removing the primary's also removes the older one, so it cannot
+return through that fallback. A credit saved under an id discovery later folds
+into an account (`AntigravityAccount.historyAliases`) is still that account's
+(`GeminiAPICreditStore.credit(for:aliases:in:)`), and the next save moves it to
+the current id. Settings has one editor per account. Each is
+drawn in the Wallet as its own "Gemini API · <account>" line tagged CONFIGURED,
+once per account however many routes read it, with an
+elapsed-month meter ("MO 63%" and the countdown beneath). The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
 calendar time**, never spend: no documented API returns an API key's spend, and
@@ -299,7 +308,8 @@ prefix, so "1,234.50" and "30abc" would have saved 1 and 30. It lives in its own
 snapshot field, attached on read from `GeminiAPICreditStore` rather than stored
 in the poll cache — so a failed Antigravity poll neither erases nor stales it,
 a change takes effect without a poll, and only a Gemini snapshot ever carries
-it (Argon and the shared Claude/GPT pool are separate allowances). Read it on read:
+it (Argon and the shared Claude/GPT pool are separate allowances), each account's
+on that account's Gemini snapshot. Read it on read:
 `QuotaManager.attachingGeminiCredit` is applied in `visibleCache` and
 `sortedSnapshots`, not in the fetch path. Saving from Settings replaces the
 snapshot list (`QuotaStore.reloadConfiguredCredit`): it never force-repolls a
@@ -434,10 +444,54 @@ only go in alongside a signed, entitled `.app`.
 ## UI constraints
 
 **The glance.** The popover answers "which pool do I use now, and when do the
-spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows Providers,
-Wallet and a footer. Providers expands one group at a time. Claude combines
-Claude Code with Antigravity Claude/GPT. DeepSeek groups OpenCode Go, Command
-Code and OpenDesign, with direct API credit listed separately. The group
+spent ones come back?" (owner, 23 Nov 2026). The 420pt popover shows
+Subscriptions (the provider grid, titled so on 24 Nov 2026), Wallet and a
+footer. Subscriptions expands one group at a time. Claude combines
+Claude Code with Antigravity Claude/GPT. Gemini holds Gemini and Argon, and
+each Antigravity row names its model and the route that read it ("AGY" for
+this Mac's Google sign-in, "CLI Proxy"), from the reading's `cliSource` before
+the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
+OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
+entries only, never Subscriptions rows (owner, 24 Nov 2026). The Wallet
+(`WalletPresentation`) is a flat list, one line per credit with no group
+headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
+and the account when the reading carries a named one ("ChatGPT API",
+"ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
+CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
+text beside the title. When the title needs the room, the tag shrinks to its
+glyph (pencil, clock) rather than cutting the account name; the tooltip and
+spoken label still say the word. A line is LAST READING by the read that
+produced it: the ChatGPT API grant and the Console credit have their own billing
+reads, so a quota outage does not tag them and their own failed read does. A
+direct balance whose read failed is still a Wallet line that says why
+(`GlancePresentation` admits every `isDirectBalance` snapshot): it is in
+Subscriptions nowhere, so dropping it would hide the failure from both. Clicking
+a line opens the inspector of the snapshot it came from (`Row.snapshotID`).
+ChatGPT has two lines: the monthly API credit grant and
+the bonus credit count. Each Google account's configured Gemini API credit is
+its own "Gemini API · <account>" line in the Wallet, never under an Antigravity
+row in Subscriptions. A model's reset
+tickets (Fable) sit beside that model's line in its Claude account's Subscriptions
+row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
+model line to sit beside, are Wallet lines. The Wallet is a `Grid`: a fixed
+meter column and a figure column as wide as the widest figure, so every bar
+starts and ends in the same place (a fixed figure width let "60,085 credits"
+push its bar out of line). A credit that expires and publishes what was used
+draws the Subscriptions bar (`Meter.credit`, through `UsageBar`): % used and the
+countdown beneath, the same colours, and the even-use tick only where the
+credit's period is known. The ChatGPT API credit and Claude usage credits pass
+the promo's own `barMetrics`. ChatGPT bonus credits come from the account
+holder's saved grant (`OpenAICreditGrant`: total, expiry, and optionally the
+date it was granted); OpenAI's usage payload publishes only the balance. The
+bar draws its even-use tick only when both the grant date and the expiry were
+saved (`periodLength`), paced over that period and never a calendar month.
+Without a grant date it is a bar to the expiry with no tick. Time-only
+credits (Claude Console, configured Gemini) draw an informational "MO 63%"
+elapsed meter (`Meter.elapsed`) in `Theme.primary`, never a quota colour. A
+balance (OpenRouter, DeepSeek, any `APICreditEntry` with a series) draws its
+recorded trend through `BalanceSparklinePresentation.make`, which draws nothing
+below two readings.
+The group
 averages use only fresh figures in the same window and report coverage. Each
 pool keeps its service identity and opens its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window
@@ -464,9 +518,15 @@ pool keeps its service identity and opens its own inspector.
   pick, red only when no pool is usable, each with a glyph. "All spent" is
   claimed only when every pool is confirmed spent; spent plus unreadable reads
   "None confirmed usable".
-- Bars in the glance show **% left**; the tick is where an even pace would
-  leave it (`1 − paceMarker`), drawn only when `paceMarker` is.
-- Use one unit per countdown. Providers uses `ResetCountdownBadge.compact`
+- Bars show **% used** (`UsageBar`, owner, 24 Nov 2026): empty when nothing
+  is used, full when spent, so the fill reads the way vendors' consoles and the
+  red spent "100%" read. A full bar for an unused window was read as
+  exhausted. The figure under the bar is always printed, 0% included, and the
+  header, group averages, inspector and spoken labels say "used" too. The tick
+  is where an even pace would be (`paceMarker`), drawn only when `paceMarker`
+  is. Text that names its direction ("12% WK left" in a pick reason, the
+  widget's story, History's "% left over time") is unchanged.
+- Use one unit per countdown. Subscriptions uses `ResetCountdownBadge.compact`
   so the badge and cell both switch to days at 24 hours. The menu bar and
   Story use `GlancePresentation.countdown`, which switches at 48 hours.
 - A measured exhausted month fills the quota lane. A measured exhausted week

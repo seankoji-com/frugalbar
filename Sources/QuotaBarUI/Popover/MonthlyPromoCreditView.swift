@@ -25,9 +25,13 @@ public struct MonthlyPromoCreditPresentation: Equatable, Sendable {
     let percentText: String?
     let spoken: String
     let barMetrics: DualBarMetrics
+    /// The credit's own freshness, as the caller judged it: OpenAI's grant
+    /// from its billing read, Claude's promo from the quota poll it rides.
+    let isStale: Bool
     var isExhausted: Bool { fraction.map { $0 >= QuotaSnapshot.exhaustionThreshold } ?? false }
 
     init(entry: APICreditEntry, now: Date, isStale: Bool, calendar: Calendar = .current) {
+        self.isStale = isStale
         title = entry.vendorId == .openai ? "API credit" : "Usage credits"
         if case .currency(_, let limit?, _, let code) = entry.metric, limit > 0 {
             amountText = MoneyText.format(limit, code: code)

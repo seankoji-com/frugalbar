@@ -43,13 +43,18 @@ enum CreditExpiryText {
 }
 
 /// A one-time grant uses the account holder's original allowance and the
-/// vendor's exact remaining count. It has no pace marker or quota urgency.
+/// vendor's exact remaining count. It has no quota urgency. It has an even-use
+/// tick only when the account holder confirmed both the grant date and the
+/// expiry (`OpenAICreditGrant.periodLength`): OpenAI publishes neither.
 public struct OpenAIUsageCreditPresentation: Equatable, Sendable {
     let fraction: Double
     let percentText: String
     let totalText: String
     let expiryText: String
     let spoken: String
+    /// The grant as a window for the Wallet's bar: used share, expiry, and a
+    /// pace only over a confirmed period. Nil without an expiry.
+    let barMetrics: DualBarMetrics?
 
     init?(entry: APICreditEntry, now: Date, isStale: Bool) {
         guard entry.vendorId == .openai, entry.id == "openai.api-credits",
@@ -65,8 +70,19 @@ public struct OpenAIUsageCreditPresentation: Equatable, Sendable {
         percentText = "\(Int((used * 100).rounded()))% used"
         totalText = "of \(CreditText.format(grant.total))"
         expiryText = CreditExpiryText.countdown(grant.expiresAt, now: now)
-        var parts = ["Usage credits", percentText, "\(totalText) credits", expiryText,
-                     "Original allowance and expiry entered by you"]
+        let length = grant.periodLength
+        barMetrics = grant.expiresAt.map { end in
+            DualBarMetrics(
+                primaryFraction: used,
+                expectedPaceFraction: length.flatMap { DualBarMetrics.proRataPace(resetsAt: end, windowLength: $0, now: now) },
+                label: "EXP", resetsAt: end, windowLength: length)
+        }
+        var parts = ["Usage credits", percentText, "\(totalText) credits", expiryText]
+        if let pace = barMetrics?.paceMarker {
+            parts.append("even use by now is \(Int((pace * 100).rounded()))% used")
+        }
+        parts.append(length == nil ? "Original allowance and expiry entered by you"
+                                   : "Original allowance, grant date and expiry entered by you")
         if isStale { parts.append("stale, the last poll failed") }
         spoken = parts.joined(separator: ", ")
     }

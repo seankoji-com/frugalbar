@@ -63,14 +63,23 @@ enum GlanceFixtures {
                 now: now)
             all[i].resetCreditGroups = [ResetCreditGroup(scope: .model("Fable"), count: 1,
                                                          expiries: [now.addingTimeInterval(107 * 86_400)])]
+            // The Fable weekly cap the ticket resets (screenshot: WK 0% used).
+            all[i].scopedBars = [bar("Fable", 0.0, resetsInHours: 135.7, windowHours: 168)]
         }
         if let i = all.firstIndex(where: { $0.vendorId == .gemini && $0.antigravityAccount?.id == burner.id }) {
             all[i].geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 25,
                                                      configuredAt: now.addingTimeInterval(-4 * 86_400))
         }
         if let i = all.firstIndex(where: { $0.vendorId == .openai }) {
+            // ChatGPT's two credits: the bonus credit count, and the monthly
+            // API credit grant (synthetic, labelled; shapes from the owner's
+            // account, 24 Nov 2026).
             all[i].apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
-                metric: .credits(remaining: Decimal(string: "1234.5"), unitName: "credits"))]
+                metric: .credits(remaining: 60_085, unitName: "credits"),
+                creditGrant: OpenAICreditGrant(total: 75_000, expiresAt: now.addingTimeInterval(38 * 86_400)))]
+            all[i].openAIMonthlyCredit = OpenAIMonthlyCredit(
+                grantUSD: 100, remainingUSD: 4, periodStart: now.addingTimeInterval(-4 * 86_400),
+                periodEnd: now.addingTimeInterval(26 * 86_400), measuredAt: now)
         }
         all.append(balance("openrouter", .openrouter, "OpenRouter", 0))
         all.append(balance("deepseek", .deepseek, "DeepSeek", Decimal(string: "12.34")!))

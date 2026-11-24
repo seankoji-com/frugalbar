@@ -688,6 +688,24 @@ struct AntigravityAccountTests {
         #expect(attachedPrimary.geminiAPICredit == credit)
         #expect(attachedSecondary.geminiAPICredit == nil)
         #expect(attachedClaude.geminiAPICredit == nil)
+
+        // Each Google account's own credit (owner, 24 Nov 2026): the secondary
+        // account gets its own, the primary's own wins over the older single
+        // credit, and a non-Gemini pool still gets none.
+        let mainOwn = try #require(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 20,
+                                                   configuredAt: now))
+        let burnerOwn = try #require(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 9,
+                                                     configuredAt: now))
+        let perAccount = [primary.id: mainOwn, secondary.id: burnerOwn]
+        #expect(QuotaManager.attachingGeminiCredit(to: primaryGemini, credit: credit,
+                                                   accountCredits: perAccount).geminiAPICredit == mainOwn)
+        #expect(QuotaManager.attachingGeminiCredit(to: secondaryGemini, credit: credit,
+                                                   accountCredits: perAccount).geminiAPICredit == burnerOwn)
+        #expect(QuotaManager.attachingGeminiCredit(to: primaryClaude, credit: credit,
+                                                   accountCredits: perAccount).geminiAPICredit == nil)
+        // The secondary's own credit attaches even with no older single credit.
+        #expect(QuotaManager.attachingGeminiCredit(to: secondaryGemini, credit: nil,
+                                                   accountCredits: [secondary.id: burnerOwn]).geminiAPICredit == burnerOwn)
     }
 
     @Test("QuotaHistoryStore preserves legacy key continuity for the primary account and isolates secondary accounts")
@@ -905,5 +923,51 @@ struct AntigravityAccountTests {
         )
         let attached = QuotaManager.attachingGeminiCredit(to: placeholder, credit: credit)
         #expect(attached.geminiAPICredit == nil)
+    }
+
+    @Test("a proxy inventory outage's placeholders still name the CLI Proxy route they stand for")
+    func proxyOutagePlaceholderNamesItsRoute() async throws {
+        let (suiteName, defaults) = freshSuite()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = AntigravityAccountFixture()
+        fixture.inventoryDown = true
+        let session = makeSession(fixture: fixture)
+
+        try await QuotaHTTP.$session.withValue(session) {
+            let discovery = AntigravityAccountDiscovery(
+                defaultsSuiteName: suiteName,
+                proxyConfig: { proxyConfig },
+                directCredential: { nil },
+                environment: [:]
+            )
+            let providers = await discovery.providers(now: now)
+            #expect(providers.count == 3)
+            for provider in providers {
+                let snapshot = try await provider.fetchSnapshot()
+                #expect(snapshot.status.confidence == .unavailable)
+                #expect(snapshot.cliSource == "CLI Proxy")
+                #expect(snapshot.antigravityAccount == nil)
+            }
+        }
+    }
+
+    @Test("a configured Gemini credit saved under an id discovery later folded into an account still attaches")
+    func geminiCreditFollowsAccountAlias() throws {
+        let credit = try #require(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 9, configuredAt: now))
+        let account = AntigravityAccount(id: "agy-account:verified", badge: "2", sourceLabel: "fixture",
+                                         fallbackName: "burner", historyAliases: ["agy-account:unverified"])
+        var gemini = QuotaSnapshot(
+            id: account.poolInstanceID(for: .gemini), vendorId: .gemini, displayName: "Gemini",
+            category: .aiSubscriptions, metric: .subscription(tierName: "Pro", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil)
+        gemini.antigravityAccount = account
+        let attached = QuotaManager.attachingGeminiCredit(
+            to: gemini, credit: nil, accountCredits: ["agy-account:unverified": credit])
+        #expect(attached.geminiAPICredit == credit)
+        // Its own id wins over an alias.
+        let own = try #require(GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 4, configuredAt: now))
+        #expect(QuotaManager.attachingGeminiCredit(
+            to: gemini, credit: nil,
+            accountCredits: ["agy-account:unverified": credit, account.id: own]).geminiAPICredit == own)
     }
 }

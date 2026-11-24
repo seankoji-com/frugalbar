@@ -727,7 +727,7 @@ private struct AntigravityDiscoveryFailureProvider: QuotaProvider {
     var displayName: String { vendorId.displayName }
     var category: MetricCategory { .aiSubscriptions }
     func fetchSnapshot() async throws -> QuotaSnapshot {
-        QuotaSnapshot(
+        var snapshot = QuotaSnapshot(
             id: instanceID,
             vendorId: vendorId,
             displayName: displayName,
@@ -738,5 +738,9 @@ private struct AntigravityDiscoveryFailureProvider: QuotaProvider {
             lastUpdated: Date(),
             auxiliaryInfo: nil
         )
+        // This placeholder only ever stands for the CLI Proxy route that
+        // failed, so the row can still say which route it was.
+        snapshot.cliSource = "CLI Proxy"
+        return snapshot
     }
 }

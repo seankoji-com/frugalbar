@@ -513,6 +513,44 @@ struct UXRenderTests {
                 name: vendor == .claude ? "provider-grid-claude" :
                     vendor == nil ? "provider-grid-collapsed" : "provider-grid-expanded", directory: directory)
         }
+        // The popover as drawn: Gemini expanded (Argon now sits in it, each
+        // row naming its route), then the Wallet.
+        let now = GlanceFixtures.now
+        // The ChatGPT bonus as the owner's account had it on 24 Nov 2026:
+        // 62,500 credits granted 55 days ago, 37 days to expiry, 44,135 left,
+        // with the grant date saved so its even-use tick draws.
+        var walletBatch = GlanceFixtures.batchWithWallet
+        if let i = walletBatch.firstIndex(where: { $0.vendorId == .openai }) {
+            walletBatch[i].apiCredits = [APICreditEntry(
+                id: "openai.api-credits", vendorId: .openai, label: "Usage credits",
+                metric: .credits(remaining: 44_135, unitName: "credits"),
+                creditGrant: OpenAICreditGrant(total: 62_500, expiresAt: now.addingTimeInterval(37 * 86_400),
+                                               grantedAt: now.addingTimeInterval(-55 * 86_400)))]
+        }
+        // A second Google account with its own Gemini API credit: two pools.
+        if let i = walletBatch.firstIndex(where: {
+            $0.vendorId == .gemini && $0.antigravityAccount?.id == GlanceFixtures.account2.id
+        }) {
+            walletBatch[i].geminiAPICredit = GeminiAPICredit(currencyCode: "AUD", monthlySpendCap: 14,
+                                                             configuredAt: now.addingTimeInterval(-86_400))
+        }
+        let wallet = WalletPresentation(
+            snapshots: GlancePresentation(snapshots: walletBatch, now: now).walletSnapshots, now: now)
+        // A week of recorded balances for each balance line, so its trend draws.
+        var series: [String: [BalancePoint]] = [:]
+        for (index, id) in wallet.rows.compactMap(\.balanceSeriesID).enumerated() {
+            series[id] = (0..<8).map { day in
+                BalancePoint(measuredAt: now.addingTimeInterval(Double(day - 7) * 86_400),
+                             value: Decimal(20 - day * (index + 1)) + Decimal(day % 3))
+            }
+        }
+        try await save(VStack(spacing: Theme.sectionGap) {
+            ProviderGridView(presentation: presentation, expanded: .claude)
+            WalletSection(presentation: wallet, balanceSeries: series, now: now)
+        }
+        .padding(Theme.edgeMargin)
+        .frame(width: PopoverRootView.popoverWidth)
+        .background(Theme.surface), name: "provider-grid-gemini-wallet", directory: directory)
     }
 
     /// The rebuilt detail view for a synthetic Gemini account, with a

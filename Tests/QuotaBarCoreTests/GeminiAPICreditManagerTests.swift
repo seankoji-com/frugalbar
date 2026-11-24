@@ -69,8 +69,51 @@ private struct FixedVendorProvider: QuotaProvider {
     }
 }
 
+/// One Antigravity account's Gemini pool, so a test can give each account its
+/// own configured credit.
+private struct AccountGeminiProvider: QuotaProvider {
+    let account: AntigravityAccount
+    var vendorId: VendorIdentifier { .gemini }
+    var displayName: String { "Gemini" }
+    var category: MetricCategory { .aiSubscriptions }
+    var instanceID: String { account.poolInstanceID(for: .gemini) }
+
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        var snapshot = QuotaSnapshot(
+            id: instanceID, vendorId: .gemini, displayName: "Gemini", category: .aiSubscriptions,
+            metric: .subscription(tierName: "Google AI Pro", renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: Date(timeIntervalSince1970: 1_800_000_000),
+            auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.25, label: "5H", windowLength: QuotaWindow.fiveHours))
+        snapshot.antigravityAccount = account
+        return snapshot
+    }
+}
+
 @Suite("Configured Gemini API credit in the engine")
 struct GeminiAPICreditManagerTests {
+
+    @Test("each Google account's configured credit rides that account's Gemini row on every read")
+    func perAccountCredits() async throws {
+        let main = AntigravityAccount(id: "agy-account:main", badge: "1", sourceLabel: "fixture",
+                                      fallbackName: "main", isPrimary: true)
+        let burner = AntigravityAccount(id: "agy-account:burner", badge: "2", sourceLabel: "fixture",
+                                        fallbackName: "burner")
+        let older = try credit("12")
+        let burnerOwn = try credit("3")
+        let manager = QuotaManager(
+            providerFactory: { [AccountGeminiProvider(account: main), AccountGeminiProvider(account: burner)] },
+            geminiCreditLookup: { older },
+            geminiAccountCreditLookup: { [burner.id: burnerOwn] })
+
+        let refreshed = await manager.refresh()
+        let cached = await manager.cachedSnapshots()
+        let sorted = await manager.sortedSnapshots()
+        for read in [Array(refreshed.values), Array(cached.values), sorted] {
+            #expect(read.first { $0.antigravityAccount?.id == main.id }?.geminiAPICredit == older)
+            #expect(read.first { $0.antigravityAccount?.id == burner.id }?.geminiAPICredit == burnerOwn)
+        }
+    }
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 

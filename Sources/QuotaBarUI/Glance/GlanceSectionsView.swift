@@ -21,8 +21,9 @@ struct GlanceSectionsView: View {
             if !glance.services.isEmpty || !glance.foldedServices.isEmpty {
                 ServicesSection(glance: glance, onSelect: onSelect)
             }
-            if !glance.walletSnapshots.isEmpty {
-                WalletSection(snapshots: glance.walletSnapshots, now: glance.now)
+            let wallet = WalletPresentation(snapshots: glance.walletSnapshots, now: glance.now)
+            if !wallet.rows.isEmpty {
+                WalletSection(presentation: wallet)
             }
         }
     }
@@ -63,10 +64,11 @@ struct GlanceCard<Content: View>: View {
     }
 }
 
-/// A "% left" meter. The fill is what remains; the tick, when the vendor
-/// published the window's reset and length, is where an even pace would
-/// leave it (`1 − paceMarker`). Nothing is drawn for a figure not received.
-struct RemainingBar: View {
+/// A "% used" meter (owner, 24 Nov 2026): empty when nothing is used, full
+/// when the window is spent. The tick, when the vendor published the window's
+/// reset and length, is where an even pace would have used it (`paceMarker`).
+/// Nothing is drawn for a figure not received.
+struct UsageBar: View {
     let window: GlancePresentation.Window
     var height: CGFloat = 4
 
@@ -74,14 +76,14 @@ struct RemainingBar: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
-                if let remaining = window.remaining {
+                if let used = window.used, used > 0 {
                     Capsule().fill(GlanceColors.fill(for: window))
-                        .frame(width: max(0, proxy.size.width * remaining), height: height)
+                        .frame(width: max(height, proxy.size.width * used), height: height)
                 }
                 if let pace = window.bar.paceMarker {
                     Rectangle().fill(Theme.onSurface)
                         .frame(width: 1.5, height: height + 4)
-                        .offset(x: proxy.size.width * (1 - pace) - 0.75)
+                        .offset(x: proxy.size.width * pace - 0.75)
                 }
             }
         }
@@ -206,7 +208,7 @@ private struct HeroPickView: View {
                 Text(heroCaption(reset: reset))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.onSurfaceVariant)
-                RemainingBar(window: pick.binding, height: 6)
+                UsageBar(window: pick.binding, height: 6)
             }
             .padding(14)
             .background(tint.opacity(0.07))
@@ -382,7 +384,7 @@ private struct ServicesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            GlanceSectionHeader(title: "Services", meta: "bar = % left · tick = even pace")
+            GlanceSectionHeader(title: "Services", meta: "bar = % used · tick = even pace")
             GlanceCard {
                 // One shared column header, so each block's own header row can
                 // carry its counts in full.
@@ -541,7 +543,7 @@ private struct ServicePoolRow: View {
     @ViewBuilder private func cell(_ window: GlancePresentation.Window?) -> some View {
         if let window {
             VStack(alignment: .leading, spacing: 2) {
-                RemainingBar(window: window)
+                UsageBar(window: window)
                 HStack(spacing: 3) {
                     if window.isSpent {
                         Image(systemName: "nosign").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.errorBold)
@@ -590,182 +592,207 @@ private struct ServicePoolRow: View {
 
 // MARK: - Wallet
 
-/// Every credit, balance and reset ticket, one line each. Each line is drawn
-/// from the existing presentation for that figure, so its label, unit and
-/// money formatting are the ones those rules already test.
+/// Every credit and balance, one line each (`WalletPresentation`). The row's
+/// own title names its provider, so there are no group headers.
 struct WalletSection: View {
-    let snapshots: [QuotaSnapshot]
-    let now: Date
+    let presentation: WalletPresentation
+    /// Recorded balance history by `BalanceSeries.id`, for each balance's trend.
+    var balanceSeries: [String: [BalancePoint]] = [:]
+    var now: Date = Date()
+    /// Opens the inspector for the snapshot a line came from
+    /// (`WalletPresentation.Row.snapshotID`), as a Subscriptions row does.
+    var onSelect: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(snapshots, id: \.id) { snapshot in
-                        WalletLines(snapshot: snapshot, now: now)
+                // A grid, not stacked rows: the figure column is as wide as the
+                // widest figure ("60,085 credits"), so every meter starts and
+                // ends in the same place. A fixed figure width let a wider
+                // figure push its bar out of line.
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 0) {
+                    ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
+                        WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
+                            BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
+                        }, now: now, onSelect: { onSelect(row.snapshotID) })
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
             }
         }
     }
 }
 
-private struct WalletLines: View {
-    let snapshot: QuotaSnapshot
+/// A Wallet line's meter, in the provider rows' anatomy: the bar, then "% used"
+/// and the countdown under it. A credit's bar is `UsageBar`, so its fill,
+/// colour and even-use tick follow the same rules as a quota window; a
+/// time-only meter is drawn in the informational colour and says "MO 63%".
+private struct WalletMeterCell: View {
+    let meter: WalletPresentation.Meter
     let now: Date
+    private let trackHeight: CGFloat = 3
 
     var body: some View {
-        let p = MetricRowPresentation(snapshot: snapshot, now: now)
-        let stale = snapshot.staleReading != nil
-        let isBalanceOnly = snapshot.quotaBars.allSatisfy { $0.allowanceRole != .plan }
-        VStack(alignment: .leading, spacing: 8) {
-            if isBalanceOnly, snapshot.apiCredits.isEmpty {
-                WalletValueRow(vendor: snapshot.vendorId, title: snapshot.rowTitle,
-                               detail: snapshot.auxiliaryInfo, figure: p.valueLabel,
-                               isNegative: Self.isNegative(snapshot.metric), spoken: p.accessibilityLabel)
-            } else {
-                // Every credit sits under the account it belongs to: the
-                // credit views were drawn under their quota row, which named
-                // it, and several ("Usage credits", "API credit") do not.
-                WalletOwnerCaption(vendor: snapshot.vendorId, owner: ownerTitle, tag: nil)
-            }
-            // The same split the old row and credit card made, so no figure
-            // is drawn twice and each keeps its own meter and freshness rule.
-            ForEach(snapshot.apiCredits.filter { !$0.extendsSubscription }, id: \.id) { entry in
-                let e = APICreditEntryPresentation(entry: entry)
-                WalletValueRow(vendor: entry.vendorId, title: e.title, detail: e.detail, figure: e.figure,
-                               isNegative: Self.isNegative(entry.metric), spoken: e.spoken, isStale: stale)
-            }
-            ForEach(Array(p.subscriptionCredits.enumerated()), id: \.offset) { _, e in
-                WalletValueRow(vendor: snapshot.vendorId, title: e.title, detail: e.detail, figure: e.figure,
-                               spoken: e.spoken, isStale: stale)
-            }
-            if let usage = p.openAIUsageCredit { OpenAIUsageCreditView(presentation: usage) }
-            if let promo = p.monthlyPromo { MonthlyPromoCreditView(presentation: promo) }
-            if let credit = p.monthlyCredit { MonthlyCreditBarView(presentation: credit) }
-            if let credit = p.geminiAPICredit {
-                // The AI Studio key's credit, typed by the user: say so where
-                // it is drawn, not only in its tooltip.
-                Text("GEMINI API KEY · CONFIGURED")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Theme.primary)
-                GeminiAPICreditView(presentation: credit)
-            }
-            ForEach(ticketGroups(p), id: \.label) { group in
-                TicketLines(owner: ownerTitle, label: group.label, credits: group.credits)
-            }
-        }
-        .padding(.bottom, isBalanceOnly ? 0 : 2)
-    }
-
-    /// "Codex · Pro", "Claude Code · Primary · Max (20x)", "Antigravity · Gemini · Burner".
-    private var ownerTitle: String {
-        let (service, name) = GlancePresentation.names(for: snapshot)
-        let plan = snapshot.claudeAccount == nil ? snapshot.shortPlanName : (snapshot.planName ?? "")
-        return ([service] + [name == service ? nil : name, plan.isEmpty ? nil : plan].compactMap { $0 })
-            .joined(separator: " · ")
-    }
-
-    private func ticketGroups(_ p: MetricRowPresentation) -> [(label: String, credits: MetricRowPresentation.ResetCredits)] {
-        if !p.resetCreditGroups.isEmpty {
-            return p.resetCreditGroups.map { ("\($0.scope.displayName) reset", $0.credits) }
-        }
-        return p.resetCredits.map { [("Reset", $0)] } ?? []
-    }
-
-    static func isNegative(_ metric: MetricType) -> Bool {
-        if case .currency(let balance, _, _, _) = metric { return balance < 0 }
-        return false
-    }
-}
-
-private struct WalletValueRow: View {
-    let vendor: VendorIdentifier
-    let title: String
-    let detail: String?
-    let figure: String
-    var isNegative = false
-    let spoken: String
-    var isStale = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VendorAvatarView(vendorId: vendor, status: .measured(.none), size: 18)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.onSurface).lineLimit(1)
-                if let detail {
-                    Text(detail).font(.system(size: 10.5)).foregroundStyle(Theme.outline).lineLimit(1)
+        switch meter {
+        case .credit(let bar):
+            let window = GlancePresentation.window(for: bar, now: now)
+            let reset = bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
+            if window.isSpent {
+                VStack(alignment: .leading, spacing: 3) {
+                    Capsule()
+                        .fill(Theme.errorBold.opacity(0.6))
+                        .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+                        .frame(height: trackHeight)
+                    caption("100%", reset: reset, color: Theme.error)
+                }
+            } else if let used = window.used {
+                VStack(alignment: .leading, spacing: 3) {
+                    UsageBar(window: window, height: trackHeight)
+                    caption(used.formatted(.percent.precision(.fractionLength(0))),
+                            reset: reset, color: GlanceColors.text(for: window))
                 }
             }
-            Spacer(minLength: 6)
-            if isStale {
-                Image(systemName: "clock").font(.system(size: 9)).foregroundStyle(Theme.tertiary)
-                    .help("Carried over from an earlier poll")
+        case .elapsed(let fraction, let countdown):
+            VStack(alignment: .leading, spacing: 3) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.surfaceContainerHighest)
+                        Capsule().fill(Theme.primary)
+                            .frame(width: max(0, proxy.size.width * min(max(fraction, 0), 1)))
+                    }
+                }
+                .frame(height: trackHeight)
+                caption("MO \(Int((fraction * 100).rounded()))%", reset: countdown, color: Theme.primary)
             }
-            Text(figure)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isNegative ? Theme.error : Theme.onSurface)
-                .lineLimit(1)
-                .layoutPriority(1)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken + (isStale ? ", carried over from an earlier poll" : ""))
     }
-}
 
-private struct WalletOwnerCaption: View {
-    let vendor: VendorIdentifier
-    let owner: String
-    let tag: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            VendorAvatarView(vendorId: vendor, status: .measured(.none), size: 14)
-            Text(owner).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant)
-            if let tag {
-                Text(tag.uppercased())
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Theme.primary)
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.primary.opacity(0.6), lineWidth: 0.5))
-            }
+    private func caption(_ label: String, reset: String?, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(label).fontWeight(.semibold).foregroundStyle(color)
             Spacer(minLength: 0)
+            if let reset { Text(reset).foregroundStyle(Theme.outline) }
         }
-        // A heading, so VoiceOver names the account before its credit lines.
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        .font(.system(size: 10).monospacedDigit())
+        .lineLimit(1)
     }
 }
 
-/// One line per displayed ticket, each with its own published expiry.
-private struct TicketLines: View {
-    /// Spoken only: the Wallet's owner caption names it on screen.
-    let owner: String
-    let label: String
-    let credits: MetricRowPresentation.ResetCredits
+private struct WalletRowView: View {
+    let row: WalletPresentation.Row
+    let trend: BalanceSparklinePresentation?
+    let now: Date
+    let onSelect: () -> Void
+
+    /// The meter column's width. With the grid's shared figure column, every
+    /// line's bar starts and ends at the same place.
+    private let meterWidth: CGFloat = 76
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(0..<credits.tickets, id: \.self) { index in
-                HStack(spacing: 8) {
-                    GoldenTicketView(index: index).frame(width: 18)
-                        .help(credits.expiryText(at: index, now: credits.now))
-                    Text("1 \(label) ticket").font(.system(size: 12.5)).foregroundStyle(Theme.onSurface)
-                    Spacer(minLength: 6)
-                    Text(credits.expiryPhrase(at: index, now: credits.now))
-                        .font(.system(size: 11.5).monospacedDigit())
-                        .foregroundStyle(Theme.onSurfaceVariant)
+        GridRow {
+            nameCell
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 14)
+                .padding(.vertical, 8)
+                // The grid has no row element, so the name cell speaks for the
+                // whole line and the other cells stay silent.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Open usage details")
+                .accessibilityAction { onSelect() }
+                .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
+                .selectsWalletLine(onSelect)
+            Group {
+                if let meter = row.meter {
+                    WalletMeterCell(meter: meter, now: now)
+                } else if let trend {
+                    BalanceSparklineView(presentation: trend)
+                } else {
+                    Color.clear.frame(height: 1)
                 }
             }
-            if credits.overflow > 0 {
-                Text("+\(credits.overflow) more").font(.system(size: 10.5)).foregroundStyle(Theme.outline)
-                    .padding(.leading, 26)
+            .frame(width: meterWidth)
+            .accessibilityHidden(true)
+            .selectsWalletLine(onSelect)
+            Text(row.figure ?? "")
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(color(row.tone))
+                .lineLimit(1)
+                .fixedSize()
+                .gridColumnAlignment(.trailing)
+                .padding(.trailing, 14)
+                .accessibilityHidden(true)
+                .selectsWalletLine(onSelect)
+        }
+    }
+
+    private var nameCell: some View {
+        HStack(spacing: 8) {
+            VendorAvatarView(vendorId: row.vendor, status: .measured(.none), size: 16)
+            if let symbol = row.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(red: 0.96, green: 0.78, blue: 0.29))
+            }
+            // The tag says its word when the title fits beside it, and shrinks
+            // to its glyph when it does not, so an account name is never cut
+            // to make room for "CONFIGURED". The tooltip and spoken label
+            // always carry the word.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    title.fixedSize()
+                    if let tag = row.tag { tagCapsule { Text(tag.uppercased()) } }
+                }
+                HStack(spacing: 6) {
+                    title
+                    if let tag = row.tag { tagCapsule { Image(systemName: Self.glyph(for: tag)) } }
+                }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(owner): \(credits.spoken)")
+    }
+
+    private var title: some View {
+        Text(row.title)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.onSurface)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .layoutPriority(1)
+    }
+
+    private func tagCapsule<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .font(.system(size: 8.5, weight: .semibold))
+            .foregroundStyle(Theme.outline)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 0.75))
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    /// The compact form of a tag: a pencil for a figure the user typed, a
+    /// clock for a carried-over reading.
+    static func glyph(for tag: String) -> String {
+        tag == "configured" ? "pencil" : "clock.arrow.circlepath"
+    }
+
+    private func color(_ tone: WalletPresentation.Tone) -> Color {
+        switch tone {
+        case .normal: Theme.onSurface
+        case .negative: Theme.error
+        case .exhausted: Theme.errorBold
+        case .unknown: Theme.outline
+        }
+    }
+}
+
+private extension View {
+    /// A grid row is not one view, so each cell of a Wallet line takes the
+    /// click: anywhere on the line opens its inspector.
+    func selectsWalletLine(_ action: @escaping () -> Void) -> some View {
+        contentShape(Rectangle()).onTapGesture(perform: action)
     }
 }

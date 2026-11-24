@@ -476,8 +476,19 @@ public struct SettingsView: View {
             AntigravityAccountSettingsView()
             googleConnectionSection
             Section("API billing") {
-                GeminiAPICreditSettingsView {
-                    Task { await store?.reloadConfiguredCredit() }
+                // One credit per Google account: each AI Studio key bills to
+                // its own Cloud Billing account (owner, 24 Nov 2026).
+                let accounts = AntigravityAccountStore.all()
+                if accounts.isEmpty {
+                    GeminiAPICreditSettingsView {
+                        Task { await store?.reloadConfiguredCredit() }
+                    }
+                } else {
+                    ForEach(accounts) { account in
+                        GeminiAPICreditSettingsView(account: account) {
+                            Task { await store?.reloadConfiguredCredit() }
+                        }
+                    }
                 }
             }
         case .opencode:
@@ -1225,10 +1236,10 @@ public struct SettingsView: View {
     private var readingGuide: some View {
         Form {
             Section("Popover") {
-                guideRow("Providers", "Expand a provider to see its pools. Select a pool for details.")
+                guideRow("Subscriptions", "Expand a provider to see its pools. Select a pool for details.")
                 guideRow("Averages", "Each reported window counts once. The count shows how many pools supplied a figure.")
-                guideRow("Bars and resets", "Bars show the share left. The tick marks even pace. Red bars and badges show spent or blocked windows and their published reset times.")
-                guideRow("Wallet", "Credits and reset tickets sit under their accounts. Direct balances appear with their providers.")
+                guideRow("Bars and resets", "Bars show the share used. The tick marks even pace. Red bars and badges show spent or blocked windows and their published reset times.")
+                guideRow("Wallet", "One line per credit, balance or plan reset ticket. Credit bars show the share used; blue bars show time through the month. Balances show their recent trend.")
             }
 
             Section("Status symbols") {

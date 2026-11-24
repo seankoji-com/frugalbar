@@ -11,6 +11,11 @@ import QuotaBarCore
 /// history point from them.
 struct GeminiAPICreditSettingsView: View {
 
+    /// The Google account whose AI Studio key this credit belongs to. Each
+    /// account bills to its own Cloud Billing account, so each has its own
+    /// credit (owner, 24 Nov 2026). Nil edits the older single credit.
+    var account: AntigravityAccount? = nil
+
     /// Called after a save so the popover redraws the configured line.
     var onSaved: () -> Void = {}
 
@@ -78,7 +83,7 @@ struct GeminiAPICreditSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } label: {
             HStack(spacing: 6) {
-                Text("Gemini API prepaid credit")
+                Text(account.map { "Gemini API credit · \($0.name)" } ?? "Gemini API prepaid credit")
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: configured ? "checkmark.circle.fill" : "exclamationmark.circle")
@@ -90,7 +95,7 @@ struct GeminiAPICreditSettingsView: View {
                 .accessibilityElement(children: .combine)
             }
         }
-        .task {
+        .task(id: account?.id) {
             guard !loaded else { return }
             load()
             loaded = true
@@ -147,7 +152,9 @@ struct GeminiAPICreditSettingsView: View {
     }
 
     private func load() {
-        guard let stored = GeminiAPICreditStore.load() else {
+        let stored = account.map { GeminiAPICreditStore.load(accountID: $0.id, aliases: $0.historyAliases, isPrimary: $0.isPrimary) }
+            ?? GeminiAPICreditStore.load()
+        guard let stored else {
             configured = false
             saved = false
             return
@@ -160,20 +167,28 @@ struct GeminiAPICreditSettingsView: View {
         saved = false
     }
 
+    private func store(_ credit: GeminiAPICredit?) {
+        if let account {
+            GeminiAPICreditStore.save(credit, accountID: account.id, aliases: account.historyAliases, isPrimary: account.isPrimary)
+        } else {
+            GeminiAPICreditStore.save(credit)
+        }
+    }
+
     private func text(_ amount: Decimal?) -> String {
         amount.map { NSDecimalNumber(decimal: $0).stringValue } ?? ""
     }
 
     private func save() {
         guard let credit = draft.credit else { return }
-        GeminiAPICreditStore.save(credit)
+        store(credit)
         configured = true
         saved = true
         onSaved()
     }
 
     private func remove() {
-        GeminiAPICreditStore.save(nil)
+        store(nil)
         balanceText = ""
         monthlyText = ""
         capText = ""

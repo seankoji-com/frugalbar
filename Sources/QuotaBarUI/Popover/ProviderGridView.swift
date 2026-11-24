@@ -12,12 +12,12 @@ struct ProviderGridView: View {
     var body: some View {
         if !presentation.groups.isEmpty {
             GlanceCard {
-                GlanceSectionHeader(title: "Providers")
+                GlanceSectionHeader(title: "Subscriptions")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 9)
                 Divider()
                 line {
-                    Text("% left").foregroundStyle(Theme.outline)
+                    Text("% used").foregroundStyle(Theme.outline)
                 } figures: {
                     columns { column in
                         Text(column.label)
@@ -37,16 +37,12 @@ struct ProviderGridView: View {
                                 Divider()
                                 poolButton(pool)
                             }
-                            ForEach(group.balances) { balance in
-                                Divider()
-                                balanceButton(balance)
-                            }
                         }
                         .background(Theme.surfaceContainerHighest.opacity(0.25))
                     }
                 }
                 Divider()
-                Text("Averages use reported windows. Red percentages show % used. Ticks mark even pace.")
+                Text("Averages use reported windows. Ticks mark even pace.")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.outline)
                     .fixedSize(horizontal: false, vertical: true)
@@ -150,14 +146,23 @@ struct ProviderGridView: View {
                                 .padding(.horizontal, 14)
                         }
                     } else {
-                        HStack(spacing: 7) {
-                            Text(bar.label)
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.outline)
-                                .frame(width: nameWidth, alignment: .leading)
+                        // The shared `line`, so this bar keeps the trailing
+                        // slot every row reserves and ends where theirs do.
+                        line {
+                            // A model's reset tickets sit beside that model's
+                            // line, in the account they reset (owner, 24 Nov 2026).
+                            HStack(spacing: 4) {
+                                Text(bar.label)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.outline)
+                                if let tickets = MetricRowPresentation(snapshot: pool.snapshot, now: presentation.now)
+                                    .modelResetCredits(for: bar.label) {
+                                    ModelTicketsBadge(credits: tickets)
+                                }
+                            }
+                        } figures: {
                             windowCell(window, label: bar.label, stale: pool.isStale, showSpentPercent: true)
                         }
-                        .padding(.horizontal, 14)
                     }
                 }
             }
@@ -170,33 +175,33 @@ struct ProviderGridView: View {
         .accessibilityHint("Open usage details")
     }
 
-    private func balanceButton(_ snapshot: QuotaSnapshot) -> some View {
-        Button { onSelect(snapshot) } label: {
-            HStack {
-                Text(snapshot.vendorId == .deepseek ? "DeepSeek API credit" : snapshot.rowTitle)
-                    .font(.system(size: 11.5))
-                Spacer()
-                if snapshot.staleReading != nil {
-                    Text("Last reading")
-                        .foregroundStyle(Theme.tertiary)
-                        .font(.system(size: 10))
-                }
-                Text(snapshot.status.unavailableReason?.headline ?? MetricRowPresentation.value(for: snapshot.metric))
-                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(balanceColor(snapshot.metric))
-            }
-            .foregroundStyle(Theme.onSurface)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Open usage details")
-    }
+    /// A model's banked reset tickets, beside that model's line: one gold
+    /// ticket per credit (capped, with an exact `+n`) and the soonest
+    /// published expiry. Each ticket's tooltip gives its own expiry.
+    struct ModelTicketsBadge: View {
+        let credits: MetricRowPresentation.ResetCredits
 
-    private func balanceColor(_ metric: MetricType) -> Color {
-        if case .currency(let balance, _, _, _) = metric, balance < 0 { return Theme.error }
-        return Theme.onSurface
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(0..<credits.tickets, id: \.self) { index in
+                    GoldenTicketView(index: index)
+                        .frame(width: 13)
+                        .help(credits.expiryText(at: index, now: credits.now))
+                }
+                if credits.overflow > 0 {
+                    Text("+\(credits.overflow)")
+                }
+                // The soonest published expiry, compact; nothing when none
+                // was published (never the reset window's date).
+                if let expiry = credits.expiries.compactMap({ $0 }).min(),
+                   let compact = ResetCountdownBadge.compact(expiry, now: credits.now) {
+                    Text(compact)
+                }
+            }
+            .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+            .foregroundStyle(Theme.onSurfaceVariant)
+            .accessibilityLabel(credits.spoken)
+        }
     }
 
     private func identity(
@@ -257,8 +262,8 @@ struct ProviderGridView: View {
             let window = GlancePresentation.window(for: bar, now: presentation.now)
             if window.isSpent {
                 parts.append("\(bar.label), \(spentDescription(window))")
-            } else if let remaining = window.remaining {
-                parts.append("\(bar.label), \(remaining.formatted(.percent)) left")
+            } else if let used = window.used {
+                parts.append("\(bar.label), \(used.formatted(.percent)) used")
             }
             if let reset = presentation.countdown(bar.resetsAt, stale: single.isStale) {
                 parts.append("resets in \(reset)")
@@ -270,8 +275,8 @@ struct ProviderGridView: View {
             let result: String
             let reset: Date?
             switch summary {
-            case .average(let fraction, let reported, let count):
-                result = "\(fraction.formatted(.percent)) left across \(reported) of \(count) pools"
+            case .average(let remaining, let reported, let count):
+                result = "\((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools"
                 reset = nil
             case .spent(let next, let exhausted, let blocked):
                 result = exhausted && !blocked ? "all spent" : "all blocked or spent"
@@ -279,8 +284,8 @@ struct ProviderGridView: View {
             case .window(let window):
                 if window.isSpent {
                     result = spentDescription(window)
-                } else if let remaining = window.remaining {
-                    result = "\(remaining.formatted(.percent)) left"
+                } else if let used = window.used {
+                    result = "\(used.formatted(.percent)) used"
                 } else {
                     continue
                 }
@@ -304,7 +309,7 @@ struct ProviderGridView: View {
                       showsBlockedGlyph: allMeasuredExhausted && includesBlocked)
         case .average(let remaining, let reported, let count):
             VStack(alignment: .trailing, spacing: 2) {
-                Text(remaining, format: .percent.precision(.fractionLength(0...1)))
+                Text(1 - remaining, format: .percent.precision(.fractionLength(0...1)))
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Theme.onSurface)
                 Text(reported == 1 ? "\(reported)/\(count)" : "avg · \(reported)/\(count)")
@@ -313,7 +318,7 @@ struct ProviderGridView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(column.spokenName): \(remaining.formatted(.percent)) left across \(reported) of \(count) pools")
+            .accessibilityLabel("\(column.spokenName): \((1 - remaining).formatted(.percent)) used across \(reported) of \(count) pools")
         }
     }
 
@@ -328,15 +333,17 @@ struct ProviderGridView: View {
             spentCell(title, reset: reset, spoken: "\(label), \(spentDescription(window))",
                       showsBlockedGlyph: exhausted && window.bar.isBlocked)
                 .opacity(stale ? 0.65 : 1)
-        } else if let remaining = window.remaining {
+        } else if let used = window.used {
             VStack(alignment: .leading, spacing: 3) {
-                RemainingBar(window: window, height: trackHeight)
-                meterCaption(remaining == 1 ? nil : remaining.formatted(.percent.precision(.fractionLength(0))),
+                UsageBar(window: window, height: trackHeight)
+                // Always printed, 0% included: an empty bar with no figure
+                // reads as "no reading".
+                meterCaption(used.formatted(.percent.precision(.fractionLength(0))),
                              reset: reset, color: GlanceColors.text(for: window))
             }
             .opacity(stale ? 0.65 : 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel([ "\(label), \(remaining.formatted(.percent)) left",
+            .accessibilityLabel([ "\(label), \(used.formatted(.percent)) used",
                                  reset.map { "resets in \($0)" } ].compactMap { $0 }.joined(separator: ", "))
         }
     }
