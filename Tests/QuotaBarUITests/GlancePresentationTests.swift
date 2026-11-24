@@ -84,6 +84,18 @@ struct GlancePresentationTests {
         #expect(glance.menuTitle.tone == .normal)
     }
 
+    /// Review R1: at an exact tie the title must print what the pick's
+    /// Subscriptions cell prints. The cell's percent formatter rounds 12.5%
+    /// half-to-even, to 12%; `Double.rounded()` made the title say 13%.
+    @Test("the menu title rounds a tie as the pick's Subscriptions cell does")
+    func menuTitleTieMatchesCell() {
+        let tie = F.snapshot("t", .opencode, "Tie", [F.bar("WK", 0.125, resetsInHours: 100, windowHours: 168)])
+        let title = GlancePresentation(snapshots: [tie], now: now).menuTitle.text
+        #expect(title.contains("\(GlancePresentation.usedPercentText(0.125)) WK used"))
+        #expect(GlancePresentation.usedPercentText(0.125) == 0.125.formatted(.percent.precision(.fractionLength(0))))
+        #expect(!title.contains("13%"))
+    }
+
     // MARK: Rules
 
     @Test("countdowns use one unit, rounded: minutes, then hours under two days, then days")

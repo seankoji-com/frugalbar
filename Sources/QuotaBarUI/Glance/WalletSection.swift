@@ -140,7 +140,7 @@ private struct WalletMeterCell: View {
             } else if let used = window.used {
                 VStack(alignment: .leading, spacing: 3) {
                     UsageBar(window: window, height: trackHeight)
-                    caption(used.formatted(.percent.precision(.fractionLength(0))),
+                    caption(GlancePresentation.usedPercentText(used),
                             reset: reset, color: GlanceColors.text(for: window))
                 }
             }

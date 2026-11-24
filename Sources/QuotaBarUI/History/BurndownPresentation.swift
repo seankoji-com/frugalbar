@@ -370,8 +370,11 @@ public enum BurndownPresentation {
     /// clause appears only when its input was measured.
     ///
     /// It sits in the inspector beside the summary's and window lines' "%
-    /// used", so it says used too, and each countdown is one unit, rounded,
-    /// as the Subscriptions cells print it (`ResetCountdownBadge.compact`).
+    /// used", so it says used too. Each countdown is one unit and matches
+    /// its neighbour in the inspector: the reset as the window lines print
+    /// it (`ResetCountdownBadge.compact`), the run-out as the summary's
+    /// `InspectorRunOut` does (`GlancePresentation.countdown`), so the same
+    /// projection never reads "30h" in one place and "1d" in the other.
     ///
     /// No pace clause: the inspector's summary and window lines state the
     /// pace from `DualBarMetrics.paceMarker`, the popover's own definition.
@@ -396,9 +399,8 @@ public enum BurndownPresentation {
            let reset = ResetCountdownBadge.compact(resetsAt, now: now) {
             parts.append("resets in \(reset)")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now,
-           let out = ResetCountdownBadge.compact(exhaustion, now: now) {
-            parts.append("at recent rate, out in \(out)")
+        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
+            parts.append("at recent rate, out in \(GlancePresentation.countdown(exhaustion, now: now))")
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
     }
@@ -425,9 +427,8 @@ public enum BurndownPresentation {
         if burndown.ideal != nil {
             parts.append("ideal pace line shown")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now,
-           let out = ResetCountdownBadge.spanSpoken(exhaustion, now: now) {
-            parts.append("at recent pace runs out in \(out)")
+        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
+            parts.append("at recent pace runs out in \(GlancePresentation.countdownSpoken(exhaustion, now: now))")
         } else if burndown.projection != nil {
             parts.append("at recent pace resets before running out")
         }

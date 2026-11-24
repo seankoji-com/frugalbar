@@ -354,10 +354,11 @@ public struct GlancePresentation: Equatable, Sendable {
         Int((min(max(remaining, 0), 1) * 100 + 1e-9).rounded(.down))
     }
 
-    /// A used share as the Subscriptions cells print it: rounded to the
-    /// nearest whole percent.
-    static func usedPercent(_ used: Double) -> Int {
-        Int((min(max(used, 0), 1) * 100).rounded())
+    /// A used share as every "% used" figure prints it: the Subscriptions
+    /// cell, the Wallet meter and the menu-bar title. One formatter, so a tie
+    /// such as 12.5% rounds the same way in all three.
+    static func usedPercentText(_ used: Double) -> String {
+        min(max(used, 0), 1).formatted(.percent.precision(.fractionLength(0)))
     }
 
     // MARK: Back soon
@@ -439,7 +440,7 @@ public struct GlancePresentation: Equatable, Sendable {
             // rounded as they round, so the title and the pick's cell agree.
             // The spoken label keeps the reason's "% left", which names its
             // direction.
-            let used = "\(usedPercent(pick.binding.used ?? 0))% \(pick.binding.bar.label) used"
+            let used = "\(usedPercentText(pick.binding.used ?? 0)) \(pick.binding.bar.label) used"
             let reset = pick.binding.bar.resetsAt.map { countdown($0, now: now) }
             let text = ([who, used] + [reset].compactMap { $0 }).joined(separator: " · ")
             let spoken = "Use \(pick.pool.service) \(pick.pool.name): \(pick.reason)"

@@ -314,6 +314,21 @@ struct BurndownPresentationTests {
         #expect(P.summaryLine(for: remainingOnly, now: now) == "73% used")
     }
 
+    /// Review R2: the caption and the summary's `InspectorRunOut` sit in one
+    /// inspector, so a run-out 30 hours out must read "30h" in both, not
+    /// "1d" under a summary that says "30h".
+    @Test("the run-out clause counts down as the inspector summary does")
+    func runOutMatchesSummary() {
+        let out = now.addingTimeInterval(30 * 3_600)
+        let b = P.Burndown(
+            barLabel: "WK", windowStart: nil, resetsAt: nil, actual: [], ideal: nil,
+            projection: [P.LinePoint(date: now, remainingFraction: 0.4),
+                         P.LinePoint(date: out, remainingFraction: 0)],
+            nowRemaining: 0.4, latestReading: nil)
+        #expect(P.summaryLine(for: b, now: now) == "60% used · at recent rate, out in 30h")
+        #expect(P.accessibilityDescription(for: b, now: now).contains("runs out in 30 hours"))
+    }
+
     @Test("reset credits text appears only when published")
     func resetCreditsText() {
         #expect(P.resetCreditsText(available: nil, applicable: 1) == nil)

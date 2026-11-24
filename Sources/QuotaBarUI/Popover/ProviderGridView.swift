@@ -338,7 +338,7 @@ struct ProviderGridView: View {
                 UsageBar(window: window, height: trackHeight)
                 // Always printed, 0% included: an empty bar with no figure
                 // reads as "no reading".
-                meterCaption(used.formatted(.percent.precision(.fractionLength(0))),
+                meterCaption(GlancePresentation.usedPercentText(used),
                              reset: reset, color: GlanceColors.text(for: window))
             }
             .opacity(stale ? 0.65 : 1)
