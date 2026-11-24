@@ -219,6 +219,26 @@ private actor InventoryGate {
     }
 }
 
+private actor PassGate {
+    private var pass = 0
+    func next() -> Int { pass += 1; return pass }
+}
+
+/// First pass retires Argon, later passes fail. The manager must keep the
+/// retired state across the failure.
+private struct RetiredThenFailingProvider: QuotaProvider {
+    let gate: PassGate
+    var vendorId: VendorIdentifier { .antigravityArgon }
+    var instanceID: String { VendorIdentifier.antigravityArgon.rawValue }
+    var displayName: String { "AGY Argon" }
+    var category: MetricCategory { .aiSubscriptions }
+    func fetchSnapshot() async throws -> QuotaSnapshot {
+        let reason: UnavailableReason = await gate.next() == 1
+            ? GeminiQuotaProvider.argonMeteredWithGeminiReason : .badResponse
+        return QuotaManager.unavailableSnapshot(for: self, reason: reason)
+    }
+}
+
 @Suite("HTTP-backed provider behaviour", .serialized)
 struct ProviderHTTPTests {
 
@@ -514,7 +534,8 @@ struct ProviderHTTPTests {
 
     @Test("an unreadable group inventory cannot confirm retirement", arguments: [
         #"{"groups":[42]}"#,
-        #"{"groups":[{}]}"#
+        #"{"groups":[{}]}"#,
+        #"{"groups":[{"buckets":[{}]}]}"#
     ])
     func unreadableGroupInventoryKeepsRow(payload: String) async throws {
         let merge = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]}]}"#
@@ -529,7 +550,7 @@ struct ProviderHTTPTests {
             try await GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon)
                 .fetchSnapshot()
         }
-        #expect(snapshot.status == .unavailable(.badResponse))
+        #expect(snapshot.status == .unavailable(GeminiQuotaProvider.unreadableSummaryReason))
     }
 
     @Test("a discovery timeout keeps a retired pool and its poll clocks")
@@ -597,6 +618,48 @@ struct ProviderHTTPTests {
             #expect(!second.values.contains { $0.vendorId == .antigravityArgon },
                     "a bare proxy-unavailable Argon placeholder must not replace the retired pool")
         }
+    }
+
+
+    @Test("a surviving route's throttle outranks a known failed route")
+    func survivingRouteThrottleOutranksKnownFailure() async throws {
+        let account = AntigravityAccount(id: "agy-review", badge: "", sourceLabel: "test", fallbackName: "review")
+        let snapshot = try await withStubbedHTTP({ request in
+            if request.url!.path.hasSuffix("loadCodeAssist") {
+                return canned(body: #"{"cloudaicompanionProject":"p"}"#)
+            }
+            return canned(status: 429, body: "{}", headers: ["Retry-After": "300"])
+        }) {
+            try await GeminiQuotaProvider(
+                account: account,
+                transports: [.direct(accessToken: "token", batchKey: "direct")],
+                initialFailure: .badResponse,
+                allowance: .argon,
+                requests: AntigravityRequestBatch()
+            ).fetchSnapshot()
+        }
+        guard case .rateLimited(let retryAfter) = snapshot.status.unavailableReason else {
+            Issue.record("expected the surviving route's throttle, got \(String(describing: snapshot.status.unavailableReason))")
+            return
+        }
+        #expect(try #require(retryAfter).timeIntervalSinceNow > 200)
+    }
+
+    @Test("a failure cannot overwrite a retired Argon pool")
+    func failureCannotOverwriteRetiredArgon() async throws {
+        let gate = PassGate()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120,
+                                     perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [RetiredThenFailingProvider(gate: gate)] }
+        )
+        let first = await manager.forceRefresh()
+        #expect(!first.values.contains { $0.vendorId == .antigravityArgon })
+        let second = await manager.forceRefresh()
+        #expect(!second.values.contains { $0.vendorId == .antigravityArgon },
+                "a later failure must not bring back a retired pool")
+        let sorted = await manager.sortedSnapshots()
+        #expect(!sorted.contains { $0.vendorId == .antigravityArgon })
     }
 
 

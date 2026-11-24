@@ -948,7 +948,7 @@ public actor QuotaManager {
             // duration of an outage, so every subsequent forceRefresh
             // re-hit the failing vendor once the floor's window (measured
             // from that stale timestamp) had elapsed.
-            let displaySnapshot: QuotaSnapshot
+            var displaySnapshot: QuotaSnapshot
             // Retention preserves *figures*, so it only applies to a provider
             // we previously read. An absence is always the current one: two
             // failures in a row must report the newest reason rather than
@@ -994,6 +994,18 @@ public actor QuotaManager {
                 displaySnapshot = retained
             } else {
                 displaySnapshot = snap
+            }
+            // A retired pool is a statement about the vendor, not a reading to
+            // be overwritten by a failure to reach the vendor. A route that
+            // could not be checked leaves the retirement in place; only a
+            // measured reading or the vendor publishing an Argon group with no
+            // readable window may bring the row back. The vendor's own backoff
+            // is still stored below from the failure itself.
+            if let existing = cache[id], Self.isRetiredPool(existing.snapshot),
+               let reason = snap.status.unavailableReason,
+               reason != GeminiQuotaProvider.argonNoQuotaReason,
+               reason != GeminiQuotaProvider.unreadableSummaryReason {
+                displaySnapshot = existing.snapshot
             }
             // A provider we attempted re-arms the floors it is supposed to:
             // `fetchedAt` always (so the automatic floor measures from the

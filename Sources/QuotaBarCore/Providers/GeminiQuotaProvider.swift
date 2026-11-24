@@ -214,8 +214,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         /// `{}` is a valid all-optional `Group`, but it identifies nothing, so
         /// it cannot confirm that a particular pool is absent.
         var hasUnidentifiableGroup: Bool {
-            (groups ?? []).contains {
-                ($0.displayName?.trimmed.isEmpty ?? true) && ($0.buckets ?? []).isEmpty
+            (groups ?? []).contains { group in
+                let hasName = !(group.displayName?.trimmed.isEmpty ?? true)
+                let hasBucketID = (group.buckets ?? []).contains {
+                    !($0.bucketId?.trimmed.isEmpty ?? true)
+                }
+                return !hasName && !hasBucketID
             }
         }
 
@@ -290,7 +294,7 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             ?? configured.value.map { [$0] }
             ?? Self.productionAPIHosts
 
-        var firstFailure: UnavailableReason? = initialFailure
+        var firstFailure: UnavailableReason?
         var firstTransportFailure: Error?
         var retired = false
 
@@ -317,7 +321,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         if let firstTransportFailure, firstFailure == nil {
             throw firstTransportFailure
         }
+        // A transport's own failure is more actionable than a route that was
+        // already known to have failed before this pass: a surviving route's
+        // 429 carries the vendor's wait. The known failure still vetoes
+        // retirement below.
         if let firstFailure { return stamped(unavailable(firstFailure)) }
+        if let initialFailure { return stamped(unavailable(initialFailure)) }
         if retired { return stamped(unavailable(Self.argonMeteredWithGeminiReason)) }
         return stamped(unavailable(.badResponse))
     }
@@ -470,8 +479,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     // unreadable inventory rather than a merge statement.
                     if (summary.rejectedGroupEntries || summary.hasUnidentifiableGroup),
                        !Self.publishesArgonGroup(summary) {
-                        lastFailure = .badResponse
-                        firstRealFailure = firstRealFailure ?? .badResponse
+                        lastFailure = Self.unreadableSummaryReason
+                        firstRealFailure = firstRealFailure ?? Self.unreadableSummaryReason
                         continue
                     }
                 }
@@ -565,13 +574,20 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
     }
 
     private var noQuotaReason: UnavailableReason {
-        let pool = switch allowance {
-        case .gemini: "Gemini"
-        case .claude: "Claude"
-        case .argon: "Argon"
-        }
-        return .unsupported("Antigravity reported no \(pool) quota")
+        if allowance == .argon { return Self.argonNoQuotaReason }
+        return .unsupported("Antigravity reported no \(allowance == .gemini ? "Gemini" : "Claude") quota")
     }
+
+    /// Argon's own group was published but yielded no readable window. Unlike
+    /// `argonMeteredWithGeminiReason`, this keeps the row: the pool exists.
+    static let argonNoQuotaReason = UnavailableReason.unsupported(
+        "Antigravity reported no Argon quota")
+
+    /// The summary's group inventory could not identify its pools. A host that
+    /// returns this cannot confirm that Argon is absent, so it must not retire
+    /// the pool — and unlike a route failure, the row stays visible.
+    static let unreadableSummaryReason = UnavailableReason.unsupported(
+        "Antigravity returned an unreadable quota summary")
 
     /// The vendor no longer meters Argon separately for this account: the
     /// `Gemini Models` group's description names Argon among its models and no
