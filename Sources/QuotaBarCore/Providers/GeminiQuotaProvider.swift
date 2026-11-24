@@ -291,6 +291,15 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         var resolvedProject: String?
         var resolvedGroup: QuotaSummary.Group?
         var readings: [Reading] = []
+        // Antigravity used to meter Argon as its own weekly pool ("Gemini 4
+        // Argon · Separate on Pro"). Some accounts now get no Argon group at
+        // all and the Gemini Models group's own description lists Argon among
+        // the models it covers. That is not a failed read: there is no second
+        // allowance to draw, so the pool is retired below rather than reported
+        // as a permanent "No quota reading". A host that still publishes an
+        // Argon group always keeps it.
+        var argonGroupPublished = false
+        var argonMeteredWithGemini = false
         // What the last host to answer said, when none of them published a
         // Gemini window. Kept so the row names the real reason rather than a
         // generic one.
@@ -375,6 +384,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
                     lastFailure = .badResponse
                     continue
                 }
+                if allowance == .argon {
+                    argonGroupPublished = argonGroupPublished
+                        || (summary.groups ?? []).contains(where: Self.isArgonGroup)
+                    argonMeteredWithGemini = argonMeteredWithGemini
+                        || Self.argonIsMeteredWithGemini(summary)
+                }
                 guard let group = quotaGroup(in: summary) else {
                     lastFailure = noQuotaReason
                     continue
@@ -415,6 +430,14 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             // exception, cleared above, because the token is the same wherever
             // it is presented.
             if let transportFailure { return .transportError(transportFailure) }
+            // Only a host that actually answered may retire the pool, and only
+            // while no host published an Argon group. A stronger failure — a
+            // rejected credential, a throttle, an unparseable body — stays this
+            // provider's answer, because the vendor never said Argon is gone.
+            if allowance == .argon, !argonGroupPublished, argonMeteredWithGemini,
+               lastFailure == nil || lastFailure == noQuotaReason {
+                return .failed(Self.argonMeteredWithGeminiReason)
+            }
             return .failed(lastFailure ?? .badResponse)
         }
 
@@ -453,6 +476,27 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         case .argon: "Argon"
         }
         return .unsupported("Antigravity reported no \(pool) quota")
+    }
+
+    /// The vendor no longer meters Argon separately for this account: the
+    /// `Gemini Models` group's description names Argon among its models and no
+    /// Argon group is published. This is not a reading and must never be drawn
+    /// as one; `QuotaManager` drops the pool instead of leaving a permanent
+    /// "No quota reading" row beside Gemini's real windows.
+    static let argonMeteredWithGeminiReason = UnavailableReason.unsupported(
+        "Argon is metered with Gemini Models")
+
+    /// Whether the summary places Argon inside the group metering Gemini.
+    ///
+    /// Only the vendor's own description of that group is consulted, and the
+    /// answer never produces a figure — it retires a pool whose separate
+    /// allowance the response no longer states. A published Argon group always
+    /// wins over this (see `fetchSnapshot`).
+    static func argonIsMeteredWithGemini(_ summary: QuotaSummary) -> Bool {
+        guard let description = geminiGroup(in: summary)?.description?.lowercased() else {
+            return false
+        }
+        return description.contains("argon")
     }
 
     private func quotaGroup(in summary: QuotaSummary) -> QuotaSummary.Group? {

@@ -251,8 +251,7 @@ struct ProviderHTTPTests {
         #expect(VendorIdentifier.antigravityClaude.displayName == claude.displayName)
     }
 
-    @Test("Argon requires its own readable quota group, never a model mention", arguments: [
-        #"{"groups":[{"displayName":"Gemini Models","description":"Includes Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":1}]}]}"#,
+    @Test("Argon is unavailable when its own group is disabled, unreadable or ambiguous", arguments: [
         #"{"groups":[{"displayName":"Gemini 4 Argon","buckets":[{"remainingFraction":1,"disabled":true}]}]}"#,
         #"{"groups":[{"displayName":"Gemini 4 Argon","buckets":[{"remainingFraction":1,"disabled":"false"}]}]}"#,
         #"{"groups":[{"displayName":"Gemini 4 Argon","buckets":[{"remainingFraction":-0.1}]}]}"#,
@@ -272,6 +271,61 @@ struct ProviderHTTPTests {
         #expect(snapshot.status == .unavailable(.unsupported("Antigravity reported no Argon quota")))
         #expect(snapshot.displayBars.isEmpty)
         #expect(snapshot.consumptionFraction == nil)
+    }
+
+    @Test("Argon reports the vendor's merge when no Argon group is published")
+    func argonMeteredWithGeminiReason() async throws {
+        let payload = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75},{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.64}]}]}"#
+        let snapshot = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            try await GeminiQuotaProvider(accessToken: "token", apiBaseOverride: "https://cloudcode-pa.googleapis.com/v1internal:", allowance: .argon).fetchSnapshot()
+        }
+        #expect(URLProtocolStub.requestCount == 2)
+        #expect(snapshot.vendorId == .antigravityArgon)
+        #expect(snapshot.status == .unavailable(GeminiQuotaProvider.argonMeteredWithGeminiReason))
+        #expect(snapshot.displayBars.isEmpty)
+        #expect(snapshot.consumptionFraction == nil)
+    }
+
+    @Test("Argon is not a pool when Antigravity meters it with Gemini")
+    func argonMeteredWithGeminiIsNotAPool() async throws {
+        let payload = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75},{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.64}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":1}]}]}"#
+        let snapshots = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            let batch = AntigravityRequestBatch()
+            let manager = QuotaManager(providerFactory: {
+                [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                 GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .claude, requests: batch),
+                 GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+            })
+            return await manager.forceRefresh()
+        }
+        #expect(snapshots["gemini"]?.status.confidence == .measured)
+        #expect(snapshots["antigravity_claude"]?.status.confidence == .measured)
+        #expect(snapshots["antigravity_argon"] == nil)
+    }
+
+    @Test("a published Argon group keeps its row even when Gemini's description names Argon")
+    func argonPublishedGroupWinsOverDescription() async throws {
+        let payload = #"{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.75}]},{"displayName":"Gemini 4 Argon","description":"Separate on Pro","buckets":[{"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.3,"resetTime":"2099-01-09T00:00:00Z"}]}]}"#
+        let snapshots = try await withStubbedHTTP({ request in
+            request.url!.path.hasSuffix("loadCodeAssist")
+                ? canned(body: #"{"cloudaicompanionProject":"p"}"#) : canned(body: payload)
+        }) {
+            let batch = AntigravityRequestBatch()
+            let manager = QuotaManager(providerFactory: {
+                [GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .gemini, requests: batch),
+                 GeminiQuotaProvider(accessToken: "token", environment: [:], allowance: .argon, requests: batch)]
+            })
+            return await manager.forceRefresh()
+        }
+        let argon = try #require(snapshots["antigravity_argon"])
+        #expect(argon.status.confidence == .measured)
+        #expect(abs(try #require(argon.row1?.primaryFraction) - 0.7) < 0.00001)
     }
 
     @Test("Argon cannot replace Gemini or invalidate Claude, even with Claude-named buckets or malformed fields", arguments: [false, true])

@@ -865,6 +865,19 @@ public actor QuotaManager {
         where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
             results[provider.instanceID] = nil
         }
+        // Argon is no longer a separately metered allowance on an account whose
+        // Antigravity summary lists it inside the Gemini Models group. The
+        // provider reports that as `argonMeteredWithGeminiReason`; there is no
+        // pool to draw, so the row is dropped instead of being kept as a
+        // permanent unreadable provider beside Gemini's real windows. An
+        // account that still publishes an Argon group is measured and keeps its
+        // row, and any other failure stays visible.
+        for provider in providersToFetch where provider.vendorId == .antigravityArgon {
+            guard results[provider.instanceID]?.status.unavailableReason
+                    == GeminiQuotaProvider.argonMeteredWithGeminiReason else { continue }
+            results[provider.instanceID] = nil
+            cache[provider.instanceID] = nil
+        }
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             snapshot.status.confidence == .measured && snapshot.staleReading == nil ? id : nil
         })

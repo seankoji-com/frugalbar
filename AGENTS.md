@@ -95,6 +95,19 @@ last published fraction, and drawing it would report a window nothing is
 metered against. A configured `FRUGALBAR_GEMINI_API_BASE` is the operator's
 answer and is asked alone, so its failure stays this provider's answer.
 
+**Argon is a row only while Antigravity publishes an Argon quota group.** The
+vendor used to meter it as a separate weekly pool ("Gemini 4 Argon · Separate on
+Pro"). On some accounts that group is gone and the `Gemini Models` group's own
+description names Argon among the models it covers. Then Argon is metered by
+Gemini's windows, so `GeminiQuotaProvider` reports
+`argonMeteredWithGeminiReason` and `QuotaManager` drops the row rather than
+showing a permanent "No quota reading" beside Gemini's real windows. Never draw
+Gemini's windows under an Argon label: two pools with one allowance would double
+its headroom in Use now and the widget. A published Argon group — including one
+whose buckets are all disabled — keeps its own row, and any other failure stays
+visible. A host that never answered cannot retire the pool; only a 200 that
+states the merge, with no Argon group on any host, does.
+
 **OpenDesign is read through its web sign-in, not an API key.** An OpenDesign
 inference key gets `401 unauthenticated` from the usage endpoints (checked with
 a real key on 22 November 2026 AEDT, 21 November UTC), so there is no key slot. `OpenDesignWebSession`
