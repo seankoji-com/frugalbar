@@ -8,31 +8,54 @@ struct ProviderStoryView: View {
     @Binding var poolID: String?
     /// Injected by the render harness; live use loads from the store.
     var preloaded: (readings: [QuotaHistoryStore.ReadingRecord], events: [AIEvent])? = nil
+    /// The render harness's fixed instant. Live use follows `ticks`.
     var now: Date? = nil
+    /// The clock the Story follows: the shared `GlanceClock` ticks, so a
+    /// reset that passes while the widget is open turns it on the same tick
+    /// as the popover and menu bar. Tests inject their own ticks.
+    var ticks: () -> AsyncStream<Date> = { GlanceClock.ticks() }
+    /// Told the story the view derives each time its time moves (a tick or
+    /// a load). Tests only.
+    var timeObserver: ((Date, ProviderStoryPresentation?) -> Void)? = nil
 
     @State private var readings: [QuotaHistoryStore.ReadingRecord]?
     @State private var events: [AIEvent] = []
-    @State private var loadedAt = Date()
+    /// The time the Story describes. Moved by every clock tick and every
+    /// load, never backwards. It used to move only on a load, keyed on the
+    /// pool and the last poll attempt, so a poll served from cache left the
+    /// Story describing a window whose published reset had passed.
+    @State private var shownAt = Date()
 
     private struct LoadKey: Equatable {
         let poolID: String?
         let lastAttempt: Date?
     }
 
-    private var instant: Date { now ?? loadedAt }
-    private var glance: GlancePresentation { GlancePresentation(snapshots: store.snapshots, now: instant) }
+    private var instant: Date { now ?? shownAt }
+
+    /// What the Story draws at `instant`: one derivation, read by the body
+    /// and reported to `timeObserver`, so neither can describe another time.
+    private struct Derived {
+        let glance: GlancePresentation
+        let pool: GlancePresentation.Pool
+        let story: ProviderStoryPresentation
+    }
 
     /// The pinned pool, else the top pick, else the first pool.
-    private var pool: GlancePresentation.Pool? {
-        let g = glance
-        if let poolID, let pinned = g.pools.first(where: { $0.id == poolID }) { return pinned }
-        return g.ranking.first?.pool ?? g.pools.first
+    private func derive(at instant: Date) -> Derived? {
+        let glance = GlancePresentation(snapshots: store.snapshots, now: instant)
+        let pinned = poolID.flatMap { id in glance.pools.first { $0.id == id } }
+        guard let pool = pinned ?? glance.ranking.first?.pool ?? glance.pools.first else { return nil }
+        return Derived(glance: glance, pool: pool,
+                       story: ProviderStoryPresentation(pool: pool, glance: glance, readings: readings, now: instant))
     }
 
     var body: some View {
+        let derived = derive(at: instant)
         VStack(alignment: .leading, spacing: 10) {
-            if let pool {
-                let story = ProviderStoryPresentation(pool: pool, glance: glance, readings: readings, now: instant)
+            if let derived {
+                let pool = derived.pool
+                let story = derived.story
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 12) {
                         header(story, pool: pool)
@@ -49,7 +72,17 @@ struct ProviderStoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: LoadKey(poolID: pool?.id, lastAttempt: store.summary.lastAttemptAt)) { await load() }
+        .task(id: LoadKey(poolID: derived?.pool.id, lastAttempt: store.summary.lastAttemptAt)) { await load() }
+        // The story is a function of the time as well as the poll: every
+        // figure, sentence and the burndown re-derive on each shared tick.
+        .task {
+            for await tick in ticks() { advance(to: tick) }
+        }
+    }
+
+    private func advance(to time: Date) {
+        shownAt = GlanceClock.displayTime(current: shownAt, tick: time)
+        timeObserver?(instant, derive(at: instant)?.story)
     }
 
     // MARK: Pieces
@@ -147,15 +180,19 @@ struct ProviderStoryView: View {
     // MARK: Data
 
     private func load() async {
+        let loadTime = Date()
         if let preloaded {
             readings = preloaded.readings
             events = preloaded.events
+            advance(to: loadTime)
             return
         }
-        loadedAt = Date()
-        guard let pool else { return }
+        guard let pool = derive(at: instant)?.pool else {
+            advance(to: loadTime)
+            return
+        }
         let snapshot = pool.snapshot
-        var since = loadedAt.addingTimeInterval(-30 * 86_400)
+        var since = loadTime.addingTimeInterval(-30 * 86_400)
         for bar in snapshot.quotaBars {
             if let reset = bar.resetsAt, let length = bar.windowLength { since = min(since, reset.addingTimeInterval(-length)) }
         }
@@ -171,6 +208,9 @@ struct ProviderStoryView: View {
         guard !Task.isCancelled else { return }
         readings = raw.map { $0.map { aliases.contains($0.vendor) ? $0.namingInstance(snapshot.id) : $0 } }
         events = recent
+        // The reads awaited; a tick may have moved the time past `loadTime`
+        // meanwhile, and a load never winds it back.
+        advance(to: loadTime)
     }
 }
 

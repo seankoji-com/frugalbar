@@ -295,7 +295,7 @@ public struct MetricDetailModalView: View {
     /// The inspector's clock never runs backwards: a load that finished
     /// after the tick already set a later time.
     nonisolated static func displayTime(current: Date, tick: Date) -> Date {
-        max(current, tick)
+        GlanceClock.displayTime(current: current, tick: tick)
     }
 
     nonisolated static func loadKey(for snapshot: QuotaSnapshot) -> String {

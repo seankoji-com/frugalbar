@@ -16,6 +16,36 @@ public enum GlanceClock {
         let t = date.timeIntervalSinceReferenceDate
         return Date(timeIntervalSinceReferenceDate: (floor(t / interval) + 1) * interval)
     }
+
+    /// A surface's clock never runs backwards: a load that finished after a
+    /// tick already set a later time, and restoring the earlier instant put
+    /// a window the popover already called "due" back on its forecast.
+    public static func displayTime(current: Date, tick: Date) -> Date {
+        max(current, tick)
+    }
+
+    /// The shared ticks as a sequence, for a surface that keeps its time in
+    /// state (the widget's Story). Each element is the tick's own instant, so
+    /// every surface describes the same moment. Ends when iteration is
+    /// cancelled.
+    public static func ticks() -> AsyncStream<Date> {
+        AsyncStream { continuation in
+            let task = Task {
+                var last = Date.distantPast
+                while !Task.isCancelled {
+                    // Never the same tick twice, even if the sleep wakes early.
+                    let tick = nextTick(after: max(Date(), last))
+                    let wait = max(tick.timeIntervalSinceNow, 0.01)
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    if Task.isCancelled { break }
+                    last = tick
+                    continuation.yield(tick)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 /// A `TimelineView` schedule that draws once at `startDate` and then on every
