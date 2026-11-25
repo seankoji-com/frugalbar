@@ -220,10 +220,7 @@ public struct GlancePresentation: Equatable, Sendable {
         if !measured && !accountBlocked {
             state = .unreadable
         } else if anySpent {
-            let bonusOpen = supplementary.contains {
-                $0.allowanceRole == .bonus && !$0.isBlocked
-                    && ($0.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)
-            }
+            let bonusOpen = supplementary.contains { Self.isOpenBonus($0, now: now) }
             state = bonusOpen ? .onBonus : .spent
         } else {
             state = .usable
@@ -247,6 +244,15 @@ public struct GlancePresentation: Equatable, Sendable {
             isAheadOfPace: state == .usable && windows.contains(where: \.isAheadOfPace),
             returnsAt: returnsAt, hasPaidOverage: paidOpen
         )
+    }
+
+    /// A bonus allowance that can take a job now: not blocked, not used up,
+    /// and not past the expiry the vendor published (Kiro's `BN` carries it
+    /// in `resetsAt`). An expired bonus was still winning "Best available".
+    static func isOpenBonus(_ bar: DualBarMetrics, now: Date) -> Bool {
+        bar.allowanceRole == .bonus && !bar.isBlocked
+            && (bar.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)
+            && (bar.resetsAt.map { $0 > now } ?? true)
     }
 
     static func window(for bar: DualBarMetrics, now: Date) -> Window {
@@ -372,7 +378,7 @@ public struct GlancePresentation: Equatable, Sendable {
             // A pool on bonus whose plan windows are all spent has no plan
             // window left to name; its reason is the bonus itself.
             guard let bonus = eligible.first(where: { $0.state == .onBonus }),
-                  let bar = bonus.snapshot.quotaBars.first(where: { $0.allowanceRole == .bonus }) else { return nil }
+                  let bar = bonus.snapshot.quotaBars.first(where: { Self.isOpenBonus($0, now: now) }) else { return nil }
             let w = window(for: bar, now: now)
             return Pick(pool: bonus, binding: w,
                         reason: w.remaining.map { "on bonus · \(percent($0))% left" } ?? "on bonus",

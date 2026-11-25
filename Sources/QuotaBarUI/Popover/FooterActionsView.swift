@@ -164,10 +164,13 @@ struct FooterActionsView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(isRefreshing)
+            // Never disabled: an automatic pass (one runs whenever the popover
+            // opens) used to swallow the click meant to recover a reading.
+            // `QuotaStore.forceRefresh` joins the running pass or queues one
+            // more, so repeated clicks cost at most one extra pass.
             .onHover { isRefreshHovered = $0 }
-            .accessibilityLabel(isRefreshing ? "Refreshing" : "Refresh now")
-            .help(isRefreshing ? "Refreshing readings…" : "Refresh readings (⌘R)")
+            .accessibilityLabel(isRefreshing ? "Refreshing; press to refresh again when done" : "Refresh now")
+            .help(isRefreshing ? "Checking… a click queues a fresh check" : "Refresh readings (⌘R)")
 
             // Standard macOS Gear Menu
             Menu {
@@ -184,7 +187,6 @@ struct FooterActionsView: View {
                     Label("Refresh Now", systemImage: "arrow.clockwise")
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(isRefreshing)
 
                 Button {
                     HistoryWindow.show()

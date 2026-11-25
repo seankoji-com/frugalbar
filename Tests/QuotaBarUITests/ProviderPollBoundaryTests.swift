@@ -408,7 +408,7 @@ struct ProviderPollBoundaryTests {
         let failed = BurndownPresentation.historyAbsence(
             readings: readings, instanceID: "claude", range: .last24Hours, now: minutes(11))
         #expect(failed == .polledWithoutFigures(pollCount: 2, lastPollFailed: true))
-        #expect(failed.message.hasSuffix("The last poll could not be read."))
+        #expect(failed.message.hasSuffix("The last recorded poll could not be read."))
         #expect(failed.symbol == "exclamationmark.triangle")
 
         // Two days later, nothing inside a 24-hour range.

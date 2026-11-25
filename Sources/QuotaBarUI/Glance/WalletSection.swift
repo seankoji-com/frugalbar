@@ -72,6 +72,11 @@ struct UsageBar: View {
                     }
                 }
                 .opacity(dimmed ? Self.dimmedOpacity : 1)
+                // The track's extent is capacity, drawn even at 0% used: a
+                // hairline edge in `trackEdge` gives it 3:1 against the row
+                // (the dark fill alone measured 1.38:1), and stays at full
+                // strength when a carried-over bar is dimmed.
+                Capsule().strokeBorder(GlanceColors.trackEdge, lineWidth: 0.75).frame(height: height)
                 // A light core in a dark knockout: over the track the core
                 // carries the contrast, over the fill the knockout does. The
                 // light line alone measured 1.3:1 on the green and amber fills,
@@ -107,6 +112,10 @@ struct SpentTrack: View {
 enum GlanceColors {
     /// The elapsed-month meter's outline (`Theme.primary` at this opacity).
     static let elapsedOutlineOpacity = 0.75
+    /// A usage track's hairline edge: `Theme.outline` at this opacity clears
+    /// 3:1 against the row and the hovered row.
+    static let trackEdgeOpacity = 0.8
+    static var trackEdge: Color { Theme.outline.opacity(trackEdgeOpacity) }
 
     /// Spent is the one red; ahead of pace or under 30% left is amber; low but
     /// not spent is the pale coral; otherwise healthy green.
@@ -194,7 +203,7 @@ private struct WalletMeterCell: View {
                 VStack(alignment: .leading, spacing: 3) {
                     SpentTrack()
                         .frame(height: trackHeight)
-                    caption("100%", reset: reset, color: Theme.error)
+                    caption("100% used", reset: reset, color: Theme.error)
                 }
             } else if let used = window.used {
                 VStack(alignment: .leading, spacing: 3) {

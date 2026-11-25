@@ -228,7 +228,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
                 accessibilityLabel: "\(snapshot.displayName), \(headline), \(note)")
         }
 
-        let focus = focusBar(of: snapshot)
+        // A window whose published reset has passed with no reading since is
+        // the verdict's subject when there is one: its figure is the ended
+        // window's, so the hero shows that window and its "reset due", not a
+        // still-running window's amount and pace under a waiting headline.
+        let expired = verdictBars(of: snapshot).filter { $0.resetsAt.map { $0 <= now } ?? false }
+        let expiredFocus = expired.max { ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast) }
+        let focus = expiredFocus ?? focusBar(of: snapshot)
         let state: State
         // The focus is a blocked window whenever the vendor blocked one, with
         // or without a percentage: a 97% the vendor has cut off is not "low",
@@ -238,14 +244,15 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // same pool "Healthy" (`QuotaSnapshot.isAccountBlocked`).
         if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading || snapshot.isAccountBlocked {
             state = .blocked
+        } else if let passed = expiredFocus?.resetsAt {
+            // A window's published reset has passed and no reading since has
+            // shown the new window: its figure is the old window's, so the
+            // verdict is not "Healthy", and not "Exhausted" either for a
+            // spent window that has since reset (`GlancePresentation.Freshness`).
+            state = .awaitingReading(resetAt: passed)
         } else if verdictBars(of: snapshot).contains(where: WindowGridPresentation.isExhausted)
                     || snapshot.isFullyBlockedWithoutReading {
             state = .exhausted
-        } else if let passed = verdictBars(of: snapshot).compactMap(\.resetsAt).filter({ $0 <= now }).max() {
-            // A window's published reset has passed and no reading since has
-            // shown the new window: its figure is the old window's, so the
-            // verdict is not "Healthy" (`GlancePresentation.Freshness`).
-            state = .awaitingReading(resetAt: passed)
         } else {
             switch snapshot.status.urgency {
             case .none: state = .healthy

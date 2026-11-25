@@ -227,8 +227,16 @@ public struct PopoverRootView: View {
         }
     }
 
+    /// Re-derived every 30 seconds as well as on every store change, so a
+    /// window whose published reset passes while the popover is open stops
+    /// being the pick (and shows "due") without waiting for the next poll.
     private var sections: some View {
-        let now = Date()
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            sections(now: context.date)
+        }
+    }
+
+    private func sections(now: Date) -> some View {
         let order = CredentialStore.providerOrder
         let grid = ProviderGridPresentation(snapshots: store.snapshots, serviceOrder: order, now: now)
         // Every credit and balance, direct balances (OpenRouter, DeepSeek)
@@ -291,10 +299,14 @@ public struct PopoverRootView: View {
             }
 
 
-            if store.snapshots.isEmpty {
+            // Nothing drawn above, whatever the store holds: unconfigured
+            // placeholders survive the read but neither Subscriptions nor the
+            // Wallet draws them, and checking `snapshots.isEmpty` alone left a
+            // first-time user with a footer and no way forward.
+            if store.snapshots.isEmpty || (grid.groups.isEmpty && wallet.rows.isEmpty) {
                 if store.hasLoaded {
-                    // Loaded, and nothing came back: only possible when every
-                    // provider is hidden, so say how to fix that.
+                    // Loaded, and nothing to draw: every provider is hidden or
+                    // none is set up, so say how to fix that.
                     GlanceCard {
                         VStack(spacing: 10) {
                             Image(systemName: "slider.horizontal.3")
@@ -304,7 +316,7 @@ public struct PopoverRootView: View {
                             Text("Nothing to show")
                                 .font(Theme.Typography.title)
                                 .foregroundStyle(Theme.onSurface)
-                            Text("Every provider is hidden. Open Settings → Services to turn monitoring on.")
+                            Text("No service is set up or shown. Open Settings → Services to connect one or turn monitoring on.")
                                 .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.onSurfaceVariant)
                                 .multilineTextAlignment(.center)

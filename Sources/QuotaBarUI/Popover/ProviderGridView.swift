@@ -81,7 +81,7 @@ struct ProviderGridView: View {
             } figures: {
                 if group.pools.count == 1, let pool = group.pools.first,
                    let column = pool.spanningColumn, let window = pool.windows[column] {
-                    windowCell(window, label: column.label, stale: pool.isStale)
+                    windowCell(window, label: column.label, stale: pool.isStale, dimmed: !pool.isCurrent)
                 } else if group.pools.count == 1, let pool = group.pools.first,
                           pool.windows.isEmpty, let bar = pool.nonstandardPlanBar {
                     HStack(spacing: 7) {
@@ -130,7 +130,7 @@ struct ProviderGridView: View {
                     .padding(.leading, 4)
                 } figures: {
                     if let column = pool.spanningColumn, let window = pool.windows[column] {
-                        windowCell(window, label: column.label, stale: pool.isStale)
+                        windowCell(window, label: column.label, stale: pool.isStale, dimmed: !pool.isCurrent)
                     } else if pool.state == .unreadable
                                 || (pool.state == .spent && pool.windows.isEmpty && pool.nonstandardPlanBar == nil) {
                         // Text in the spent red uses `Theme.error`: errorBold
@@ -145,7 +145,7 @@ struct ProviderGridView: View {
                         columns { column in
                             if let window = pool.displayWindows[column] {
                                 let showPercent = pool.displayWindows.values.filter(\.isSpent).count > 1
-                                windowCell(window, label: column.label, stale: pool.isStale, showSpentPercent: showPercent)
+                                windowCell(window, label: column.label, stale: pool.isStale, showSpentPercent: showPercent, dimmed: !pool.isCurrent)
                             }
                         }
                     }
@@ -388,19 +388,21 @@ struct ProviderGridView: View {
 
     @ViewBuilder
     private func windowCell(
-        _ window: ProviderGridPresentation.Window, label: String, stale: Bool, showSpentPercent: Bool = false
+        _ window: ProviderGridPresentation.Window, label: String, stale: Bool, showSpentPercent: Bool = false,
+        dimmed: Bool? = nil
     ) -> some View {
         let reset = presentation.countdown(window.bar.resetsAt, stale: stale)
         if window.isSpent {
             let exhausted = WindowGridPresentation.isExhausted(window.bar)
             let title = exhausted ? (showSpentPercent ? "100%" : label) : "Blocked"
             spentCell(title, reset: reset, spoken: "\(label), \(spentDescription(window))",
-                      showsBlockedGlyph: exhausted && window.bar.isBlocked, stale: stale)
+                      showsBlockedGlyph: exhausted && window.bar.isBlocked)
         } else if let used = window.used {
             VStack(alignment: .leading, spacing: 3) {
-                // Dim only the bar track/fill on stale readings, never the
-                // caption text — dimming Theme.outline dropped contrast below AA.
-                UsageBar(window: window, height: trackHeight, dimmed: stale)
+                // Dim only the bar track/fill on readings that do not describe
+                // now (stale, or a window reset with no reading since), never
+                // the caption text: dimming Theme.outline dropped it below AA.
+                UsageBar(window: window, height: trackHeight, dimmed: dimmed ?? stale)
                 // Always printed, 0% included: an empty bar with no figure
                 // reads as "no reading".
                 meterCaption(GlancePresentation.usedPercentText(used),
@@ -419,11 +421,12 @@ struct ProviderGridView: View {
         return "blocked"
     }
 
-    private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool, stale: Bool = false) -> some View {
+    /// A spent track is never dimmed: its stripes are the state's pattern and
+    /// at 55% they fell under 3:1. A stale spent row says so in words.
+    private func spentCell(_ title: String, reset: String?, spoken: String, showsBlockedGlyph: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             SpentTrack()
                 .frame(height: trackHeight)
-                .opacity(stale ? 0.55 : 1)
                 .accessibilityHidden(true)
             meterCaption(title, reset: reset, color: Theme.error, showsBlockedGlyph: showsBlockedGlyph)
         }

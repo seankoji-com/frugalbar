@@ -138,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
     private var schedulerToken: UUID?
+    private var statusRedrawTimer: Timer?
     private var providerPreferencesObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private let notificationObserver = QuotaNotificationObserver()
@@ -203,6 +204,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.applyStatusItemPresentation()
         }
         applyStatusItemPresentation()
+        // The title is a function of the time too: a pick whose window reset
+        // passes between polls must stop being the pick at that moment, not
+        // at the next poll. Redrawn every 30 seconds from the cached snapshots.
+        statusRedrawTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyStatusItemPresentation() }
+        }
 
         if let liveHarness {
             Task { @MainActor [weak self] in

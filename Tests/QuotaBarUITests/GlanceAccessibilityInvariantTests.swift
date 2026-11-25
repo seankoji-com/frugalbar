@@ -179,6 +179,11 @@ struct GlanceAccessibilityInvariantTests {
             ("spent stripes on spent wash (row hover)", resolve(Theme.errorBold),
              resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(resolve(Theme.rowHover).over(card))),
             ("elapsed meter outline on card", resolve(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity)).over(card), card),
+            // A track's extent: its hairline edge against the row and hover.
+            ("usage track edge on card", resolve(Theme.outline.opacity(GlanceColors.trackEdgeOpacity)).over(card), card),
+            ("usage track edge on hovered row",
+             resolve(Theme.outline.opacity(GlanceColors.trackEdgeOpacity)).over(resolve(Theme.rowHover).over(card)),
+             resolve(Theme.rowHover).over(card)),
             // A stale bar dims its track and fill but not its tick
             // (`UsageBar.dimmed`): the knockout against a dimmed fill.
             ("pace marker knockout on dimmed tertiary fill",

@@ -289,7 +289,7 @@ public enum BurndownPresentation {
             case .noneInRange:
                 return "No readings in this range. A longer range shows the earlier ones."
             case .lastPollFailed:
-                return "The last poll could not be read, so there is no current burndown. Earlier readings are under History."
+                return "The last recorded poll could not be read, so there is no current burndown. Earlier readings are under History."
             case .noFigureAtLastPoll(let label, true):
                 return "The vendor blocked \(label) and published no figure for it at the last poll, so there is no burndown to draw."
             case .noFigureAtLastPoll(let label, false):
@@ -299,7 +299,7 @@ public enum BurndownPresentation {
             case .polledWithoutFigures(let count, let lastPollFailed):
                 let polls = count == 1 ? "Polled once" : "Polled \(count) times"
                 return "\(polls) in this range, but no poll reported a usage figure to chart."
-                    + (lastPollFailed ? " The last poll could not be read." : "")
+                    + (lastPollFailed ? " The last recorded poll could not be read." : "")
             }
         }
 

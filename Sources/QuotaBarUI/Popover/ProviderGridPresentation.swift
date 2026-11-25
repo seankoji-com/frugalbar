@@ -23,6 +23,8 @@ struct ProviderGridPresentation {
         var isStale: Bool { snapshot.staleReading != nil }
         /// A window reset with no reading since; its figure is the old window's.
         var isAwaitingReset: Bool { freshness == .awaitingReset }
+        /// Its figures describe now (`GlancePresentation.Freshness.current`).
+        var isCurrent: Bool { freshness == .current }
         var isUsable: Bool { freshness == .current && (state == .usable || state == .onBonus) }
         var isSpent: Bool { !isStale && state == .spent }
         /// True when the pool is unusable because the vendor blocked it — the
@@ -168,11 +170,16 @@ struct ProviderGridPresentation {
                 }
                 return ["\(blocked) blocked", "\(exhausted) spent"]
             }
-            let usable = pools.filter(\.isUsable).count
+            // A pool running on its bonus is named so, not counted "usable"
+            // beside its own spent plan bar: the job would spend a bonus that
+            // expires.
+            let onBonus = pools.filter { $0.isUsable && $0.state == .onBonus }.count
+            let usable = pools.filter(\.isUsable).count - onBonus
             let stale = pools.filter(\.isStale).count
             let awaiting = pools.filter { $0.isAwaitingReset && !$0.isSpent }.count
-            let unreadable = pools.count - usable - blocked - exhausted - stale - awaiting
+            let unreadable = pools.count - usable - onBonus - blocked - exhausted - stale - awaiting
             return ["\(usable) usable",
+                    onBonus > 0 ? "\(onBonus) on bonus" : nil,
                     blocked > 0 ? "\(blocked) blocked" : nil,
                     exhausted > 0 ? "\(exhausted) spent" : nil,
                     stale > 0 ? "\(stale) stale" : nil,
@@ -185,7 +192,7 @@ struct ProviderGridPresentation {
             if pools.count == 1 { return pools[0].windows[column].map(Summary.window) }
             // What the rows draw (`displayWindows`): a 5H column a spent week
             // hides from its row must not be averaged into the group's 5H.
-            let published = pools.filter { !$0.isStale }.compactMap { $0.displayWindows[column] }
+            let published = pools.filter { $0.freshness == .current }.compactMap { $0.displayWindows[column] }
             guard !published.isEmpty else { return nil }
             if published.count == pools.count, published.allSatisfy(\.isSpent) {
                 return .spent(

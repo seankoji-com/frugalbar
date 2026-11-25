@@ -646,6 +646,9 @@ public struct MetricDetailModalView: View {
     }
 
     private var runOutResult: InspectorRunOut.Result? {
+        // No forecast while the pool awaits a reading: its figures describe
+        // a window that has ended.
+        if case .awaitingReading = presentation.summary.state { return nil }
         guard let label = presentation.summary.focusLabel,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
         return InspectorRunOut.compute(for: bar, in: snapshot,

@@ -83,7 +83,8 @@ struct WalletPresentation: Equatable, Sendable {
                         // An overdrawn balance prints its signed figure alone:
                         // "-$0.01 left" would claim money remains.
                         figure: unread ? (snapshot.status.unavailableReason?.headline ?? "No reading") : p.valueLabel,
-                        figureRole: unread || Self.isNegative(snapshot.metric) ? nil : "left",
+                        figureRole: unread ? nil
+                            : Self.role(for: snapshot.metric, label: p.valueLabel, basis: snapshot.currencyBasis),
                         tone: unread ? .unknown : (Self.isNegative(snapshot.metric) ? .negative : .normal),
                         balanceSeriesID: BalanceSeries.of(snapshot)?.id,
                         spoken: p.accessibilityLabel))
@@ -149,20 +150,25 @@ struct WalletPresentation: Equatable, Sendable {
                     meter: credit.fraction.map { .elapsed(fraction: $0, countdown: credit.countdown) },
                     spoken: credit.spoken))
             }
-            for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot) {
+            // Tickets ride the quota poll, so a failed poll carries them over:
+            // their presence, count and expiry are the earlier poll's, and
+            // they wear its LAST READING tag like the rest of that read.
+            let staleSuffix = staleTag != nil ? ", last reading, the last poll failed" : ""
+            for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot, now: now) {
                 for index in 0..<credits.tickets {
                     rows.append(Row(
                         id: "\(snapshot.id)#ticket-\(label)-\(index)", vendor: snapshot.vendorId,
                         title: titled("\(provider) \(label) ticket"),
+                        tag: staleTag,
                         figure: credits.expiryPhrase(at: index, now: credits.now),
                         symbol: "ticket.fill",
-                        spoken: index == 0 ? credits.spoken : credits.expirySpoken(at: index)))
+                        spoken: (index == 0 ? credits.spoken : credits.expirySpoken(at: index)) + staleSuffix))
                 }
                 if credits.overflow > 0 {
                     rows.append(Row(id: "\(snapshot.id)#ticket-\(label)-more", vendor: snapshot.vendorId,
-                                    title: titled("\(provider) \(label) tickets"),
+                                    title: titled("\(provider) \(label) tickets"), tag: staleTag,
                                     figure: "+\(credits.overflow) more", symbol: "ticket.fill",
-                                    spoken: "\(credits.overflow) more"))
+                                    spoken: "\(credits.overflow) more" + staleSuffix))
                 }
             }
 
@@ -213,7 +219,8 @@ struct WalletPresentation: Equatable, Sendable {
         }
         return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
                    title: title(prefixed(name, with: providerName(entry.vendorId))), tag: tag,
-                   figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal,
+                   figure: e.figure, figureRole: role(for: entry.metric, label: e.figure),
+                   tone: isNegative(entry.metric) ? .negative : .normal,
                    balanceSeriesID: BalanceSeries.of(entry)?.id,
                    spoken: e.spoken(stale: tag == "last reading"))
     }
@@ -229,15 +236,36 @@ struct WalletPresentation: Equatable, Sendable {
     /// Plan-wide tickets, plus any model ticket with no model line to sit
     /// beside (it is still drawn, never dropped). A model's tickets with a
     /// line (Fable) sit beside that line in the Providers row they reset.
-    static func planTicketGroups(_ p: MetricRowPresentation,
-                                 snapshot: QuotaSnapshot) -> [(String, MetricRowPresentation.ResetCredits)] {
+    static func planTicketGroups(_ p: MetricRowPresentation, snapshot: QuotaSnapshot,
+                                 now: Date) -> [(String, MetricRowPresentation.ResetCredits)] {
         if !p.resetCreditGroups.isEmpty {
             let plan = p.resetCreditGroups.filter(\.scope.isPlan).map { ("plan reset", $0.credits) }
-            let unmatched = p.unmatchedResetCredits(scopedLabels: snapshot.scopedBars.map(\.label))
+            // A model's tickets sit beside that model's line in Subscriptions,
+            // which is drawn only while the pool is usable. A spent or blocked
+            // plan hides the line, so its tickets come here instead of
+            // vanishing from both sections.
+            let modelLinesShown = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false)?.state == .usable
+            let unmatched = p.unmatchedResetCredits(
+                scopedLabels: modelLinesShown ? snapshot.scopedBars.map(\.label) : [])
                 .map { ("\($0.scope.displayName) reset", $0.credits) }
             return plan + unmatched
         }
         return p.resetCredits.map { [("reset", $0)] } ?? []
+    }
+
+    /// "left" only for a figure that is a remaining balance and does not
+    /// already say what it is. A lifetime-spend fallback prints "$12.00
+    /// spent" and a capped key "$3.00 left of $10.00"; adding "left" under
+    /// those turned past spend into usable money. An overdrawn balance gets
+    /// none either.
+    static func role(for metric: MetricType, label: String?, basis: CurrencyBasis? = nil) -> String? {
+        guard let label, !label.isEmpty, basis != .lifetimeSpend, !isNegative(metric) else { return nil }
+        let words = label.lowercased()
+        if words.contains("spent") || words.contains("left") || words.contains("remaining") { return nil }
+        switch metric {
+        case .currency, .credits: return "left"
+        default: return nil
+        }
     }
 
     static func isNegative(_ metric: MetricType) -> Bool {
