@@ -277,9 +277,10 @@ private struct WalletRowView: View {
 
     /// The meter column's width. Combined with the measured shared figure
     /// column width, every line's bar starts and ends in the same place.
-    /// Wide enough for "29% used" beside its countdown: at 76pt "used"
-    /// truncated to "us…".
-    private let meterWidth: CGFloat = 92
+    /// Wide enough for "29% used" beside its countdown (at 76pt "used"
+    /// truncated to "us…"), narrow enough that a mid-length account name
+    /// ("Claude Extra usage · Ops") keeps one line (at 92pt it wrapped).
+    private let meterWidth: CGFloat = 84
 
     var body: some View {
         Button(action: onSelect) {
