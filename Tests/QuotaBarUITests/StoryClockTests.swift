@@ -11,10 +11,10 @@ import Testing
 /// recorded a new attempt.
 ///
 /// Hosts the production view (a helper-only test cannot see the wiring, #218)
-/// and drives it with an injected tick, so no test waits on the wall clock.
-/// The fixtures sit at `GlanceFixtures.now` (January 2027), after the wall
-/// clock, so the view's own starting time and any load's `Date()` are before
-/// the reset and only a tick can carry the Story past it.
+/// with a fixed wall clock and an injected tick, so nothing here depends on
+/// the date the suite runs or waits on a real 30-second boundary. What it
+/// asserts is what the body itself derived (`ProviderStoryView.Drawn`): the
+/// header's figure, the standing line and the burndown's projection.
 @Suite("Widget Story follows the glance clock (#221)")
 @MainActor
 struct StoryClockTests {
@@ -29,25 +29,40 @@ struct StoryClockTests {
 
     @MainActor
     private final class Capture {
-        var reports: [(time: Date, story: ProviderStoryPresentation?)] = []
+        var drawn: [ProviderStoryView.Drawn] = []
     }
 
-    private func waitFor(_ capture: Capture, _ what: String,
-                         until done: @MainActor () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(10)
+    private static let awaiting = "Window reset · awaiting a reading"
+
+    private func waitFor(_ what: String, until done: @MainActor () -> Bool) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
         while !done() {
-            guard Date() < deadline else {
-                Issue.record("the hosted Story never reported \(what)")
+            guard clock.now < deadline else {
+                Issue.record("the hosted Story never drew \(what)")
                 throw CancellationError()
             }
             try await Task.sleep(for: .milliseconds(25))
         }
     }
 
+    /// A week's readings rising towards the snapshot's figure, so the chart
+    /// draws a recent-pace projection while the window is current.
+    private func readings(for snapshot: QuotaSnapshot) throws -> [QuotaHistoryStore.ReadingRecord] {
+        let wk = try #require(snapshot.quotaBars.first { $0.label == "WK" })
+        return (0..<24).map { i in
+            QuotaHistoryStore.ReadingRecord(vendor: snapshot.id, barLabel: "WK",
+                measuredAt: GlanceFixtures.now.addingTimeInterval(-Double(23 - i) * 1800),
+                fraction: 0.25 + Double(i) * 0.0045,
+                isBlocked: false, confidence: .measured, urgency: .none,
+                resetsAt: wk.resetsAt, windowLength: wk.windowLength, elapsedOnly: false)
+        }
+    }
+
     @Test("a reset passing while the Story is open turns it on the tick, and a later load does not undo it")
     func storyCrossesResetOnTick() async throws {
-        let reset = GlanceFixtures.now.addingTimeInterval(3600)
-        #expect(Date() < reset, "the fixture reset must be after the wall clock")
+        let wallClock = GlanceFixtures.now
+        let reset = wallClock.addingTimeInterval(3600)
         let claude = GlanceFixtures.snapshot("claude-story", .claude, "Claude", [
             GlanceFixtures.bar("WK", 0.35, resetsInHours: 1, windowHours: 168),
         ])
@@ -59,14 +74,15 @@ struct StoryClockTests {
                                                      displayPreferences: { .default }))
         await store.load()
         #expect(Set(store.snapshots.map(\.id)) == ["claude-story", "codex-story"])
+        let history = try readings(for: claude) + readings(for: codex)
 
         let (ticks, tick) = AsyncStream<Date>.makeStream()
         defer { tick.finish() }
         let capture = Capture()
         func story(_ id: String) -> some View {
-            ProviderStoryView(store: store, poolID: .constant(id), preloaded: ([], []),
-                              ticks: { ticks },
-                              timeObserver: { capture.reports.append(($0, $1)) })
+            ProviderStoryView(store: store, poolID: .constant(id), preloaded: (history, []),
+                              ticks: { ticks }, clock: { wallClock },
+                              drawObserver: { capture.drawn.append($0) })
                 .frame(width: 360, height: 620)
         }
 
@@ -79,29 +95,47 @@ struct StoryClockTests {
         host.layoutSubtreeIfNeeded()
         defer { window.close() }
 
-        // Opened before the reset: the window's headroom is the story.
-        try await waitFor(capture, "its first load") { !capture.reports.isEmpty }
-        let opened = try #require(capture.reports.last?.story)
-        #expect(opened.standing != "Window reset · awaiting a reading")
+        // Opened before the reset: the window's headroom and its projection.
+        try await waitFor("its first load") { capture.drawn.contains { $0.loads == 1 } }
+        let opened = try #require(capture.drawn.last)
+        #expect(opened.time == wallClock)
+        #expect(opened.poolID == "claude-story")
+        #expect(opened.standing != Self.awaiting)
         #expect(opened.heroRemaining != nil)
+        #expect(opened.projects, "the fixture must draw a projection for the tick to remove")
 
         // A tick after the reset, with no load and no poll.
         let afterReset = reset.addingTimeInterval(1)
         tick.yield(afterReset)
-        try await waitFor(capture, "the tick") { capture.reports.contains { $0.time == afterReset } }
-        let crossed = try #require(capture.reports.last?.story)
-        #expect(crossed.standing == "Window reset · awaiting a reading")
+        try await waitFor("the tick") { capture.drawn.last?.time == afterReset }
+        let crossed = try #require(capture.drawn.last)
+        #expect(crossed.loads == 1)
+        #expect(crossed.standing == Self.awaiting)
         #expect(crossed.heroRemaining == nil)
+        #expect(!crossed.projects)
 
         // Choosing another pool loads at the wall clock, which is before the
         // tick; the Story's time must not move back to it.
-        let reportsBefore = capture.reports.count
         host.rootView = story("codex-story")
         host.layoutSubtreeIfNeeded()
-        try await waitFor(capture, "the second load") { capture.reports.count > reportsBefore }
-        let reloaded = try #require(capture.reports.last)
+        try await waitFor("the second load") { capture.drawn.contains { $0.loads == 2 } }
+        let reloaded = try #require(capture.drawn.last)
+        #expect(reloaded.poolID == "codex-story")
         #expect(reloaded.time == afterReset)
-        #expect(reloaded.story?.poolID == "codex-story")
-        #expect(reloaded.story?.standing == "Window reset · awaiting a reading")
+        #expect(reloaded.standing == Self.awaiting)
+        #expect(reloaded.heroRemaining == nil)
+        #expect(!reloaded.projects)
+    }
+
+    @Test("a late wake reports the newest boundary that has passed, not the one it slept for")
+    func lateWakeReportsNewestTick() {
+        let scheduled = Date(timeIntervalSinceReferenceDate: 1_000_020)
+        // On time, or a hair early: the scheduled tick.
+        #expect(GlanceClock.reportedTick(scheduled: scheduled, woke: scheduled.addingTimeInterval(0.004)) == scheduled)
+        #expect(GlanceClock.reportedTick(scheduled: scheduled, woke: scheduled.addingTimeInterval(-0.004)) == scheduled)
+        // 35 s late: the boundary at +30 s has passed, and a reset at +15 s
+        // must not wait for the next one.
+        #expect(GlanceClock.reportedTick(scheduled: scheduled, woke: scheduled.addingTimeInterval(35))
+                == scheduled.addingTimeInterval(30))
     }
 }

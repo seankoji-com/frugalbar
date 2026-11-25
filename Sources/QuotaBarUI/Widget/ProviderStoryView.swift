@@ -14,31 +14,48 @@ struct ProviderStoryView: View {
     /// reset that passes while the widget is open turns it on the same tick
     /// as the popover and menu bar. Tests inject their own ticks.
     var ticks: () -> AsyncStream<Date> = { GlanceClock.ticks() }
-    /// Told the story the view derives each time its time moves (a tick or
-    /// a load). Tests only.
-    var timeObserver: ((Date, ProviderStoryPresentation?) -> Void)? = nil
+    /// The wall clock, read before the first load and when a load starts.
+    /// Tests inject a fixed one, so their fixtures never fall behind it.
+    var clock: () -> Date = { Date() }
+    /// Told what the body drew whenever its time, pool, load or verdict
+    /// changes. Tests only.
+    var drawObserver: ((Drawn) -> Void)? = nil
 
     @State private var readings: [QuotaHistoryStore.ReadingRecord]?
-    @State private var events: [AIEvent] = []
+    /// The pool the events were loaded for: after an automatic pool switch,
+    /// the previous pool's events are not this pool's "Lately".
+    @State private var events: (poolID: String, events: [AIEvent])?
     /// The time the Story describes. Moved by every clock tick and every
     /// load, never backwards. It used to move only on a load, keyed on the
     /// pool and the last poll attempt, so a poll served from cache left the
     /// Story describing a window whose published reset had passed.
-    @State private var shownAt = Date()
+    @State private var shownAt: Date?
+    @State private var loads = 0
 
     private struct LoadKey: Equatable {
         let poolID: String?
         let lastAttempt: Date?
     }
 
-    private var instant: Date { now ?? shownAt }
+    /// What the body drew, as `drawObserver` sees it.
+    struct Drawn: Equatable {
+        let time: Date
+        let poolID: String?
+        /// Completed loads, so a test can tell a load's effect from a tick's.
+        let loads: Int
+        let standing: String?
+        let heroRemaining: Double?
+        /// The burndown chart draws a recent-pace projection.
+        let projects: Bool
+    }
 
-    /// What the Story draws at `instant`: one derivation, read by the body
-    /// and reported to `timeObserver`, so neither can describe another time.
+    private var instant: Date { now ?? shownAt ?? clock() }
+
+    /// What the Story draws at one instant.
     private struct Derived {
-        let glance: GlancePresentation
         let pool: GlancePresentation.Pool
         let story: ProviderStoryPresentation
+        let burndown: BurndownPresentation.Burndown?
     }
 
     /// The pinned pool, else the top pick, else the first pool.
@@ -46,12 +63,24 @@ struct ProviderStoryView: View {
         let glance = GlancePresentation(snapshots: store.snapshots, now: instant)
         let pinned = poolID.flatMap { id in glance.pools.first { $0.id == id } }
         guard let pool = pinned ?? glance.ranking.first?.pool ?? glance.pools.first else { return nil }
-        return Derived(glance: glance, pool: pool,
-                       story: ProviderStoryPresentation(pool: pool, glance: glance, readings: readings, now: instant))
+        let story = ProviderStoryPresentation(pool: pool, glance: glance, readings: readings, now: instant)
+        // The same gate as the inspector: a recorded projection is drawn
+        // only while the live snapshot shows that usable window.
+        let burndown = story.window.flatMap { window in
+            readings.flatMap {
+                BurndownPresentation.burndown(readings: $0, instanceID: pool.id,
+                                              barLabel: window.bar.label, now: instant)
+            }
+        }?.current(for: pool.snapshot, now: instant)
+        return Derived(pool: pool, story: story, burndown: burndown)
     }
 
     var body: some View {
-        let derived = derive(at: instant)
+        let time = instant
+        let derived = derive(at: time)
+        let drawn = Drawn(time: time, poolID: derived?.pool.id, loads: loads,
+                          standing: derived?.story.standing, heroRemaining: derived?.story.heroRemaining,
+                          projects: derived?.burndown?.projection != nil)
         VStack(alignment: .leading, spacing: 10) {
             if let derived {
                 let pool = derived.pool
@@ -60,8 +89,8 @@ struct ProviderStoryView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         header(story, pool: pool)
                         storyLines(story)
-                        chart(story, pool: pool)
-                        lately
+                        chart(story, burndown: derived.burndown, at: time)
+                        lately(for: pool.id, at: time)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -78,11 +107,11 @@ struct ProviderStoryView: View {
         .task {
             for await tick in ticks() { advance(to: tick) }
         }
+        .onChange(of: drawn, initial: true) { _, drawn in drawObserver?(drawn) }
     }
 
     private func advance(to time: Date) {
-        shownAt = GlanceClock.displayTime(current: shownAt, tick: time)
-        timeObserver?(instant, derive(at: instant)?.story)
+        shownAt = shownAt.map { GlanceClock.displayTime(current: $0, tick: time) } ?? time
     }
 
     // MARK: Pieces
@@ -137,17 +166,13 @@ struct ProviderStoryView: View {
     }
 
     @ViewBuilder
-    private func chart(_ story: ProviderStoryPresentation, pool: GlancePresentation.Pool) -> some View {
-        if let label = story.window?.bar.label, let readings,
-           // The same gate as the inspector: a recorded projection is drawn
-           // only while the live snapshot shows that usable window.
-           let burndown = BurndownPresentation.burndown(readings: readings, instanceID: pool.id,
-                                                       barLabel: label, now: instant)?
-               .current(for: pool.snapshot, now: instant) {
+    private func chart(_ story: ProviderStoryPresentation, burndown: BurndownPresentation.Burndown?,
+                       at time: Date) -> some View {
+        if let burndown {
             VStack(alignment: .leading, spacing: 12) {
-                Text("This \(story.windowName ?? label) window")
+                Text("This \(story.windowName ?? burndown.barLabel) window")
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant)
-                BurndownChartView(burndown: burndown, now: instant)
+                BurndownChartView(burndown: burndown, now: time)
                     .frame(height: 120)
             }
             .padding(12)
@@ -156,11 +181,11 @@ struct ProviderStoryView: View {
     }
 
     @ViewBuilder
-    private var lately: some View {
-        if !events.isEmpty {
+    private func lately(for poolID: String, at time: Date) -> some View {
+        if let events, events.poolID == poolID, !events.events.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Lately").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant)
-                ForEach(events.prefix(3)) { EventRowView(event: $0, now: instant, compact: true) }
+                ForEach(events.events.prefix(3)) { EventRowView(event: $0, now: time, compact: true) }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,15 +205,17 @@ struct ProviderStoryView: View {
     // MARK: Data
 
     private func load() async {
-        let loadTime = Date()
+        let loadTime = clock()
         if let preloaded {
             readings = preloaded.readings
-            events = preloaded.events
+            events = derive(at: instant).map { ($0.pool.id, preloaded.events) }
             advance(to: loadTime)
+            loads += 1
             return
         }
         guard let pool = derive(at: instant)?.pool else {
             advance(to: loadTime)
+            loads += 1
             return
         }
         let snapshot = pool.snapshot
@@ -207,10 +234,11 @@ struct ProviderStoryView: View {
                                         kinds: QuotaStore.recentEventKinds, since: nil, limit: 3) ?? []
         guard !Task.isCancelled else { return }
         readings = raw.map { $0.map { aliases.contains($0.vendor) ? $0.namingInstance(snapshot.id) : $0 } }
-        events = recent
+        events = (pool.id, recent)
         // The reads awaited; a tick may have moved the time past `loadTime`
         // meanwhile, and a load never winds it back.
         advance(to: loadTime)
+        loads += 1
     }
 }
 
