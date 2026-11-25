@@ -92,7 +92,8 @@ struct ProviderGridView: View {
                 } else {
                     columns { column in
                         if let summary = group.summary(for: column) {
-                            summaryCell(summary, column: column, stale: group.pools.count == 1 && group.pools[0].isStale)
+                            summaryCell(summary, column: column, stale: group.pools.count == 1 && group.pools[0].isStale,
+                                        dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                         }
                     }
                 }
@@ -363,10 +364,11 @@ struct ProviderGridView: View {
     }
 
     @ViewBuilder
-    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn, stale: Bool) -> some View {
+    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn, stale: Bool,
+                             dimmed: Bool = false) -> some View {
         switch summary {
         case .window(let window):
-            windowCell(window, label: column.label, stale: stale)
+            windowCell(window, label: column.label, stale: stale, dimmed: dimmed || stale)
         case .spent(let reset, let allMeasuredExhausted, let includesBlocked):
             spentCell(allMeasuredExhausted ? "100%" : "Blocked", reset: presentation.countdown(reset),
                       spoken: "\(column.spokenName), \(includesBlocked ? "all blocked or spent" : "all spent")",
