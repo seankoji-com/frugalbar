@@ -81,6 +81,37 @@ struct GlanceDeliveryFixTests {
         #expect(!symbols.contains("hourglass"))
         #expect(!symbols.contains("chart.line.downtrend.xyaxis"))
         #expect(!s.lines.contains { $0.text.contains("resets in") })
+        // The ended window's figure is not printed as this window's headroom.
+        #expect(s.heroRemaining == nil)
+    }
+
+    @Test("a current story window still shows its headroom in the header")
+    func storyCurrentWindowShowsHero() throws {
+        let s = try story(GlanceFixtures.snapshot("codex", .openai, "Codex", [
+            GlanceFixtures.bar("WK", 0.4, resetsInHours: 60, windowHours: 168),
+        ]))
+        #expect(s.heroRemaining == 0.6)
+    }
+
+    @Test("a pool awaiting a reading tells no pace or run-out from its other, current window")
+    func storyAwaitingPoolTellsNoProjection() throws {
+        let s = try story(GlanceFixtures.snapshot("gemini", .gemini, "Gemini", [
+            GlanceFixtures.bar("5H", 0.1, resetsInHours: -0.2, windowHours: 5),
+            GlanceFixtures.bar("WK", 0.9, resetsInHours: 100, windowHours: 168),
+        ]))
+        #expect(s.standing == "Window reset · awaiting a reading")
+        #expect(!s.lines.contains { $0.symbol == "hourglass" })
+        #expect(!s.lines.contains { $0.text.contains("of the window has gone") })
+        #expect(!s.lines.contains { $0.text.contains("even pace") })
+    }
+
+    @Test("a badge-only account block names the window its reset belongs to")
+    func storyBadgeOnlyAccountBlock() throws {
+        let s = try story(GlanceFixtures.snapshot("commandcode", .commandcode, "Command Code", [
+            GlanceFixtures.bar("MO", 0.4, resetsInHours: 39, windowHours: 720),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical))
+        #expect(!s.lines.contains { $0.text.hasPrefix("It resets in") })
+        #expect(s.lines.contains { $0.text.contains("the account block has no published end") })
     }
 
     @Test("an account-blocked story names the window its reset belongs to")

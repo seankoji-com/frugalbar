@@ -66,7 +66,7 @@ struct ProviderStoryView: View {
                     .foregroundStyle(color(story.tone))
             }
             Spacer(minLength: 6)
-            if let w = story.window, let remaining = w.remaining, !w.isSpent {
+            if let remaining = story.heroRemaining {
                 VStack(alignment: .trailing, spacing: 0) {
                     HStack(alignment: .firstTextBaseline, spacing: 1) {
                         Text("\(GlancePresentation.percent(remaining))")
