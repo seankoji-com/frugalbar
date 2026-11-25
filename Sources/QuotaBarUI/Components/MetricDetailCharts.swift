@@ -67,7 +67,8 @@ struct BurndownChartView: View {
     }
 
     private var projectionColor: Color {
-        burndown.projectedExhaustion != nil ? Theme.error : Theme.tertiary
+        // The verdict's colour: red only when it says the window runs out.
+        burndown.runOutVerdict(now: now).warns ? Theme.error : Theme.tertiary
     }
 
     var body: some View {
@@ -79,10 +80,10 @@ struct BurndownChartView: View {
                         .foregroundStyle(Theme.outlineVariant.opacity(0.35))
                     AxisValueLabel {
                         if let v = value.as(Int.self) {
-                            Text("\(v)%")
-                                .font(.system(size: 10, weight: .medium))
+                            Text("\(v)% left")
+                                .font(.system(size: 9.5, weight: .medium))
                                 .monospacedDigit()
-                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                         }
                     }
                 }
@@ -123,6 +124,20 @@ struct BurndownChartView: View {
             }
 
             ForEach(burndown.actual) { point in
+                AreaMark(
+                    x: .value("Time", point.timestamp),
+                    yStart: .value("Floor", 0),
+                    yEnd: .value("Remaining %", point.remainingFraction * 100)
+                )
+                .interpolationMethod(.monotone)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [DetailChartStyle.color(for: point).opacity(0.18), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
                 LineMark(
                     x: .value("Time", point.timestamp),
                     y: .value("Remaining %", point.remainingFraction * 100),
@@ -292,10 +307,10 @@ struct UsageHistoryChartView: View {
                     .foregroundStyle(Theme.outlineVariant.opacity(0.35))
                 AxisValueLabel {
                     if let v = value.as(Int.self) {
-                        Text("\(v)%")
-                            .font(.system(size: 10, weight: .medium))
+                        Text("\(v)% left")
+                            .font(.system(size: 9.5, weight: .medium))
                             .monospacedDigit()
-                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))
+                            .foregroundStyle(Theme.onSurfaceVariant.opacity(0.85))
                     }
                 }
             }
@@ -330,9 +345,11 @@ struct ChartEmptyState: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            // A failure's triangle is the state's non-colour channel, drawn
+            // at full strength in amber (it measured 2.72:1 at 40% grey).
             Image(systemName: symbol)
                 .font(.system(size: 20))
-                .foregroundStyle(Theme.onSurfaceVariant.opacity(0.4))
+                .foregroundStyle(symbol.hasPrefix("exclamationmark") ? Theme.tertiary : Theme.onSurfaceVariant.opacity(0.6))
             Text(message)
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.onSurfaceVariant.opacity(0.75))

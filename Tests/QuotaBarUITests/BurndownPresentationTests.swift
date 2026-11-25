@@ -445,7 +445,7 @@ struct BurndownPresentationTests {
 
         let rows = Dictionary(uniqueKeysWithValues: MetricDetailPresentation(
             snapshot: snapshot, history: history, now: now).provenance.map { ($0.label, $0.value) })
-        let row = try #require(rows["History"] ?? nil)
+        let row = try #require(rows["Quota history"] ?? nil)
         #expect(row.hasPrefix("1 reading recorded since "))
         #expect(!row.contains("30 days"))
 

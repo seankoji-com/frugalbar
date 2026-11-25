@@ -42,11 +42,16 @@ struct GlancePresentationTests {
     @Test("every spent pool is in Back soon, soonest first")
     func realBatchBackSoon() {
         let glance = GlancePresentation(snapshots: F.batch, now: now)
+        // The three OpenCode workspaces are blocked on their account badge, so
+        // their windows' resets are not offered as returns; they sort last.
         #expect(glance.backSoon.map(\.pool.name) == [
-            "Delta", "Codex", "Claude · Account 1", "Secondary", "Argon · Account 1",
-            "OpenDesign", "Command Code", "Alpha", "Beta",
+            "Codex", "Claude · Account 1", "Secondary", "Argon · Account 1",
+            "OpenDesign", "Command Code", "Alpha", "Beta", "Delta",
         ])
-        #expect(glance.backSoon.map(\.returnText) == ["39h", "44h", "2d", "3d", "5d", "5d", "12d", "17d", "17d"])
+        #expect(glance.backSoon.map(\.returnText) == [
+            "44h", "2d", "3d", "5d", "5d", "12d",
+            "Return not published", "Return not published", "Return not published",
+        ])
         #expect(glance.backSoon.allSatisfy { $0.pool.state == .spent })
     }
 
@@ -108,7 +113,7 @@ struct GlancePresentationTests {
         #expect(GlancePresentation.countdown(at(47.4), now: now) == "47h")
         #expect(GlancePresentation.countdown(at(48), now: now) == "2d")
         #expect(GlancePresentation.countdown(at(402.8), now: now) == "17d")
-        #expect(GlancePresentation.countdown(at(-1), now: now) == "now")
+        #expect(GlancePresentation.countdown(at(-1), now: now) == "due")
         #expect(GlancePresentation.countdownSpoken(at(1), now: now) == "1 hour")
         #expect(GlancePresentation.countdownSpoken(at(125), now: now) == "5 days")
     }
@@ -279,7 +284,7 @@ struct GlancePresentationTests {
         #expect(glance.ranking.count == 1)
         #expect(glance.ranking.first?.pool.name == "Low")
         #expect(glance.ranking.first?.isCaveat == true)
-        #expect(glance.ranking.first?.reason == "only 12% WK left")
+        #expect(glance.ranking.first?.reason == "only 12% WK left · resets in 4d")
         #expect(glance.menuTitle.tone == .caveat)
     }
 

@@ -20,7 +20,13 @@ public enum MenuBarGlance {
         public let accessibilityLabel: String
     }
 
-    public static func presentation(snapshots: [QuotaSnapshot], now: Date) -> Presentation {
+    /// - Parameter hasLoaded: false before the first poll has finished. An
+    ///   empty list then means "not read yet", never "no subscriptions".
+    public static func presentation(snapshots: [QuotaSnapshot], now: Date, hasLoaded: Bool = true) -> Presentation {
+        if !hasLoaded && snapshots.isEmpty {
+            return Presentation(vendor: nil, symbolName: "ellipsis.circle", text: "Loading…", tone: .unknown,
+                                accessibilityLabel: "FrugalBar. Reading your subscriptions")
+        }
         let title = GlancePresentation(snapshots: snapshots, now: now).menuTitle
         let symbol: String? = switch title.tone {
         case .normal: title.vendor == nil ? "gauge.with.dots.needle.67percent" : nil
@@ -36,8 +42,20 @@ public enum MenuBarGlance {
     public static func color(for tone: GlancePresentation.MenuTone) -> NSColor {
         switch tone {
         case .normal: .labelColor
-        case .caveat: NSColor(red: 0xff / 255.0, green: 0xb8 / 255.0, blue: 0x74 / 255.0, alpha: 1) // Theme.tertiary
-        case .critical: NSColor(red: 0xe5 / 255.0, green: 0x3d / 255.0, blue: 0x3d / 255.0, alpha: 1) // Theme.errorBold
+        case .caveat:
+            NSColor(name: nil) { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(red: 0xff / 255.0, green: 0xb8 / 255.0, blue: 0x74 / 255.0, alpha: 1) // #ffb874 on dark
+                }
+                return NSColor(red: 0x94 / 255.0, green: 0x48 / 255.0, blue: 0x00 / 255.0, alpha: 1) // #944800 on light (>= 5.5:1 on #f0f0f0)
+            }
+        case .critical:
+            NSColor(name: nil) { appearance in
+                if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                    return NSColor(red: 0xff / 255.0, green: 0x7a / 255.0, blue: 0x72 / 255.0, alpha: 1) // #ff7a72 on dark (>= 6.5:1 on #1c1d20)
+                }
+                return NSColor(red: 0xb8 / 255.0, green: 0x1d / 255.0, blue: 0x1d / 255.0, alpha: 1) // #b81d1d on light (>= 5.6:1 on #f0f0f0)
+            }
         case .unknown: .secondaryLabelColor
         }
     }

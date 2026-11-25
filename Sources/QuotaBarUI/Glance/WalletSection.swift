@@ -32,8 +32,19 @@ struct GlanceCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.outlineVariant.opacity(0.35), lineWidth: 0.5))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.card))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Theme.cardRimTop, Theme.outlineVariant.opacity(0.28)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.75
+                    )
+            )
     }
 }
 
@@ -44,19 +55,38 @@ struct GlanceCard<Content: View>: View {
 struct UsageBar: View {
     let window: GlancePresentation.Window
     var height: CGFloat = 4
+    /// A carried-over reading: the track and fill recede, the pace tick does
+    /// not. Dimming the whole bar took the tick to 1.4:1 on the fill.
+    var dimmed: Bool = false
+    static let knockoutWidth: CGFloat = 3.5
+    static let dimmedOpacity = 0.55
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
-                if let used = window.used, used > 0 {
-                    Capsule().fill(GlanceColors.fill(for: window))
-                        .frame(width: max(height, proxy.size.width * used), height: height)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.surfaceContainerHighest).frame(height: height)
+                    if let used = window.used, used > 0 {
+                        Capsule().fill(GlanceColors.fill(for: window))
+                            .frame(width: max(height, proxy.size.width * used), height: height)
+                    }
                 }
+                .opacity(dimmed ? Self.dimmedOpacity : 1)
+                // The track's extent is capacity, drawn even at 0% used: a
+                // hairline edge in `trackEdge` gives it 3:1 against the row
+                // (the dark fill alone measured 1.38:1), and stays at full
+                // strength when a carried-over bar is dimmed.
+                Capsule().strokeBorder(GlanceColors.trackEdge, lineWidth: 0.75).frame(height: height)
+                // A light core in a dark knockout: over the track the core
+                // carries the contrast, over the fill the knockout does. The
+                // light line alone measured 1.3:1 on the green and amber fills,
+                // so the mark vanished exactly once usage had passed it.
                 if let pace = window.bar.paceMarker {
-                    Rectangle().fill(Theme.onSurface)
-                        .frame(width: 1.5, height: height + 4)
-                        .offset(x: proxy.size.width * pace - 0.75)
+                    ZStack {
+                        Rectangle().fill(Theme.surface).frame(width: Self.knockoutWidth, height: height + 4)
+                        Rectangle().fill(Theme.onSurface).frame(width: 1.5, height: height + 4)
+                    }
+                    .offset(x: proxy.size.width * pace - Self.knockoutWidth / 2)
                 }
             }
         }
@@ -65,7 +95,28 @@ struct UsageBar: View {
     }
 }
 
+/// A spent or blocked window's track: errorBold stripes on a dark errorBold
+/// wash. The stripes are the state's pattern, so they must stand off their own
+/// base: on a 60% wash they measured 1.8:1; on this 22% wash they clear 3:1,
+/// and the stripes against the row clear it too, so the bar keeps its shape.
+struct SpentTrack: View {
+    static let baseOpacity = 0.22
+
+    var body: some View {
+        Capsule()
+            .fill(Theme.errorBold.opacity(Self.baseOpacity))
+            .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+    }
+}
+
 enum GlanceColors {
+    /// The elapsed-month meter's outline (`Theme.primary` at this opacity).
+    static let elapsedOutlineOpacity = 0.75
+    /// A usage track's hairline edge: `Theme.outline` at this opacity clears
+    /// 3:1 against the row and the hovered row.
+    static let trackEdgeOpacity = 0.8
+    static var trackEdge: Color { Theme.outline.opacity(trackEdgeOpacity) }
+
     /// Spent is the one red; ahead of pace or under 30% left is amber; low but
     /// not spent is the pale coral; otherwise healthy green.
     static func fill(for window: GlancePresentation.Window) -> Color {
@@ -89,29 +140,48 @@ struct WalletSection: View {
     let presentation: WalletPresentation
     /// Recorded balance history by `BalanceSeries.id`, for each balance's trend.
     var balanceSeries: [String: [BalancePoint]] = [:]
+    /// The latest history read failed and these trends are the last good read
+    /// (`QuotaStore.balanceSeriesReadFailed`); they recede and say so.
+    var trendIsCarriedOver = false
     var now: Date = Date()
     /// Opens the inspector for the snapshot a line came from
-    /// (`WalletPresentation.Row.snapshotID`), as a Subscriptions row does.
-    var onSelect: (String) -> Void = { _ in }
+    /// (`WalletPresentation.Row.snapshotID`), with the line's own balance
+    /// series (`balanceSeriesID`) so the details open on its figure.
+    var onSelect: (String, String?) -> Void = { _, _ in }
+
+    @State private var figureColumnWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlanceSectionHeader(title: "Wallet", meta: "credits and balances · never in rankings")
             GlanceCard {
-                // A grid, not stacked rows: the figure column is as wide as the
-                // widest figure ("60,085 credits"), so every meter starts and
-                // ends in the same place. A fixed figure width let a wider
-                // figure push its bar out of line.
-                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(Array(presentation.rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.3)) }
-                        WalletRowView(row: row, trend: row.balanceSeriesID.flatMap {
-                            BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
-                        }, now: now, onSelect: { onSelect(row.snapshotID) })
+                        if index > 0 { Divider().overlay(Theme.outlineVariant.opacity(0.28)) }
+                        WalletRowView(
+                            row: row,
+                            trend: row.balanceSeriesID.flatMap {
+                                BalanceSparklinePresentation.make(from: balanceSeries[$0] ?? [])
+                            },
+                            trendIsCarriedOver: trendIsCarriedOver,
+                            now: now,
+                            figureColumnWidth: figureColumnWidth,
+                            onSelect: { onSelect(row.snapshotID, row.balanceSeriesID) }
+                        )
                     }
+                }
+                .onPreferenceChange(WalletFigureWidthKey.self) { width in
+                    if width > 0 { figureColumnWidth = width }
                 }
             }
         }
+    }
+}
+
+private struct WalletFigureWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -131,30 +201,54 @@ private struct WalletMeterCell: View {
             let reset = bar.resetsAt.flatMap { ResetCountdownBadge.compact($0, now: now) }
             if window.isSpent {
                 VStack(alignment: .leading, spacing: 3) {
-                    Capsule()
-                        .fill(Theme.errorBold.opacity(0.6))
-                        .overlay(ExhaustionStripes().fill(Theme.errorBold).clipShape(Capsule()))
+                    SpentTrack()
                         .frame(height: trackHeight)
-                    caption("100%", reset: reset, color: Theme.error)
+                    caption("100% used", reset: reset, color: Theme.error)
                 }
             } else if let used = window.used {
                 VStack(alignment: .leading, spacing: 3) {
                     UsageBar(window: window, height: trackHeight)
-                    caption(GlancePresentation.usedPercentText(used),
+                    // Says its direction: beside "44,135 credits left", a bare
+                    // "29%" read as either share.
+                    caption("\(GlancePresentation.usedPercentText(used)) used",
                             reset: reset, color: GlanceColors.text(for: window))
                 }
             }
         case .elapsed(let fraction, let countdown):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.surfaceContainerHighest)
+                        // The outline is the remaining month's only edge, so
+                        // it clears 3:1 against the row (at 35% it was 2.67:1).
+                        Capsule()
+                            .strokeBorder(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity), lineWidth: 0.75)
+                            .background(Capsule().fill(Theme.surfaceContainerHighest.opacity(0.5)))
                         Capsule().fill(Theme.primary)
                             .frame(width: max(0, proxy.size.width * min(max(fraction, 0), 1)))
                     }
                 }
                 .frame(height: trackHeight)
-                caption("MO \(Int((fraction * 100).rounded()))%", reset: countdown, color: Theme.primary)
+                HStack(spacing: 2) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundStyle(Theme.primary)
+                    Text("MO \(Int((fraction * 100).rounded()))%")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.primary)
+                        .fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 1)
+                    if let countdown {
+                        Text(countdown)
+                            .foregroundStyle(Theme.outline)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .font(.system(size: 9.5).monospacedDigit())
+                .lineLimit(1)
+                Text("month elapsed")
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(Theme.outline)
+                    .lineLimit(1)
             }
         }
     }
@@ -170,53 +264,102 @@ private struct WalletMeterCell: View {
     }
 }
 
+/// A Wallet line's spoken words for its balance trend.
+enum WalletRowViewSpeech {
+    nonisolated static func trendPhrase(base: String, trend: BalanceSparklinePresentation,
+                                        carriedOver: Bool, now: Date) -> String {
+        let when = MetricDetailPresentation.clockText(trend.lastMeasuredAt, now: now)
+        let kept = carriedOver ? " (kept from an earlier read; the latest history read failed)" : ""
+        return "\(base), recorded balance \(trend.spokenTrend), last recorded \(when)\(kept)"
+    }
+}
+
 private struct WalletRowView: View {
     let row: WalletPresentation.Row
     let trend: BalanceSparklinePresentation?
+    let trendIsCarriedOver: Bool
     let now: Date
+    let figureColumnWidth: CGFloat
     let onSelect: () -> Void
 
-    /// The meter column's width. With the grid's shared figure column, every
-    /// line's bar starts and ends at the same place.
-    private let meterWidth: CGFloat = 76
+    @State private var isHovered = false
+
+    /// The meter column's width. Combined with the measured shared figure
+    /// column width, every line's bar starts and ends in the same place.
+    /// Wide enough for "29% used" beside its countdown (at 76pt "used"
+    /// truncated to "us…"), narrow enough that a mid-length account name
+    /// ("Claude Extra usage · Ops") keeps one line (at 92pt it wrapped).
+    private let meterWidth: CGFloat = 84
 
     var body: some View {
-        GridRow {
-            nameCell
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 14)
-                .padding(.vertical, 8)
-                // The grid has no row element, so the name cell speaks for the
-                // whole line and the other cells stay silent.
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(row.spoken.isEmpty ? row.title : row.spoken)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityHint("Open usage details")
-                .accessibilityAction { onSelect() }
-                .help(row.spoken.isEmpty ? [row.title, row.figure].compactMap { $0 }.joined(separator: " · ") : row.spoken)
-                .selectsWalletLine(onSelect)
-            Group {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                nameCell
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if let meter = row.meter {
                     WalletMeterCell(meter: meter, now: now)
+                        .frame(width: meterWidth)
                 } else if let trend {
-                    BalanceSparklineView(presentation: trend)
+                    // A trend kept from an earlier read recedes and wears the
+                    // carried-over clock, so it is not taken for fresh evidence.
+                    HStack(spacing: 3) {
+                        if trendIsCarriedOver {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundStyle(Theme.tertiary)
+                        }
+                        BalanceSparklineView(presentation: trend)
+                            .opacity(trendIsCarriedOver ? 0.45 : 1)
+                    }
+                    .frame(width: meterWidth)
                 } else {
-                    Color.clear.frame(height: 1)
+                    Color.clear.frame(width: meterWidth, height: 1)
                 }
+                // The role word sits under the amount, small, so it names the
+                // figure without widening the shared figure column (on one
+                // line it squeezed long account names into broken wraps).
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(row.figure ?? "")
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(color(row.tone))
+                    if let role = row.figureRole {
+                        Text(role)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(Theme.outline)
+                    }
+                }
+                    .lineLimit(1)
+                    .fixedSize()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: WalletFigureWidthKey.self, value: proxy.size.width)
+                        }
+                    )
+                    .frame(minWidth: figureColumnWidth > 0 ? figureColumnWidth : nil, alignment: .trailing)
             }
-            .frame(width: meterWidth)
-            .accessibilityHidden(true)
-            .selectsWalletLine(onSelect)
-            Text(row.figure ?? "")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundStyle(color(row.tone))
-                .lineLimit(1)
-                .fixedSize()
-                .gridColumnAlignment(.trailing)
-                .padding(.trailing, 14)
-                .accessibilityHidden(true)
-                .selectsWalletLine(onSelect)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8.5)
+            .background(isHovered ? Theme.rowHover : Color.clear)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Open usage details")
+        .help(spokenLabel)
+    }
+
+    /// The line's own words plus the drawn strip's direction and when it was
+    /// last recorded, when a strip is drawn (a meter speaks for itself).
+    private var spokenLabel: String {
+        let base = row.spoken.isEmpty
+            ? [row.title, [row.figure, row.figureRole].compactMap { $0 }.joined(separator: " ")]
+                .joined(separator: " · ")
+            : row.spoken
+        guard row.meter == nil, let trend else { return base }
+        return WalletRowViewSpeech.trendPhrase(base: base, trend: trend, carriedOver: trendIsCarriedOver, now: now)
     }
 
     private var nameCell: some View {
@@ -233,23 +376,27 @@ private struct WalletRowView: View {
             // always carry the word.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
-                    title.fixedSize()
+                    title(lineLimit: 1).fixedSize()
                     if let tag = row.tag { tagCapsule { Text(tag.uppercased()) } }
                 }
-                HStack(spacing: 6) {
-                    title
-                    if let tag = row.tag { tagCapsule { Image(systemName: Self.glyph(for: tag)) } }
+                HStack(alignment: .top, spacing: 6) {
+                    title(lineLimit: nil)
+                    if let tag = row.tag {
+                        tagCapsule { Image(systemName: Self.glyph(for: tag)) }
+                            .padding(.top, 1)
+                    }
                 }
             }
         }
     }
 
-    private var title: some View {
+    private func title(lineLimit: Int?) -> some View {
         Text(row.title)
             .font(.system(size: 12))
             .foregroundStyle(Theme.onSurface)
-            .lineLimit(1)
-            .truncationMode(.middle)
+            .lineLimit(lineLimit)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: lineLimit != 1)
             .layoutPriority(1)
     }
 
@@ -274,16 +421,8 @@ private struct WalletRowView: View {
         switch tone {
         case .normal: Theme.onSurface
         case .negative: Theme.error
-        case .exhausted: Theme.errorBold
+        case .exhausted: Theme.error
         case .unknown: Theme.outline
         }
-    }
-}
-
-private extension View {
-    /// A grid row is not one view, so each cell of a Wallet line takes the
-    /// click: anywhere on the line opens its inspector.
-    func selectsWalletLine(_ action: @escaping () -> Void) -> some View {
-        contentShape(Rectangle()).onTapGesture(perform: action)
     }
 }

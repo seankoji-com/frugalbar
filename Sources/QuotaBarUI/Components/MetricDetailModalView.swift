@@ -118,6 +118,7 @@ public struct MetricDetailModalView: View {
     @State private var balanceSeries: [BalanceSeriesRead] = []
     @State private var selectedBalanceID: String?
     @State private var isLoading = true
+    @State private var loadedSnapshotID: String?
     /// The readings or events could not be read. Each is then said as a
     /// failure to read, never as "no readings" or "no events".
     @State private var readingsFailed = false
@@ -172,14 +173,21 @@ public struct MetricDetailModalView: View {
         readingsLoader: @escaping (VendorIdentifier, Date?) async -> [QuotaHistoryStore.ReadingRecord]?,
         eventsLoader: @escaping (VendorIdentifier, String?, Set<AIEventKind>?, Date?, Int?) async -> [AIEvent]?,
         balanceLoader: @escaping (String, Date, Date, Int) async -> [BalancePoint]? = { _, _, _, _ in nil },
+        focusBalanceSeriesID: String? = nil,
         onClose: @escaping () -> Void
     ) {
         self.snapshot = snapshot
         self.readingsLoader = readingsLoader
         self.eventsLoader = eventsLoader
         self.balanceLoader = balanceLoader
+        self.focusBalanceSeriesID = focusBalanceSeriesID
         self.onClose = onClose
     }
+
+    /// The balance series of the Wallet line this was opened from, if any:
+    /// its card comes first and shows that series, so ChatGPT API and ChatGPT
+    /// bonus do not open the same view with the other figure selected.
+    let focusBalanceSeriesID: String?
 
     private var accentColor: Color {
         Color(hexString: snapshot.vendorId.accentColorHex) ?? Theme.primary
@@ -208,20 +216,51 @@ public struct MetricDetailModalView: View {
                         availableHeight: geometry.size.height, headerHeight: headerHeight, footerHeight: footerHeight,
                         maxBody: maxBody))
                     .scrollBounceBehavior(.basedOnSize)
+                    // More below the fold says so: a visible scroller and a
+                    // fade at the bottom edge, so a chart cut by the edge does
+                    // not read as the whole of it.
+                    .scrollIndicators(.visible)
+                    .overlay(alignment: .bottom) {
+                        if bodyHeight > Self.scrollHeight(contentHeight: bodyHeight,
+                            availableHeight: geometry.size.height, headerHeight: headerHeight,
+                            footerHeight: footerHeight, maxBody: maxBody) + 1 {
+                            LinearGradient(colors: [Theme.card.opacity(0), Theme.card],
+                                           startPoint: .top, endPoint: .bottom)
+                                .frame(height: 22)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                 }
                 .frame(width: 348)
                 .background(Theme.card)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                        .stroke(Theme.outlineVariant.opacity(0.4), lineWidth: 0.5)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Theme.cardRimTop, Theme.outlineVariant.opacity(0.35)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.75
+                        )
                 )
-                .shadow(color: Color.black.opacity(0.6), radius: 20, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(0.62), radius: 22, x: 0, y: 12)
                 .padding(Theme.edgeMargin)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: snapshot.id) { await load() }
+        // Re-read whenever the poll behind the snapshot changes, not only when
+        // another pool is opened: the popover passes the store's current copy
+        // (`PopoverRootView`), and a pass that fails, blocks or spends this
+        // pool must not leave the open inspector describing the earlier poll.
+        .task(id: Self.loadKey(for: snapshot)) { await load() }
+        // The presentation is a function of the time as well as the poll: a
+        // reset that passes while the inspector is open must turn its verdict
+        // into "awaiting a reading" and drop its forecast on the same tick
+        // the popover and menu bar call it "due", not at the next poll.
+        .task { await followGlanceClock() }
         .onExitCommand(perform: onClose)
     }
 
@@ -236,8 +275,38 @@ public struct MetricDetailModalView: View {
     /// every layer in one image instead of the first screenful.
     var maxBody: CGFloat = maxBodyHeight
 
+    nonisolated static func balanceSelection(keeping current: String?, in ids: [String]) -> String? {
+        if let current, ids.contains(current) { return current }
+        return ids.first
+    }
+
+    /// Which poll the inspector is showing: the pool, when it was fetched,
+    /// and whether (and when) a later poll failed.
+    private func followGlanceClock() async {
+        while !Task.isCancelled {
+            let tick = GlanceClock.nextTick(after: Date())
+            let wait = max(tick.timeIntervalSinceNow, 0.01)
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            if Task.isCancelled { return }
+            now = Self.displayTime(current: now, tick: tick)
+        }
+    }
+
+    /// The inspector's clock never runs backwards: a load that finished
+    /// after the tick already set a later time.
+    nonisolated static func displayTime(current: Date, tick: Date) -> Date {
+        max(current, tick)
+    }
+
+    nonisolated static func loadKey(for snapshot: QuotaSnapshot) -> String {
+        "\(snapshot.id)|\(snapshot.lastUpdated.timeIntervalSince1970)|\(snapshot.staleReading?.at.timeIntervalSince1970 ?? 0)"
+    }
+
     private func load() async {
-        isLoading = true
+        // A refresh of the same pool keeps the drawn history until the new
+        // read lands; only opening another pool starts from the loading state.
+        if loadedSnapshotID != snapshot.id { isLoading = true }
+        defer { loadedSnapshotID = snapshot.id }
         let vendor = snapshot.vendorId
         let loadTime = Date()
         // Far enough back for the longest offered range and for the start
@@ -281,13 +350,20 @@ public struct MetricDetailModalView: View {
         }
         readingsFailed = r == nil
         balanceSeries = reads
-        selectedBalanceID = selectedBalanceID ?? reads.first?.series.id
+        // Keep the chosen series only while this poll still publishes it: a
+        // reload that drops it left the card on "Loading balance history"
+        // with no picker to choose another.
+        selectedBalanceID = Self.balanceSelection(keeping: selectedBalanceID ?? focusBalanceSeriesID,
+                                                  in: reads.map(\.series.id))
         historySince = since
         recentEvents = e ?? []
         eventsFailed = e == nil
         markerEvents = m ?? []
         markersFailed = m == nil
-        now = loadTime
+        // The load awaited four reads; a clock tick may have moved the time
+        // past `loadTime` meanwhile, and restoring the earlier instant put a
+        // window the popover already called "due" back on its forecast.
+        now = Self.displayTime(current: now, tick: loadTime)
         isLoading = false
     }
 
@@ -298,7 +374,9 @@ public struct MetricDetailModalView: View {
             VendorAvatarView(
                 vendorId: snapshot.vendorId,
                 status: snapshot.status,
-                isExhausted: MetricRowPresentation(snapshot: snapshot).isExhausted
+                // The summary's verdict, so the avatar and the headline beside
+                // it cannot disagree (a spent bonus pool, an account block).
+                isExhausted: [.exhausted, .blocked].contains(presentation.summary.state)
             )
 
             // The name and its badge claim the row's width before the close
@@ -323,7 +401,8 @@ public struct MetricDetailModalView: View {
                 Text(headerSubtitle)
                     .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.onSurfaceVariant.opacity(0.8))
-                    .lineLimit(1)
+                    // Plan names arrive verbatim from vendors; wrap, never clip.
+                    .fixedSize(horizontal: false, vertical: true)
             }
             // The column takes the row's remaining width, so the close button is
             // pinned right and the name is not starved by a flexible `Spacer`
@@ -379,15 +458,20 @@ public struct MetricDetailModalView: View {
     /// the windows, chart and events to interrogate it with, then where the
     /// figures came from.
     private var content: some View {
-        VStack(spacing: 12) {
+        let balanceFirst = focusBalanceSeriesID != nil && Self.showsBalanceCard(for: snapshot)
+        return VStack(spacing: 12) {
             summaryCard
+            // Opened from a Wallet line: that line's figure comes first.
+            if balanceFirst {
+                balanceCard
+            }
             if !presentation.windows.isEmpty {
                 windowsCard
             }
             if Self.showsQuotaChart(for: snapshot) {
                 chartCard
             }
-            if Self.showsBalanceCard(for: snapshot) {
+            if Self.showsBalanceCard(for: snapshot) && !balanceFirst {
                 balanceCard
             }
             recentEventsCard
@@ -410,12 +494,90 @@ public struct MetricDetailModalView: View {
             readings: readingsFailed ? nil : readings, instanceID: snapshot.id, since: historySince ?? now)
     }
 
-    private var summaryColor: Color { Self.color(for: presentation.summary.state) }
+    /// True when the snapshot's raw quota band is still `.healthy` yet the
+    /// forecast says it runs out: before the reset, any moment now, or with
+    /// no reset published to save it (`RunOutVerdict.warns`). Forecasts that
+    /// say "lasts until the reset" never trigger this warning.
+    private var forecastWarnsEarlyRunOut: Bool {
+        presentation.summary.state == .healthy && runOutResult?.warns == true
+    }
+
+    private var summaryColor: Color {
+        forecastWarnsEarlyRunOut ? Theme.tertiary : Self.color(for: presentation.summary.state)
+    }
+
+    /// Headline text color on the tinted summary card. Exhausted/blocked cards
+    /// tint with `Theme.errorBold`, so their 14.5pt headline uses `Theme.error`
+    /// (#FFB4AB, > 9:1 on the tinted card) to clear WCAG small-text AA (>= 4.5:1).
+    private var summaryHeadlineColor: Color {
+        Self.headlineColor(for: presentation.summary.state, warnsEarlyRunOut: forecastWarnsEarlyRunOut)
+    }
+
+    nonisolated static func headlineColor(
+        for state: MetricDetailPresentation.State,
+        warnsEarlyRunOut: Bool
+    ) -> Color {
+        if warnsEarlyRunOut { return Theme.tertiary }
+        switch state {
+        case .exhausted, .blocked: return Theme.error
+        default: return Self.color(for: state)
+        }
+    }
+
+    private var summaryHeadline: String {
+        forecastWarnsEarlyRunOut ? "On track to run out" : presentation.summary.headline
+    }
+
+    private var summarySymbol: String {
+        forecastWarnsEarlyRunOut ? "exclamationmark.triangle.fill" : presentation.summary.symbol
+    }
+
+    nonisolated static func summaryAccessibilityLabel(
+        summary: MetricDetailPresentation.Summary,
+        warnsEarlyRunOut: Bool,
+        isAheadOfPace: Bool,
+        runOutText: String?,
+        historyNote: String? = nil
+    ) -> String {
+        let base: String
+        if warnsEarlyRunOut {
+            let needle = ", \(summary.headline)"
+            if let range = summary.accessibilityLabel.range(of: needle) {
+                base = summary.accessibilityLabel.replacingCharacters(in: range, with: ", On track to run out")
+            } else {
+                base = "On track to run out, \(summary.accessibilityLabel)"
+            }
+        } else {
+            base = summary.accessibilityLabel
+        }
+        var parts = [base]
+        if isAheadOfPace, !base.localizedCaseInsensitiveContains("ahead of even pace") {
+            parts.append("Ahead of even pace")
+        }
+        if let runOutText {
+            parts.append(runOutText)
+        }
+        if let historyNote {
+            parts.append(historyNote)
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    /// The headline is a verdict on the figure this poll read, not on the
+    /// recorded history below it. When that history could not be read, the
+    /// summary says so beside the verdict, so "Healthy" above "Could not read
+    /// the recorded balance" is not taken as a verdict on the chart.
+    nonisolated static func historyScopeNote(isLoading: Bool, reads: [BalanceSeriesRead]) -> String? {
+        guard !isLoading, reads.contains(where: { $0.points == nil }) else { return nil }
+        return "Verdict from the latest poll · recorded balance history could not be read"
+    }
 
     /// Read by Settings' legend as well, so its swatches are the inspector's.
     nonisolated static func color(for state: MetricDetailPresentation.State) -> Color {
         switch state {
         case .unavailable, .lastPollFailed: Theme.outline
+        // Not a verdict on the quota: amber says "not confirmed", never green.
+        case .awaitingReading: Theme.tertiary
         case .healthy: Theme.secondary
         case .runningLow: Theme.tertiary
         case .critical: Theme.error
@@ -431,7 +593,7 @@ public struct MetricDetailModalView: View {
     private var summaryCard: some View {
         let summary = presentation.summary
         return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: summary.symbol)
+            Image(systemName: summarySymbol)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(summaryColor)
                 .frame(width: 24)
@@ -439,9 +601,9 @@ public struct MetricDetailModalView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(summary.headline)
+                    Text(summaryHeadline)
                         .font(Theme.Typography.cardBody.weight(.semibold))
-                        .foregroundStyle(summaryColor)
+                        .foregroundStyle(summaryHeadlineColor)
                     Spacer(minLength: 4)
                     if let focus = focusWindow, let used = focus.used, let label = summary.focusLabel {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -494,6 +656,12 @@ public struct MetricDetailModalView: View {
                         .foregroundStyle(Theme.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let note = Self.historyScopeNote(isLoading: isLoading, reads: balanceSeries) {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(10)
@@ -505,24 +673,33 @@ public struct MetricDetailModalView: View {
                 .stroke(summaryColor.opacity(0.3), lineWidth: 0.5)
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([summary.accessibilityLabel]
-            + [focusWindow?.isAheadOfPace == true ? "Ahead of even pace" : nil, runOutText].compactMap { $0 })
-            .joined(separator: ". "))
+        .accessibilityLabel(Self.summaryAccessibilityLabel(
+            summary: summary,
+            warnsEarlyRunOut: forecastWarnsEarlyRunOut,
+            isAheadOfPace: focusWindow?.isAheadOfPace == true,
+            runOutText: runOutText,
+            historyNote: Self.historyScopeNote(isLoading: isLoading, reads: balanceSeries)
+        ))
     }
 
     /// The verdict's window, read the way the popover reads it.
     private var focusWindow: GlancePresentation.Window? {
         guard let label = presentation.summary.focusLabel,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
-        return GlancePresentation.window(for: bar, now: now)
+        return GlancePresentation.window(for: snapshot.applyingAccountBlock(to: bar), now: now)
     }
 
-    private var runOutText: String? {
-        guard let label = presentation.summary.focusLabel, snapshot.staleReading == nil,
+    private var runOutResult: InspectorRunOut.Result? {
+        // No forecast while the pool awaits a reading: its figures describe
+        // a window that has ended.
+        if case .awaitingReading = presentation.summary.state { return nil }
+        guard let label = presentation.summary.focusLabel,
               let bar = snapshot.quotaBars.first(where: { $0.label == label }) else { return nil }
-        return InspectorRunOut.text(for: bar, snapshotID: snapshot.id,
-                                    readings: isLoading || readingsFailed ? nil : readings, now: now)
+        return InspectorRunOut.compute(for: bar, in: snapshot,
+                                       readings: isLoading || readingsFailed ? nil : readings, now: now)
     }
+
+    private var runOutText: String? { runOutResult?.text }
 
     // MARK: Windows
 
@@ -554,20 +731,20 @@ public struct MetricDetailModalView: View {
                         // "% used", the popover's bar: fill is what was used,
                         // the tick where an even pace would be. A billing
                         // cycle keeps its elapsed-time bar.
-                        Group {
-                            if line.metrics.measuresElapsedTimeOnly {
-                                DualBarProgressView(metrics: line.metrics, showsLabel: false)
-                            } else {
-                                UsageBar(window: window, height: 6)
-                            }
-                        }
                         // Carried-over figures: the bar recedes, the words
-                        // do not. Dimming the whole line took its reset
-                        // caption to 3.0:1 (design-loop sol-15); the title
-                        // above already says these predate the failed poll.
-                        .opacity(asOf == nil ? 1 : 0.55)
+                        // and the pace tick do not. Dimming the whole line took
+                        // its reset caption to 3.0:1 (design-loop sol-15); the
+                        // title above already says these predate the failed poll.
+                        if line.metrics.measuresElapsedTimeOnly {
+                            DualBarProgressView(metrics: line.metrics, showsLabel: false)
+                                .opacity(asOf == nil ? 1 : UsageBar.dimmedOpacity)
+                        } else {
+                            UsageBar(window: window, height: 6, dimmed: asOf != nil)
+                        }
                         HStack(spacing: 3) {
-                            if window.isSpent {
+                            // The nosign means "the vendor blocked this", as in
+                            // the popover; a window the user used up says "spent".
+                            if line.metrics.isBlocked {
                                 BlockedGlyph(color: Theme.errorBold)
                             }
                             Text(window.isSpent && !line.metrics.isBlocked ? "spent"
@@ -613,7 +790,14 @@ public struct MetricDetailModalView: View {
                               window: GlancePresentation.Window, asOf: Date?) -> String {
         let name = WindowColumn.column(forLabel: line.label)?.spokenName ?? line.label
         var parts = ["\(name) window"]
-        if window.isSpent { parts.append(line.metrics.isBlocked ? "blocked" : "spent") }
+        // A blocked window keeps the percentage it reported in speech, as the
+        // row prints it ("blocked, 97 percent used reported").
+        if window.isSpent {
+            parts.append(line.metrics.isBlocked ? "blocked" : "spent")
+            if line.metrics.isBlocked, let left {
+                parts.append("\(left.replacingOccurrences(of: "%", with: " percent")) reported")
+            }
+        }
         else if let left { parts.append(left.replacingOccurrences(of: "%", with: " percent")) }
         else if let noFigure = line.noFigureText { parts.append(noFigure.lowercased()) }
         if !line.detail.isEmpty { parts.append(line.detail) }
@@ -644,15 +828,12 @@ public struct MetricDetailModalView: View {
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Picker("Chart", selection: $chartMode) {
-                    ForEach(ChartMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 170)
-                .accessibilityLabel("Chart type")
+                GlanceSegmentedControl(
+                    options: ChartMode.allCases,
+                    selection: $chartMode,
+                    title: \.rawValue,
+                    accessibilityLabel: "Chart type"
+                )
 
                 Spacer(minLength: 0)
 
@@ -671,15 +852,12 @@ public struct MetricDetailModalView: View {
                         .accessibilityLabel("Burndown window")
                     }
                 case .history:
-                    Picker("Range", selection: $historyRange) {
-                        ForEach(Self.historyRanges) { range in
-                            Text(range.rawValue).tag(range)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityLabel("History range")
+                    GlanceSegmentedControl(
+                        options: Self.historyRanges,
+                        selection: $historyRange,
+                        title: \.rawValue,
+                        accessibilityLabel: "History range"
+                    )
                 }
             }
 
@@ -718,32 +896,47 @@ public struct MetricDetailModalView: View {
         if let label = activeBurndownLabel,
            let burndown = BurndownPresentation.burndown(
                readings: readings, instanceID: snapshot.id, barLabel: label, now: now
-           ) {
+           )?.current(for: snapshot, now: now) {
             // Room above the plot: its "now" annotation sits at the top edge
             // and overprinted the caption.
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if burndown.isBlocked {
                         BlockedGlyph(color: Theme.onSurfaceVariant, size: 10)
                     }
-                    // A blocked caption carries an extra clause; it wraps
-                    // rather than cutting off the reset time.
-                    Text(BurndownPresentation.summaryLine(for: burndown, now: now))
+                    // The caption wraps rather than cutting its last clause,
+                    // which is the run-out warning whenever there is one
+                    // ("58% used · resets in 5d · at recent rate, out in 41h"
+                    // is 293pt in a 234pt column).
+                    // The chart reads the recorded series, which can trail the
+                    // live poll by a reading; its figure says when it is from,
+                    // so "63%" under a live "62%" reads as history, not conflict.
+                    Text((burndown.latestReading.map {
+                        "Recorded \(MetricDetailPresentation.clockText($0.measuredAt, now: now)) · "
+                    } ?? "") + BurndownPresentation.summaryLine(for: burndown, now: now))
                         .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.onSurfaceVariant)
-                        .lineLimit(burndown.isBlocked ? 2 : 1)
-                        .minimumScaleFactor(0.85)
                         .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Text("Axis: % left")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Theme.outline)
+                        .fixedSize()
                 }
                 .accessibilityHidden(true)
-                BurndownChartView(burndown: burndown, now: now)
-                if burndown.ideal == nil {
+                // The key comes before the plot it explains: below it, "Even
+                // pace" fell under the first viewport while the lines it names
+                // were on screen.
+                if burndown.ideal == nil && burndown.projection == nil {
                     Text("No window length published, so no pace line can be drawn")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.outline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    burndownLegend(for: burndown)
                 }
+                BurndownChartView(burndown: burndown, now: now)
+                    .padding(.top, 2)
             }
         } else if let label = activeBurndownLabel {
             let absence = BurndownPresentation.burndownAbsence(
@@ -760,6 +953,90 @@ public struct MetricDetailModalView: View {
         }
     }
 
+    private func burndownLegend(for burndown: BurndownPresentation.Burndown) -> some View {
+        HStack(spacing: 12) {
+            if burndown.ideal != nil {
+                HStack(spacing: 5) {
+                    legendDashSwatch(color: Theme.outline.opacity(0.85), dash: [4, 2.5], lineWidth: 1.25)
+                    Text("Even pace")
+                }
+            }
+            if burndown.projection != nil {
+                HStack(spacing: 5) {
+                    legendDashSwatch(
+                        color: burndown.runOutVerdict(now: now).warns ? Theme.error : Theme.tertiary,
+                        dash: [1.5, 2.5],
+                        lineWidth: 1.5
+                    )
+                    Text("Recent pace")
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 9.5, weight: .medium))
+        .foregroundStyle(Theme.outline)
+        .accessibilityHidden(true)
+    }
+
+    private func legendDashSwatch(color: Color, dash: [CGFloat], lineWidth: CGFloat) -> some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: size.height / 2))
+            path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, dash: dash))
+        }
+        .frame(width: 14, height: 6)
+    }
+
+    /// High-contrast dark-mode segmented control replacing macOS's native
+    /// segmented picker (whose selected capsule measured ~2.3:1 on dark cards).
+    /// Selected pill (`Theme.primary`) clears > 11:1 against the well
+    /// (`Theme.surfaceContainerLowest`), and both selected and unselected text
+    /// clear > 11:1 against their backgrounds.
+    private struct GlanceSegmentedControl<Option: Hashable & Identifiable>: View {
+        let options: [Option]
+        @Binding var selection: Option
+        let title: (Option) -> String
+        let accessibilityLabel: String
+
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(options) { option in
+                    let isSelected = selection == option
+                    Button {
+                        selection = option
+                    } label: {
+                        Text(title(option))
+                            .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? Theme.surfaceContainerLowest : Theme.onSurfaceVariant)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3.5)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(isSelected ? Theme.primary : Color.clear)
+                            )
+                            .contentShape(Capsule(style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title(option))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+            .padding(2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Theme.surfaceContainerLowest)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Theme.outlineVariant.opacity(0.6), lineWidth: 0.75)
+            )
+            .fixedSize()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel)
+        }
+    }
+
     @ViewBuilder
     private var historyContent: some View {
         let series = BurndownPresentation.history(
@@ -773,7 +1050,17 @@ public struct MetricDetailModalView: View {
                 message: absence.message
             )
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                // The qualification comes before the plot it qualifies: below
+                // it, the warning sat under the fold while the whole chart
+                // read as complete.
+                if markersFailed {
+                    Label("Reset markers could not be read, so resets may be missing from this chart.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 UsageHistoryChartView(
                     series: series,
                     range: historyRange,
@@ -782,13 +1069,6 @@ public struct MetricDetailModalView: View {
                     ),
                     now: now
                 )
-                if markersFailed {
-                    Label("Reset markers could not be read, so resets may be missing from this chart.",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.outline)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
     }
@@ -830,15 +1110,18 @@ public struct MetricDetailModalView: View {
                 case .readFailed:
                     ChartEmptyState(
                         symbol: "exclamationmark.triangle",
-                        message: "Could not read the recorded balance. This is a failure to read, not an absence of readings."
+                        message: "Could not read the recorded balance. This is a failure to read, not an absence of readings. It is read again with the next poll, or when you reopen these details."
                     )
                 case .trend(let trend, let unit):
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(trend.caption(in: unit))
+                        // The span and the newest reading's time, so a fall
+                        // over two days does not read like one over twelve,
+                        // and the last point is not mistaken for the live figure.
+                        Text("\(trend.caption(in: unit)) \(trend.spanDescription) · "
+                             + "last recorded \(MetricDetailPresentation.clockText(trend.lastMeasuredAt, now: now))")
                             .font(Theme.Typography.subtitle)
                             .foregroundStyle(Theme.onSurfaceVariant)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: false, vertical: true)
                         BalanceChartView(presentation: trend) { value in
                             unit.format(value)
                         }

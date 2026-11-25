@@ -703,6 +703,27 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         quotaBars.contains { $0.primaryFractionOrUnmeasured >= Self.exhaustionThreshold || $0.isBlocked }
     }
 
+    /// The vendor blocked the whole account, on its badge rather than on a
+    /// window (Command Code's `limited`, OpenCode Go's rate-limited signal).
+    /// Its windows may still read well under 100%; the account is unusable
+    /// all the same. Every surface that says "blocked" reads this, so the
+    /// popover, the group subtitle and the inspector cannot disagree.
+    public static let accountBlockedBadge = "Blocked"
+    public var isAccountBlocked: Bool { badgeText == Self.accountBlockedBadge }
+
+    /// `bar` as this account's block leaves it: blocked when the vendor
+    /// blocked the whole account, whatever its own flag says. A billing
+    /// cycle measures elapsed time and is never blocked. The one place the
+    /// account flag reaches a window, read by the grid, the inspector's window
+    /// lines and the history recorder, so none of them draws a 40% bar as
+    /// usable under an account the vendor stopped.
+    public func applyingAccountBlock(to bar: DualBarMetrics) -> DualBarMetrics {
+        guard isAccountBlocked, !bar.isBlocked, !bar.measuresElapsedTimeOnly else { return bar }
+        var blocked = bar
+        blocked.isBlocked = true
+        return blocked
+    }
+
     /// Every consumable window is blocked with no percentage at all — a fully
     /// rate-limited / cut-off account (e.g. OpenCode's `rate-limited` signal).
     ///

@@ -25,6 +25,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case critical
         case exhausted
         case blocked
+        /// A window's published reset (`resetAt`) has passed and no reading
+        /// since has shown the new window, so its figures are the old window's.
+        case awaitingReading(resetAt: Date)
     }
 
     /// The words and shape a state leads with. Settings' legend reads this
@@ -37,6 +40,7 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         case .exhausted:  ("Exhausted", "xmark.octagon.fill")
         case .blocked:    ("Blocked by the vendor", BlockedGlyph.symbolName)
         case .lastPollFailed: ("The last poll could not be read", "exclamationmark.triangle.fill")
+        case .awaitingReading: ("Window reset · awaiting a reading", "clock.arrow.circlepath")
         case .unavailable: ("", "minus.circle")
         }
     }
@@ -151,8 +155,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let failedPoll = stale?.at ?? Self.failedPollAfter(snapshot, readings: readings)
         self.summary = Self.summary(
             for: snapshot, failedPollAt: failedPoll, staleReason: stale?.reason, now: now)
+        // Model-scoped windows (Fable) follow the plan's, each on its own
+        // line as in the popover. They are never the summary's focus or its
+        // verdict (`focusBar` reads `quotaBars`, which excludes them).
         self.windows = snapshot.status.confidence == .measured
-            ? snapshot.displayBars.map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
+            ? (snapshot.displayBars.map(snapshot.applyingAccountBlock(to:)) + snapshot.scopedBars)
+                .map { Self.windowLine($0, isCurrent: failedPoll == nil, now: now) }
             : []
         self.windowsAsOf = failedPoll == nil || windows.isEmpty ? nil : snapshot.lastUpdated
         self.provenance = Self.provenance(
@@ -176,9 +184,18 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// whether the provider can be used at all), then the most consumed.
     /// Billing cycles measure elapsed time and are never the focus.
     static func focusBar(of snapshot: QuotaSnapshot) -> DualBarMetrics? {
-        let bars = snapshot.quotaBars
+        let bars = verdictBars(of: snapshot)
         return bars.first(where: \.isBlocked)
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
+    }
+
+    /// The windows the verdict is about: the plan's, as the popover's pool
+    /// state reads them. A spent bonus (Kiro `BN`) or paid overage (Grok
+    /// `OD`) never makes a usable plan "Exhausted"; a vendor that labels no
+    /// window as plan keeps all of its windows.
+    static func verdictBars(of snapshot: QuotaSnapshot) -> [DualBarMetrics] {
+        let plan = snapshot.quotaBars.filter { $0.allowanceRole == .plan }
+        return plan.isEmpty ? snapshot.quotaBars : plan
     }
 
     static func summary(
@@ -211,15 +228,30 @@ public struct MetricDetailPresentation: Equatable, Sendable {
                 accessibilityLabel: "\(snapshot.displayName), \(headline), \(note)")
         }
 
-        let row = MetricRowPresentation(snapshot: snapshot, now: now)
-        let focus = focusBar(of: snapshot)
+        // A window whose published reset has passed with no reading since is
+        // the verdict's subject when there is one: its figure is the ended
+        // window's, so the hero shows that window and its "reset due", not a
+        // still-running window's amount and pace under a waiting headline.
+        let expired = verdictBars(of: snapshot).filter { $0.resetsAt.map { $0 <= now } ?? false }
+        let expiredFocus = expired.max { ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast) }
+        let focus = expiredFocus ?? focusBar(of: snapshot)
         let state: State
         // The focus is a blocked window whenever the vendor blocked one, with
         // or without a percentage: a 97% the vendor has cut off is not "low",
-        // it is unusable, and the glance must say which.
-        if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading {
+        // it is unusable, and the glance must say which. An account the vendor
+        // blocked on its badge is unusable at any percentage too: the popover
+        // already files it as blocked, and the inspector must not call the
+        // same pool "Healthy" (`QuotaSnapshot.isAccountBlocked`).
+        if focus?.isBlocked == true || snapshot.isFullyBlockedWithoutReading || snapshot.isAccountBlocked {
             state = .blocked
-        } else if row.isExhausted {
+        } else if let passed = expiredFocus?.resetsAt {
+            // A window's published reset has passed and no reading since has
+            // shown the new window: its figure is the old window's, so the
+            // verdict is not "Healthy", and not "Exhausted" either for a
+            // spent window that has since reset (`GlancePresentation.Freshness`).
+            state = .awaitingReading(resetAt: passed)
+        } else if verdictBars(of: snapshot).contains(where: WindowGridPresentation.isExhausted)
+                    || snapshot.isFullyBlockedWithoutReading {
             state = .exhausted
         } else {
             switch snapshot.status.urgency {
@@ -230,9 +262,19 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         }
 
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
-        let reset = focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
-            ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil)
-        let pace = focus.flatMap(paceVerdict(for:))
+        // Under an account block no window's reset is the account's return,
+        // so the hero names none and says the unblock time is unpublished.
+        let accountBlocked = snapshot.isAccountBlocked
+        let reset = accountBlocked ? nil
+            : (focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
+               ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil))
+        let pace: String? = {
+            if case .awaitingReading = state { return nil }
+            return accountBlocked ? nil : focus.flatMap(paceVerdict(for:))
+        }()
+        let remedy: String? = accountBlocked
+            ? "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own."
+            : nil
         // A provider with no window still has a measured figure worth leading
         // with: a balance, a count. A subscription tier is not a figure.
         let figure: String? = {
@@ -245,19 +287,20 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let (headline, symbol) = Self.headlineAndSymbol(for: state)
 
         var spoken = [snapshot.displayName, headline]
-        if let percent, let label = focus?.label {
-            spoken.append("\(WindowColumn.column(forLabel: label)?.spokenName ?? label) window \(percent) percent used")
+        if let fraction = focus?.primaryFraction, let label = focus?.label {
+            spoken.append("\(WindowColumn.column(forLabel: label)?.spokenName ?? label) window \(GlancePresentation.usedPercentWords(fraction)) used")
         } else if let figure {
             spoken.append(MetricRowPresentation.spoken(for: snapshot.metric).isEmpty
                           ? figure : MetricRowPresentation.spoken(for: snapshot.metric))
         }
         if let reset { spoken.append(reset) }
         if let pace { spoken.append(pace) }
+        if let remedy { spoken.append(remedy) }
 
         return Summary(
             state: state, headline: headline, symbol: symbol,
             focusLabel: focus?.label, percentUsed: percent, figure: figure,
-            resetText: reset, paceVerdict: pace, remedy: nil,
+            resetText: reset, paceVerdict: pace, remedy: remedy,
             accessibilityLabel: spoken.joined(separator: ", "))
     }
 
@@ -280,7 +323,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// run-out are forecasts from it, and are left out.
     static func windowLine(_ bar: DualBarMetrics, isCurrent: Bool = true, now: Date) -> WindowLine {
         let percent = bar.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
-        let percentText = percent.map { "\($0)%" }
+        // The popover's own figure for a used share, so the two never round
+        // one reading differently; a billing cycle's elapsed share is not a
+        // used share and keeps its plain percentage.
+        let percentText = bar.primaryFraction.map {
+            bar.measuresElapsedTimeOnly ? "\(Int((min(max($0, 0), 1) * 100).rounded()))%"
+                : GlancePresentation.usedPercentText($0)
+        }
         let noFigure: String? = percent != nil ? nil : (bar.isBlocked ? "Blocked" : (bar.balanceCaption ?? "No figure"))
 
         var parts: [String] = []
@@ -300,8 +349,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
         let name = WindowColumn.column(forLabel: bar.label)?.spokenName ?? bar.label
         var spoken = [bar.measuresElapsedTimeOnly ? "\(name) cycle" : "\(name) window"]
-        if let percent {
-            spoken.append(bar.measuresElapsedTimeOnly ? "\(percent) percent elapsed" : "\(percent) percent used")
+        if let percent, let fraction = bar.primaryFraction {
+            spoken.append(bar.measuresElapsedTimeOnly ? "\(percent) percent elapsed"
+                          : "\(GlancePresentation.usedPercentWords(fraction)) used")
         } else if bar.isBlocked {
             spoken.append("blocked")
         } else if let balance = bar.balanceCaption {
@@ -325,7 +375,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     ) -> [ProvenanceRow] {
         var rows: [ProvenanceRow] = [
             ProvenanceRow(label: "Source", value: snapshot.cliSource),
-            ProvenanceRow(label: "Last fetched", value: lastFetchedText(snapshot.lastUpdated, now: now)),
+            // An unreadable snapshot is stamped when the fetch was tried, not
+            // when figures arrived: "fetched" claimed a reading that never came.
+            ProvenanceRow(label: snapshot.status.confidence == .measured ? "Last fetched" : "Last attempted",
+                          value: lastFetchedText(snapshot.lastUpdated, now: now)),
             ProvenanceRow(label: "Latency", value: snapshot.latencyMs.map { "\($0) ms" }),
             // Only a real `planName`: a badge or vendor name in this slot is a
             // plan nobody measured.
@@ -340,6 +393,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
                 value: "Could not be read\(staleReason.map { " (\($0.headline))" } ?? ""), "
                     + "\(lastFetchedText(failedPollAt, now: now))"))
         }
+        // The configured Gemini API figure the Wallet line shows: opened from
+        // that line, the details must carry the figure the user selected.
+        if let credit = snapshot.geminiAPICredit, let cap = credit.monthlySpendCap {
+            rows.append(ProvenanceRow(
+                label: "Configured cap",
+                value: "\(MoneyText.format(cap, code: credit.currencyCode))/mo, entered \(sinceText(credit.configuredAt, now: now))"))
+        }
         if let key = snapshot.keyMasked {
             rows.append(ProvenanceRow(label: "Key", value: key))
         }
@@ -350,11 +410,16 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         switch history {
         case .loading:
             break
+        // Quota readings, named as such: beside a Balance history card's own
+        // count, a bare "History · 0 readings" read as "the balance was never
+        // logged". A provider with no quota window has none to count.
         case .unreadable:
-            rows.append(ProvenanceRow(label: "History", value: "Could not be read"))
+            rows.append(ProvenanceRow(label: "Quota history", value: "Could not be read"))
+        case .counted(_, _) where ProviderGridPresentation.isDirectBalance(snapshot):
+            break
         case .counted(let count, let since):
             rows.append(ProvenanceRow(
-                label: "History",
+                label: "Quota history",
                 value: "\(count) reading\(count == 1 ? "" : "s") recorded since \(sinceText(since, now: now))"))
         }
         return rows

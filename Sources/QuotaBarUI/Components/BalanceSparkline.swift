@@ -34,6 +34,28 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
     /// True when every recorded figure is identical, so the line is flat. The
     /// view draws it centred rather than pinned to an edge.
     public let isFlat: Bool
+    /// When the oldest and newest readings were recorded: a fall over two
+    /// days and one over twelve draw the same normalised line, so the span
+    /// is said beside it.
+    public var firstMeasuredAt: Date = .distantPast
+    public var lastMeasuredAt: Date = .distantPast
+
+    /// "over 11 days" (or hours, under a day).
+    public var spanDescription: String {
+        let span = max(0, lastMeasuredAt.timeIntervalSince(firstMeasuredAt))
+        if span >= 86_400 {
+            let days = Int((span / 86_400).rounded())
+            return "over \(days) day\(days == 1 ? "" : "s")"
+        }
+        // Under an hour is said in minutes: "over 1 hour" for two readings
+        // five minutes apart overstated how slowly the balance moved.
+        if span < 3600 {
+            let minutes = max(1, Int((span / 60).rounded()))
+            return "over \(minutes) minute\(minutes == 1 ? "" : "s")"
+        }
+        let hours = Int((span / 3600).rounded())
+        return "over \(hours) hour\(hours == 1 ? "" : "s")"
+    }
 
     /// nil when there is nothing honest to draw: fewer than two readings is not
     /// a trend, it is one observation (or none).
@@ -67,7 +89,7 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
             return Point(x: x, y: y)
         }
 
-        return BalanceSparklinePresentation(
+        var presentation = BalanceSparklinePresentation(
             points: normalised,
             latestValue: ordered.last!.value,
             minValue: minValue,
@@ -76,6 +98,9 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
             sampleCount: ordered.count,
             isFlat: isFlat
         )
+        presentation.firstMeasuredAt = ordered.first!.measuredAt
+        presentation.lastMeasuredAt = ordered.last!.measuredAt
+        return presentation
     }
 
     /// How a series ended against where it began.
@@ -100,6 +125,18 @@ public struct BalanceSparklinePresentation: Equatable, Sendable {
     ///
     /// A flat series is said as *unchanged* rather than as "▲ 0": every figure
     /// is the same, so there was no movement to describe.
+    /// The inline strip's direction in words, for the Wallet line's label:
+    /// the strip itself is hidden from VoiceOver, so without this the trend a
+    /// sighted user reads at a glance was only reachable in the inspector.
+    public var spokenTrend: String {
+        guard !isFlat else { return "unchanged across \(sampleCount) readings \(spanDescription)" }
+        switch Trend.of(change: change) {
+        case .rose: return "rising across \(sampleCount) readings \(spanDescription)"
+        case .fell: return "falling across \(sampleCount) readings \(spanDescription)"
+        case .returned: return "back where it started across \(sampleCount) readings \(spanDescription)"
+        }
+    }
+
     public func caption(in unit: BalanceSeries.Unit) -> String {
         let latest = unit.format(latestValue)
         guard !isFlat else {

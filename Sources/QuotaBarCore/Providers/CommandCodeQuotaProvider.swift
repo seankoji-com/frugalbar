@@ -185,7 +185,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         else { urgency = .none }
 
         let badge: String?
-        if limited { badge = "Blocked" }
+        if limited { badge = QuotaSnapshot.accountBlockedBadge }
         else if let worst, worst >= 1.0 { badge = "Exhausted" }
         else if let worst { badge = "\(Int(((1 - worst) * 100).rounded()))% left" }
         else { badge = nil }

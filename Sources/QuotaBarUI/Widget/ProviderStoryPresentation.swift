@@ -28,6 +28,11 @@ struct ProviderStoryPresentation: Equatable, Sendable {
     /// The window the story is about, and its "% left" (nil when unmeasured).
     let window: GlancePresentation.Window?
     let windowName: String?
+    /// The header's large "% left": the story window's remaining share, only
+    /// while that window is unspent and its published reset has not passed.
+    /// After the reset the figure is the ended window's, and printing it as
+    /// "35% weekly left" read as headroom in a window nobody has measured.
+    let heroRemaining: Double?
     let lines: [Line]
 
     init(pool: GlancePresentation.Pool, glance: GlancePresentation,
@@ -48,6 +53,7 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             ?? pool.windows.filter(\.isLong).min { ($0.remaining ?? 2) < ($1.remaining ?? 2) }
             ?? pool.windows.first
         window = chosen
+        heroRemaining = chosen.flatMap { !$0.isSpent && !$0.isExpired ? $0.remaining : nil }
         windowName = chosen.map { WindowColumn.column(forLabel: $0.bar.label)?.spokenName ?? $0.bar.label }
 
         switch (rank, entry, pool.state) {
@@ -62,7 +68,8 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             tone = pool.isAheadOfPace ? .caution : .good
         case (_, let e?, _):
             standing = e.pool.returnsAt != nil && !e.returnText.hasPrefix("Reset passed")
-                ? "\(e.isBlocked ? "Blocked" : "Spent") · back in \(e.returnText)" : e.returnText
+                ? "\(e.isBlocked ? "Blocked" : "Spent") · back in \(e.returnText)"
+                : (e.isBlocked ? "Blocked · \(e.returnText.lowercased())" : e.returnText)
             tone = .spent
         case (_, _, .unreadable):
             standing = pool.snapshot.status.unavailableReason?.headline ?? "No reading"
@@ -70,6 +77,11 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         case (_, _, .onBonus):
             standing = "Plan spent · running on its bonus allowance"
             tone = .caution
+        case _ where pool.freshness == .awaitingReset:
+            // Not a pick because a published reset has passed with no reading
+            // since (`GlancePresentation.Freshness`), not because of its floor.
+            standing = "Window reset · awaiting a reading"
+            tone = .unknown
         default:
             standing = pool.isStale ? "Figures from an earlier poll" : "Usable, below the 20% floor"
             tone = pool.isStale ? .unknown : .caution
@@ -86,12 +98,15 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         }
         for other in pool.windows where other.bar.label != chosen?.bar.label {
             let name = WindowColumn.column(forLabel: other.bar.label)?.spokenName ?? other.bar.label
-            let reset = other.bar.resetsAt.map { ", resets in \(GlancePresentation.countdown($0, now: now))" } ?? ""
+            let reset = other.bar.resetsAt.map { Self.resetClause($0, now: now) } ?? ""
+            let passed = other.isExpired
             if other.isSpent {
-                lines.append(Line(symbol: "nosign", text: "The \(name) window is spent\(reset).", tone: .spent))
+                lines.append(Line(symbol: "nosign", text: "The \(name) window \(passed ? "was" : "is") spent\(reset).",
+                                  tone: passed ? .unknown : .spent))
             } else if let left = other.remaining {
                 lines.append(Line(symbol: "square.stack",
-                    text: "The \(name) window has \(GlancePresentation.percent(left))% left\(reset)."))
+                    text: "The \(name) window \(passed ? "had" : "has") \(GlancePresentation.percent(left))% left\(reset).",
+                    tone: passed ? .unknown : .good))
             }
         }
         if pool.hasPaidOverage {
@@ -109,15 +124,21 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         let resetWhen = bar.resetsAt.map {
             "\(GlancePresentation.countdown($0, now: now)) (\(dayText($0)))"
         }
+        // A window whose published reset has passed: its figures describe the
+        // window that ended, so no "resets in", pace or run-out is told from
+        // them (`GlancePresentation.Freshness.awaitingReset`).
+        if w.isExpired, let reset = bar.resetsAt {
+            lines.append(Line(symbol: "clock.arrow.circlepath",
+                text: "The \(name) window's reset was due \(dayText(reset)); waiting for a reading that confirms it.",
+                tone: .unknown))
+            return lines
+        }
         if w.isSpent {
             lines.append(Line(symbol: "nosign", text: bar.isBlocked
                 ? "The vendor has blocked the \(name) window."
                 : "The \(name) allowance is used up.", tone: .spent))
             if let resetWhen {
-                lines.append(Line(symbol: "arrow.clockwise",
-                    text: bar.resetsAt! > now ? "It resets in \(resetWhen)."
-                        : "Its reset was due \(dayText(bar.resetsAt!)); waiting for a reading that confirms it.",
-                    tone: .unknown))
+                lines.append(resetLine(name: name, resetWhen: resetWhen, pool: pool, tone: .unknown))
             } else {
                 lines.append(Line(symbol: "questionmark.circle", text: "The vendor has not published when it resets.",
                                   tone: .unknown))
@@ -130,8 +151,13 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             return lines
         }
         let usedPct = Int((min(max(used, 0), 1) * 100).rounded())
+        // A pool awaiting a reading (another of its windows has reset) gets no
+        // pace or run-out: the inspector refuses both in that state, and the
+        // Story's chart drops its projection there (`Burndown.current`), so the
+        // prose must not plan around it either.
+        let tellsProjection = pool.freshness != .awaitingReset
         // Elapsed share only where the pace tick is drawn: the same figures.
-        if let elapsed = bar.paceMarker, let length = bar.windowLength {
+        if tellsProjection, let elapsed = bar.paceMarker, let length = bar.windowLength {
             let elapsedSpan = GlancePresentation.countdown(now.addingTimeInterval(elapsed * length), now: now)
             lines.append(Line(symbol: "chart.line.downtrend.xyaxis",
                 text: "You've used \(usedPct)% of the \(name) allowance in \(elapsedSpan); "
@@ -151,17 +177,39 @@ struct ProviderStoryPresentation: Equatable, Sendable {
             lines.append(Line(symbol: "chart.line.downtrend.xyaxis",
                 text: "You've used \(usedPct)% of the \(name) allowance."))
         }
-        if !pool.isStale, let runOut = InspectorRunOut.text(for: bar, snapshotID: pool.id, readings: readings, now: now) {
-            lines.append(Line(symbol: "hourglass", text: runOut + ".",
-                              tone: runOut.contains("runs out") ? .caution : .good))
+        if tellsProjection,
+           let runOut = InspectorRunOut.compute(for: bar, in: pool.snapshot, readings: readings, now: now) {
+            lines.append(Line(symbol: "hourglass", text: runOut.text + ".",
+                              tone: runOut.warns ? .caution : .good))
         }
         if let resetWhen {
-            lines.append(Line(symbol: "arrow.clockwise", text: "It resets in \(resetWhen)."))
+            lines.append(resetLine(name: name, resetWhen: resetWhen, pool: pool, tone: .good))
         } else {
             lines.append(Line(symbol: "questionmark.circle", text: "The vendor has not published when it resets.",
                               tone: .unknown))
         }
         return lines
+    }
+
+    /// The story window's reset. Under an account-wide block (Command Code's
+    /// `limited`, set on the badge whether or not a window is blocked) the
+    /// standing says the block's end is unpublished, so this names the window
+    /// the reset belongs to rather than reading as the account's return.
+    static func resetLine(name: String, resetWhen: String, pool: GlancePresentation.Pool, tone: Tone) -> Line {
+        Line(symbol: "arrow.clockwise",
+             text: pool.snapshot.isAccountBlocked
+                 ? "The \(name) window resets in \(resetWhen); the account block has no published end."
+                 : "It resets in \(resetWhen).",
+             tone: pool.snapshot.isAccountBlocked ? .unknown : tone)
+    }
+
+    /// ", resets in 4h", or, once that reset has passed, a clause that says the
+    /// figure before it is from the window that ended ("resets in due" read as
+    /// a countdown nobody measured).
+    static func resetClause(_ reset: Date, now: Date) -> String {
+        reset > now
+            ? ", resets in \(GlancePresentation.countdown(reset, now: now))"
+            : " before its reset; a new reading is awaited"
     }
 
     static func dayText(_ date: Date) -> String {

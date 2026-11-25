@@ -40,7 +40,15 @@ public enum Theme {
     /// ground and reads as pink once it is 8pt tall and 130pt wide — which put
     /// an exhausted quota and a merely over-pace one in the same colour. The
     /// over-pace delta keeps `error`; only "there is nothing left" gets this.
-    public static let errorBold = Color(red: 0xe5 / 255.0, green: 0x3d / 255.0, blue: 0x3d / 255.0)        // #e53d3d
+    /// Tuned to #ea4444 so partial blocked fills on `surfaceContainerHighest`
+    /// (#343539) clear WCAG 1.4.11 (>= 3.0:1).
+    public static let errorBold = Color(red: 0xea / 255.0, green: 0x44 / 255.0, blue: 0x44 / 255.0)        // #ea4444
+    /// Deeper crimson for white-on-red small-text badges (e.g. exhausted countdown
+    /// pill): #c42727 yields 5.66:1 against #ffffff, meeting WCAG AA >= 4.5:1.
+    public static let errorBadge = Color(red: 0xc4 / 255.0, green: 0x27 / 255.0, blue: 0x27 / 255.0)       // #c42727
+    /// Subtle top rim light for floating dark cards and tactile hover fill for rows.
+    public static let cardRimTop = Color.white.opacity(0.11)
+    public static let rowHover = Color.white.opacity(0.045)
 
     /// Secondary text in the system-appearance windows (Settings). The system
     /// `.secondary` label is 50% black, which on a grouped form's #ebebec ground

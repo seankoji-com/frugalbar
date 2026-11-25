@@ -18,7 +18,9 @@ struct ProviderGridPresentationTests {
             return
         }
         #expect(abs(amount - 0.3425) < 0.0001)
-        #expect(claude.summary(for: .fiveHour) == .average(remaining: 1, reported: 2, count: 4))
+        // Secondary's spent week hides its 5H column from its row, so the
+        // group's 5H averages only the 5H figure a row actually draws.
+        #expect(claude.summary(for: .fiveHour) == .average(remaining: 1, reported: 1, count: 4))
         #expect(claude.summary(for: .monthly) == nil)
 
         let deepSeek = try #require(grid.groups.first { $0.id == .deepseek })
@@ -33,7 +35,10 @@ struct ProviderGridPresentationTests {
             Issue.record("Expected the DeepSeek monthly average")
             return
         }
-        #expect(measured == 6 && poolCount == 7)
+        // The three blocked OpenCode workspaces' reported figures are not
+        // headroom, so they are not averaged; they still count toward the
+        // pools, and the cell's "3/7" coverage says so.
+        #expect(measured == 3 && poolCount == 7)
     }
 
     @Test("all confirmed spent uses the first window reset, and stale or missing readings cannot exhaust the group")

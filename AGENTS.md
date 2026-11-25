@@ -480,7 +480,14 @@ headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
 and the account when the reading carries a named one ("ChatGPT API",
 "ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
 CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
-text beside the title. When the title needs the room, the tag shrinks to its
+text beside the title. The figure carries its role word (owner, 25 Nov 2026)
+as a small caption under the amount (`Row.figureRole`: "left", "grant",
+"credit", "cap"; none under an overdrawn balance), and a credit meter says
+"29% used"; a bare amount made a remaining count, a monthly grant and a cap
+look alike. The caption sits under the amount, not beside it, so the figure
+column keeps its width and long account names do not break. Opening a line passes
+its balance series to the inspector, whose card for that series comes first.
+When the title needs the room, the tag shrinks to its
 glyph (pencil, clock) rather than cutting the account name; the tooltip and
 spoken label still say the word. A line is LAST READING by the read that
 produced it: the ChatGPT API grant and the Console credit have their own billing
@@ -609,7 +616,40 @@ avatar in the popover is the logo in greyscale at 55% opacity inside a 1.5pt
 red ring, with the countdown (or `nosign` when no reset was published) in a red
 capsule on the top-left corner, so the logo stays recognisable. The ring and
 tag draw outside the 28pt frame and do not move it. The inspector and widget
-keep the struck-through mark.
+keep the struck-through mark. In Subscriptions, spent *text* (the caption under
+a striped bar and the "Blocked" fallback) is `Theme.error`: errorBold as 10–11pt
+text measures 4.08:1 on the row and 3.58:1 hovered, under AA. errorBold stays
+the fill, stripes, ring and tag.
+
+**Each glance verdict has one definition; surfaces word it, never re-derive it.**
+A run-out forecast is `RunOutVerdict` (total over reset × rate × projected
+run-out, including a run-out already due between polls); an account-level block
+is `QuotaSnapshot.isAccountBlocked`, read through `GlancePresentation.Pool.isBlocked`
+and into the grid pool's windows; a used share is `GlancePresentation.usedPercentText`
+(never "100%" under the spent threshold, "<1%" for a sliver); a countdown that
+has passed is "due", never "now". Each of these was once derived locally and
+drifted, one surface per review round, until it was moved to one place.
+A return hint ("Back soonest", the menu bar's "next …") is
+`GlancePresentation.soonestReturn`: never a stale pool's old reset, and never
+for an account blocked on its badge, whose windows' resets do not say when the
+account-wide block lifts (its return is "not published"); the grid's cells for
+such an account show the block with no countdown.
+Whether a pool's figures describe now is `GlancePresentation.Freshness`
+(current, stale, or awaitingReset when a window's published reset has passed
+with no reading since). Only a current pool is a pick; the grid notes
+"Window reset · awaiting a reading"; the inspector leads with
+`.awaitingReading`, never "Healthy"; and the burndown keeps its recorded
+projection only while the live snapshot shows the same usable window: a
+current, usable pool whose window is unspent and unblocked and whose reset
+agrees with the recorded one (`Burndown.current(for:now:)`,
+`InspectorRunOut.resetsAgree`).
+
+Time is one clock too. The menu-bar title, the popover's sections and footer,
+and an open inspector re-derive on the same whole-30-second boundaries
+(`GlanceClock`, `.glanceTicks`), so a reset that passes between polls turns
+every surface on the same tick. Each surface used to run a timer from when it
+opened, and the inspector read the time only on a data load, so it kept
+forecasting a window the popover already called "due".
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
@@ -622,7 +662,10 @@ remainder. Claude splits the grant set by the allowance it resets: a plan-wide
 ticket is a Wallet line of its own, with the credit's visible expiry as its
 figure ("20d remaining"), and a model's tickets sit beside that model's line in
 Subscriptions (`ModelTicketsBadge`), which a spent or blocked plan window hides.
-A model ticket with no model line to sit beside is a Wallet line too. An expiry
+A model ticket with no model line to sit beside is a Wallet line too, and that
+includes one whose line a spent or blocked plan hides. `unmatchedResetCredits`
+decides only by the labels its caller actually draws; also filtering on
+`hidesModelWindows` there dropped those tickets from both sections. An expiry
 the vendor did not publish says "Expiry not published" rather than borrowing
 the reset window's date.
 

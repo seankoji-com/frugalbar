@@ -207,7 +207,7 @@ public final class OpenCodeGoProvider: QuotaProvider, Sendable {
             row1: Self.row(usage.rolling, "5H", length: QuotaWindow.fiveHours, now: now),
             row2: Self.row(usage.weekly, "WK", length: QuotaWindow.week, now: now),
             row3: Self.row(usage.monthly, "MO", length: nil, monthly: true, now: now),
-            badgeText: "Blocked",
+            badgeText: QuotaSnapshot.accountBlockedBadge,
             planName: plan?.name,
             keyMasked: nil,
             cliSource: "macOS Keychain / auth.json"

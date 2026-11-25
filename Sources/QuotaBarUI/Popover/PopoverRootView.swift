@@ -24,20 +24,44 @@ import QuotaBarCore
 @MainActor
 @Observable
 public final class PopoverInspection {
-    public var snapshot: QuotaSnapshot?
+    public var snapshot: QuotaSnapshot? {
+        didSet { if snapshot == nil { focusBalanceSeriesID = nil } }
+    }
+    /// The balance series of the Wallet line the inspector was opened from.
+    public var focusBalanceSeriesID: String?
     public init() {}
+
+    /// Pure motion policy for inspector open/close transitions so Reduce Motion
+    /// is respected consistently across SwiftUI views and AppKit Escape handling.
+    public static func openAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84)
+    }
+
+    public static func closeAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.18)
+    }
+
+    public static func usesScaleTransition(reduceMotion: Bool) -> Bool {
+        !reduceMotion
+    }
 
     /// Closes the open inspector, if any. Returns whether one was open.
     @discardableResult
-    public func dismiss() -> Bool {
+    public func dismiss(reduceMotion: Bool? = nil) -> Bool {
         guard snapshot != nil else { return false }
-        withAnimation(.easeOut(duration: 0.2)) { snapshot = nil }
+        let reduced = reduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if let anim = Self.closeAnimation(reduceMotion: reduced) {
+            withAnimation(anim) { snapshot = nil }
+        } else {
+            snapshot = nil
+        }
         return true
     }
 }
 
 public struct PopoverRootView: View {
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var store: QuotaStore
     @State private var inspection: PopoverInspection
     private var selectedSnapshot: QuotaSnapshot? {
@@ -99,7 +123,9 @@ public struct PopoverRootView: View {
                 },
                 onQuit: { NSApp.terminate(nil) },
                 onRefresh: { Task { await store.forceRefresh(allowInteractiveUnlock: true) } },
-                eventCount: EventsPresentation.popoverEvents(store.recentEvents).count
+                eventCount: EventsPresentation.popoverEvents(store.recentEvents).count,
+                eventsReadFailed: store.recentEventsReadFailed,
+                eventsNotYetRead: !store.recentEventsLoaded && !store.recentEventsReadFailed
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 footerHeight = $0
@@ -111,7 +137,14 @@ public struct PopoverRootView: View {
         .allowsHitTesting(selectedSnapshot == nil)
         .accessibilityHidden(selectedSnapshot != nil)
         .overlay {
-            if let snap = selectedSnapshot {
+            // The store's current copy of the selected pool, not the copy taken
+            // when it was opened: a poll that lands while the inspector is open
+            // must reach it (its summary, windows and forecast), as it reaches
+            // the list beneath and the menu bar. A pool the store no longer
+            // publishes (disconnected, hidden) has no current copy, so nothing
+            // is drawn and the selection is dropped below.
+            if let selected = selectedSnapshot,
+               let snap = Self.currentSnapshot(for: selected, in: store.snapshots, hasLoaded: store.hasLoaded) {
                 MetricDetailModalView(
                     snapshot: snap,
                     readingsLoader: store.readings(for:since:),
@@ -121,17 +154,33 @@ public struct PopoverRootView: View {
                     balanceLoader: { id, since, until, bucket in
                         await store.balancePoints(seriesId: id, since: since, until: until, bucketSeconds: bucket)
                     },
+                    focusBalanceSeriesID: inspection.focusBalanceSeriesID,
                     onClose: {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        if let anim = PopoverInspection.closeAnimation(reduceMotion: reduceMotion) {
+                            withAnimation(anim) { selectedSnapshot = nil }
+                        } else {
                             selectedSnapshot = nil
                         }
                     }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .transition(
+                    PopoverInspection.usesScaleTransition(reduceMotion: reduceMotion)
+                        ? .opacity.combined(with: .scale(scale: 0.98))
+                        : .identity
+                )
                 .zIndex(100)
+                // A fresh inspector per pool and entry point: its selections
+                // (chart mode, balance series) never carry over to another.
+                .id("\(snap.id)|\(inspection.focusBalanceSeriesID ?? "")")
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedSnapshot != nil)
+        .animation(PopoverInspection.closeAnimation(reduceMotion: reduceMotion), value: selectedSnapshot != nil)
+        .onChange(of: store.snapshots.map(\.id)) {
+            if let selected = selectedSnapshot,
+               Self.currentSnapshot(for: selected, in: store.snapshots, hasLoaded: store.hasLoaded) == nil {
+                inspection.dismiss(reduceMotion: reduceMotion)
+            }
+        }
         .onAppear(perform: updateAvailableHeight)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             updateAvailableHeight()
@@ -144,6 +193,14 @@ public struct PopoverRootView: View {
             // owns the store. Registering here too ran every tick twice.
             await store.load()
         }
+    }
+
+    /// The selected pool as the store publishes it now. Before the first load
+    /// the selection is all there is; after it, a pool the store dropped has
+    /// no current copy and must not be shown as if it did.
+    nonisolated static func currentSnapshot(for selected: QuotaSnapshot, in snapshots: [QuotaSnapshot],
+                                hasLoaded: Bool) -> QuotaSnapshot? {
+        snapshots.first { $0.id == selected.id } ?? (hasLoaded ? nil : selected)
     }
 
     private var scrollHeight: CGFloat {
@@ -170,29 +227,48 @@ public struct PopoverRootView: View {
         }
     }
 
+    /// Re-derived every 30 seconds as well as on every store change, so a
+    /// window whose published reset passes while the popover is open stops
+    /// being the pick (and shows "due") without waiting for the next poll.
     private var sections: some View {
-        let now = Date()
+        TimelineView(.glanceTicks) { context in
+            sections(now: context.date)
+        }
+    }
+
+    private func sections(now: Date) -> some View {
         let order = CredentialStore.providerOrder
         let grid = ProviderGridPresentation(snapshots: store.snapshots, serviceOrder: order, now: now)
         // Every credit and balance, direct balances (OpenRouter, DeepSeek)
         // included, under the provider it belongs to.
-        let wallet = WalletPresentation(
-            snapshots: GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order).walletSnapshots,
-            now: now)
+        let glance = GlancePresentation(snapshots: store.snapshots, now: now, serviceOrder: order)
+        let wallet = WalletPresentation(snapshots: glance.walletSnapshots, now: now)
         return VStack(spacing: Theme.sectionGap) {
             ProviderGridView(
                 presentation: grid,
+                // The menu bar's pick, from the same presentation.
+                useNow: UseNowPresentation(glance: glance),
                 onSelect: { snap in
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                        withAnimation(anim) { selectedSnapshot = snap }
+                    } else {
                         selectedSnapshot = snap
                     }
                 }
             )
             if !wallet.rows.isEmpty {
-                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries, now: now) { id in
+                WalletSection(presentation: wallet, balanceSeries: store.balanceSeries,
+                              trendIsCarriedOver: store.balanceSeriesReadFailed, now: now) { id, seriesID in
                     guard let snap = store.snapshots.first(where: { $0.id == id }) else { return }
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    // The line's own series, so its details open on its figure.
+                    if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                        withAnimation(anim) {
+                            selectedSnapshot = snap
+                            inspection.focusBalanceSeriesID = seriesID
+                        }
+                    } else {
                         selectedSnapshot = snap
+                        inspection.focusBalanceSeriesID = seriesID
                     }
                 }
             }
@@ -213,7 +289,9 @@ public struct PopoverRootView: View {
                     forecasts: store.forecasts,
                     balanceSeries: store.balanceSeries,
                     onSelect: { snap in
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        if let anim = PopoverInspection.openAnimation(reduceMotion: reduceMotion) {
+                            withAnimation(anim) { selectedSnapshot = snap }
+                        } else {
                             selectedSnapshot = snap
                         }
                     }
@@ -221,35 +299,60 @@ public struct PopoverRootView: View {
             }
 
 
-            if store.snapshots.isEmpty {
+            // Nothing drawn above, whatever the store holds: unconfigured
+            // placeholders survive the read but neither Subscriptions nor the
+            // Wallet draws them, and checking `snapshots.isEmpty` alone left a
+            // first-time user with a footer and no way forward.
+            if store.snapshots.isEmpty || (grid.groups.isEmpty && wallet.rows.isEmpty) {
                 if store.hasLoaded {
-                    // Loaded, and nothing came back: only possible when every
-                    // provider is hidden, so say how to fix that.
-                    VStack(spacing: 10) {
-                        Text("Nothing to show")
-                            .font(Theme.Typography.title)
-                            .foregroundStyle(Theme.onSurface)
-                        Text("Every provider is hidden. Open Settings → Services to turn monitoring on.")
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.onSurfaceVariant)
-                            .multilineTextAlignment(.center)
-                        Button("Open Preferences") {
-                            if let onOpenSettings {
-                                onOpenSettings()
-                            } else {
-                                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    // Loaded, and nothing to draw: every provider is hidden or
+                    // none is set up, so say how to fix that.
+                    GlanceCard {
+                        VStack(spacing: 10) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(Theme.outline)
+                                .accessibilityHidden(true)
+                            Text("Nothing to show")
+                                .font(Theme.Typography.title)
+                                .foregroundStyle(Theme.onSurface)
+                            Text("No service is set up or shown. Open Settings → Services to connect one or turn monitoring on.")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.onSurfaceVariant)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                if let onOpenSettings {
+                                    onOpenSettings()
+                                } else {
+                                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                                }
+                            } label: {
+                                Text("Open Preferences")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.onSurface)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(Theme.surfaceContainerHigh))
+                                    .overlay(Capsule().strokeBorder(Theme.outlineVariant.opacity(0.6), lineWidth: 0.75))
                             }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
-                    .accessibilityElement(children: .combine)
-                } else {
-                    Text("Loading…")
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.outline)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 32)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 26)
+                    }
+                } else {
+                    GlanceCard {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading…")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.outline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 28)
+                    }
                 }
             }
         }

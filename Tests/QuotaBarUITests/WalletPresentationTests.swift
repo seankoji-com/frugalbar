@@ -24,9 +24,9 @@ struct WalletPresentationTests {
     @Test("ChatGPT has two credit lines: its bonus credit count and its monthly API credit")
     func chatGPTCredits() throws {
         let bonus = try #require(wallet.rows.first { $0.title == "ChatGPT bonus" })
-        #expect(bonus.figure == "60,085 credits")
+        #expect(bonus.figure == "60,085 credits" && bonus.figureRole == "left")
         let api = try #require(wallet.rows.first { $0.title == "ChatGPT API" })
-        #expect(api.figure == "$100.00/mo")
+        #expect(api.figure == "$100.00/mo" && api.figureRole == "grant")
     }
 
     @Test("a credit with an expiry draws a provider-style bar; the even-use tick only where its period is published")
@@ -157,7 +157,7 @@ struct WalletPresentationTests {
         snapshots.append(second)
         let rows = WalletPresentation(snapshots: snapshots, now: now).rows.filter { $0.title.hasPrefix("Gemini API") }
         #expect(rows.map(\.title) == ["Gemini API · Account 1", "Gemini API · Account 2"])
-        #expect(rows.map(\.figure) == ["A$25.00/mo", "A$14.00/mo"])
+        #expect(rows.map(\.figure) == ["A$25.00/mo", "A$14.00/mo"] && rows.allSatisfy { $0.figureRole == "cap" })
         #expect(rows.allSatisfy { $0.tag == "configured" })
     }
 
@@ -207,9 +207,11 @@ struct WalletPresentationTests {
         let deepSeek = try #require(rows.first { $0.id == "deepseek#balance" })
         #expect(deepSeek.title == "DeepSeek")
         #expect(deepSeek.figure == "-$0.01")
+        // Overdrawn: no "left" under a figure that is below zero.
+        #expect(deepSeek.figureRole == nil)
         #expect(deepSeek.tone == .negative)
         let openRouter = try #require(rows.first { $0.id == "openrouter#balance" })
-        #expect(openRouter.figure == "$0.00")
+        #expect(openRouter.figure == "$0.00" && openRouter.figureRole == "left")
         #expect(openRouter.tone == .normal)
     }
 

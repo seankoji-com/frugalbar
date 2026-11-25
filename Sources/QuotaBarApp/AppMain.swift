@@ -24,8 +24,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Sync to phone & watch. nil in a build with no sync client, which then
     /// never contacts Google and shows no sync setting.
     private let sync: SyncController?
+    /// Active only when launched with `FRUGALBAR_LIVE_HARNESS_DIR` set: keeps
+    /// all state isolated from Keychain, live preferences, history and network
+    /// while driving the exact production `NSStatusItem` / `NSPopover` lifecycle.
+    private let liveHarness: LiveGlanceHarness?
 
     override init() {
+        if let harnessDir = LiveGlanceHarness.outputDirectory {
+            let harness = LiveGlanceHarness(outputDir: harnessDir)
+            self.liveHarness = harness
+            self.historyStore = harness.historyStore
+            self.activityEngine = ActivityIngestionEngine(store: harness.historyStore, adapters: [])
+            self.eventEngine = AIEventEngine(store: harness.historyStore)
+            self.store = harness.store
+            self.sync = nil
+            super.init()
+            return
+        }
+        self.liveHarness = nil
         let hStore = QuotaHistoryStore()
         let aEngine = ActivityIngestionEngine(store: hStore)
         self.historyStore = hStore
@@ -122,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
     private var schedulerToken: UUID?
+    private var statusRedrawTimer: Timer?
     private var providerPreferencesObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private let notificationObserver = QuotaNotificationObserver()
@@ -130,22 +147,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the accessory policy explicit for bare and wrapped executables.
         NSApp.setActivationPolicy(.accessory)
 
-        let activity = activityEngine
-        HistoryWindow.activityStatusLoader = { await activity.status() }
+        if liveHarness == nil {
+            let activity = activityEngine
+            HistoryWindow.activityStatusLoader = { await activity.status() }
 
-        // Adopt a choice made under an older, process-name-keyed preference
-        // domain before deciding whether this is a first launch — otherwise
-        // renaming the binary reads as a fresh install.
-        CredentialStore.migrateLegacyPreferences()
+            // Adopt a choice made under an older, process-name-keyed preference
+            // domain before deciding whether this is a first launch — otherwise
+            // renaming the binary reads as a fresh install.
+            CredentialStore.migrateLegacyPreferences()
 
-        // The banner identity and (when a banner kind is on) the one-time
-        // macOS permission prompt. No-op outside an app bundle.
-        NotificationDelivery.prepare()
+            // The banner identity and (when a banner kind is on) the one-time
+            // macOS permission prompt. No-op outside an app bundle.
+            NotificationDelivery.prepare()
 
-        // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
-        // the fetch path (`resolved()` reads without writing) so a poll never
-        // writes preferences or posts the refresh such a write triggers.
-        OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
+            // Seed the legacy OpenCode Go workspace once, on a first run. Kept off
+            // the fetch path (`resolved()` reads without writing) so a poll never
+            // writes preferences or posts the refresh such a write triggers.
+            OpenCodeGoWorkspaceStore.persistLegacyIfNeeded()
+        }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -180,22 +199,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.delegate = self
         self.popover = popover
 
+        // One owner for status item redraws.
+        store.onSummaryChange = { [weak self] _ in
+            self?.applyStatusItemPresentation()
+        }
+        applyStatusItemPresentation()
+        // The title is a function of the time too: a pick whose window reset
+        // passes between polls must stop being the pick at that moment, not
+        // at the next poll. Redrawn on every `GlanceClock` tick from the cached
+        // snapshots, the same boundaries the popover and inspector use.
+        let redraw = Timer(fire: GlanceClock.nextTick(after: Date()), interval: GlanceClock.interval,
+                           repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyStatusItemPresentation() }
+        }
+        RunLoop.main.add(redraw, forMode: .common)
+        statusRedrawTimer = redraw
+
+        if let liveHarness {
+            Task { @MainActor [weak self] in
+                guard let self else { exit(1) }
+                let code = await liveHarness.run(
+                    statusItem: statusItem,
+                    popover: popover,
+                    inspection: inspection,
+                    applyStatusItemPresentation: { [weak self] in
+                        self?.applyStatusItemPresentation()
+                    }
+                )
+                exit(code)
+            }
+            return
+        }
+
         // A clicked banner with no link of its own opens this popover; see
         // `NotificationPresenter.didReceive`.
         NotificationPresenter.activateHandler = { [weak self] in
             self?.presentPopoverFromNotification()
         }
 
-
-
-        // One owner for status item redraws.
-        store.onSummaryChange = { [weak self] _ in
-            self?.applyStatusItemPresentation()
-        }
         store.onQuotaRefreshCompleted = { [weak self] snapshots in
             await self?.checkForQuotaTransitions(snapshots)
         }
-        applyStatusItemPresentation()
         DesktopWidgetWindow.configure(store: store)
 
         // A change in Settings → Services takes effect now rather than on
@@ -317,6 +361,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func presentPopoverFromNotification() {
         NSApp.activate(ignoringOtherApps: true)
         guard let button = statusItem?.button, let popover, !popover.isShown else { return }
+        // Opens on the list, as the status item does (`togglePopover`).
+        inspection.dismiss(reduceMotion: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         Task { await store.load() }
@@ -358,7 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The title is the top Use-now pick, from the same presentation the
         // popover's strip is drawn from, so the two can never disagree.
-        let glance = MenuBarGlance.presentation(snapshots: snapshots, now: Date())
+        let glance = MenuBarGlance.presentation(snapshots: snapshots, now: Date(), hasLoaded: store.hasLoaded)
         if let vendorId = glance.vendor, let rawImg = VendorSVGLogo.nsImage(for: vendorId) {
             let icon = NSImage(size: NSSize(width: 18, height: 18))
             icon.isTemplate = false
@@ -404,6 +450,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(sender)
             return
         }
+        // However the popover last closed (a click outside, the status item,
+        // Escape on the list), a new glance opens on the list. A retained
+        // selection reopened the old inspector over it. Cleared here, before
+        // showing, rather than in `popoverDidClose`, whose late delivery could
+        // clear a selection made after the popover had already reopened.
+        inspection.dismiss(reduceMotion: true)
         // Show immediately with cached values, then update in place.
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()

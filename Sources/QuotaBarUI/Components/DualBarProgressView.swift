@@ -151,10 +151,13 @@ public struct DualBarProgressView: View {
 
                     // The single marker: where an even pace would be by now.
                     if let pace = drawnPaceMarker {
+                        // A light core in a dark knockout, as `UsageBar` draws
+                        // it: a soft shadow left the core at 1.6:1 on the fill.
                         Capsule()
                             .fill(Color.white.opacity(0.9))
                             .frame(width: Self.tickWidth, height: Self.tickHeight)
-                            .shadow(color: Color.black.opacity(0.6), radius: 1.5)
+                            .padding(1)
+                            .background(Capsule().fill(Theme.surface))
                             .position(x: min(max(pace * w, 1), w - 1), y: geo.size.height / 2)
                     }
                 }

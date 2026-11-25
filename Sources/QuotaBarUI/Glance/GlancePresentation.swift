@@ -49,9 +49,25 @@ public struct GlancePresentation: Equatable, Sendable {
         public let headroomAtRisk: Double?
         public let isAheadOfPace: Bool
         public let isSpent: Bool
+        /// The vendor's published reset for this window has passed: its figure
+        /// describes the window that ended, not the one running now.
+        public var isExpired: Bool = false
         /// The share used, as the bars draw it: 1 − `remaining`, nil when no
         /// fraction was published.
         public var used: Double? { remaining.map { 1 - $0 } }
+    }
+
+    /// Whether a pool's figures describe now. The one answer every surface
+    /// reads (the pick, return hints, the grid's note line, the inspector),
+    /// so none can recommend or reassure from figures another calls old.
+    public enum Freshness: Equatable, Sendable {
+        /// The newest poll measured it, and every window is still running.
+        case current
+        /// The newest poll failed; these figures are from an earlier one.
+        case stale
+        /// A window's published reset has passed and no reading since has
+        /// shown the new window: its figure is the old window's.
+        case awaitingReset
     }
 
     public struct Pool: Identifiable, Equatable, Sendable {
@@ -74,6 +90,21 @@ public struct GlancePresentation: Equatable, Sendable {
         public let returnsAt: Date?
         /// A paid overage or on-demand allowance is still open beside a spent plan.
         public let hasPaidOverage: Bool
+
+        /// The vendor, not the user's own use, stopped this pool: the account
+        /// badge (`QuotaSnapshot.isAccountBlocked`) or a blocked plan window.
+        /// The one definition every "blocked" word on the glance reads.
+        public var isBlocked: Bool {
+            snapshot.isAccountBlocked || windows.contains { $0.isSpent && $0.bar.isBlocked }
+        }
+
+        public var freshness: Freshness {
+            if isStale { return .stale }
+            return windows.contains(where: \.isExpired) ? .awaitingReset : .current
+        }
+
+        /// Its figures describe now (`freshness == .current`).
+        public var isCurrent: Bool { freshness == .current }
     }
 
     public struct Pick: Equatable, Sendable {
@@ -132,7 +163,9 @@ public struct GlancePresentation: Equatable, Sendable {
         self.pools = pools
 
         // Use now.
-        let candidates = pools.filter { $0.state == .usable && !$0.isStale }
+        // Only a pool whose figures describe now: a stale one, or one whose
+        // window reset with no reading since, is unconfirmed, never a pick.
+        let candidates = pools.filter { $0.state == .usable && $0.isCurrent }
         let qualifying = candidates.compactMap { Self.qualifyingPick($0, now: now) }
             .sorted(by: Self.ranksAbove)
         if qualifying.isEmpty, let caveat = Self.caveatPick(from: pools, now: now) {
@@ -160,7 +193,10 @@ public struct GlancePresentation: Equatable, Sendable {
                 (rank[Self.serviceName(for: $0.vendorId)] ?? .max) < (rank[Self.serviceName(for: $1.vendorId)] ?? .max)
             }
         }
-        menuTitle = Self.menuTitle(ranking: ranking, pools: pools, backSoon: backSoon, now: now)
+        // A Wallet line exists only for a configured balance: an unconfigured
+        // direct-balance vendor draws none, so the menu bar must not point to it.
+        menuTitle = Self.menuTitle(ranking: ranking, pools: pools, backSoon: backSoon, now: now,
+                                   hasWallet: walletSnapshots.contains { $0.status.unavailableReason != .notConfigured })
     }
 
     // MARK: Pools
@@ -172,7 +208,7 @@ public struct GlancePresentation: Equatable, Sendable {
         // Keep its row so the user can see why no quota is available.
         let readFailed = snapshot.category == .aiSubscriptions
             && snapshot.status.unavailableReason.map { $0 != .notConfigured } == true
-        let accountBlocked = snapshot.badgeText == "Blocked"
+        let accountBlocked = snapshot.isAccountBlocked
         guard !plan.isEmpty || isNamedClaudeAccount(snapshot) || readFailed || accountBlocked else { return nil }
         let windows = plan.map { window(for: $0, now: now) }
         // The vendor's account-level block (Command Code's `limited`) is
@@ -184,17 +220,17 @@ public struct GlancePresentation: Equatable, Sendable {
         if !measured && !accountBlocked {
             state = .unreadable
         } else if anySpent {
-            let bonusOpen = supplementary.contains {
-                $0.allowanceRole == .bonus && !$0.isBlocked
-                    && ($0.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)
-            }
+            let bonusOpen = supplementary.contains { Self.isOpenBonus($0, now: now) }
             state = bonusOpen ? .onBonus : .spent
         } else {
             state = .usable
         }
 
         let spentResets = windows.filter(\.isSpent).map(\.bar.resetsAt)
-        let returnsAt: Date? = (accountBlocked && spentResets.isEmpty) || spentResets.contains(where: { $0 == nil })
+        // An account the vendor blocked on its badge has no published return:
+        // its windows' resets say when each window turns over, not when the
+        // account-wide block lifts, so neither is offered as the pool's return.
+        let returnsAt: Date? = accountBlocked || spentResets.contains(where: { $0 == nil })
             ? nil : spentResets.compactMap { $0 }.max()
         let paidOpen = supplementary.contains {
             $0.allowanceRole == .paidOverage && !$0.isBlocked
@@ -208,6 +244,15 @@ public struct GlancePresentation: Equatable, Sendable {
             isAheadOfPace: state == .usable && windows.contains(where: \.isAheadOfPace),
             returnsAt: returnsAt, hasPaidOverage: paidOpen
         )
+    }
+
+    /// A bonus allowance that can take a job now: not blocked, not used up,
+    /// and not past the expiry the vendor published (Kiro's `BN` carries it
+    /// in `resetsAt`). An expired bonus was still winning "Best available".
+    static func isOpenBonus(_ bar: DualBarMetrics, now: Date) -> Bool {
+        bar.allowanceRole == .bonus && !bar.isBlocked
+            && (bar.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)
+            && (bar.resetsAt.map { $0 > now } ?? true)
     }
 
     static func window(for bar: DualBarMetrics, now: Date) -> Window {
@@ -229,7 +274,8 @@ public struct GlancePresentation: Equatable, Sendable {
             ahead = used - elapsed >= aheadOfPaceLead
         }
         return Window(bar: bar, remaining: remaining, isLong: isLong, headroomAtRisk: risk,
-                      isAheadOfPace: ahead, isSpent: spent)
+                      isAheadOfPace: ahead, isSpent: spent,
+                      isExpired: bar.resetsAt.map { $0 <= now } ?? false)
     }
 
     /// Which instances share an identity for the menu bar's account tag.
@@ -321,7 +367,7 @@ public struct GlancePresentation: Equatable, Sendable {
     /// left in its least-remaining plan window, marked as weak. A pool on its
     /// bonus allowance is eligible only here. Stale and spent pools never are.
     private static func caveatPick(from pools: [Pool], now: Date) -> Pick? {
-        let eligible = pools.filter { ($0.state == .usable || $0.state == .onBonus) && !$0.isStale }
+        let eligible = pools.filter { ($0.state == .usable || $0.state == .onBonus) && $0.isCurrent }
         let best = eligible.compactMap { pool -> (Pool, Window)? in
             let measured = pool.windows.filter { $0.remaining != nil && !$0.isSpent }
             let preferred = measured.filter(\.isLong).isEmpty ? measured : measured.filter(\.isLong)
@@ -332,21 +378,31 @@ public struct GlancePresentation: Equatable, Sendable {
             // A pool on bonus whose plan windows are all spent has no plan
             // window left to name; its reason is the bonus itself.
             guard let bonus = eligible.first(where: { $0.state == .onBonus }),
-                  let bar = bonus.snapshot.quotaBars.first(where: { $0.allowanceRole == .bonus }) else { return nil }
+                  let bar = bonus.snapshot.quotaBars.first(where: { Self.isOpenBonus($0, now: now) }) else { return nil }
             let w = window(for: bar, now: now)
-            return Pick(pool: bonus, binding: w, reason: "on bonus · \(percent(w.remaining ?? 0))% left",
+            return Pick(pool: bonus, binding: w,
+                        reason: w.remaining.map { "on bonus · \(percent($0))% left" } ?? "on bonus",
                         isCaveat: true, score: nil)
         }
+        // The reset is part of the reason, as for a qualifying pick: the title
+        // shows it, so the spoken label must say it too.
+        let resetClause = binding.bar.resetsAt.map { reset -> String in
+            let when = countdown(reset, now: now)
+            return when == "due" ? " · reset due" : " · resets in \(when)"
+        } ?? ""
         let text = pool.state == .onBonus
             ? "on bonus"
-            : "only \(percent(binding.remaining!))% \(binding.bar.label) left"
+            : "only \(percent(binding.remaining!))% \(binding.bar.label) left\(resetClause)"
         return Pick(pool: pool, binding: binding, reason: text, isCaveat: true, score: binding.headroomAtRisk)
     }
 
     static func reason(_ window: Window, now: Date) -> String {
-        let left = "\(percent(window.remaining ?? 0))% \(window.bar.label) left"
+        // Never a "0% left" for a window that published no figure.
+        let left = window.remaining.map { "\(percent($0))% \(window.bar.label) left" }
+            ?? "\(window.bar.label) not measured"
         guard let reset = window.bar.resetsAt else { return "\(left) · reset not published" }
-        return "\(left) · resets in \(countdown(reset, now: now))"
+        let when = countdown(reset, now: now)
+        return when == "due" ? "\(left) · reset due" : "\(left) · resets in \(when)"
     }
 
     /// Floored, so a figure never overstates headroom (99.8% left reads 99%).
@@ -357,8 +413,27 @@ public struct GlancePresentation: Equatable, Sendable {
     /// A used share as every "% used" figure prints it: the Subscriptions
     /// cell, the Wallet meter and the menu-bar title. One formatter, so a tie
     /// such as 12.5% rounds the same way in all three.
+    ///
+    /// It never rounds across a state boundary: a window under the spent
+    /// threshold never prints "100%" (99.6% used is not spent, and draws no
+    /// stripes), and a nonzero share never prints "0%" beside a bar that
+    /// shows a sliver. Spoken labels use `usedPercentSpoken`, the same figure.
     static func usedPercentText(_ used: Double) -> String {
-        min(max(used, 0), 1).formatted(.percent.precision(.fractionLength(0)))
+        let clamped = min(max(used, 0), 1)
+        if clamped > 0, clamped < 0.005 { return "<1%" }
+        let shown = clamped >= QuotaSnapshot.exhaustionThreshold ? clamped : min(clamped, 0.99)
+        return shown.formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    /// `usedPercentText` as VoiceOver should read it.
+    static func usedPercentSpoken(_ used: Double) -> String {
+        let text = usedPercentText(used)
+        return text == "<1%" ? "under 1%" : text
+    }
+
+    /// `usedPercentSpoken` in words: "58 percent", "under 1 percent".
+    static func usedPercentWords(_ used: Double) -> String {
+        usedPercentSpoken(used).replacingOccurrences(of: "%", with: " percent")
     }
 
     // MARK: Back soon
@@ -366,7 +441,7 @@ public struct GlancePresentation: Equatable, Sendable {
     static func returnEntry(_ pool: Pool, now: Date) -> ReturnEntry {
         let spent = pool.windows.filter(\.isSpent)
         let label = spent.max { ($0.bar.resetsAt ?? .distantFuture) < ($1.bar.resetsAt ?? .distantFuture) }?.bar.label
-        let blocked = pool.snapshot.badgeText == "Blocked" || spent.contains { $0.bar.isBlocked }
+        let blocked = pool.isBlocked
         let text: String
         if let at = pool.returnsAt {
             text = at > now
@@ -391,10 +466,15 @@ public struct GlancePresentation: Equatable, Sendable {
     /// minutes under an hour, hours under two days, then days, each rounded.
     /// 43.9h is "44h"; 125h is "5d". Every countdown in the glance and the
     /// menu-bar title reads this, so no two can disagree in format.
+    ///
+    /// A time that has passed is "due" (the reset is owed, no reading has
+    /// shown it yet) and one under half a minute away is "<1m": "now" read
+    /// as "resets in now" in sentences and as "back now" beside a 100% bar.
     public static func countdown(_ date: Date, now: Date) -> String {
         let interval = date.timeIntervalSince(now)
+        guard interval > 0 else { return "due" }
         let minutes = Int((interval / 60).rounded())
-        guard minutes > 0 else { return "now" }
+        guard minutes > 0 else { return "<1m" }
         if minutes < 60 { return "\(minutes)m" }
         let hours = Int((interval / 3600).rounded())
         if hours < 48 { return "\(hours)h" }
@@ -404,7 +484,9 @@ public struct GlancePresentation: Equatable, Sendable {
     /// `countdown` in words, the same unit and rounding: "44 hours", "5 days".
     public static func countdownSpoken(_ date: Date, now: Date) -> String {
         let text = countdown(date, now: now)
-        guard text != "now", let unit = text.last, let value = Int(text.dropLast()) else { return text }
+        if text == "due" { return "now, awaiting a reading" }
+        if text == "<1m" { return "under a minute" }
+        guard let unit = text.last, let value = Int(text.dropLast()) else { return text }
         let word = switch unit { case "m": "minute"; case "h": "hour"; default: "day" }
         return "\(value) \(word)\(value == 1 ? "" : "s")"
     }
@@ -433,37 +515,76 @@ public struct GlancePresentation: Equatable, Sendable {
 
     // MARK: Menu bar
 
-    static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date) -> MenuTitle {
+    /// The pool's spoken name: "Codex", not "Codex Codex"; "Claude Code
+    /// Primary" when the pool has its own name.
+    static func spokenName(_ pool: Pool) -> String {
+        pool.name == pool.service || pool.name.hasPrefix(pool.service) ? pool.name : "\(pool.service) \(pool.name)"
+    }
+
+    /// The return a hint may promise: the soonest published one still ahead,
+    /// from a current reading. A stale pool's reset is the schedule of a poll
+    /// that has since failed, so it is not offered as the next return (the
+    /// menu bar's "next …" and the popover's "Back soonest" both read this).
+    static func soonestReturn(_ backSoon: [ReturnEntry], now: Date) -> ReturnEntry? {
+        backSoon.first { !$0.pool.isStale && ($0.pool.returnsAt ?? .distantPast) > now }
+    }
+
+    /// - Parameter format: how a countdown is printed. The menu bar keeps its
+    ///   own unit (`countdown`, days from 48h); the popover's Use-now line
+    ///   passes Subscriptions' compact one, so it agrees with the rows below it.
+    static func menuTitle(ranking: [Pick], pools: [Pool], backSoon: [ReturnEntry], now: Date,
+                          hasWallet: Bool = true,
+                          format: (Date, Date) -> String = { countdown($0, now: $1) }) -> MenuTitle {
         if let pick = ranking.first {
             let who = pick.pool.accountTag ?? pick.pool.name
             // % used, as the popover's bars print it (owner, 24 Nov 2026), and
             // rounded as they round, so the title and the pick's cell agree.
             // The spoken label keeps the reason's "% left", which names its
             // direction.
-            let used = "\(usedPercentText(pick.binding.used ?? 0)) \(pick.binding.bar.label) used"
-            let reset = pick.binding.bar.resetsAt.map { countdown($0, now: now) }
-            let text = ([who, used] + [reset].compactMap { $0 }).joined(separator: " · ")
-            let spoken = "Use \(pick.pool.service) \(pick.pool.name): \(pick.reason)"
+            let used = pick.binding.used.map { "\(usedPercentText($0)) \(pick.binding.bar.label) used" }
+            let reset = pick.binding.bar.resetsAt.map { format($0, now) }
+            // A bonus pick says so: starting a job there spends a bonus
+            // allowance that expires, not a plan that resets.
+            let onBonus = pick.binding.bar.allowanceRole == .bonus ? "on bonus" : nil
+            let text = ([who] + [onBonus, used, reset].compactMap { $0 }).joined(separator: " · ")
+            let spoken = "Use \(spokenName(pick.pool)): \(pick.reason)"
                 + (pick.isCaveat ? ". Best available, not a strong pick" : "")
             return MenuTitle(vendor: pick.pool.snapshot.vendorId, text: text,
                              tone: pick.isCaveat ? .caveat : .normal, spoken: spoken)
         }
-        let next = backSoon.first { ($0.pool.returnsAt ?? .distantPast) > now }
-            .map { countdown($0.pool.returnsAt!, now: now) }
+        let next = soonestReturn(backSoon, now: now).map { format($0.pool.returnsAt!, now) }
+        // A published reset that has passed with no reading since: the return
+        // is owed, not unpublished.
+        let resetPassed = backSoon.contains {
+            !$0.pool.isStale && ($0.pool.returnsAt.map { $0 <= now } ?? false)
+        }
+        // Only balances (OpenRouter, DeepSeek's API credit) and no quota pool:
+        // nothing failed, there is simply no subscription to pick from.
+        if pools.isEmpty {
+            return MenuTitle(vendor: nil, text: "No subscriptions", tone: .unknown,
+                             spoken: "No subscription quota to pick from"
+                                + (hasWallet ? "; balances are in the Wallet" : ""))
+        }
         let readable = pools.filter { $0.state != .unreadable }
         if readable.isEmpty {
+            // About subscription pools only: a Wallet balance may well have
+            // been read.
             return MenuTitle(vendor: nil, text: "No readings", tone: .unknown,
-                             spoken: "No provider could be read")
+                             spoken: "No subscription could be read")
         }
-        let uncertain = pools.contains { $0.state == .unreadable || $0.isStale }
+        let uncertain = pools.contains { $0.state == .unreadable || !$0.isCurrent }
         if uncertain {
-            let tail = next.map { "next \($0)" } ?? "returns unknown"
-            return MenuTitle(vendor: nil, text: "None confirmed usable · \(tail)", tone: .unknown,
-                             spoken: "No pool confirmed usable; \(tail)")
+            // A return is claimed unknown only when something is waiting to
+            // return; with nothing spent there is no return to speak of.
+            let tail = next.map { "next \($0)" }
+                ?? (resetPassed ? "reset passed · awaiting reading" : (backSoon.isEmpty ? nil : "returns unknown"))
+            let text = ["None confirmed usable", tail].compactMap { $0 }.joined(separator: " · ")
+            return MenuTitle(vendor: nil, text: text, tone: .unknown,
+                             spoken: ["No pool confirmed usable", tail].compactMap { $0 }.joined(separator: "; "))
         }
         let unknownReturns = backSoon.contains { $0.pool.returnsAt == nil }
         let tail = next.map { "next \($0)" + (unknownReturns ? " · others unknown" : "") }
-            ?? "return not published"
+            ?? (resetPassed ? "reset passed · awaiting reading" : "return not published")
         return MenuTitle(vendor: nil, text: "All spent · \(tail)", tone: .critical,
                          spoken: "Every pool is spent; \(tail)")
     }

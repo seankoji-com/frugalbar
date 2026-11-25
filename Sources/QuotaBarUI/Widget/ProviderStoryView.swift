@@ -66,7 +66,7 @@ struct ProviderStoryView: View {
                     .foregroundStyle(color(story.tone))
             }
             Spacer(minLength: 6)
-            if let w = story.window, let remaining = w.remaining, !w.isSpent {
+            if let remaining = story.heroRemaining {
                 VStack(alignment: .trailing, spacing: 0) {
                     HStack(alignment: .firstTextBaseline, spacing: 1) {
                         Text("\(GlancePresentation.percent(remaining))")
@@ -106,8 +106,11 @@ struct ProviderStoryView: View {
     @ViewBuilder
     private func chart(_ story: ProviderStoryPresentation, pool: GlancePresentation.Pool) -> some View {
         if let label = story.window?.bar.label, let readings,
+           // The same gate as the inspector: a recorded projection is drawn
+           // only while the live snapshot shows that usable window.
            let burndown = BurndownPresentation.burndown(readings: readings, instanceID: pool.id,
-                                                       barLabel: label, now: instant) {
+                                                       barLabel: label, now: instant)?
+               .current(for: pool.snapshot, now: instant) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("This \(story.windowName ?? label) window")
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant)

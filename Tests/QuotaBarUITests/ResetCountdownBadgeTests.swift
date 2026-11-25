@@ -28,11 +28,11 @@ struct ResetCountdownBadgeTests {
         // 3h 20m, which `description` spells out in two units.
         #expect(ResetCountdownBadge.compactDescription(inSeconds(12_000), now: now) == "Resets in 3h")
         #expect(ResetCountdownBadge.compactDescription(inSeconds(3.5 * 86_400 + 60), now: now) == "Resets in 4d")
-        #expect(ResetCountdownBadge.compactDescription(inSeconds(-1), now: now) == "Resets now")
+        #expect(ResetCountdownBadge.compactDescription(inSeconds(-1), now: now) == "Reset due · awaiting a reading")
         #expect(ResetCountdownBadge.spanSpoken(inSeconds(12_000), now: now) == "3 hours")
         #expect(ResetCountdownBadge.spanSpoken(inSeconds(60), now: now) == "1 minute")
         #expect(ResetCountdownBadge.compactSpoken(inSeconds(12_000), now: now) == "resets in 3 hours")
-        #expect(ResetCountdownBadge.compactSpoken(inSeconds(-1), now: now) == "resets now")
+        #expect(ResetCountdownBadge.compactSpoken(inSeconds(-1), now: now) == "reset due, awaiting a reading")
     }
 
     @Test("seconds")
@@ -121,7 +121,7 @@ struct ResetCountdownBadgeCompactTests {
     @Test("under a minute reads 1m, never 0m; a passed reset reads now; none reads nothing")
     func edges() {
         #expect(c(10) == "1m")
-        #expect(c(-5) == "now")
+        #expect(c(-5) == "due")
         #expect(ResetCountdownBadge.compact(nil, now: now) == nil)
     }
 

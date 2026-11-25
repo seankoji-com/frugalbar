@@ -212,15 +212,17 @@ public struct MetricRowPresentation: Equatable, Sendable {
         return nil
     }
 
-    /// Groups that have no row to sit under. They are still drawn at the
-    /// bottom of the card rather than dropped when a vendor publishes a scope
-    /// whose window is absent.
+    /// Groups that have no row to sit under: a model scope whose label is
+    /// not among `scopedLabels`. The caller passes the labels of the lines it
+    /// actually draws, so a spent or blocked plan (which hides the model
+    /// lines) passes none and its model tickets are returned here, to be
+    /// drawn elsewhere. Filtering on `hidesModelWindows` here as well dropped
+    /// them from both places.
     public func unmatchedResetCredits(scopedLabels: [String]) -> [ResetCreditTicketGroup] {
         resetCreditGroups.filter { group in
             if group.scope.isPlan { return false }
             if case .model(let name) = group.scope {
-                return !hidesModelWindows
-                    && !scopedLabels.contains { name.caseInsensitiveCompare($0) == .orderedSame }
+                return !scopedLabels.contains { name.caseInsensitiveCompare($0) == .orderedSame }
             }
             return true
         }

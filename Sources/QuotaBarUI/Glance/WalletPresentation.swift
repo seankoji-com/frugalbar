@@ -15,7 +15,8 @@ import QuotaBarCore
 /// `MonthlyCreditBarPresentation`, `GeminiAPICreditPresentation`,
 /// `MetricRowPresentation.ResetCredits`), so units, money formatting and what a
 /// meter measures stay as those rules define them. A model-scoped ticket
-/// (Fable) is drawn beside its model's line in Subscriptions, not here.
+/// (Fable) is drawn beside its model's line in Subscriptions, and here only
+/// when that line is not drawn (a spent or blocked plan hides it).
 struct WalletPresentation: Equatable, Sendable {
 
     enum Tone: Equatable, Sendable { case normal, negative, exhausted, unknown }
@@ -39,6 +40,10 @@ struct WalletPresentation: Equatable, Sendable {
         var tag: String? = nil
         /// The figure on the right: "$100.00/mo", "60,085 credits", "107d remaining".
         let figure: String?
+        /// What the figure is (owner, 25 Nov 2026): "left", "grant", "credit",
+        /// "cap". Drawn as a small caption under the amount; a bare amount made
+        /// a remaining count, a monthly grant and a spend cap look alike.
+        var figureRole: String? = nil
         var tone: Tone = .normal
         var symbol: String? = nil
         var meter: Meter? = nil
@@ -76,7 +81,11 @@ struct WalletPresentation: Equatable, Sendable {
                     rows.append(Row(
                         id: snapshot.id + "#balance", vendor: snapshot.vendorId, title: titled(provider),
                         tag: staleTag,
+                        // An overdrawn balance prints its signed figure alone:
+                        // "-$0.01 left" would claim money remains.
                         figure: unread ? (snapshot.status.unavailableReason?.headline ?? "No reading") : p.valueLabel,
+                        figureRole: unread ? nil
+                            : Self.role(for: snapshot.metric, label: p.valueLabel, basis: snapshot.currencyBasis),
                         tone: unread ? .unknown : (Self.isNegative(snapshot.metric) ? .negative : .normal),
                         balanceSeriesID: BalanceSeries.of(snapshot)?.id,
                         spoken: p.accessibilityLabel))
@@ -93,15 +102,19 @@ struct WalletPresentation: Equatable, Sendable {
             // The ChatGPT credit count that extends the plan: "bonus".
             if let usage = p.openAIUsageCredit,
                let entry = snapshot.apiCredits.first(where: { $0.id == "openai.api-credits" }) {
+                let usageSpoken = staleTag != nil && !usage.spoken.localizedCaseInsensitiveContains("stale")
+                    ? "\(usage.spoken), stale, the last poll failed"
+                    : usage.spoken
                 rows.append(Row(
                     id: snapshot.id + "#bonus", vendor: snapshot.vendorId, title: titled("\(provider) bonus"),
                     tag: staleTag,
                     figure: APICreditEntryPresentation(entry: entry).figure,
+                    figureRole: "left",
                     tone: usage.fraction >= QuotaSnapshot.exhaustionThreshold ? .exhausted : .normal,
                     // A bar to the expiry; the even-use tick only when the
                     // grant date was confirmed too (`OpenAICreditGrant.periodLength`).
                     meter: usage.barMetrics.map { .credit($0) },
-                    spoken: usage.spoken))
+                    spoken: usageSpoken))
             }
             for (index, e) in p.subscriptionCredits.enumerated() {
                 let isBonus = snapshot.vendorId == .openai
@@ -109,7 +122,7 @@ struct WalletPresentation: Equatable, Sendable {
                 rows.append(Row(
                     id: "\(snapshot.id)#sub\(index)", vendor: snapshot.vendorId,
                     title: titled(isBonus ? "\(provider) bonus" : Self.prefixed(e.title, with: provider)),
-                    tag: staleTag, figure: e.figure, spoken: e.spoken))
+                    tag: staleTag, figure: e.figure, spoken: e.spoken(stale: staleTag != nil)))
             }
             if let promo = p.monthlyPromo {
                 rows.append(Row(
@@ -120,6 +133,7 @@ struct WalletPresentation: Equatable, Sendable {
                     // failed billing read does even when quota is fresh.
                     tag: promo.isStale ? "last reading" : nil,
                     figure: promo.amountText.map { "\($0)/mo" },
+                    figureRole: promo.amountText == nil ? nil : "grant",
                     tone: promo.isExhausted ? .exhausted : .normal,
                     // The promo's own bar metrics: its period, so its tick.
                     meter: promo.fraction == nil ? nil : .credit(promo.barMetrics),
@@ -132,24 +146,30 @@ struct WalletPresentation: Equatable, Sendable {
                     // poll: only its own failed read makes it stale.
                     tag: credit.isStale ? "last reading" : nil,
                     figure: "\(credit.amountText)/mo",
+                    figureRole: "credit",
                     // Time through the billing month, not spend (no spend is published).
                     meter: credit.fraction.map { .elapsed(fraction: $0, countdown: credit.countdown) },
                     spoken: credit.spoken))
             }
-            for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot) {
+            // Tickets ride the quota poll, so a failed poll carries them over:
+            // their presence, count and expiry are the earlier poll's, and
+            // they wear its LAST READING tag like the rest of that read.
+            let staleSuffix = staleTag != nil ? ", last reading, the last poll failed" : ""
+            for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot, now: now) {
                 for index in 0..<credits.tickets {
                     rows.append(Row(
                         id: "\(snapshot.id)#ticket-\(label)-\(index)", vendor: snapshot.vendorId,
                         title: titled("\(provider) \(label) ticket"),
+                        tag: staleTag,
                         figure: credits.expiryPhrase(at: index, now: credits.now),
                         symbol: "ticket.fill",
-                        spoken: index == 0 ? credits.spoken : credits.expirySpoken(at: index)))
+                        spoken: (index == 0 ? credits.spoken : credits.expirySpoken(at: index)) + staleSuffix))
                 }
                 if credits.overflow > 0 {
                     rows.append(Row(id: "\(snapshot.id)#ticket-\(label)-more", vendor: snapshot.vendorId,
-                                    title: titled("\(provider) \(label) tickets"),
+                                    title: titled("\(provider) \(label) tickets"), tag: staleTag,
                                     figure: "+\(credits.overflow) more", symbol: "ticket.fill",
-                                    spoken: "\(credits.overflow) more"))
+                                    spoken: "\(credits.overflow) more" + staleSuffix))
                 }
             }
 
@@ -167,6 +187,7 @@ struct WalletPresentation: Equatable, Sendable {
                     title: snapshot.antigravityAccount.map { "Gemini API · \($0.name)" } ?? "Gemini API",
                     tag: "configured",
                     figure: "\(b.amountText)/mo",
+                    figureRole: "cap",
                     meter: .elapsed(fraction: b.fraction, countdown: b.countdown),
                     spoken: credit.spoken))
             }
@@ -199,8 +220,10 @@ struct WalletPresentation: Equatable, Sendable {
         }
         return Row(id: entry.vendorId.rawValue + "#" + entry.id, vendor: entry.vendorId,
                    title: title(prefixed(name, with: providerName(entry.vendorId))), tag: tag,
-                   figure: e.figure, tone: isNegative(entry.metric) ? .negative : .normal,
-                   balanceSeriesID: BalanceSeries.of(entry)?.id, spoken: e.spoken)
+                   figure: e.figure, figureRole: role(for: entry.metric, label: e.figure),
+                   tone: isNegative(entry.metric) ? .negative : .normal,
+                   balanceSeriesID: BalanceSeries.of(entry)?.id,
+                   spoken: e.spoken(stale: tag == "last reading"))
     }
 
     /// "Extra usage" → "Claude extra usage"; a title that already names its
@@ -214,15 +237,36 @@ struct WalletPresentation: Equatable, Sendable {
     /// Plan-wide tickets, plus any model ticket with no model line to sit
     /// beside (it is still drawn, never dropped). A model's tickets with a
     /// line (Fable) sit beside that line in the Providers row they reset.
-    static func planTicketGroups(_ p: MetricRowPresentation,
-                                 snapshot: QuotaSnapshot) -> [(String, MetricRowPresentation.ResetCredits)] {
+    static func planTicketGroups(_ p: MetricRowPresentation, snapshot: QuotaSnapshot,
+                                 now: Date) -> [(String, MetricRowPresentation.ResetCredits)] {
         if !p.resetCreditGroups.isEmpty {
             let plan = p.resetCreditGroups.filter(\.scope.isPlan).map { ("plan reset", $0.credits) }
-            let unmatched = p.unmatchedResetCredits(scopedLabels: snapshot.scopedBars.map(\.label))
+            // A model's tickets sit beside that model's line in Subscriptions,
+            // which is drawn only while the pool is usable. A spent or blocked
+            // plan hides the line, so its tickets come here instead of
+            // vanishing from both sections.
+            let modelLinesShown = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false)?.state == .usable
+            let unmatched = p.unmatchedResetCredits(
+                scopedLabels: modelLinesShown ? snapshot.scopedBars.map(\.label) : [])
                 .map { ("\($0.scope.displayName) reset", $0.credits) }
             return plan + unmatched
         }
         return p.resetCredits.map { [("reset", $0)] } ?? []
+    }
+
+    /// "left" only for a figure that is a remaining balance and does not
+    /// already say what it is. A lifetime-spend fallback prints "$12.00
+    /// spent" and a capped key "$3.00 left of $10.00"; adding "left" under
+    /// those turned past spend into usable money. An overdrawn balance gets
+    /// none either.
+    static func role(for metric: MetricType, label: String?, basis: CurrencyBasis? = nil) -> String? {
+        guard let label, !label.isEmpty, basis != .lifetimeSpend, !isNegative(metric) else { return nil }
+        let words = label.lowercased()
+        if words.contains("spent") || words.contains("left") || words.contains("remaining") { return nil }
+        switch metric {
+        case .currency, .credits: return "left"
+        default: return nil
+        }
     }
 
     static func isNegative(_ metric: MetricType) -> Bool {

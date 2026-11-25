@@ -97,6 +97,32 @@ public enum BurndownPresentation {
             self.latestReading = latestReading
         }
 
+        /// This chart as the current snapshot allows it. The stored readings
+        /// can predate the snapshot (the store publishes before it records, and
+        /// a failed record leaves older rows in place), so a recent-pace
+        /// projection is kept only when the snapshot still describes the same
+        /// usable window: the pool is current and usable (`GlancePresentation`'s
+        /// one definition, so neither stale, awaiting a reading, spent nor
+        /// blocked anywhere), this window is published and not spent, and its
+        /// reset is the recorded one (`InspectorRunOut.resetsAgree`). Otherwise
+        /// a projection from the old readings implies headroom, or a run-out,
+        /// that the summary above has already refused to forecast.
+        public func current(for snapshot: QuotaSnapshot, now: Date) -> Burndown {
+            guard projection != nil, !keepsProjection(for: snapshot, now: now) else { return self }
+            return Burndown(barLabel: barLabel, windowStart: windowStart, resetsAt: resetsAt, actual: actual,
+                            ideal: ideal, projection: nil, nowRemaining: nowRemaining, latestReading: latestReading)
+        }
+
+        func keepsProjection(for snapshot: QuotaSnapshot, now: Date) -> Bool {
+            guard let pool = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false),
+                  pool.isCurrent, pool.state == .usable,
+                  let live = snapshot.quotaBars.first(where: { $0.label == barLabel }),
+                  !live.isBlocked,
+                  let used = live.primaryFraction, used < QuotaSnapshot.exhaustionThreshold
+            else { return false }
+            return InspectorRunOut.resetsAgree(live.resetsAt, resetsAt)
+        }
+
         /// True when the vendor blocked the window at the latest reading. Its
         /// remaining share is then a figure the vendor reported, not capacity
         /// the user can spend.
@@ -275,7 +301,7 @@ public enum BurndownPresentation {
             case .noneInRange:
                 return "No readings in this range. A longer range shows the earlier ones."
             case .lastPollFailed:
-                return "The last poll could not be read, so there is no current burndown. Earlier readings are under History."
+                return "The last recorded poll could not be read, so there is no current burndown. Earlier readings are under History."
             case .noFigureAtLastPoll(let label, true):
                 return "The vendor blocked \(label) and published no figure for it at the last poll, so there is no burndown to draw."
             case .noFigureAtLastPoll(let label, false):
@@ -285,7 +311,7 @@ public enum BurndownPresentation {
             case .polledWithoutFigures(let count, let lastPollFailed):
                 let polls = count == 1 ? "Polled once" : "Polled \(count) times"
                 return "\(polls) in this range, but no poll reported a usage figure to chart."
-                    + (lastPollFailed ? " The last poll could not be read." : "")
+                    + (lastPollFailed ? " The last recorded poll could not be read." : "")
             }
         }
 
@@ -399,8 +425,8 @@ public enum BurndownPresentation {
            let reset = ResetCountdownBadge.compact(resetsAt, now: now) {
             parts.append("resets in \(reset)")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent rate, out in \(GlancePresentation.countdown(exhaustion, now: now))")
+        if let clause = burndown.runOutVerdict(now: now).captionClause(now: now) {
+            parts.append(clause)
         }
         return parts.isEmpty ? "No current reading" : parts.joined(separator: " · ")
     }
@@ -427,10 +453,8 @@ public enum BurndownPresentation {
         if burndown.ideal != nil {
             parts.append("ideal pace line shown")
         }
-        if let exhaustion = burndown.projectedExhaustion, exhaustion > now {
-            parts.append("at recent pace runs out in \(GlancePresentation.countdownSpoken(exhaustion, now: now))")
-        } else if burndown.projection != nil {
-            parts.append("at recent pace resets before running out")
+        if let clause = burndown.runOutVerdict(now: now).spokenClause(now: now) {
+            parts.append(clause)
         }
         return parts.joined(separator: ", ")
     }
