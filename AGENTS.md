@@ -645,11 +645,21 @@ agrees with the recorded one (`Burndown.current(for:now:)`,
 `InspectorRunOut.resetsAgree`).
 
 Time is one clock too. The menu-bar title, the popover's sections and footer,
-and an open inspector re-derive on the same whole-30-second boundaries
-(`GlanceClock`, `.glanceTicks`), so a reset that passes between polls turns
-every surface on the same tick. Each surface used to run a timer from when it
-opened, and the inspector read the time only on a data load, so it kept
-forecasting a window the popover already called "due".
+an open inspector and the widget's Story re-derive on the same whole-30-second
+boundaries (`GlanceClock`, `.glanceTicks`, `GlanceClock.ticks()`), so a reset
+that passes between polls turns every surface on the same tick. Each surface
+used to run a timer from when it opened, and the inspector and the Story read
+the time only on a data load, so they kept forecasting a window the popover
+already called "due" (the Story's load is keyed on the poll attempt, which a
+poll served from cache leaves unchanged). A load never moves a surface's time
+backwards (`GlanceClock.displayTime`): it may finish after a tick already set a
+later one, so the Story merges its load time in before awaiting any read. The
+inspector's loop and the Story's stream both report the newest boundary
+already passed when a tick wakes late (`GlanceClock.reportedTick`), not the one
+they slept for, and ticks the Story missed collapse into the newest. `StoryClockTests` hosts the Story with
+a fixed wall clock and an injected tick, and asserts what its body drew
+(`ProviderStoryView.Drawn`), because a test of the helper alone stays green when
+the view's wiring is removed (#218).
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
