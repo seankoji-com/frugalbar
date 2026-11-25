@@ -231,7 +231,7 @@ public struct PopoverRootView: View {
     /// window whose published reset passes while the popover is open stops
     /// being the pick (and shows "due") without waiting for the next poll.
     private var sections: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        TimelineView(.glanceTicks) { context in
             sections(now: context.date)
         }
     }

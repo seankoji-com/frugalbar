@@ -227,9 +227,28 @@ struct SubscriptionCreditPlacementTests {
         #expect(p.planResetCredits?.total == 1)
         #expect(p.visibleScopedBars.isEmpty)
         #expect(p.modelResetCredits(for: "Fable") == nil)
-        #expect(p.unmatchedResetCredits(scopedLabels: []).isEmpty)
+        // Hidden beside its line, so it is unmatched and the Wallet draws it.
+        #expect(p.unmatchedResetCredits(scopedLabels: []).map(\.scope) == [.model("Fable")])
         #expect(p.combinedAccessibilityLabel(windows: nil, forecast: nil, creditsStale: false)
             .contains("Fable 1 banked reset credit"))
+
+        let wallet = WalletPresentation(snapshots: [snapshot], now: now).rows
+        #expect(wallet.contains { $0.title.contains("Fable reset ticket") && $0.symbol == "ticket.fill" })
+    }
+
+    @Test("a usable plan keeps the Fable ticket beside its line, not in the Wallet")
+    func usablePlanKeepsModelTicketInSubscriptions() {
+        var snapshot = QuotaSnapshot(id: "claude", vendorId: .claude, displayName: "Claude",
+            category: .aiSubscriptions, metric: .subscription(tierName: nil, renewalDate: nil),
+            status: .measured(.none), resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
+            row1: DualBarMetrics(primaryFraction: 0.2, label: "WK",
+                                 resetsAt: now.addingTimeInterval(86_400), windowLength: 7 * 86_400))
+        snapshot.scopedBars = [DualBarMetrics(primaryFraction: 0.3, label: "Fable")]
+        snapshot.resetCreditGroups = [ResetCreditGroup(scope: .model("Fable"), count: 1, expiries: [])]
+        let p = MetricRowPresentation(snapshot: snapshot, now: now)
+        #expect(p.modelResetCredits(for: "Fable")?.total == 1)
+        let wallet = WalletPresentation(snapshots: [snapshot], now: now).rows
+        #expect(!wallet.contains { $0.title.contains("Fable") })
     }
 
     @Test("a payload with only a model group draws no plan ticket")

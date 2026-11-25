@@ -206,10 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyStatusItemPresentation()
         // The title is a function of the time too: a pick whose window reset
         // passes between polls must stop being the pick at that moment, not
-        // at the next poll. Redrawn every 30 seconds from the cached snapshots.
-        statusRedrawTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        // at the next poll. Redrawn on every `GlanceClock` tick from the cached
+        // snapshots, the same boundaries the popover and inspector use.
+        let redraw = Timer(fire: GlanceClock.nextTick(after: Date()), interval: GlanceClock.interval,
+                           repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyStatusItemPresentation() }
         }
+        RunLoop.main.add(redraw, forMode: .common)
+        statusRedrawTimer = redraw
 
         if let liveHarness {
             Task { @MainActor [weak self] in

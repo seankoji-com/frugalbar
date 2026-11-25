@@ -41,7 +41,7 @@ struct FooterActionsView: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        TimelineView(.glanceTicks) { context in
             footer(now: context.date)
         }
     }

@@ -638,8 +638,18 @@ Whether a pool's figures describe now is `GlancePresentation.Freshness`
 (current, stale, or awaitingReset when a window's published reset has passed
 with no reading since). Only a current pool is a pick; the grid notes
 "Window reset · awaiting a reading"; the inspector leads with
-`.awaitingReading`, never "Healthy"; and the burndown drops its projection when
-the snapshot is stale or blocked now (`Burndown.current(for:)`).
+`.awaitingReading`, never "Healthy"; and the burndown keeps its recorded
+projection only while the live snapshot shows the same usable window: a
+current, usable pool whose window is unspent and unblocked and whose reset
+agrees with the recorded one (`Burndown.current(for:now:)`,
+`InspectorRunOut.resetsAgree`).
+
+Time is one clock too. The menu-bar title, the popover's sections and footer,
+and an open inspector re-derive on the same whole-30-second boundaries
+(`GlanceClock`, `.glanceTicks`), so a reset that passes between polls turns
+every surface on the same tick. Each surface used to run a timer from when it
+opened, and the inspector read the time only on a data load, so it kept
+forecasting a window the popover already called "due".
 
 Every row needs an `accessibilityLabel`, and status needs a non-colour channel
 (SF Symbol shape). Colour alone fails WCAG 1.4.1, and "glance to know" is the
@@ -652,7 +662,10 @@ remainder. Claude splits the grant set by the allowance it resets: a plan-wide
 ticket is a Wallet line of its own, with the credit's visible expiry as its
 figure ("20d remaining"), and a model's tickets sit beside that model's line in
 Subscriptions (`ModelTicketsBadge`), which a spent or blocked plan window hides.
-A model ticket with no model line to sit beside is a Wallet line too. An expiry
+A model ticket with no model line to sit beside is a Wallet line too, and that
+includes one whose line a spent or blocked plan hides. `unmatchedResetCredits`
+decides only by the labels its caller actually draws; also filtering on
+`hidesModelWindows` there dropped those tickets from both sections. An expiry
 the vendor did not publish says "Expiry not published" rather than borrowing
 the reset window's date.
 

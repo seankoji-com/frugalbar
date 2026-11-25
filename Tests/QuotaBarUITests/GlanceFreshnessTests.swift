@@ -98,15 +98,36 @@ struct GlanceFreshnessTests {
 
     @Test("the burndown draws no projection for a pool that is blocked or stale now")
     func burndownCurrentForSnapshot() {
-        let reset = now.addingTimeInterval(4 * 3600)
+        let reset = now.addingTimeInterval(120 * 3600)
         let burndown = BurndownPresentation.Burndown(
             barLabel: "WK", windowStart: nil, resetsAt: reset, actual: [], ideal: nil,
             projection: [.init(date: now, remainingFraction: 0.5), .init(date: reset, remainingFraction: 0.1)],
             nowRemaining: 0.5, latestReading: nil)
         var stale = codex
         stale.staleReading = StaleReading(reason: .offline, at: now)
-        #expect(burndown.current(for: stale).projection == nil)
-        #expect(burndown.current(for: codex).projection != nil)
+        #expect(burndown.current(for: stale, now: now).projection == nil)
+        #expect(burndown.current(for: codex, now: now).projection != nil)
+    }
+
+    @Test("a recorded projection is dropped once the live snapshot describes another window",
+          arguments: ["spent", "new reset", "other window blocked", "reset passed"])
+    func burndownProjectionNeedsTheSameUsableWindow(change: String) {
+        let reset = now.addingTimeInterval(120 * 3600)
+        let burndown = BurndownPresentation.Burndown(
+            barLabel: "WK", windowStart: nil, resetsAt: reset, actual: [], ideal: nil,
+            projection: [.init(date: now, remainingFraction: 0.5), .init(date: reset, remainingFraction: 0.1)],
+            nowRemaining: 0.5, latestReading: nil)
+        let bars: [DualBarMetrics]
+        switch change {
+        case "spent": bars = [Fixtures.bar("WK", 1.0, resetsInHours: 120, windowHours: 168)]
+        case "new reset": bars = [Fixtures.bar("WK", 0.1, resetsInHours: 160, windowHours: 168)]
+        case "other window blocked": bars = [Fixtures.bar("5H", 0.4, resetsInHours: 2, windowHours: 5, blocked: true),
+                                             Fixtures.bar("WK", 0.34, resetsInHours: 120, windowHours: 168)]
+        default: bars = [Fixtures.bar("5H", 0.2, resetsInHours: -0.5, windowHours: 5),
+                         Fixtures.bar("WK", 0.34, resetsInHours: 120, windowHours: 168)]
+        }
+        let live = Fixtures.snapshot("codex", .openai, "Codex", bars)
+        #expect(burndown.current(for: live, now: now).projection == nil)
     }
 
     @Test("a balance span under an hour is said in minutes")

@@ -97,18 +97,30 @@ public enum BurndownPresentation {
             self.latestReading = latestReading
         }
 
-        /// This chart as the current snapshot allows it: no recent-pace
-        /// projection when the snapshot says the pool is stale or blocked now.
-        /// The stored readings can predate the failure or the block (the store
-        /// publishes before it records, and a failed record leaves older rows
-        /// in place), and a projection from them implies headroom the summary
-        /// above has already refused to forecast.
-        public func current(for snapshot: QuotaSnapshot) -> Burndown {
-            let blockedNow = snapshot.isAccountBlocked
-                || snapshot.quotaBars.contains { $0.label == barLabel && $0.isBlocked }
-            guard snapshot.staleReading != nil || blockedNow else { return self }
+        /// This chart as the current snapshot allows it. The stored readings
+        /// can predate the snapshot (the store publishes before it records, and
+        /// a failed record leaves older rows in place), so a recent-pace
+        /// projection is kept only when the snapshot still describes the same
+        /// usable window: the pool is current and usable (`GlancePresentation`'s
+        /// one definition, so neither stale, awaiting a reading, spent nor
+        /// blocked anywhere), this window is published and not spent, and its
+        /// reset is the recorded one (`InspectorRunOut.resetsAgree`). Otherwise
+        /// a projection from the old readings implies headroom, or a run-out,
+        /// that the summary above has already refused to forecast.
+        public func current(for snapshot: QuotaSnapshot, now: Date) -> Burndown {
+            guard projection != nil, !keepsProjection(for: snapshot, now: now) else { return self }
             return Burndown(barLabel: barLabel, windowStart: windowStart, resetsAt: resetsAt, actual: actual,
                             ideal: ideal, projection: nil, nowRemaining: nowRemaining, latestReading: latestReading)
+        }
+
+        func keepsProjection(for snapshot: QuotaSnapshot, now: Date) -> Bool {
+            guard let pool = GlancePresentation.pool(for: snapshot, now: now, ambiguous: false),
+                  pool.isCurrent, pool.state == .usable,
+                  let live = snapshot.quotaBars.first(where: { $0.label == barLabel }),
+                  !live.isBlocked,
+                  let used = live.primaryFraction, used < QuotaSnapshot.exhaustionThreshold
+            else { return false }
+            return InspectorRunOut.resetsAgree(live.resetsAt, resetsAt)
         }
 
         /// True when the vendor blocked the window at the latest reading. Its

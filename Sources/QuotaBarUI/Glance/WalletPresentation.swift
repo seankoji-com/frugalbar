@@ -15,7 +15,8 @@ import QuotaBarCore
 /// `MonthlyCreditBarPresentation`, `GeminiAPICreditPresentation`,
 /// `MetricRowPresentation.ResetCredits`), so units, money formatting and what a
 /// meter measures stay as those rules define them. A model-scoped ticket
-/// (Fable) is drawn beside its model's line in Subscriptions, not here.
+/// (Fable) is drawn beside its model's line in Subscriptions, and here only
+/// when that line is not drawn (a spent or blocked plan hides it).
 struct WalletPresentation: Equatable, Sendable {
 
     enum Tone: Equatable, Sendable { case normal, negative, exhausted, unknown }

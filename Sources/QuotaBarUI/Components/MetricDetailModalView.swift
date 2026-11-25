@@ -256,6 +256,11 @@ public struct MetricDetailModalView: View {
         // (`PopoverRootView`), and a pass that fails, blocks or spends this
         // pool must not leave the open inspector describing the earlier poll.
         .task(id: Self.loadKey(for: snapshot)) { await load() }
+        // The presentation is a function of the time as well as the poll: a
+        // reset that passes while the inspector is open must turn its verdict
+        // into "awaiting a reading" and drop its forecast on the same tick
+        // the popover and menu bar call it "due", not at the next poll.
+        .task { await followGlanceClock() }
         .onExitCommand(perform: onClose)
     }
 
@@ -277,6 +282,22 @@ public struct MetricDetailModalView: View {
 
     /// Which poll the inspector is showing: the pool, when it was fetched,
     /// and whether (and when) a later poll failed.
+    private func followGlanceClock() async {
+        while !Task.isCancelled {
+            let tick = GlanceClock.nextTick(after: Date())
+            let wait = max(tick.timeIntervalSinceNow, 0.01)
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            if Task.isCancelled { return }
+            now = Self.displayTime(current: now, tick: tick)
+        }
+    }
+
+    /// The inspector's clock never runs backwards: a load that finished
+    /// after the tick already set a later time.
+    nonisolated static func displayTime(current: Date, tick: Date) -> Date {
+        max(current, tick)
+    }
+
     nonisolated static func loadKey(for snapshot: QuotaSnapshot) -> String {
         "\(snapshot.id)|\(snapshot.lastUpdated.timeIntervalSince1970)|\(snapshot.staleReading?.at.timeIntervalSince1970 ?? 0)"
     }
@@ -512,7 +533,8 @@ public struct MetricDetailModalView: View {
         summary: MetricDetailPresentation.Summary,
         warnsEarlyRunOut: Bool,
         isAheadOfPace: Bool,
-        runOutText: String?
+        runOutText: String?,
+        historyNote: String? = nil
     ) -> String {
         let base: String
         if warnsEarlyRunOut {
@@ -532,7 +554,19 @@ public struct MetricDetailModalView: View {
         if let runOutText {
             parts.append(runOutText)
         }
+        if let historyNote {
+            parts.append(historyNote)
+        }
         return parts.joined(separator: ". ")
+    }
+
+    /// The headline is a verdict on the figure this poll read, not on the
+    /// recorded history below it. When that history could not be read, the
+    /// summary says so beside the verdict, so "Healthy" above "Could not read
+    /// the recorded balance" is not taken as a verdict on the chart.
+    nonisolated static func historyScopeNote(isLoading: Bool, reads: [BalanceSeriesRead]) -> String? {
+        guard !isLoading, reads.contains(where: { $0.points == nil }) else { return nil }
+        return "Verdict from the latest poll · recorded balance history could not be read"
     }
 
     /// Read by Settings' legend as well, so its swatches are the inspector's.
@@ -619,6 +653,12 @@ public struct MetricDetailModalView: View {
                         .foregroundStyle(Theme.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let note = Self.historyScopeNote(isLoading: isLoading, reads: balanceSeries) {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(10)
@@ -634,7 +674,8 @@ public struct MetricDetailModalView: View {
             summary: summary,
             warnsEarlyRunOut: forecastWarnsEarlyRunOut,
             isAheadOfPace: focusWindow?.isAheadOfPace == true,
-            runOutText: runOutText
+            runOutText: runOutText,
+            historyNote: Self.historyScopeNote(isLoading: isLoading, reads: balanceSeries)
         ))
     }
 
@@ -852,7 +893,7 @@ public struct MetricDetailModalView: View {
         if let label = activeBurndownLabel,
            let burndown = BurndownPresentation.burndown(
                readings: readings, instanceID: snapshot.id, barLabel: label, now: now
-           )?.current(for: snapshot) {
+           )?.current(for: snapshot, now: now) {
             // Room above the plot: its "now" annotation sits at the top edge
             // and overprinted the caption.
             VStack(alignment: .leading, spacing: 10) {
