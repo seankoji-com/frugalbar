@@ -127,6 +127,72 @@ struct StoryClockTests {
         #expect(!reloaded.projects)
     }
 
+    @MainActor
+    private final class WallClock {
+        var now: Date
+        init(_ now: Date) { self.now = now }
+    }
+
+    private final class HeldRead: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _entered = false
+        var entered: Bool { lock.withLock { _entered } }
+        func enter() { lock.withLock { _entered = true } }
+    }
+
+    @Test("a first history read held open across a reset cannot put the Story's time back")
+    func heldFirstLoadDoesNotRewind() async throws {
+        let wallClock = WallClock(GlanceFixtures.now)
+        let afterReset = GlanceFixtures.now.addingTimeInterval(3600 + 1)
+        let claude = GlanceFixtures.snapshot("claude-story", .claude, "Claude", [
+            GlanceFixtures.bar("WK", 0.35, resetsInHours: 1, windowHours: 168),
+        ])
+        let history = try readings(for: claude)
+        let held = HeldRead()
+        let (release, releaser) = AsyncStream<Void>.makeStream()
+        defer { releaser.finish() }
+        let providers = [FixtureProvider(snapshot: claude)]
+        let store = QuotaStore(
+            manager: QuotaManager(providerFactory: { providers }, displayPreferences: { .default }),
+            vendorReadingsLoader: { _, _ in
+                held.enter()
+                for await _ in release { break }
+                return history
+            })
+        await store.load()
+
+        let (ticks, tick) = AsyncStream<Date>.makeStream()
+        defer { tick.finish() }
+        let capture = Capture()
+        func story() -> some View {
+            ProviderStoryView(store: store, poolID: .constant("claude-story"),
+                              ticks: { ticks }, clock: { wallClock.now },
+                              drawObserver: { capture.drawn.append($0) })
+                .frame(width: 360, height: 620)
+        }
+        let host = NSHostingView(rootView: story())
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 620)
+        let window = NSWindow(contentRect: host.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        // The first load is waiting on its history read when the reset passes
+        // and something redraws the Story.
+        try await waitFor("its history read") { held.entered }
+        wallClock.now = afterReset
+        host.rootView = story()
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(200))
+        releaser.yield()
+        try await waitFor("its first load") { capture.drawn.contains { $0.loads == 1 } }
+
+        let times = capture.drawn.map(\.time)
+        #expect(times == times.sorted(), "the Story's time went backwards: \(times)")
+    }
+
     @Test("a late wake reports the newest boundary that has passed, not the one it slept for")
     func lateWakeReportsNewestTick() {
         let scheduled = Date(timeIntervalSinceReferenceDate: 1_000_020)

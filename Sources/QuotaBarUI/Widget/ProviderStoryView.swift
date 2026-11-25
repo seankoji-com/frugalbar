@@ -205,16 +205,19 @@ struct ProviderStoryView: View {
     // MARK: Data
 
     private func load() async {
+        // The load's time is merged in before any await. Until a first load
+        // had set it, every redraw read the wall clock, so a history read
+        // suspended across a reset could finish and put an earlier time back
+        // under a Story that had already turned. Ticks only move it later.
         let loadTime = clock()
+        advance(to: loadTime)
         if let preloaded {
             readings = preloaded.readings
             events = derive(at: instant).map { ($0.pool.id, preloaded.events) }
-            advance(to: loadTime)
             loads += 1
             return
         }
         guard let pool = derive(at: instant)?.pool else {
-            advance(to: loadTime)
             loads += 1
             return
         }
@@ -235,9 +238,6 @@ struct ProviderStoryView: View {
         guard !Task.isCancelled else { return }
         readings = raw.map { $0.map { aliases.contains($0.vendor) ? $0.namingInstance(snapshot.id) : $0 } }
         events = (pool.id, recent)
-        // The reads awaited; a tick may have moved the time past `loadTime`
-        // meanwhile, and a load never winds it back.
-        advance(to: loadTime)
         loads += 1
     }
 }

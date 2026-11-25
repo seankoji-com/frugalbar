@@ -288,7 +288,8 @@ public struct MetricDetailModalView: View {
             let wait = max(tick.timeIntervalSinceNow, 0.01)
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             if Task.isCancelled { return }
-            now = Self.displayTime(current: now, tick: tick)
+            // A late wake describes the newest boundary passed, as the Story does.
+            now = Self.displayTime(current: now, tick: GlanceClock.reportedTick(scheduled: tick, woke: Date()))
         }
     }
 

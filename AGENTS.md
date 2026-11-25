@@ -653,9 +653,10 @@ the time only on a data load, so they kept forecasting a window the popover
 already called "due" (the Story's load is keyed on the poll attempt, which a
 poll served from cache leaves unchanged). A load never moves a surface's time
 backwards (`GlanceClock.displayTime`): it may finish after a tick already set a
-later one. A tick that wakes late reports the newest boundary already passed
-(`GlanceClock.reportedTick`), not the one it slept for, and ticks a busy
-consumer missed collapse into the newest. `StoryClockTests` hosts the Story with
+later one, so the Story merges its load time in before awaiting any read. The
+inspector's loop and the Story's stream both report the newest boundary
+already passed when a tick wakes late (`GlanceClock.reportedTick`), not the one
+they slept for, and ticks the Story missed collapse into the newest. `StoryClockTests` hosts the Story with
 a fixed wall clock and an injected tick, and asserts what its body drew
 (`ProviderStoryView.Drawn`), because a test of the helper alone stays green when
 the view's wiring is removed (#218).
