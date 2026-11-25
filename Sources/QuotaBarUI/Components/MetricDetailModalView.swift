@@ -360,7 +360,10 @@ public struct MetricDetailModalView: View {
         eventsFailed = e == nil
         markerEvents = m ?? []
         markersFailed = m == nil
-        now = loadTime
+        // The load awaited four reads; a clock tick may have moved the time
+        // past `loadTime` meanwhile, and restoring the earlier instant put a
+        // window the popover already called "due" back on its forecast.
+        now = Self.displayTime(current: now, tick: loadTime)
         isLoading = false
     }
 

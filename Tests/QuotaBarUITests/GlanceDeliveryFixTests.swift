@@ -49,6 +49,50 @@ struct GlanceDeliveryFixTests {
         #expect(MetricDetailModalView.displayTime(current: loadedLater, tick: tick) == loadedLater)
     }
 
+    private func story(_ snapshot: QuotaSnapshot) throws -> ProviderStoryPresentation {
+        let glance = GlancePresentation(snapshots: [snapshot], now: now)
+        let pool = try #require(glance.pools.first)
+        return ProviderStoryPresentation(pool: pool, glance: glance, readings: nil, now: now)
+    }
+
+    @Test("the widget's Story says a reset-passed pool awaits a reading, never 'below the floor' or 'resets in due' (#201)")
+    func storyForAwaitingResetPool() throws {
+        let snapshot = GlanceFixtures.snapshot("claude", .claude, "Claude", [
+            GlanceFixtures.bar("5H", 0.2, resetsInHours: -0.5, windowHours: 5),
+            GlanceFixtures.bar("WK", 0.65, resetsInHours: 60, windowHours: 168),
+        ])
+        let s = try story(snapshot)
+        #expect(s.standing == "Window reset · awaiting a reading")
+        #expect(s.tone == .unknown)
+        let text = s.lines.map(\.text).joined(separator: " | ")
+        #expect(!text.contains("resets in due"))
+        #expect(!text.contains("resets in now"))
+        #expect(text.contains("5-hour window had 80% left before its reset") || text.contains("reset was due"))
+    }
+
+    @Test("an expired story window tells no pace or run-out from the window that ended")
+    func storyWindowExpiredTellsNoProjection() throws {
+        let snapshot = GlanceFixtures.snapshot("codex", .openai, "Codex", [
+            GlanceFixtures.bar("WK", 0.4, resetsInHours: -1, windowHours: 168),
+        ])
+        let s = try story(snapshot)
+        let symbols = s.lines.map(\.symbol)
+        #expect(symbols.contains("clock.arrow.circlepath"))
+        #expect(!symbols.contains("hourglass"))
+        #expect(!symbols.contains("chart.line.downtrend.xyaxis"))
+        #expect(!s.lines.contains { $0.text.contains("resets in") })
+    }
+
+    @Test("an account-blocked story names the window its reset belongs to")
+    func storyAccountBlockedNamesWindowReset() throws {
+        let snapshot = GlanceFixtures.snapshot("commandcode", .commandcode, "Command Code", [
+            GlanceFixtures.bar("MO", 0.4, resetsInHours: 39, windowHours: 720, blocked: true),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        let s = try story(snapshot)
+        #expect(!s.lines.contains { $0.text.hasPrefix("It resets in") })
+        #expect(s.lines.contains { $0.text.contains("the account block has no published end") })
+    }
+
     private func read(points: [BalancePoint]?) -> MetricDetailModalView.BalanceSeriesRead {
         let snapshot = QuotaSnapshot(
             id: "openrouter", vendorId: .openrouter, displayName: "OpenRouter",
