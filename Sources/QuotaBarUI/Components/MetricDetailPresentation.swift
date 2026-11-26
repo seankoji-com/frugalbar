@@ -180,21 +180,22 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     // MARK: - Summary
 
-    /// The window the summary is about: a blocked one first (it decides
-    /// whether the provider can be used at all), then the most consumed.
-    /// Billing cycles measure elapsed time and are never the focus.
+    /// The window the summary is about: the one that dates an account block,
+    /// else a blocked one (it decides whether the provider can be used at all),
+    /// else the most consumed. Billing cycles measure elapsed time and are never
+    /// the focus.
     static func focusBar(of snapshot: QuotaSnapshot) -> DualBarMetrics? {
         let bars = verdictBars(of: snapshot)
-        // A block the provider dated is about that bar; a badge-blocked
-        // account's bars carry no flag of their own, so the fullest one is the
-        // subject (the pool that ran out).
-        // The window whose published reset dates the block: the provider-named
-        // pool, or (no named pool) the earliest vendor-blocked reset — the same
-        // window Back soon and the Story use.
+        // The window whose published reset dates the block — the provider-named
+        // plan pool, or the plan window the vendor blocked whose reset comes
+        // first. It is the same window Back soon and the Story use.
         if let label = snapshot.accountBlockDatedWindowLabel,
            let dated = bars.first(where: { $0.label == label }) {
             return dated
         }
+        // No window dates the block: a window the vendor blocked on its own is
+        // the subject, and for a badge-blocked account — whose bars carry no
+        // flag of their own — the fullest one is (the pool that ran out).
         return bars.first(where: \.isBlocked)
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
     }

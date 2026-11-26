@@ -52,13 +52,12 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         // the story would name a sibling's reset as the block's end. Each step
         // is typed separately: one chained expression here exceeded Xcode 16's
         // type-checking limit and failed CI before the tests ran.
-        // Only a block that actually publishes a return may steer the story;
-        // an undated block keeps following the ranking.
-        let datedWindow: GlancePresentation.Window? = pool.snapshot.accountBlockHasPublishedReturn
-            ? pool.datedBlockWindowLabel.flatMap { label in
-                pool.windows.first(where: { $0.bar.label == label })
-            }
-            : nil
+        // A dated block steers the story to the window its return belongs to,
+        // and an undated one keeps following the ranking: `datedBlockWindowLabel`
+        // is the single fact that decides it, because `GlancePresentation.pool`
+        // only sets it from a window this pool actually draws (nil otherwise).
+        let datedWindow: GlancePresentation.Window? = pool.datedBlockWindowLabel
+            .flatMap { label in pool.windows.first(where: { $0.bar.label == label }) }
         let rankedWindow: GlancePresentation.Window? = rank.map { index in
             glance.ranking[index].binding
         }
