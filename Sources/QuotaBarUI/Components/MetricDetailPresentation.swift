@@ -180,11 +180,22 @@ public struct MetricDetailPresentation: Equatable, Sendable {
 
     // MARK: - Summary
 
-    /// The window the summary is about: a blocked one first (it decides
-    /// whether the provider can be used at all), then the most consumed.
-    /// Billing cycles measure elapsed time and are never the focus.
+    /// The window the summary is about: the one that dates an account block,
+    /// else a blocked one (it decides whether the provider can be used at all),
+    /// else the most consumed. Billing cycles measure elapsed time and are never
+    /// the focus.
     static func focusBar(of snapshot: QuotaSnapshot) -> DualBarMetrics? {
         let bars = verdictBars(of: snapshot)
+        // The window whose published reset dates the block — the provider-named
+        // plan pool, or the plan window the vendor blocked whose reset comes
+        // first. It is the same window Back soon and the Story use.
+        if let label = snapshot.accountBlockDatedWindowLabel,
+           let dated = bars.first(where: { $0.label == label }) {
+            return dated
+        }
+        // No window dates the block: a window the vendor blocked on its own is
+        // the subject, and for a badge-blocked account — whose bars carry no
+        // flag of their own — the fullest one is (the pool that ran out).
         return bars.first(where: \.isBlocked)
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
     }
@@ -232,7 +243,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // the verdict's subject when there is one: its figure is the ended
         // window's, so the hero shows that window and its "reset due", not a
         // still-running window's amount and pace under a waiting headline.
-        let expired = verdictBars(of: snapshot).filter { $0.resetsAt.map { $0 <= now } ?? false }
+        // An account block's subject is the block, not a sibling window that
+        // happens to have reset: taking the expired sibling would let its date
+        // stand in for the block's return.
+        let expired = snapshot.isAccountBlocked ? [] : verdictBars(of: snapshot)
+            .filter { $0.resetsAt.map { $0 <= now } ?? false }
         let expiredFocus = expired.max { ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast) }
         let focus = expiredFocus ?? focusBar(of: snapshot)
         let state: State
@@ -264,8 +279,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
         // Under an account block no window's reset is the account's return,
         // so the hero names none and says the unblock time is unpublished.
+        // A block the vendor dated (`accountBlockHasPublishedReturn`) is the
+        // exception: the pool it ran out of — or the window it blocked itself —
+        // publishes when it refills, and that date is the account's return.
         let accountBlocked = snapshot.isAccountBlocked
-        let reset = accountBlocked ? nil
+        let blockIsDated = accountBlocked && snapshot.accountBlockHasPublishedReturn
+        let reset = accountBlocked && !blockIsDated ? nil
             : (focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
                ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil))
         let pace: String? = {
@@ -273,7 +292,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             return accountBlocked ? nil : focus.flatMap(paceVerdict(for:))
         }()
         let remedy: String? = accountBlocked
-            ? "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own."
+            ? (blockIsDated
+                ? "The vendor blocked this account until the pool it used up resets. The reset above is that pool's own published date."
+                : "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own.")
             : nil
         // A provider with no window still has a measured figure worth leading
         // with: a balance, a count. A subscription tier is not a figure.

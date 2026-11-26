@@ -164,6 +164,19 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         let billingPeriod = planID == subscriptionPlan ? subscription?.period : nil
         let credits = creditRow(response.credits, planID: planID, billingPeriod: billingPeriod, now: now)
         let limited = windows?.limited?.value == true
+        // A block on a spent credit pool is dated: the vendor's own docs say
+        // the request budget refreshes at the start of every billing cycle and
+        // that the rolling windows only throttle the included pool, so the
+        // cycle end the credit row already publishes is when work resumes.
+        // Without a spent gauge the flag could be a window throttle whose
+        // reset this is not, and without a published cycle there is no date —
+        // both keep the undated block, which promises no return.
+        let blockIsDated = limited && credits?.resetsAt != nil
+            && (credits?.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold
+        // Name the bar that dated it, not just that it is dated: a sibling
+        // window's reset is not when this block lifts, and the grid keeps a
+        // window's countdown only when it is the block's own end.
+        let datedBy = blockIsDated ? credits?.label : nil
 
         // Neither a window nor a credit bucket is nothing we can report. A
         // structurally valid response carrying no figure must not render as a
@@ -207,7 +220,8 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
             row3: credits,
             badgeText: badge,
             planName: planName,
-            cliSource: nil
+            cliSource: nil,
+            accountBlockDatedByBarLabel: datedBy
         )
     }
 

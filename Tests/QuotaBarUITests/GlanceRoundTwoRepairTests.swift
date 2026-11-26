@@ -24,15 +24,36 @@ struct GlanceRoundTwoRepairTests {
         #expect(UseNowPresentation(glance: glance).backSoon == nil)
     }
 
-    @Test("an account block promises no return, whatever its windows' resets")
-    func accountBlockHasNoReturn() throws {
-        let limited = Fixtures.snapshot("commandcode", .commandcode, "Command Code", [
-            Fixtures.bar("WK", 1.0, resetsInHours: 30, windowHours: 168, blocked: true),
+    @Test("an account block the vendor did not date promises no return")
+    func accountBlockWithoutAPublishedReturn() throws {
+        // The badge stopped the account, but no window was blocked by the
+        // vendor and no pool the provider named carries a reset: the block's
+        // end is unpublished, so its windows' resets are not offered as it.
+        let limited = Fixtures.snapshot("opencode-go:alpha", .opencode, "Alpha", [
+            Fixtures.bar("WK", 0.4, resetsInHours: 30, windowHours: 168),
         ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
         let glance = GlancePresentation(snapshots: [codex, limited], now: now)
-        let pool = try #require(glance.pools.first { $0.id == "commandcode" })
+        let pool = try #require(glance.pools.first { $0.id == "opencode-go:alpha" })
         #expect(pool.returnsAt == nil)
         #expect(UseNowPresentation(glance: glance).backSoon == nil)
+    }
+
+    @Test("a window the vendor blocked itself dates the account block")
+    func vendorBlockedWindowDatesTheBlock() throws {
+        // OpenCode Go's `rate-limited` month: the vendor blocked that window
+        // and still published when it frees, so that reset is the return.
+        let limited = Fixtures.snapshot("opencode-go:alpha", .opencode, "Alpha", [
+            Fixtures.bar("5H", 0.0, resetsInHours: 5, windowHours: 5),
+            Fixtures.bar("WK", 0.0, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 1.0, resetsInHours: 336, windowHours: 720, blocked: true),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        let glance = GlancePresentation(snapshots: [codex, limited], now: now)
+        let pool = try #require(glance.pools.first { $0.id == "opencode-go:alpha" })
+        #expect(pool.returnsAt == now.addingTimeInterval(336 * 3600))
+        let back = try #require(UseNowPresentation(glance: glance).backSoon)
+        #expect(back.contains(GlancePresentation.spokenName(pool)))
+        let when = try #require(ResetCountdownBadge.compact(now.addingTimeInterval(336 * 3600), now: now))
+        #expect(back.hasSuffix(when))
     }
 
     @Test("the Use-now return uses Subscriptions' countdown unit")

@@ -39,6 +39,14 @@ struct ProviderGridPresentationTests {
         // headroom, so they are not averaged; they still count toward the
         // pools, and the cell's "3/7" coverage says so.
         #expect(measured == 3 && poolCount == 7)
+        // The averaged cell's dots follow the pools' own order, so each dot
+        // maps to a row: the four blocked workspaces are false even where a
+        // mid-list pool reported (review advisory on #224).
+        // A dot per pool, in pool order: green exactly where that pool's figure
+        // is in the average, so the dots and the spoken "N of M" agree.
+        let coverage = deepSeek.coverage(for: .monthly)
+        #expect(coverage.filter { $0 }.count == measured)
+        #expect(coverage.enumerated().filter { $0.element }.map(\.offset) == [2, 4, 6])
     }
 
     @Test("all confirmed spent uses the first window reset, and stale or missing readings cannot exhaust the group")

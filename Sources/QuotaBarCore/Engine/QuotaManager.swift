@@ -1130,7 +1130,8 @@ public actor QuotaManager {
                 latencyMs: updated.latencyMs,
                 keyMasked: updated.keyMasked,
                 cliSource: updated.cliSource,
-                currencyBasis: updated.currencyBasis
+                currencyBasis: updated.currencyBasis,
+                accountBlockDatedByBarLabel: updated.accountBlockDatedByBarLabel
             )
             // A rebuild must not drop real published figures: the credit
             // entries ride this snapshot, and losing them here would make
@@ -1207,7 +1208,8 @@ public actor QuotaManager {
             latencyMs: updated.latencyMs,
             keyMasked: updated.keyMasked,
             cliSource: updated.cliSource,
-            currencyBasis: updated.currencyBasis
+            currencyBasis: updated.currencyBasis,
+            accountBlockDatedByBarLabel: updated.accountBlockDatedByBarLabel
         )
         rebuilt.apiCredits = updated.apiCredits
         rebuilt.scopedBars = updated.scopedBars

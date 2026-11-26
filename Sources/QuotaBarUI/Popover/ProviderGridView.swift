@@ -53,13 +53,6 @@ struct ProviderGridView: View {
                         .background(Theme.surfaceContainerHighest.opacity(0.22))
                     }
                 }
-                Divider()
-                Text("Averages use reported windows. Ticks mark even pace.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.outline)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
             }
         }
     }
@@ -72,8 +65,13 @@ struct ProviderGridView: View {
             expanded = isExpanded ? nil : group.id
         } label: {
             line {
+                // The counts ("2 usable · 3 blocked · 2 spent") are spoken, not
+                // drawn (owner, 26 Nov 2026): the coverage dots under each
+                // bar already say which pools answered, and a second status
+                // line under every name made the card taller for a summary of
+                // the rows below.
                 identity(
-                    group.title, subtitle: group.displaySubtitle, vendor: group.id, status: .measured(.none),
+                    group.title, subtitle: nil, vendor: group.id, status: .measured(.none),
                     spent: group.allSpent, reset: presentation.countdown(group.nextReturn), size: 23,
                     staleBadgeCount: staleCount
                 )
@@ -90,10 +88,33 @@ struct ProviderGridView: View {
                                    label: bar.label, stale: pool.isStale, showSpentPercent: true)
                     }
                 } else {
-                    columns { column in
-                        if let summary = group.summary(for: column) {
-                            summaryCell(summary, column: column, stale: group.pools.count == 1 && group.pools[0].isStale,
+                    // A group that publishes only one column draws that bar
+                    // across the whole grid instead of leaving two columns as
+                    // dashes (owner, 26 Nov 2026) — one window's shape is more
+                    // useful than two empty slots.
+                    let published = WindowColumn.allCases.compactMap { column in
+                        group.summary(for: column).map { (column, $0) }
+                    }
+                    if published.count == 1, let only = published.first {
+                        // The token travels with the bar (owner, 26 Nov 2026):
+                        // across the whole grid the column no longer says
+                        // which period the one published window is.
+                        HStack(spacing: 7) {
+                            Text(only.0.label)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.outline)
+                            summaryCell(only.1, column: only.0,
+                                        coverage: group.coverage(for: only.0),
+                                        stale: group.pools.count == 1 && group.pools[0].isStale,
                                         dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
+                        }
+                    } else {
+                        columns { column in
+                            if let summary = group.summary(for: column) {
+                                summaryCell(summary, column: column, coverage: group.coverage(for: column),
+                                            stale: group.pools.count == 1 && group.pools[0].isStale,
+                                            dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
+                            }
                         }
                     }
                 }
@@ -364,8 +385,8 @@ struct ProviderGridView: View {
     }
 
     @ViewBuilder
-    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn, stale: Bool,
-                             dimmed: Bool = false) -> some View {
+    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn,
+                             coverage: [Bool], stale: Bool, dimmed: Bool = false) -> some View {
         switch summary {
         case .window(let window):
             windowCell(window, label: column.label, stale: stale, dimmed: dimmed || stale)
@@ -374,18 +395,40 @@ struct ProviderGridView: View {
                       spoken: "\(column.spokenName), \(includesBlocked ? "all blocked or spent" : "all spent")",
                       showsBlockedGlyph: allMeasuredExhausted && includesBlocked)
         case .average(let remaining, let reported, let count):
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(GlancePresentation.usedPercentText(1 - remaining))
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Theme.onSurface)
-                Text(reported == 1 ? "\(reported)/\(count)" : "avg · \(reported)/\(count)")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(Theme.outline)
+            // A bar, not a percentage (owner, 26 Nov 2026): the group's share
+            // used is the same figure every pool row draws as a track, and the
+            // "avg · 2/4" caption becomes one dot per pool — green where it
+            // reported this window, red where it did not.
+            let window = GlancePresentation.window(
+                for: DualBarMetrics(primaryFraction: 1 - remaining, label: column.label),
+                now: presentation.now)
+            VStack(alignment: .leading, spacing: 3) {
+                UsageBar(window: window, height: trackHeight)
+                // The dots follow the pools' own order, so each one maps to a
+                // row; a count alone would colour the first N by index.
+                coverageDots(coverage.count == count
+                    ? coverage
+                    : Array(repeating: true, count: reported)
+                        + Array(repeating: false, count: max(count - reported, 0)))
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools")
         }
+    }
+
+    /// One dot per pool in an averaged column: green where it reported the
+    /// window, red where it did not. The count is what "avg · 2/4" said, in a
+    /// mark rather than a second line of 9.5pt text.
+    private func coverageDots(_ coverage: [Bool]) -> some View {
+        HStack(spacing: 2.5) {
+            ForEach(Array(coverage.enumerated()), id: \.offset) { _, reported in
+                Circle()
+                    .fill(reported ? Theme.healthy : Theme.error)
+                    .frame(width: 4.5, height: 4.5)
+            }
+        }
+        .frame(height: 5)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder

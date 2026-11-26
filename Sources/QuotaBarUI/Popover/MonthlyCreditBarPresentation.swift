@@ -23,6 +23,11 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
     public let percentText: String?
     /// The compact countdown, e.g. "4d".
     public let countdown: String?
+    /// The cycle the elapsed share was measured in, for a caller that draws a
+    /// position mark on its own track (`WalletSection`): the end is the reset
+    /// and the span its length. Nil when no current cycle was measured.
+    public let periodEnd: Date?
+    public let periodLength: TimeInterval?
     public let isStale: Bool
     public let spoken: String
 
@@ -34,6 +39,8 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
 
         var elapsed: Double?
         var countdown: String?
+        var periodEnd: Date?
+        var periodLength: TimeInterval?
         if let end = credit.nextGrantAt,
            let length = DualBarMetrics.monthWindowLength(endingAt: end, calendar: calendar) {
             let start = end.addingTimeInterval(-length)
@@ -47,8 +54,12 @@ public struct MonthlyCreditBarPresentation: Equatable, Sendable {
                     elapsed = min(max(value, 0), 1)
                 }
                 countdown = ResetCountdownBadge.compact(end, now: now)
+                periodEnd = end
+                periodLength = length
             }
         }
+        self.periodEnd = periodEnd
+        self.periodLength = periodLength
         self.fraction = elapsed
         self.percentText = elapsed.map { "\(Int(($0 * 100).rounded()))%" }
         self.countdown = countdown

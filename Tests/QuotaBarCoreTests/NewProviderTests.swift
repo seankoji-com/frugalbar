@@ -1701,6 +1701,48 @@ struct CommandCodeQuotaProviderTests {
         }
     }
 
+    @Test("a block on a spent credit pool is dated by its published cycle reset")
+    func datedBlockUsesCreditCycle() async throws {
+        try await withCommandCode(
+            creditsBody: Self.body(limited: "true", planId: "individual-goat", monthly: "0.0506"),
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-goat"))
+        ) {
+            let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
+            #expect(snap.accountBlockDatedByBarLabel == "MO")
+            #expect(snap.row3?.resetsAt == ISO8601DateFormatter().date(from: "2099-12-04T23:22:43Z"))
+        }
+    }
+
+    @Test("a block the credit pool does not explain keeps its return unpublished")
+    func undatedBlockLeavesNoReturn() async throws {
+        // Credits half spent: the block is not the credit pool's exhaustion,
+        // so the cycle end is not when the block lifts and is never named as it.
+        try await withCommandCode(
+            creditsBody: Self.body(limited: "true", planId: "individual-goat", monthly: "35"),
+            subscriptions: .init(status: 200, body: Self.subscriptions("individual-goat"))
+        ) {
+            let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
+            #expect(snap.accountBlockDatedByBarLabel == nil)
+            // The reading still carries the cycle; only the block's end is unstated.
+            #expect(snap.row3?.resetsAt != nil)
+        }
+    }
+
+    @Test("a block with no published cycle has no date to name")
+    func datedBlockNeedsACycle() async throws {
+        // No subscriptions read means no billing period, so no cycle end.
+        try await withCommandCode(
+            creditsBody: Self.body(limited: "true", planId: "individual-goat", monthly: "0.0506")
+        ) {
+            let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
+            #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
+            #expect(snap.accountBlockDatedByBarLabel == nil)
+            #expect(snap.row3?.resetsAt == nil)
+        }
+    }
+
     @Test("one credential caches plans separately for two request scopes")
     func subscriptionCacheIsScoped() async throws {
         let provider = CommandCodeQuotaProvider(apiKey: "user_ok")

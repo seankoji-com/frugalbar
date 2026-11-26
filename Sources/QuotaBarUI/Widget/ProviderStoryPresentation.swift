@@ -48,9 +48,29 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         let entry = glance.backSoon.first { $0.pool.id == pool.id }
         // The window the story follows: the pick's binding window, else the
         // spent window, else the pool's least-remaining long window.
-        let chosen: GlancePresentation.Window? = rank.map { glance.ranking[$0].binding }
-            ?? pool.windows.first(where: \.isSpent)
-            ?? pool.windows.filter(\.isLong).min { ($0.remaining ?? 2) < ($1.remaining ?? 2) }
+        // A block the vendor dated is about one window: tell that window, or
+        // the story would name a sibling's reset as the block's end. Each step
+        // is typed separately: one chained expression here exceeded Xcode 16's
+        // type-checking limit and failed CI before the tests ran.
+        // A dated block steers the story to the window its return belongs to,
+        // and an undated one keeps following the ranking. The gate is the
+        // snapshot's own fact (`accountBlockHasPublishedReturn`); the window is
+        // the one it names, which is a plan bar `pool.windows` holds.
+        let datingLabel = pool.snapshot.accountBlockDatedWindowLabel
+        let datedWindow: GlancePresentation.Window? = pool.snapshot.accountBlockHasPublishedReturn
+            ? pool.windows.first(where: { $0.bar.label == datingLabel })
+            : nil
+        let rankedWindow: GlancePresentation.Window? = rank.map { index in
+            glance.ranking[index].binding
+        }
+        let spentWindow: GlancePresentation.Window? = pool.windows.first(where: { $0.isSpent })
+        let longWindow: GlancePresentation.Window? = pool.windows
+            .filter({ $0.isLong })
+            .min(by: { lhs, rhs in (lhs.remaining ?? 2) < (rhs.remaining ?? 2) })
+        let chosen: GlancePresentation.Window? = datedWindow
+            ?? rankedWindow
+            ?? spentWindow
+            ?? longWindow
             ?? pool.windows.first
         window = chosen
         heroRemaining = chosen.flatMap { !$0.isSpent && !$0.isExpired ? $0.remaining : nil }
@@ -138,7 +158,7 @@ struct ProviderStoryPresentation: Equatable, Sendable {
                 ? "The vendor has blocked the \(name) window."
                 : "The \(name) allowance is used up.", tone: .spent))
             if let resetWhen {
-                lines.append(resetLine(name: name, resetWhen: resetWhen, pool: pool, tone: .unknown))
+                lines.append(resetLine(name: name, label: bar.label, resetWhen: resetWhen, pool: pool, tone: .unknown))
             } else {
                 lines.append(Line(symbol: "questionmark.circle", text: "The vendor has not published when it resets.",
                                   tone: .unknown))
@@ -183,7 +203,7 @@ struct ProviderStoryPresentation: Equatable, Sendable {
                               tone: runOut.warns ? .caution : .good))
         }
         if let resetWhen {
-            lines.append(resetLine(name: name, resetWhen: resetWhen, pool: pool, tone: .good))
+            lines.append(resetLine(name: name, label: bar.label, resetWhen: resetWhen, pool: pool, tone: .good))
         } else {
             lines.append(Line(symbol: "questionmark.circle", text: "The vendor has not published when it resets.",
                               tone: .unknown))
@@ -191,16 +211,24 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         return lines
     }
 
-    /// The story window's reset. Under an account-wide block (Command Code's
-    /// `limited`, set on the badge whether or not a window is blocked) the
-    /// standing says the block's end is unpublished, so this names the window
-    /// the reset belongs to rather than reading as the account's return.
-    static func resetLine(name: String, resetWhen: String, pool: GlancePresentation.Pool, tone: Tone) -> Line {
-        Line(symbol: "arrow.clockwise",
-             text: pool.snapshot.isAccountBlocked
-                 ? "The \(name) window resets in \(resetWhen); the account block has no published end."
-                 : "It resets in \(resetWhen).",
-             tone: pool.snapshot.isAccountBlocked ? .unknown : tone)
+    /// The story window's reset. Only the window that dates an account block
+    /// may say "It resets in …", because that sentence reads as the account's
+    /// return. Any other window under a block names itself and says the block's
+    /// end is elsewhere — the date it carries is not an unblock date.
+    static func resetLine(name: String, label: String, resetWhen: String,
+                          pool: GlancePresentation.Pool, tone: Tone) -> Line {
+        guard pool.snapshot.isAccountBlocked else {
+            return Line(symbol: "arrow.clockwise", text: "It resets in \(resetWhen).", tone: tone)
+        }
+        if pool.datedBlockWindowLabel == label {
+            return Line(symbol: "arrow.clockwise", text: "It resets in \(resetWhen).", tone: tone)
+        }
+        let end = pool.snapshot.accountBlockHasPublishedReturn
+            ? "the account block's own end is another window's."
+            : "the account block has no published end."
+        return Line(symbol: "arrow.clockwise",
+                    text: "The \(name) window resets in \(resetWhen); \(end)",
+                    tone: .unknown)
     }
 
     /// ", resets in 4h", or, once that reset has passed, a clause that says the

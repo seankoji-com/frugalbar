@@ -310,8 +310,9 @@ return through that fallback. A credit saved under an id discovery later folds
 into an account (`AntigravityAccount.historyAliases`) is still that account's
 (`GeminiAPICreditStore.credit(for:aliases:in:)`), and the next save moves it to
 the current id. Settings has one editor per account. Each is
-drawn in the Wallet as its own "Gemini API · <account>" line tagged CONFIGURED,
-once per account however many routes read it, with an
+drawn in the Wallet as its own "Gemini API cap · <account>" line (the title
+names the figure for what it is), once per account however many routes read it,
+with an
 elapsed-month meter ("MO 63%" and the countdown beneath). The prepaid balance and
 monthly grant stay in Settings and are not drawn. The line always says
 *configured* and the date it was saved in its tooltip. Its fill is **elapsed
@@ -476,16 +477,40 @@ the account's `sourceLabel`. DeepSeek groups OpenCode Go, Command Code and
 OpenDesign. Direct balances (OpenRouter, DeepSeek's own API credit) are Wallet
 entries only, never Subscriptions rows (owner, 24 Nov 2026). The Wallet
 (`WalletPresentation`) is a flat list, one line per credit with no group
-headers and no subtitle (owner, 24 Nov 2026): the title names the provider,
-and the account when the reading carries a named one ("ChatGPT API",
-"ChatGPT bonus", "Claude Console · Primary"). A configured figure wears a small
-CONFIGURED tag and a carried-over reading a LAST READING tag; there is no other
-text beside the title. The figure carries its role word (owner, 25 Nov 2026)
-as a small caption under the amount (`Row.figureRole`: "left", "grant",
-"credit", "cap"; none under an overdrawn balance), and a credit meter says
-"29% used"; a bare amount made a remaining count, a monthly grant and a cap
-look alike. The caption sits under the amount, not beside it, so the figure
-column keeps its width and long account names do not break. Opening a line passes
+headers and no subtitle (owner, 24 Nov 2026), and its section header carries no
+note (owner, 26 Nov 2026: "credits and balances · never in rankings" was cut,
+the section title says enough). A row's title names the provider, and the
+account when the reading carries a named one ("ChatGPT API", "ChatGPT bonus",
+"Claude · Primary", "Claude Fable · Primary"). The Console is where Claude's
+monthly credit is read, not a second service, so it is not in the title; a
+model ticket is named for its model ("Claude Fable") rather than "Claude Fable
+reset ticket", because the gold ticket glyph already says what it is and the
+reset has a line of its own. A carried-over reading wears a small LAST READING
+tag; a figure the user typed carries no CONFIGURED tag any more (owner, 26 Nov
+2026) — that line is only ever drawn for a typed figure, so the tag
+distinguished it from nothing, and the tooltip still says so. The figure is the amount alone (owner, 26 Nov 2026): the
+role word ("left", "grant", "credit", "cap" — `Row.figureRole`) is no longer
+drawn as a caption under it, because a second 9.5pt line on every row made the
+Wallet read as a stack of captions. The role still reaches the spoken label and
+the tooltip (`row.spoken`, `spokenLabel`), so a remaining count, a monthly grant
+and a cap can still be told apart without being printed twice. No figure carries
+a "/mo" either (owner, 26 Nov 2026): the meter under it is the billing month and
+the spoken label says monthly. A credit count over ten thousand is shortened for
+the glance — "60k credits", not "60,085 credits" (`CreditText.compact`; the
+inspector keeps the exact count through `CreditText.format`). On a line with a
+meter the figure moves onto the meter's own caption, in that caption's size,
+between the used share and the countdown, and the track then runs through the
+vacated figure column to the card's edge (owner, 26 Nov 2026); an 84pt stub
+could not show a window's shape. Lines without a meter keep the figure
+right-aligned in the shared figure column. Every meter is normalised (owner, 26 Nov 2026): one
+informational blue fill, one "MO 14%" label with no "used" suffix, the calendar
+token, the figure in the middle and the countdown at the right, and an even-use
+tick on every bar. A spent credit keeps `SpentTrack` and its red label — an
+exhausted allowance must not render as a calm blue bar. A time-only meter publishes no
+spend, so it draws no fill — an empty tinted track would read as "nothing
+used" — and only its even-use mark at the elapsed share, built from the cycle
+it was measured in because `evenPace` refuses a position with nothing behind
+it. The label still says "MO 48%" and no "month elapsed" line sits under it. Opening a line passes
 its balance series to the inspector, whose card for that series comes first.
 When the title needs the room, the tag shrinks to its
 glyph (pencil, clock) rather than cutting the account name; the tooltip and
@@ -498,14 +523,21 @@ Subscriptions nowhere, so dropping it would hide the failure from both. Clicking
 a line opens the inspector of the snapshot it came from (`Row.snapshotID`).
 ChatGPT has two lines: the monthly API credit grant and
 the bonus credit count. Each Google account's configured Gemini API credit is
-its own "Gemini API · <account>" line in the Wallet, never under an Antigravity
-row in Subscriptions. A model's reset
+its own "Gemini API cap · <account>" line in the Wallet, never under an
+Antigravity row in Subscriptions. The amount there is the **cap the user
+configured**, not a balance: Google publishes no spend and no credit-remaining
+for an API key, so the line can never say how close the project is to its cap,
+and a project at its cap answers `429` while credit remains. A model's reset
 tickets (Fable) sit beside that model's line in its Claude account's Subscriptions
 row (`ModelTicketsBadge`); only plan-wide tickets, and a model ticket with no
 model line to sit beside, are Wallet lines. The Wallet is a `Grid`: a fixed
 meter column and a figure column as wide as the widest figure, so every bar
 starts and ends in the same place (a fixed figure width let "60,085 credits"
-push its bar out of line). A credit that expires and publishes what was used
+push its bar out of line). A line with neither a meter nor a trend draws
+nothing there and gives that column to its name instead: reserving it empty
+squeezed "Claude Fable reset ticket · Primary" into three lines (owner, 26 Nov
+2026). Only the figure column is shared, so amounts still end together. A
+credit that expires and publishes what was used
 draws the Subscriptions bar (`Meter.credit`, through `UsageBar`): % used and the
 countdown beneath, the same colours, and the even-use tick only where the
 credit's period is known. The ChatGPT API credit and Claude usage credits pass
@@ -521,8 +553,18 @@ balance (OpenRouter, DeepSeek, any `APICreditEntry` with a series) draws its
 recorded trend through `BalanceSparklinePresentation.make`, which draws nothing
 below two readings.
 The group
-averages use only fresh figures in the same window and report coverage. Each
-pool keeps its service identity and opens its own inspector.
+averages use only fresh figures in the same window and are drawn as bars, not
+as percentages (owner, 26 Nov 2026): an averaged column draws the same
+`UsageBar` a pool row draws, with one dot per pool underneath — green where
+that pool reported this window, red where it did not — in place of the old
+"avg · 2/4" caption. Nothing on the card explains the dots or the ticks any
+more (owner, 26 Nov 2026): the row's spoken label says what each mark means, and
+the drawn legend made the card taller for a sentence nobody reads twice. The
+group's status counts ("2 usable · 3 blocked · 2 spent") are spoken, not drawn
+either: the dots already say which pools answered. A group that
+publishes only one column draws that bar across the whole grid rather than
+leaving two columns of dashes. Each pool keeps its service identity and opens
+its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window
   still to run, on long windows (≥ 7 days, or WK/MO) only. Soonest-reset
   ranking was tried on real data and picked a nearly drained pool over a full
@@ -631,9 +673,27 @@ has passed is "due", never "now". Each of these was once derived locally and
 drifted, one surface per review round, until it was moved to one place.
 A return hint ("Back soonest", the menu bar's "next …") is
 `GlancePresentation.soonestReturn`: never a stale pool's old reset, and never
-for an account blocked on its badge, whose windows' resets do not say when the
-account-wide block lifts (its return is "not published"); the grid's cells for
-such an account show the block with no countdown.
+for an account blocked on its badge whose block nothing dates: its windows'
+resets say when each window turns over, not when the block lifts, so its return
+is "not published" and the grid's cells show the block with no countdown. A
+block the vendor dates is the exception (`QuotaSnapshot.accountBlockResetIsTheBlocksEnd`,
+read through `accountBlockEnd` / `accountBlockHasPublishedReturn`), and it is
+dated per bar, never for the whole account: `accountBlockDatedByBarLabel` names
+the bar whose exhaustion raised the block — Command Code's `limited` is its
+monthly credit pool running out, and the vendor documents that "your request
+budget refreshes at the start of every billing cycle", so that row's published
+cycle end is the block's end — or the vendor blocked the window itself and
+still published when it frees, which is OpenCode Go's `rate-limited` month
+beside its percentage. Only those bars keep a reset and a countdown; every
+other window the badge merely blocked stays without one, so a sibling that
+resets in an hour is never read as an unblock date by the grid, Back soon
+(which names the dating window), the inspector (whose focus is that bar) or the
+Story (which tells it). The dating bar must be a **plan** window, chosen once by
+`accountBlockDatedBar` and read by both `accountBlockEnd` and
+`accountBlockDatedWindowLabel`: a bonus or overage allowance is not the plan
+that was stopped, so its expiry can never date the block, and the date and the
+window's name can never come from different bars. Back soon additionally takes
+both from a window the pool actually draws (`GlancePresentation.pool`).
 Whether a pool's figures describe now is `GlancePresentation.Freshness`
 (current, stale, or awaitingReset when a window's published reset has passed
 with no reading since). Only a current pool is a pick; the grid notes

@@ -90,6 +90,9 @@ public struct GlancePresentation: Equatable, Sendable {
         public let returnsAt: Date?
         /// A paid overage or on-demand allowance is still open beside a spent plan.
         public let hasPaidOverage: Bool
+        /// The window whose published reset dates an account block, so a
+        /// return hint names that window rather than a sibling's.
+        public let datedBlockWindowLabel: String?
 
         /// The vendor, not the user's own use, stopped this pool: the account
         /// badge (`QuotaSnapshot.isAccountBlocked`) or a blocked plan window.
@@ -230,8 +233,23 @@ public struct GlancePresentation: Equatable, Sendable {
         // An account the vendor blocked on its badge has no published return:
         // its windows' resets say when each window turns over, not when the
         // account-wide block lifts, so neither is offered as the pool's return.
-        let returnsAt: Date? = accountBlocked || spentResets.contains(where: { $0 == nil })
-            ? nil : spentResets.compactMap { $0 }.max()
+        // Unless the vendor dated the block — the pool it ran out of
+        // (`accountBlockDatedByBarLabel`) or the window it blocked itself — then the
+        // reset we hold is exactly that date, and withholding it left Command
+        // Code and OpenCode Go showing a block with no reset at all.
+        // A dated block returns at the one reset that dates it, never at a
+        // sibling window's: a badge-blocked 5H sibling can reset in an hour
+        // while the block runs to the month's end.
+        // Back soon's date and its window name are the snapshot's own facts
+        // (`accountBlockEnd` / `accountBlockDatedWindowLabel`, both read from
+        // one plan-filtered bar), so they always agree with
+        // `accountBlockHasPublishedReturn` and the label is a window `windows`
+        // holds — it is built from the same plan bars.
+        let returnsAt: Date? = accountBlocked
+            ? snapshot.accountBlockEnd
+            : (spentResets.contains(where: { $0 == nil })
+                ? nil : spentResets.compactMap { $0 }.max())
+        let datedBlockWindowLabel = accountBlocked ? snapshot.accountBlockDatedWindowLabel : nil
         let paidOpen = supplementary.contains {
             $0.allowanceRole == .paidOverage && !$0.isBlocked
                 && ($0.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)
@@ -242,7 +260,8 @@ public struct GlancePresentation: Equatable, Sendable {
             accountTag: ambiguous ? accountTag(for: snapshot, fallback: name) : nil,
             state: state, isStale: snapshot.staleReading != nil, windows: windows,
             isAheadOfPace: state == .usable && windows.contains(where: \.isAheadOfPace),
-            returnsAt: returnsAt, hasPaidOverage: paidOpen
+            returnsAt: returnsAt, hasPaidOverage: paidOpen,
+            datedBlockWindowLabel: datedBlockWindowLabel
         )
     }
 
@@ -440,7 +459,8 @@ public struct GlancePresentation: Equatable, Sendable {
 
     static func returnEntry(_ pool: Pool, now: Date) -> ReturnEntry {
         let spent = pool.windows.filter(\.isSpent)
-        let label = spent.max { ($0.bar.resetsAt ?? .distantFuture) < ($1.bar.resetsAt ?? .distantFuture) }?.bar.label
+        let label = pool.datedBlockWindowLabel
+            ?? spent.max { ($0.bar.resetsAt ?? .distantFuture) < ($1.bar.resetsAt ?? .distantFuture) }?.bar.label
         let blocked = pool.isBlocked
         let text: String
         if let at = pool.returnsAt {

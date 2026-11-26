@@ -661,6 +661,16 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// so neither existing initializer, nor any other provider's call site, has
     /// to change.
     public var staleReading: StaleReading? = nil
+    /// The bar whose exhaustion raised the account block, when the provider
+    /// dated the block by that pool's own reset — Command Code's `limited` is
+    /// its monthly credit pool running out ("your request budget refreshes at
+    /// the start of every billing cycle"), so its "MO" row's cycle end is when
+    /// the account can work again.
+    ///
+    /// Naming the *bar* rather than just "dated" is what stops a sibling
+    /// window's reset being read as the block's end: only this label qualifies
+    /// in `accountBlockResetIsTheBlocksEnd`.
+    public var accountBlockDatedByBarLabel: String? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
@@ -710,6 +720,52 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// popover, the group subtitle and the inspector cannot disagree.
     public static let accountBlockedBadge = "Blocked"
     public var isAccountBlocked: Bool { badgeText == Self.accountBlockedBadge }
+
+    /// Whether `bar`'s published reset is the account block's own end. Two
+    /// ways it can be: the provider named this bar as the pool whose
+    /// exhaustion raised the block (Command Code, `accountBlockDatedByBarLabel`),
+    /// or the vendor blocked this very window and still published when it
+    /// frees (OpenCode Go marks the monthly window `rate-limited`).
+    ///
+    /// Only a **plan** window qualifies. A bonus or paid-overage allowance is
+    /// not the plan that was stopped, and a return hint built from its expiry
+    /// would name a date the pool row never draws. A window the *badge* alone
+    /// blocked never qualifies either: its reset says when that window turns
+    /// over, not when the account comes back. The owner asked for the dated
+    /// case twice (26 Nov 2026): "⊘ MO 9d" on Command Code, then the same on
+    /// OpenCode Go; withholding a published reset left both rows with no way
+    /// back.
+    public func accountBlockResetIsTheBlocksEnd(_ bar: DualBarMetrics) -> Bool {
+        guard isAccountBlocked, bar.allowanceRole == .plan, bar.resetsAt != nil else { return false }
+        if let label = accountBlockDatedByBarLabel { return bar.label == label }
+        return bar.isBlocked
+    }
+
+    /// The one window whose published reset dates the block: the provider-named
+    /// plan window when there is one, else the plan window the vendor blocked
+    /// itself whose reset comes first. The date and the window's name both come
+    /// from this bar, so a countdown can never be attributed to a different
+    /// window than the one it belongs to.
+    private var accountBlockDatedBar: DualBarMetrics? {
+        guard isAccountBlocked else { return nil }
+        let plan = quotaBars.filter { $0.allowanceRole == .plan }
+        if let label = accountBlockDatedByBarLabel {
+            return plan.first { $0.label == label && $0.resetsAt != nil }
+        }
+        return plan.filter { $0.isBlocked && $0.resetsAt != nil }
+            .min { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }
+    }
+
+    /// When the account block lifts, as the vendor published it. Nil when no
+    /// plan window dates it: then its end is unpublished and no surface may
+    /// offer one.
+    public var accountBlockEnd: Date? { accountBlockDatedBar?.resetsAt }
+
+    /// The window the block's end came from, for naming it in a return hint.
+    public var accountBlockDatedWindowLabel: String? { accountBlockDatedBar?.label }
+
+    /// The account block is dated by a reset we hold.
+    public var accountBlockHasPublishedReturn: Bool { accountBlockEnd != nil }
 
     /// `bar` as this account's block leaves it: blocked when the vendor
     /// blocked the whole account, whatever its own flag says. A billing
@@ -863,7 +919,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         latencyMs: Int? = nil,
         keyMasked: String? = nil,
         cliSource: String? = nil,
-        currencyBasis: CurrencyBasis? = nil
+        currencyBasis: CurrencyBasis? = nil,
+        accountBlockDatedByBarLabel: String? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -883,6 +940,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.keyMasked = keyMasked
         self.cliSource = cliSource
         self.currencyBasis = currencyBasis
+        self.accountBlockDatedByBarLabel = accountBlockDatedByBarLabel
     }
 
 

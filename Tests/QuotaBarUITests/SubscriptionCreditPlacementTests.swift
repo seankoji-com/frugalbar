@@ -18,7 +18,7 @@ struct SubscriptionCreditPlacementTests {
         snap.apiCredits = [APICreditEntry(id: "openai.api-credits", vendorId: .openai,
                                         label: "Usage credits", metric: metric)]
         let p = MetricRowPresentation(snapshot: snap, now: now)
-        #expect(p.subscriptionCredits.first?.figure == "60,085 credits")
+        #expect(p.subscriptionCredits.first?.figure == "60k credits")
         #expect(p.subscriptionCredits.first?.spoken.contains("60,085 credits remaining") == true)
         #expect(MetricRowPresentation.value(for: metric) == "60,085 credits")
         #expect(BalanceSeries.Unit.credits(name: "credits").format(-amount) == "-60,085 credits")
@@ -63,8 +63,7 @@ struct SubscriptionCreditPlacementTests {
         #expect(credit.extendsSubscription)
         #expect(snap.apiCredits.filter { !$0.extendsSubscription }.isEmpty)
         #expect(presentation.subscriptionCredits.count == 1)
-        let digits = presentation.subscriptionCredits.first?.figure.filter(\.isNumber)
-        #expect(digits == "62500")
+        #expect(presentation.subscriptionCredits.first?.figure == "63k credits")
         #expect(presentation.subscriptionCredits.first?.figure.hasSuffix("credits") == true)
         #expect(presentation.subscriptionCredits.first?.figure.contains("$") == false)
         #expect(presentation.subscriptionCredits.first?.detail == nil)
@@ -233,7 +232,7 @@ struct SubscriptionCreditPlacementTests {
             .contains("Fable 1 banked reset credit"))
 
         let wallet = WalletPresentation(snapshots: [snapshot], now: now).rows
-        #expect(wallet.contains { $0.title.contains("Fable reset ticket") && $0.symbol == "ticket.fill" })
+        #expect(wallet.contains { $0.title.contains("Fable") && $0.symbol == "ticket.fill" })
     }
 
     @Test("a usable plan keeps the Fable ticket beside its line, not in the Wallet")

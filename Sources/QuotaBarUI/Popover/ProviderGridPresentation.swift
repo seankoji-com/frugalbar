@@ -101,10 +101,15 @@ struct ProviderGridPresentation {
             // lifts, and "⊘ MO 2d" beside "1 blocked" read as the unblock date.
             // The cells then show the block and no countdown; the inspector's
             // window lines still give each window's own reset, labelled as such.
+            // A block the vendor dated (`accountBlockDatedByBarLabel`, or a window it
+            // blocked itself) is the exception: that reset *is* the block's
+            // end, so the cell keeps it.
             let poolWindows = (pool?.windows ?? []).map { window -> Window in
                 guard snapshot.isAccountBlocked else { return window }
                 var bar = snapshot.applyingAccountBlock(to: window.bar)
-                bar.resetsAt = nil
+                // A dated block keeps its pool's reset: that date is the
+                // block's published end, and the cell draws it.
+                if !snapshot.accountBlockResetIsTheBlocksEnd(window.bar) { bar.resetsAt = nil }
                 return GlancePresentation.window(for: bar, now: now)
             }
             var columns: [WindowColumn: Window] = [:]
@@ -145,17 +150,12 @@ struct ProviderGridPresentation {
         var allSpent: Bool { !pools.isEmpty && pools.allSatisfy(\.isSpent) }
         var nextReturn: Date? { allSpent ? pools.compactMap(\.returnsAt).min() : nil }
 
-        /// The status line under the group's name, as spoken and tested.
+        /// The group's status in words — "2 usable · 3 blocked · 2 spent" — for
+        /// the row's accessibility label and the tooltip only. It is not drawn
+        /// (owner, 26 Nov 2026): the coverage dots under each bar already show
+        /// which pools answered, and a status line under every name made the
+        /// card taller for a summary of the rows below.
         var subtitle: String? { statusParts?.joined(separator: " · ") }
-
-        /// `subtitle` as drawn. It wraps in a 136pt column, so each count
-        /// keeps its word on the same line ("1 stale", never "1" / "stale"):
-        /// the spaces inside a part are non-breaking.
-        var displaySubtitle: String? {
-            statusParts.map { parts in
-                parts.map { $0.replacingOccurrences(of: " ", with: "\u{00A0}") }.joined(separator: " · ")
-            }
-        }
 
         private var statusParts: [String]? {
             if pools.isEmpty { return nil }
@@ -186,6 +186,21 @@ struct ProviderGridPresentation {
                     awaiting > 0 ? "\(awaiting) awaiting reading" : nil,
                     unreadable > 0 ? "\(unreadable) unreadable" : nil]
                 .compactMap { $0 }
+        }
+
+        /// Which pools' figures fed the average for `column`, in the order the
+        /// group lists them — the same order the expanded rows use, and the same
+        /// set the cell's "across N of M pools" counts. The averaged cell draws
+        /// one dot per pool from this, so a dot maps to a pool instead of
+        /// colouring the first N of them by count alone.
+        func coverage(for column: WindowColumn) -> [Bool] {
+            pools.map { pool in
+                guard pool.freshness == .current,
+                      let window = pool.displayWindows[column] else { return false }
+                // A blocked window's figure is the vendor's, not headroom, so
+                // it is not averaged (`summary(for:)`).
+                return !window.bar.isBlocked && window.remaining != nil
+            }
         }
 
         func summary(for column: WindowColumn) -> Summary? {

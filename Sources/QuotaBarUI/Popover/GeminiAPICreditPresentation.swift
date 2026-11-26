@@ -31,6 +31,11 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
         public let percentText: String
         /// "11d" left in the month, or nil when the calendar cannot state it.
         public let countdown: String?
+        /// The calendar month the elapsed share was measured in: the end is
+        /// the reset, the span its length. A caller drawing a position mark on
+        /// its own track needs both (`WalletSection`).
+        public let periodEnd: Date?
+        public let periodLength: TimeInterval?
         /// The whole line in words, for the row's one accessibility element
         /// and its tooltip. It says the fill is time and not spend.
         public let spoken: String
@@ -92,9 +97,10 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
         var parts = ["API credit \(amount)",
                      "\(percent)% of the calendar month elapsed"]
         if let dayPhrase { parts.append(dayPhrase) }
-        parts.append("not spend, the fill is elapsed calendar time")
+        parts.append("not spend, the mark is where the calendar month has reached")
         return Budget(amountText: amount, fraction: fraction,
                       percentText: "\(percent)%", countdown: countdown,
+                      periodEnd: end, periodLength: length,
                       spoken: parts.joined(separator: ", "))
     }
 

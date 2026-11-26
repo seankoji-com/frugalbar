@@ -57,7 +57,7 @@ struct OpenAIUsageCreditTests {
             label: "Usage credits", metric: .credits(remaining: 59_641, unitName: "credits"))]
         let p = MetricRowPresentation(snapshot: snap, now: now)
         #expect(p.openAIUsageCredit == nil)
-        #expect(p.subscriptionCredits.first?.figure == "59,641 credits")
+        #expect(p.subscriptionCredits.first?.figure == "60k credits")
         #expect(OpenAIUsageCreditPresentation(entry: entry(balance: 75_000), now: now, isStale: false)?.fraction == 0)
         #expect(OpenAIUsageCreditPresentation(entry: entry(balance: 0), now: now, isStale: false)?.fraction == 1)
     }
