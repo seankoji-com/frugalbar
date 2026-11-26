@@ -91,6 +91,34 @@ struct GoWorkspaceAccountTests {
         #expect(readings.map(\.usage) == [.noPlan, .failed(.badResponse), .failed(.badResponse)])
     }
 
+    @Test("Console keeps complete and explicitly blocked windows when amount fields are omitted")
+    func preservesPartialConsoleUsage() async {
+        let result = await GoWorkspaceAccount.openCode.verify(now: now) { _, workspace in
+            switch workspace {
+            case nil: ok(#"[{"id":"org_partial"},{"id":"org_without_meters"}]"#)
+            case "org_partial": ok(#"{"access":{"meters":{"fiveHour":{"limitMicroCents":"100"},"week":{"limitMicroCents":"100","usedMicroCents":20},"month":{"status":"rate-limited"}}}}"#)
+            default: ok(#"{"access":{}}"#)
+            }
+        }
+        guard case .workspaces(let readings) = result, case .measured(let windows)? = readings.first?.usage else {
+            Issue.record("Expected partial usage to preserve published windows"); return
+        }
+        #expect(windows.map(\.label) == ["WK", "MO"])
+        #expect(windows.map(\.fraction) == [0.2, nil])
+        #expect(windows.map(\.isBlocked) == [false, true])
+        #expect(readings.last?.usage == .failed(.unsupported("OpenCode reported no usage window")))
+    }
+
+    @Test("OpenDesign allows same-origin signed-in landing pages and rejects sign-in routes")
+    func acceptsOpenDesignDashboardVariants() {
+        let service = GoWorkspaceAccount.openDesign
+        #expect(service.canReadAccount(from: URL(string: "https://open-design.ai/studio/home")!))
+        #expect(service.canReadAccount(from: URL(string: "https://open-design.ai/cloud/dashboard")!))
+        #expect(!service.canReadAccount(from: URL(string: "https://open-design.ai/cloud/login")!))
+        #expect(!service.canReadAccount(from: URL(string: "https://open-design.ai:8443/studio/home")!))
+        #expect(!service.canReadAccount(from: URL(string: "https://example.com/studio/home")!))
+    }
+
     @Test("Malformed or duplicate workspace IDs fail the directory before any usage request")
     func refusesPartialDirectory() async {
         for directory in [
@@ -208,6 +236,28 @@ struct GoWorkspaceAccountTests {
                                        requirements: requirements)
         #expect(other)
         #expect(settings.usesAccount(.openDesign) && settings.usesAccount(.openCode))
+    }
+
+    @Test("A verified planless workspace stays in the directory and cannot satisfy migration coverage")
+    func retainsPlanlessWorkspaceWithoutCountingIt() {
+        let requirements = GoWorkspaceAccountSettings.LegacyRequirements(
+            openCodeCount: 0, openDesignCount: 1, openDesignIDs: ["earlier"])
+        let earlier = GoWorkspaceAccount.Workspace(id: "earlier", name: "Previous workspace")
+        let current = GoWorkspaceAccount.Workspace(id: "current", name: "Current workspace")
+        let result = GoWorkspaceAccount.Verification.workspaces([
+            .init(workspace: earlier, usage: .noPlan),
+            .init(workspace: current, usage: .measured([.init(label: "5H", fraction: 0.2, resetsAt: nil, isBlocked: false)])),
+        ])
+        var settings = GoWorkspaceAccountSettings()
+        let automatic = settings.connect(.openDesign, verification: result, requirements: requirements)
+        #expect(!automatic)
+        #expect(!settings.isLinked(.openDesign))
+        let explicit = settings.connect(.openDesign, verification: result, requirements: requirements,
+                                         replaceEarlierConnections: true)
+        #expect(explicit)
+        #expect(settings.workspaces(for: .openDesign) == [earlier, current])
+        #expect(settings.workspacesWithPlan(for: .openDesign) == [current])
+        #expect(settings.knownWorkspaces(for: .openDesign) == [current])
     }
 
     @Test("Polling replaces legacy rows at cutover and drops the account rows on disconnect")

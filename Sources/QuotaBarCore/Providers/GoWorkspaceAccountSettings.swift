@@ -37,8 +37,12 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     }
 
     public func activeHistoryIDs(for service: GoWorkspaceAccount) -> Set<String> {
+        Set(workspacesWithPlan(for: service).map { service.seriesID(for: $0) })
+    }
+
+    func workspacesWithPlan(for service: GoWorkspaceAccount) -> [GoWorkspaceAccount.Workspace] {
         let excluded = planless?[service] ?? []
-        return Set(workspaces(for: service).lazy.filter { !excluded.contains($0.id) }.map { service.seriesID(for: $0) })
+        return workspaces(for: service).filter { !excluded.contains($0.id) }
     }
 
     public struct LegacyRequirements: Sendable {
@@ -100,7 +104,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         let measured = readings.compactMap { reading in
             if case .measured = reading.usage { reading.workspace } else { nil }
         }
-        guard !measured.isEmpty, Set(measured.map(\.id)).count == measured.count else { return false }
+        guard !measured.isEmpty, Set(readings.map(\.id)).count == readings.count else { return false }
         let minimum = usesAccount(service) ? 0 : requirements.minimum(for: service)
         let coversEarlier = requirements.covers(measured, service: service)
         guard usesAccount(service) || coversEarlier || replaceEarlierConnections else { return false }
@@ -108,12 +112,16 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         if !coversEarlier && replaceEarlierConnections { approvals.insert(service) }
         else { approvals.remove(service) }
         approvedReplacements = approvals
-        updateWorkspaces(measured, for: service)
+        let noPlan = readings.compactMap { $0.usage == .noPlan ? $0.id : nil }
+        var workspacePlans = planless ?? [:]
+        workspacePlans[service] = Set(noPlan)
+        planless = workspacePlans
+        updateWorkspaces(readings.map(\.workspace), for: service)
         for workspace in measured { remember(workspace, for: service) }
         if minimum == 0 { migrated.insert(service) }
         let ready = GoWorkspaceAccount.allCases.allSatisfy { account in
             if usesAccount(account) || requirements.minimum(for: account) == 0 { return true }
-            return isLinked(account) && (approvals.contains(account) || requirements.covers(workspaces(for: account), service: account))
+            return isLinked(account) && (approvals.contains(account) || requirements.covers(workspacesWithPlan(for: account), service: account))
         }
         if ready { migrated.formUnion(linked.keys) }
         return true
@@ -121,11 +129,13 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
 
     public mutating func disconnect(_ service: GoWorkspaceAccount) {
         linked[service] = nil
+        planless?[service] = nil
         approvedReplacements?.remove(service)
     }
 
     mutating func updateWorkspaces(_ workspaces: [GoWorkspaceAccount.Workspace], for service: GoWorkspaceAccount) {
         linked[service] = workspaces
+        planless?[service]?.formIntersection(workspaces.map(\.id))
     }
 
     mutating func remember(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {
@@ -140,7 +150,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     }
 
     mutating func markNoPlan(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {
-        guard knownWorkspaces(for: service).contains(where: { $0.id == workspace.id }) else { return }
+        guard workspaces(for: service).contains(where: { $0.id == workspace.id }) else { return }
         var noPlan = planless ?? [:]
         noPlan[service, default: []].insert(workspace.id)
         planless = noPlan

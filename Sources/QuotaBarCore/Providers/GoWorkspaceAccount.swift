@@ -35,6 +35,13 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
         }
     }
 
+    func canReadAccount(from page: URL) -> Bool {
+        guard page.scheme == "https", page.host == dashboard.host, (page.port ?? 443) == 443 else { return false }
+        if self == .openCode, page.path != "/console", !page.path.hasPrefix("/console/") { return false }
+        let signInRoutes = ["auth", "login", "sign-in", "signin", "oauth"]
+        return !page.pathComponents.contains { signInRoutes.contains($0.lowercased()) }
+    }
+
     var workspaceHeader: String {
         switch self {
         case .openCode: "x-org-id"
@@ -192,12 +199,18 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
         guard let wire else { return .noPlan }
         guard wire.orgID == nil || wire.orgID == workspaceID else { return .failed(.badResponse) }
         guard let access = wire.access else { return .noPlan }
-        let meters = [("5H", access.meters.fiveHour), ("WK", access.meters.week), ("MO", access.meters.month)]
+        let meters = [("5H", access.meters?.fiveHour), ("WK", access.meters?.week), ("MO", access.meters?.month)]
         var windows: [Window] = []
         for (label, value) in meters {
             guard let value else { continue }
-            guard value.limit.value > 0, (value.used.value / value.limit.value).isFinite else {
-                return .failed(.badResponse)
+            let blocked = value.status == "rate-limited"
+            let fraction: Double?
+            if let limit = value.limit?.value, let used = value.used?.value {
+                guard limit > 0, (used / limit).isFinite else { return .failed(.badResponse) }
+                fraction = min(used / limit, 1)
+            } else {
+                guard blocked else { continue }
+                fraction = nil
             }
             let reset = (value.resetsAt ?? (label == "MO" ? access.endsAt : nil)).flatMap(OpenCodeGoProvider.parseDate)
             let length: TimeInterval? = switch label {
@@ -205,10 +218,10 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
             case "WK": QuotaWindow.week
             default: reset.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
             }
-            windows.append(Window(label: label, fraction: min(value.used.value / value.limit.value, 1),
-                                  resetsAt: reset, isBlocked: value.status == "rate-limited", windowLength: length))
+            windows.append(Window(label: label, fraction: fraction, resetsAt: reset,
+                                  isBlocked: blocked, windowLength: length))
         }
-        return windows.isEmpty ? .failed(.badResponse) : .measured(windows)
+        return windows.isEmpty ? .failed(.unsupported("OpenCode reported no usage window")) : .measured(windows)
     }
 
     private struct ConsoleUsage: Decodable {
@@ -218,7 +231,7 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
                 let week: Meter?
                 let month: Meter?
             }
-            let meters: Meters
+            let meters: Meters?
             let endsAt: String?
         }
 
@@ -237,8 +250,8 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
     private struct Meter: Decodable {
         let status: String?
         let resetsAt: String?
-        let limit: Amount
-        let used: Amount
+        let limit: Amount?
+        let used: Amount?
 
         private enum CodingKeys: String, CodingKey {
             case status, resetsAt, limit = "limitMicroCents", used = "usedMicroCents"

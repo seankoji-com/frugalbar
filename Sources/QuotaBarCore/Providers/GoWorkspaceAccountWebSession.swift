@@ -193,7 +193,8 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     }
 
     private func quotaProviders(from settings: GoWorkspaceAccountSettings, failure: UnavailableReason?) -> [any QuotaProvider] {
-        settings.workspaces(for: service).map { workspace in
+        let workspaces = failure == nil ? settings.workspaces(for: service) : settings.workspacesWithPlan(for: service)
+        return workspaces.map { workspace in
             GoWorkspaceAccountQuotaProvider(service: service, workspace: workspace, navigation: navigation,
                                             directoryFailure: failure)
         }
@@ -213,12 +214,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     }
 
     private var isAtDashboard: Bool {
-        guard !webView.isLoading, let page = webView.url, page.scheme == "https",
-              page.host == service.dashboard.host else { return false }
-        let prefix = service == .openCode ? "/console" : "/cloud"
-        let signInRoutes = ["auth", "login", "sign-in", "signin", "oauth"]
-        return (page.path == prefix || page.path.hasPrefix(prefix + "/"))
-            && !page.pathComponents.dropFirst(2).contains(where: signInRoutes.contains)
+        !webView.isLoading && webView.url.map(service.canReadAccount(from:)) == true
     }
 
     private func get(_ url: URL, workspace: String?, generation: UUID, interactive: Bool = false) async -> OpenDesignResult {
