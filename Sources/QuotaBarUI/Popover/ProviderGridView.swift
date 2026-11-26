@@ -32,9 +32,12 @@ struct ProviderGridView: View {
                     Text("% used").foregroundStyle(Theme.outline)
                 } figures: {
                     columns { column in
+                        // Centred over its column (owner, 26 Nov 2026): the
+                        // trailing edge sat over the next column's dashes and
+                        // read as a label for the wrong window.
                         Text(column.label)
                             .foregroundStyle(Theme.outline)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                 }
                 .font(.system(size: 10, weight: .semibold))
