@@ -224,6 +224,11 @@ struct GlanceFreshnessTests {
 
         let story = ProviderStoryPresentation(pool: pool, glance: glance, readings: nil, now: now)
         #expect(story.windowName == "weekly")
+        // The other blocked window may not claim the phrase: it names itself.
+        let monthlyLine = ProviderStoryPresentation.resetLine(
+            name: "monthly", label: "MO", resetWhen: "9d", pool: pool, tone: .good)
+        #expect(!monthlyLine.text.hasPrefix("It resets in"))
+        #expect(monthlyLine.text.contains("another window"))
     }
 
     @Test("a window the vendor blocked itself keeps its published reset in the cell")
