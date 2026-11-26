@@ -114,7 +114,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         approvedReplacements = approvals
         let noPlan = readings.compactMap { $0.usage == .noPlan ? $0.id : nil }
         var workspacePlans = planless ?? [:]
-        workspacePlans[service] = Set(noPlan)
+        workspacePlans[service, default: []].formUnion(noPlan)
         planless = workspacePlans
         updateWorkspaces(readings.map(\.workspace), for: service)
         for workspace in measured { remember(workspace, for: service) }
@@ -134,8 +134,8 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     }
 
     mutating func updateWorkspaces(_ workspaces: [GoWorkspaceAccount.Workspace], for service: GoWorkspaceAccount) {
+        // A directory response can temporarily omit a workspace. Keep its last plan status.
         linked[service] = workspaces
-        planless?[service]?.formIntersection(workspaces.map(\.id))
     }
 
     mutating func remember(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {

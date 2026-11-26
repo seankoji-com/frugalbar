@@ -260,6 +260,39 @@ struct GoWorkspaceAccountTests {
         #expect(settings.knownWorkspaces(for: .openDesign) == [current])
     }
 
+    @Test("An omitted workspace keeps its no-plan status until a new reading", arguments: [true, false])
+    func retainsNoPlanWhenWorkspaceReappears(omittedDuringVerification: Bool) {
+        let service = GoWorkspaceAccount.openCode
+        let requirements = GoWorkspaceAccountSettings.LegacyRequirements(
+            openCodeCount: 0, openDesignCount: 0, openDesignIDs: [])
+        let paid = GoWorkspaceAccount.Workspace(id: "org_paid", name: "Paid")
+        let free = GoWorkspaceAccount.Workspace(id: "org_free", name: "Free")
+        let usage = GoWorkspaceAccount.Usage.measured([
+            .init(label: "5H", fraction: 0.2, resetsAt: nil, isBlocked: false),
+        ])
+        let paidReading = GoWorkspaceAccount.Reading(workspace: paid, usage: usage)
+        var settings = GoWorkspaceAccountSettings()
+        let connected = settings.connect(service, verification: .workspaces([
+            paidReading, .init(workspace: free, usage: .noPlan),
+        ]), requirements: requirements)
+        #expect(connected)
+        if omittedDuringVerification {
+            let verified = settings.connect(service, verification: .workspaces([paidReading]), requirements: requirements)
+            #expect(verified)
+        } else {
+            settings.updateWorkspaces([paid], for: service)
+        }
+        #expect(settings.workspaces(for: service) == [paid])
+
+        settings.updateWorkspaces([paid, free], for: service)
+        #expect(settings.workspacesWithPlan(for: service) == [paid])
+        #expect(settings.activeHistoryIDs(for: service) == [service.seriesID(for: paid)])
+
+        settings.remember(free, for: service)
+        #expect(settings.workspacesWithPlan(for: service) == [paid, free])
+        #expect(settings.activeHistoryIDs(for: service) == [service.seriesID(for: paid), service.seriesID(for: free)])
+    }
+
     @Test("Polling replaces legacy rows at cutover and drops the account rows on disconnect")
     func pollingUsesOnlyOneSource() async {
         let discovery = DiscoveredSource()
