@@ -189,7 +189,7 @@ public struct HistoryRootView: View {
             return (
                 HistoryOverviewPresentation.subjects(
                     order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved(),
-                    openDesignConnections: OpenDesignConnections.load()),
+                    openDesignConnections: OpenDesignConnections.load(), goAccounts: GoWorkspaceAccountSettings.load()),
                 HistoryOverviewPresentation.hiddenNames(order: prefs.order, hidden: prefs.hidden)
             )
         }

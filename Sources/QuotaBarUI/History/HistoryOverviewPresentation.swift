@@ -47,7 +47,8 @@ public enum HistoryOverviewPresentation {
         workspaces: [OpenCodeGoWorkspace],
         claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all(),
         antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all(),
-        openDesignConnections: OpenDesignConnections? = nil
+        openDesignConnections: OpenDesignConnections? = nil,
+        goAccounts: GoWorkspaceAccountSettings = GoWorkspaceAccountSettings()
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
@@ -78,25 +79,37 @@ public enum HistoryOverviewPresentation {
                 return subjects
             }
             if vendor == .opendesign {
+                let accountSubjects = goAccountSubjects(.openDesign, settings: goAccounts)
+                let accountIDs = Set(accountSubjects.map(\.id))
                 let linked = OpenDesignConnection.allCases.compactMap { connection -> Subject? in
-                    guard let workspace = openDesignConnections?.workspace(for: connection) else { return nil }
+                    guard let workspace = openDesignConnections?.workspace(for: connection),
+                          !accountIDs.contains(workspace.seriesID) else { return nil }
                     return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName)
                 }
-                return linked.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : linked
+                let subjects = accountSubjects + linked
+                return subjects.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : subjects
             }
             guard vendor == .opencode else {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)]
             }
-            return workspaces.filter(\.isEnabled).map { workspace in
+            let accountSubjects = goAccountSubjects(.openCode, settings: goAccounts)
+            return accountSubjects + workspaces.filter(\.isEnabled).map { workspace in
                 Subject(
                     id: workspace.instanceID,
                     vendor: .opencode,
-                    name: workspace.name,
+                    name: accountSubjects.isEmpty ? workspace.name : "\(workspace.name) · Earlier connection",
                     keys: workspace.id == OpenCodeGoWorkspaceStore.legacyID
                         ? [workspace.instanceID, VendorIdentifier.opencode.rawValue]
                         : [workspace.instanceID]
                 )
             }
+        }
+    }
+
+    private static func goAccountSubjects(_ service: GoWorkspaceAccount, settings: GoWorkspaceAccountSettings) -> [Subject] {
+        guard settings.usesAccount(service) else { return [] }
+        return settings.knownWorkspaces(for: service).map {
+            Subject(id: service.seriesID(for: $0), vendor: service.vendor, name: $0.name)
         }
     }
 

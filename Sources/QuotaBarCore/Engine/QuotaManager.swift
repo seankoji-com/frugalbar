@@ -23,6 +23,7 @@ public actor QuotaManager {
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         knownClaudeAccounts: { ClaudeAccountStore.all() },
         antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
+        goAccountDiscovery: { await GoWorkspaceAccountWebSession.discoveredProviders(hidden: $0, force: $1) },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
         monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } },
         vaultWarmUp: { interactive in
@@ -51,6 +52,7 @@ public actor QuotaManager {
     private let claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])?
     private let knownClaudeAccounts: @Sendable () -> [ClaudeAccount]
     private let antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])?
+    private let goAccountDiscovery: (@Sendable (Set<VendorIdentifier>, Bool) async -> [VendorIdentifier: [any QuotaProvider]])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     /// The configured Gemini API credit, read on every snapshot read rather
@@ -130,6 +132,7 @@ public actor QuotaManager {
         claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])? = nil,
         knownClaudeAccounts: @escaping @Sendable () -> [ClaudeAccount] = { [] },
         antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
+        goAccountDiscovery: (@Sendable (Set<VendorIdentifier>, Bool) async -> [VendorIdentifier: [any QuotaProvider]])? = nil,
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
         monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
@@ -152,6 +155,7 @@ public actor QuotaManager {
         self.claudeProviderFactory = claudeProviderFactory
         self.knownClaudeAccounts = knownClaudeAccounts
         self.antigravityProviderFactory = antigravityProviderFactory
+        self.goAccountDiscovery = goAccountDiscovery
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
         self.geminiCreditLookup = geminiCreditLookup
@@ -626,6 +630,18 @@ public actor QuotaManager {
         let hidden = displayPreferences().hidden
         for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
         var allProviders: [any QuotaProvider] = providerFactory()
+        if let goAccountDiscovery {
+            let sources = await goAccountDiscovery(hidden, force)
+            for (vendor, accounts) in sources {
+                let position = allProviders.firstIndex { $0.vendorId == vendor } ?? allProviders.count
+                allProviders.removeAll { $0.vendorId == vendor }
+                allProviders.insert(contentsOf: accounts, at: min(position, allProviders.count))
+                let current = Set(accounts.map(\.instanceID))
+                for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor && !current.contains(key) {
+                    cache[key] = nil
+                }
+            }
+        }
         if !hidden.contains(.claude), let discover = claudeProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
                 try await QuotaFetchContext.$isUserInitiated.withValue(force) { try await discover() }
@@ -972,6 +988,7 @@ public actor QuotaManager {
                 case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,
                !isAntigravityRestriction,
+               reason != GoWorkspaceAccountQuotaProvider.noPlan,
                let previous = cache[id], previous.snapshot.status.confidence == .measured,
                previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was

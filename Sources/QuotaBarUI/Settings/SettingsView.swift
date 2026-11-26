@@ -82,11 +82,6 @@ public struct SettingsView: View {
               placeholder: "sk-…",
               note: "Prepaid credit balance. Discovered from DEEPSEEK_API_KEY "
                   + "or OpenCode auth.json when CLI discovery is on."),
-        // OpenCode Go is not a single slot: it is one row per named workspace,
-        // each with its own key, managed in the "OpenCode Go workspaces"
-        // section below. The original workspace keeps the legacy `opencode`
-        // Keychain label, so a key entered before workspaces existed is still
-        // the one that is used and never has to be re-entered.
         .init(id: .grok, label: "Grok",
               placeholder: "Grok CLI access token",
               note: "Discovered from ~/.grok/auth.json when CLI discovery is on. "
@@ -122,13 +117,13 @@ public struct SettingsView: View {
     @State private var loaded: [VendorIdentifier: String] = [:]
     @State private var perKeyStatus: [VendorIdentifier: String] = [:]
     @State private var verifyingVendor: VendorIdentifier?
-    @State private var busyWorkspaceIDs: Set<String> = []
     @State private var sources: [VendorIdentifier: CredentialStore.CredentialSource] = [:]
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
     @State private var claudeCreditRows: [ClaudeMonthlyCreditBinding.Row] = []
-    @State private var openDesignConnections: OpenDesignConnections?
-    @State private var openDesignConnection: OpenDesignConnection?
+    @State private var goAccount: GoWorkspaceAccount?
+    @State private var goAccountChecks: [GoWorkspaceAccount: GoWorkspaceAccount.Verification] = [:]
+    @State private var goAccountSettings = GoWorkspaceAccountSettings()
 
     /// Which Claude row the linked monthly credit is drawn under, or why it is
     /// drawn under none. Nil when Claude has no named account rows: the single
@@ -184,15 +179,6 @@ public struct SettingsView: View {
     /// process has no notification identity to ask about.
     @State private var notificationPermission: LocalNotificationPermission?
     @State private var desktopWidgetMode: DesktopWidgetMode = CredentialStore.desktopWidgetMode
-    /// One row per configured OpenCode Go workspace. Its own key is never read
-    /// into view state; `workspaceKeys` holds a transient, initially-empty
-    /// entry per instance and `workspaceHasKey` records only whether one exists.
-    @State private var workspaces: [OpenCodeGoWorkspace] = []
-    @State private var workspaceKeys: [String: String] = [:]
-    @State private var workspaceStatus: [String: String] = [:]
-    @State private var workspaceHasKey: [String: Bool] = [:]
-    @State private var newWorkspaceName = ""
-
     /// False only in the test render harness: the panes are drawn without
     /// reading a single Keychain item, so a render can never touch the
     /// user's real credentials.
@@ -296,7 +282,7 @@ public struct SettingsView: View {
         .frame(width: 780, height: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { if readsCredentials { loadKeysFromCache() } }
-        .onAppear(perform: loadWorkspaces)
+        .onAppear { if readsCredentials { goAccountSettings = GoWorkspaceAccountSettings.load() } }
         .onAppear { cycles = SubscriptionCycleStore.all() }
         .task {
             if readsCredentials {
@@ -308,11 +294,6 @@ public struct SettingsView: View {
         // reflected, or the status line becomes a lie the moment it matters.
         .onChange(of: cliDiscovery) {
             if readsCredentials { Task { await refreshSources() } }
-        }
-        // A rename typed into the workspace list but never committed with
-        // Return is kept when the user moves to another section.
-        .onChange(of: selection) { old, _ in
-            if old == .service(.opencode) { commitWorkspaceRenames() }
         }
         .onReceive(NotificationCenter.default.publisher(
             for: .frugalbarProviderPreferencesDidChange, object: CredentialStore.preferencesChangeSender
@@ -331,7 +312,6 @@ public struct SettingsView: View {
             // merge keeps any edits the user has typed.
             if SettingsVaultReload.shouldReloadCredentials(previous: previous, current: current) {
                 loadKeysFromCache()
-                refreshWorkspaceHasKey()
                 Task { await refreshSources() }
             }
         }
@@ -438,7 +418,6 @@ public struct SettingsView: View {
             guard readsCredentials else { return }
             claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
             openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
-            openDesignConnections = OpenDesignConnections.load()
             claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
@@ -448,14 +427,10 @@ public struct SettingsView: View {
                 await store?.load()
             }
         }) { ClaudeMonthlyCreditConnectionView() }
-        .sheet(item: $openDesignConnection) { connection in
-            OpenDesignConnectionView(connection: connection) { invalidated in
-                openDesignConnections = OpenDesignConnections.load()
-                Task {
-                    await store?.forgetReadings(for: invalidated)
-                    await store?.applyProviderPreferences()
-                }
-            }
+        .sheet(item: $goAccount) { service in
+            GoWorkspaceVerificationView(service: service, isLinked: goAccountSettings.isLinked(service),
+                onConnect: { connectGoAccount(service, verification: $0) }, result: Binding(
+                get: { goAccountChecks[service] }, set: { goAccountChecks[service] = $0 }))
         }
         .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
             Task { await store?.forceRefresh() }
@@ -498,11 +473,11 @@ public struct SettingsView: View {
                 }
             }
         case .opencode:
-            openCodeWorkspaceSection
+            goAccountSection(.openCode)
         case .muse:
             musePortalSection
         case .opendesign:
-            openDesignSection
+            goAccountSection(.openDesign)
         case .kiro:
             Section("Connection") {
                 Text("Sign in to the Kiro CLI or IDE on this Mac, then turn on CLI discovery.")
@@ -582,33 +557,61 @@ public struct SettingsView: View {
         }
     }
 
-    private var openDesignSection: some View {
-        Section("OpenDesign Go usage") {
-            Text("Link each workspace through its own OpenDesign sign-in to see its coding-plan usage.")
-                .font(.caption)
-            ForEach(OpenDesignConnection.allCases) { connection in
-                let connected = openDesignConnections?.isConnected(connection) == true
-                LabeledContent(connection.title) {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        if let name = openDesignConnections?.workspace(for: connection)?.name {
-                            Text(name).font(.caption)
-                        }
-                        HStack {
-                            Button(connected ? "Open \(connection.title.lowercased()) sign-in" : "Connect \(connection.title.lowercased())") {
-                                OpenDesignWebSession.session(for: connection).open()
-                                openDesignConnection = connection
-                            }
-                            if connected {
-                                Button("Disconnect \(connection.title.lowercased())") {
-                                    let oldID = OpenDesignWebSession.session(for: connection).disconnect()
-                                    openDesignConnections = OpenDesignConnections.load()
-                                    if let oldID { Task { await store?.forgetReadings(for: [oldID]) } }
-                                }
-                            }
-                        }
-                    }
+    private func goAccountSection(_ service: GoWorkspaceAccount) -> some View {
+        Section("Account") {
+            HStack {
+                Button(goAccountSettings.isLinked(service) ? "Manage account" : "Connect account") { goAccount = service }
+                if goAccountSettings.isLinked(service) {
+                    Button("Disconnect") { disconnectGoAccount(service) }
                 }
             }
+            if goAccountSettings.isLinked(service) && !goAccountSettings.usesAccount(service) {
+                Text("Account verified. Connect the other service to switch both sets of readings.").font(.caption)
+            } else if !goAccountSettings.usesAccount(service), store?.snapshots.contains(where: {
+                $0.vendorId == service.vendor && $0.status.confidence == .measured
+            }) == true {
+                Text("Your existing quota readings stay active during account setup.").font(.caption)
+            }
+        }
+    }
+
+    private func connectGoAccount(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification) -> String? {
+        guard case .workspaces = verification else { return nil }
+        let old = GoWorkspaceAccountSettings.load()
+        var next = old
+        let requirements = GoWorkspaceAccountSettings.LegacyRequirements.read(snapshots: store?.snapshots ?? [])
+        guard next.connect(service, verification: verification, requirements: requirements) else {
+            return "Connect after every existing workspace has a verified quota reading."
+        }
+        next.save()
+        goAccountSettings = next
+        let changed = GoWorkspaceAccount.allCases.filter {
+            next.usesAccount($0) && (!old.usesAccount($0) || $0 == service)
+        }
+        refreshGoAccounts(changed)
+        return next.usesAccount(service) ? "Connected. FrugalBar will discover new workspaces automatically."
+            : "Account verified. Connect the other service to switch both sets of readings."
+    }
+
+    private func disconnectGoAccount(_ service: GoWorkspaceAccount) {
+        var settings = GoWorkspaceAccountSettings.load()
+        settings.disconnect(service)
+        settings.save()
+        goAccountSettings = settings
+        goAccountChecks[service] = nil
+        if settings.usesAccount(service) {
+            refreshGoAccounts([service])
+        } else {
+            GoWorkspaceAccountWebSession.session(for: service).resetConnection()
+        }
+    }
+
+    private func refreshGoAccounts(_ services: [GoWorkspaceAccount]) {
+        guard !services.isEmpty else { return }
+        for service in services { GoWorkspaceAccountWebSession.session(for: service).resetConnection() }
+        Task {
+            for service in services { await store?.forgetReadings(of: service.vendor) }
+            await store?.applyProviderPreferences()
         }
     }
 
@@ -777,286 +780,6 @@ public struct SettingsView: View {
                 }
             }
             .accessibilityElement(children: .combine)
-        }
-    }
-
-    // MARK: - OpenCode Go workspaces
-
-    /// One OpenCode Go subscription per row: name, enable toggle, its own key,
-    /// and reorder/remove. The key is never read back into the field — it starts
-    /// blank and a stored key is only ever indicated.
-    private var openCodeWorkspaceSection: some View {
-        Section {
-            ForEach(workspaces) { workspace in
-                workspaceRow(workspace)
-            }
-            // Drag a row to reorder, as well as the arrows on each row.
-            .onMove { source, destination in
-                workspaces = OpenCodeGoWorkspaceStore.moved(workspaces, fromOffsets: source, toOffset: destination)
-                persistWorkspaces()
-            }
-            HStack(spacing: 8) {
-                TextField("New workspace name", text: $newWorkspaceName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addWorkspace)
-                Button("Add", action: addWorkspace)
-                    .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        } header: {
-            Text("Workspaces")
-        } footer: {
-            Text("""
-                 Each workspace is a separate OpenCode Go subscription with its \
-                 own API key, monitored and shown as its own reading. Drag a row \
-                 or use its arrows to set the order the popover, History and the \
-                 desktop widget list them in; renaming or reordering never moves \
-                 a key or its history. The original workspace, marked below \
-                 its key field, keeps your existing OpenCode key and the CLI \
-                 auth.json fallback wherever it sits in the list; every other \
-                 workspace is read from its own Keychain entry only. A key is \
-                 written to the Keychain and never shown again.
-                 """)
-                .font(.caption)
-                .foregroundStyle(Theme.systemSecondaryText)
-        }
-    }
-
-    @ViewBuilder
-    private func workspaceRow(_ workspace: OpenCodeGoWorkspace) -> some View {
-        let instanceID = workspace.instanceID
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: enabledBinding(for: workspace.id))
-                    .labelsHidden()
-                    .accessibilityLabel("Monitor \(workspace.name)")
-
-                // Renames persist on Return; the whole list is written, so a
-                // rename and a toggle cannot fight over which one is current.
-                TextField("Name", text: nameBinding(for: workspace.id))
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(persistWorkspaces)
-
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(Theme.systemSecondaryText)
-                    .help("Drag to reorder")
-                    .accessibilityHidden(true)
-
-                // Only where the Keychain itself says so. "Not configured" here
-                // contradicted a workspace that reads fine from the CLI login.
-                if let hasKey = workspaceHasKey[instanceID] {
-                    Text(hasKey ? "Stored in Keychain" : "No key in Keychain")
-                        .font(.caption)
-                        .foregroundStyle(Theme.systemSecondaryText)
-                }
-
-                Button { moveWorkspace(workspace.id, by: -1) } label: {
-                    Image(systemName: "chevron.up")
-                }
-                .buttonStyle(.borderless)
-                .disabled(workspaces.first?.id == workspace.id)
-                .accessibilityLabel("Move \(workspace.name) up")
-
-                Button { moveWorkspace(workspace.id, by: 1) } label: {
-                    Image(systemName: "chevron.down")
-                }
-                .buttonStyle(.borderless)
-                .disabled(workspaces.last?.id == workspace.id)
-                .accessibilityLabel("Move \(workspace.name) down")
-
-                Button(role: .destructive) { Task { await removeWorkspace(workspace.id) } } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .disabled(busyWorkspaceIDs.contains(workspace.id))
-                .accessibilityLabel("Remove \(workspace.name)")
-            }
-
-            HStack(spacing: 8) {
-                SecureField(
-                    "API key",
-                    text: keyBinding(for: instanceID),
-                    prompt: Text(workspaceHasKey[instanceID] == true
-                                 ? "•••••••• stored — type to replace"
-                                 : "oc_live_…")
-                )
-                .textFieldStyle(.roundedBorder)
-
-                Button("Save") { Task { await saveWorkspaceKey(workspace) } }
-                    .disabled(busyWorkspaceIDs.contains(workspace.id)
-                        || (workspaceKeys[instanceID] ?? "")
-                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            // Credential ownership follows the workspace, not its position:
-            // this one inherited the pre-workspace key wherever it is moved.
-            if workspace.id == OpenCodeGoWorkspaceStore.legacyID {
-                Label("Original workspace: uses your existing OpenCode key and the CLI login",
-                      systemImage: "key")
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            }
-
-            if let status = workspaceStatus[instanceID] {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(Theme.systemSecondaryText)
-            } else if let live = liveWorkspaceStatus(workspace) {
-                ConnectionStatusLine(status: live)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "Workspace \(workspace.name), position \((workspaces.firstIndex { $0.id == workspace.id } ?? 0) + 1) of \(workspaces.count)")
-    }
-
-    private func liveWorkspaceStatus(_ workspace: OpenCodeGoWorkspace) -> ProviderConnectionPresentation.Status? {
-        guard workspace.isEnabled, let store, store.hasLoaded,
-              let snapshot = store.snapshots.first(where: { $0.id == workspace.instanceID })
-        else { return nil }
-        return ProviderConnectionPresentation.status(for: snapshot, now: Date())
-    }
-
-    /// Writes a name typed but not committed with Return, and nothing else.
-    ///
-    /// The names are applied to the stored list rather than writing this
-    /// view's copy: the Providers section may have reordered the workspaces
-    /// since this copy was read, and writing it back would undo that. Nothing
-    /// is written when no name changed, so leaving the section does not post
-    /// a change (and a refresh) for nothing.
-    private func commitWorkspaceRenames() {
-        let stored = OpenCodeGoWorkspaceStore.resolved()
-        let names = Dictionary(workspaces.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let renamed = stored.contains { workspace in
-            names[workspace.id].map { $0 != workspace.name } ?? false
-        }
-        guard renamed else { return }
-        workspaces = stored.map { workspace in
-            var copy = workspace
-            if let name = names[workspace.id] { copy.name = name }
-            return copy
-        }
-        persistWorkspaces()
-    }
-
-    private func enabledBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { workspaces.first { $0.id == id }?.isEnabled ?? false },
-            set: { isOn in
-                guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
-                workspaces[index].isEnabled = isOn
-                persistWorkspaces()
-            }
-        )
-    }
-
-    private func nameBinding(for id: String) -> Binding<String> {
-        Binding(
-            get: { workspaces.first { $0.id == id }?.name ?? "" },
-            set: { name in
-                guard let index = workspaces.firstIndex(where: { $0.id == id }) else { return }
-                workspaces[index].name = name
-            }
-        )
-    }
-
-    private func keyBinding(for instanceID: String) -> Binding<String> {
-        Binding(
-            get: { workspaceKeys[instanceID] ?? "" },
-            set: { workspaceKeys[instanceID] = $0 }
-        )
-    }
-
-    private func loadWorkspaces() {
-        workspaces = OpenCodeGoWorkspaceStore.resolved()
-        workspaceKeys = [:]
-        workspaceStatus = [:]
-        refreshWorkspaceHasKey()
-    }
-
-    /// Writes the list and refreshes each row's stored/not-stored indicator.
-    ///
-    /// Names are normalised by `OpenCodeGoWorkspaceStore.set` — a blanked
-    /// field falls back to the name last committed for that workspace, so an
-    /// accidental select-all-delete leaves it named — and the list is written
-    /// back so the field shows the name that was actually stored rather than
-    /// the blank the user typed.
-    private func persistWorkspaces() {
-        OpenCodeGoWorkspaceStore.set(workspaces)
-        refreshWorkspaceHasKey()
-        workspaces = OpenCodeGoWorkspaceStore.all()
-    }
-
-    private func refreshWorkspaceHasKey() {
-        guard readsCredentials else { return }
-        var has: [String: Bool] = [:]
-        for workspace in workspaces {
-            has[workspace.instanceID] = OpenCodeGoWorkspaceStore.hasCredential(for: workspace)
-        }
-        workspaceHasKey = has
-    }
-
-    private func addWorkspace() {
-        let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        workspaces.append(OpenCodeGoWorkspace(name: name))
-        newWorkspaceName = ""
-        persistWorkspaces()
-    }
-
-    private func removeWorkspace(_ id: String) async {
-        guard !busyWorkspaceIDs.contains(id),
-              let workspace = workspaces.first(where: { $0.id == id })
-        else { return }
-        busyWorkspaceIDs.insert(id)
-        defer { busyWorkspaceIDs.remove(id) }
-        let instanceID = workspace.instanceID
-        // A removed workspace must not leave its key behind in the Keychain.
-        // If it cannot be deleted, keep the row: dropping it here would orphan
-        // the secret with no way left to retry from the UI, and it would hide
-        // the failure a moment after it happened. Run off MainActor so an
-        // unanswered startup Keychain prompt never freezes Settings.
-        do {
-            try await Self.runKeychainOffMainActor {
-                try OpenCodeGoWorkspaceStore.deleteCredential(for: workspace)
-            }
-        } catch {
-            workspaceStatus[instanceID] = "Could not remove: its key could not be deleted from the Keychain"
-            return
-        }
-        workspaces.removeAll { $0.id == id }
-        workspaceKeys[instanceID] = nil
-        workspaceHasKey[instanceID] = nil
-        workspaceStatus[instanceID] = nil
-        vaultStatus = KeychainVault.shared.statusSnapshot()
-        persistWorkspaces()
-    }
-
-    private func moveWorkspace(_ id: String, by offset: Int) {
-        workspaces = OpenCodeGoWorkspaceStore.moved(workspaces, id: id, by: offset)
-        persistWorkspaces()
-    }
-
-    /// Stores one workspace's key and exercises it, so a truncated paste fails
-    /// here rather than as an unexplained blank row later.
-    private func saveWorkspaceKey(_ workspace: OpenCodeGoWorkspace) async {
-        guard !busyWorkspaceIDs.contains(workspace.id) else { return }
-        let instanceID = workspace.instanceID
-        let key = (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        busyWorkspaceIDs.insert(workspace.id)
-        defer { busyWorkspaceIDs.remove(workspace.id) }
-        do {
-            try await Self.runKeychainOffMainActor {
-                try OpenCodeGoWorkspaceStore.setCredential(key, for: workspace)
-            }
-            if (workspaceKeys[instanceID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == key {
-                workspaceKeys[instanceID] = ""
-            }
-            workspaceHasKey[instanceID] = true
-            vaultStatus = KeychainVault.shared.statusSnapshot()
-            workspaceStatus[instanceID] = await verify(.opencode, key: key)
-        } catch {
-            workspaceStatus[instanceID] = Self.keychainAdvice(for: error)
         }
     }
 
@@ -1536,7 +1259,6 @@ public struct SettingsView: View {
             vaultStatus = current
         }
         loadKeysFromCache()
-        refreshWorkspaceHasKey()
         await refreshSources()
     }
 
@@ -1547,7 +1269,6 @@ public struct SettingsView: View {
         defer { isUnlockingVault = false }
         vaultStatus = await KeychainVault.shared.unlock()
         loadKeysFromCache()
-        refreshWorkspaceHasKey()
         await refreshSources()
         if vaultStatus.state == .loaded || vaultStatus.state == .empty {
             sync?.vaultDidUnlock()
