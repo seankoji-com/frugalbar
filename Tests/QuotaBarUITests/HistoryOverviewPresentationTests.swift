@@ -76,6 +76,18 @@ struct HistoryOverviewPresentationTests {
         #expect(cards.first?.latestPercent == 20)
     }
 
+    @Test("An earlier connection appears only when its readings are in range")
+    func earlierConnectionRequiresHistory() {
+        let active = HistoryOverviewPresentation.Subject(id: "opencode-go:active", vendor: .opencode, name: "Studio")
+        let previous = HistoryOverviewPresentation.Subject(id: "opencode-go:legacy", vendor: .opencode,
+                                                           name: "OpenCode", keys: ["opencode-go:legacy", "opencode"],
+                                                           historicalOnly: true)
+        let subjects = [active, previous]
+        #expect(HistoryOverviewPresentation.includingHistoricalSubjects(subjects, readings: []) == [active])
+        let recorded = [record("opencode", at: 0, 0.2)]
+        #expect(HistoryOverviewPresentation.includingHistoricalSubjects(subjects, readings: recorded) == subjects)
+    }
+
     // MARK: - Cards
 
     @Test("each card is its own longest window, in subject order, with no figure carried over")

@@ -1277,7 +1277,8 @@ public struct HistoryRootView: View {
                 until: now,
                 bucketSeconds: bucket)
             guard !Task.isCancelled else { return }
-            subjects = HistoryOverviewPresentation.includingOpenDesignHistory(configuredSubjects, readings: sampled)
+            let expanded = HistoryOverviewPresentation.includingOpenDesignHistory(configuredSubjects, readings: sampled)
+            subjects = HistoryOverviewPresentation.includingHistoricalSubjects(expanded, readings: sampled)
             let overview = HistoryOverviewPresentation.overview(
                 subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards

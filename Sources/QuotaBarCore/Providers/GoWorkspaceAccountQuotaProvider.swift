@@ -21,7 +21,9 @@ struct GoWorkspaceAccountQuotaProvider: QuotaProvider {
         switch service.parseUsage(response, workspace: workspace, now: now) {
         case .noPlan: return unavailable(Self.noPlan)
         case .failed(let reason): return unavailable(reason)
-        case .measured(let windows): return snapshot(windows: windows, planName: planName(from: response), now: now)
+        case .measured(let windows):
+            await GoWorkspaceAccountWebSession.session(for: service).rememberReading(workspace, generation: navigation)
+            return snapshot(windows: windows, planName: planName(from: response), now: now)
         }
     }
 
@@ -32,8 +34,9 @@ struct GoWorkspaceAccountQuotaProvider: QuotaProvider {
             struct Status: Decodable { let product: OpenCodeGoProvider.Plan? }
             return (try? JSONDecoder().decode(Status.self, from: data))?.product?.name
         case .openDesign:
-            let tier = (try? JSONDecoder().decode(OpenDesignQuotaProvider.Usage.self, from: data))?.tier?.trimmed
-            return tier.flatMap { $0.isEmpty ? nil : "OpenDesign Go · " + $0.capitalized }
+            let tier = (try? JSONDecoder().decode(OpenDesignQuotaProvider.Usage.self, from: data))?.tier
+            return [tier, workspace.membershipTier].compactMap { $0?.trimmed }.first { !$0.isEmpty }
+                .map { "OpenDesign Go · " + $0.capitalized }
         }
     }
 

@@ -124,6 +124,8 @@ public struct SettingsView: View {
     @State private var goAccount: GoWorkspaceAccount?
     @State private var goAccountChecks: [GoWorkspaceAccount: GoWorkspaceAccount.Verification] = [:]
     @State private var goAccountSettings = GoWorkspaceAccountSettings()
+    @State private var disconnectingGoAccounts: Set<GoWorkspaceAccount> = []
+    @State private var goAccountRefreshPending: Set<GoWorkspaceAccount> = []
 
     /// Which Claude row the linked monthly credit is drawn under, or why it is
     /// drawn under none. Nil when Claude has no named account rows: the single
@@ -427,9 +429,9 @@ public struct SettingsView: View {
                 await store?.load()
             }
         }) { ClaudeMonthlyCreditConnectionView() }
-        .sheet(item: $goAccount) { service in
+        .sheet(item: $goAccount, onDismiss: refreshConnectedGoAccounts) { service in
             GoWorkspaceVerificationView(service: service, isLinked: goAccountSettings.isLinked(service),
-                onConnect: { connectGoAccount(service, verification: $0) }, result: Binding(
+                onConnect: { await connectGoAccount(service, verification: $0) }, result: Binding(
                 get: { goAccountChecks[service] }, set: { goAccountChecks[service] = $0 }))
         }
         .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
@@ -562,9 +564,10 @@ public struct SettingsView: View {
             HStack {
                 Button(goAccountSettings.isLinked(service) ? "Manage account" : "Connect account") { goAccount = service }
                 if goAccountSettings.isLinked(service) {
-                    Button("Disconnect") { disconnectGoAccount(service) }
+                    Button("Disconnect") { Task { await disconnectGoAccount(service) } }
                 }
             }
+            .disabled(disconnectingGoAccounts.contains(service))
             if goAccountSettings.isLinked(service) && !goAccountSettings.usesAccount(service) {
                 Text("Account verified. Connect the other service to switch both sets of readings.").font(.caption)
             } else if !goAccountSettings.usesAccount(service), store?.snapshots.contains(where: {
@@ -575,38 +578,42 @@ public struct SettingsView: View {
         }
     }
 
-    private func connectGoAccount(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification) -> String? {
+    private func connectGoAccount(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification) async -> String? {
         guard case .workspaces = verification else { return nil }
+        let requirements = await GoWorkspaceAccountSettings.LegacyRequirements.read(snapshots: store?.snapshots ?? [])
+        guard !Task.isCancelled else { return nil }
         let old = GoWorkspaceAccountSettings.load()
         var next = old
-        let requirements = GoWorkspaceAccountSettings.LegacyRequirements.read(snapshots: store?.snapshots ?? [])
         guard next.connect(service, verification: verification, requirements: requirements) else {
-            return "Connect after every existing workspace has a verified quota reading."
+            return "Use the account that includes your existing Go workspaces, then verify their quota readings."
         }
         next.save()
         goAccountSettings = next
         let changed = GoWorkspaceAccount.allCases.filter {
             next.usesAccount($0) && (!old.usesAccount($0) || $0 == service)
         }
-        refreshGoAccounts(changed)
+        goAccountRefreshPending.formUnion(changed)
         return next.usesAccount(service) ? "Connected. FrugalBar will discover new workspaces automatically."
             : "Account verified. Connect the other service to switch both sets of readings."
     }
 
-    private func disconnectGoAccount(_ service: GoWorkspaceAccount) {
+    private func disconnectGoAccount(_ service: GoWorkspaceAccount) async {
+        disconnectingGoAccounts.insert(service)
+        defer { disconnectingGoAccounts.remove(service) }
         var settings = GoWorkspaceAccountSettings.load()
         settings.disconnect(service)
         settings.save()
         goAccountSettings = settings
         goAccountChecks[service] = nil
-        if settings.usesAccount(service) {
-            refreshGoAccounts([service])
-        } else {
-            GoWorkspaceAccountWebSession.session(for: service).resetConnection()
-        }
+        let session = GoWorkspaceAccountWebSession.session(for: service)
+        session.resetConnection()
+        if settings.usesAccount(service) { await store?.forgetReadings(of: service.vendor) }
+        await session.clearSignIn()
     }
 
-    private func refreshGoAccounts(_ services: [GoWorkspaceAccount]) {
+    private func refreshConnectedGoAccounts() {
+        let services = goAccountRefreshPending
+        goAccountRefreshPending.removeAll()
         guard !services.isEmpty else { return }
         for service in services { GoWorkspaceAccountWebSession.session(for: service).resetConnection() }
         Task {

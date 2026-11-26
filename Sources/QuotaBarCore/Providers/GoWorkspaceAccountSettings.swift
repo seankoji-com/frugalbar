@@ -17,7 +17,9 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     }
 
     @MainActor public func save() {
-        if let data = try? JSONEncoder().encode(self) { CredentialStore.preferences.set(data, forKey: Self.key) }
+        guard Self.load() != self, let data = try? JSONEncoder().encode(self) else { return }
+        CredentialStore.preferences.set(data, forKey: Self.key)
+        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
     }
 
     public func isLinked(_ service: GoWorkspaceAccount) -> Bool { linked[service] != nil }
@@ -36,11 +38,20 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
             service == .openCode ? openCodeCount : openDesignCount
         }
 
-        public static func read(snapshots: [QuotaSnapshot]) -> Self {
-            let openCode = OpenCodeGoWorkspaceStore.resolved().filter { workspace in
+        public static func read(snapshots: [QuotaSnapshot]) async -> Self {
+            let workspaces = OpenCodeGoWorkspaceStore.resolved()
+            let hasLegacy: Bool
+            if workspaces.contains(where: { $0.isEnabled && $0.id == OpenCodeGoWorkspaceStore.legacyID }) {
+                let saved = await CredentialStore.hasSavedCredentialAsync(for: .opencode)
+                let resolved = await CredentialStore.apiKeyAsync(for: .opencode) != nil
+                hasLegacy = saved != false || resolved
+            } else {
+                hasLegacy = false
+            }
+            let openCode = workspaces.filter { workspace in
                 guard workspace.isEnabled else { return false }
                 return workspace.id != OpenCodeGoWorkspaceStore.legacyID
-                    || OpenCodeGoWorkspaceStore.hasCredential(for: workspace)
+                    || hasLegacy
                     || snapshots.contains { $0.id == workspace.instanceID && $0.status.unavailableReason != .notConfigured }
             }
             let openDesign = OpenDesignConnections.load()
@@ -66,6 +77,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         if service == .openDesign, !usesAccount(service),
            !requirements.openDesignIDs.isSubset(of: Set(measured.map(\.id))) { return false }
         updateWorkspaces(measured, for: service)
+        for workspace in measured { remember(workspace, for: service) }
         if minimum == 0 { migrated.insert(service) }
         let ready = GoWorkspaceAccount.allCases.allSatisfy { account in
             if usesAccount(account) || requirements.minimum(for: account) == 0 { return true }
@@ -83,7 +95,15 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
 
     mutating func updateWorkspaces(_ workspaces: [GoWorkspaceAccount.Workspace], for service: GoWorkspaceAccount) {
         linked[service] = workspaces
-        let discovered = Set(workspaces.map(\.id))
-        remembered[service] = workspaces + knownWorkspaces(for: service).filter { !discovered.contains($0.id) }
+    }
+
+    mutating func remember(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {
+        var history = knownWorkspaces(for: service)
+        if let index = history.firstIndex(where: { $0.id == workspace.id }) {
+            history[index] = workspace
+        } else {
+            history.append(workspace)
+        }
+        remembered[service] = history
     }
 }

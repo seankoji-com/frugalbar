@@ -5,7 +5,7 @@ import QuotaBarCore
 struct GoWorkspaceVerificationView: View {
     let service: GoWorkspaceAccount
     let isLinked: Bool
-    let onConnect: (GoWorkspaceAccount.Verification) -> String?
+    let onConnect: (GoWorkspaceAccount.Verification) async -> String?
     @Binding var result: GoWorkspaceAccount.Verification?
     @Environment(\.dismiss) private var dismiss
     @State private var verification: Task<Void, Never>?
@@ -28,6 +28,8 @@ struct GoWorkspaceVerificationView: View {
                     Text("Reading workspaces…").font(.caption)
                 }
                 Spacer()
+                Button("Reload sign-in page") { session.reloadSignIn() }
+                    .disabled(verification != nil)
                 Button("Close") { dismiss() }
                 Button(isLinked ? "Refresh workspaces" : "Connect account") { verify() }
                     .disabled(verification != nil)
@@ -35,8 +37,11 @@ struct GoWorkspaceVerificationView: View {
         }
         .padding(16)
         .frame(width: 800, height: 700)
-        .onAppear { session.open() }
-        .onDisappear { verification?.cancel() }
+        .onAppear { session.beginManaging() }
+        .onDisappear {
+            verification?.cancel()
+            session.endManaging()
+        }
     }
 
     private func verify() {
@@ -47,7 +52,7 @@ struct GoWorkspaceVerificationView: View {
             let checked = await session.verify()
             guard !Task.isCancelled else { return }
             result = checked
-            connectionStatus = onConnect(checked)
+            connectionStatus = await onConnect(checked)
         }
     }
 

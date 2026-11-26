@@ -17,10 +17,15 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     public let webView: WKWebView
     private let service: GoWorkspaceAccount
     private var verificationInProgress = false
+    private var isManaging = false
     private var navigation = UUID()
     private var pageWaiters: [ClaudeMonthlyCreditEvaluation] = []
     private var directoryCheckedAt: Date?
+    private var userCheckedDirectoryAt: Date?
     private var directoryFailure: UnavailableReason?
+    private var navigationFailed = false
+    private var requestTail: Task<Void, Never>?
+    private var retryAfter: Date?
 
     private init(_ service: GoWorkspaceAccount, profile: UUID) {
         self.service = service
@@ -31,15 +36,43 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         webView.navigationDelegate = self
     }
 
-    public func open() {
-        guard !TestHost.isActive, webView.url == nil, !webView.isLoading else { return }
+    public func beginManaging() {
+        isManaging = true
+        navigation = UUID()
+        releaseWaiters()
+        open()
+    }
+
+    public func endManaging() { isManaging = false }
+
+    public func reloadSignIn() {
+        guard !TestHost.isActive, !verificationInProgress else { return }
+        webView.stopLoading()
+        navigationFailed = false
+        webView.load(URLRequest(url: service.dashboard))
+    }
+
+    private func open() {
+        guard !TestHost.isActive, !webView.isLoading, !isAtDashboard || navigationFailed else { return }
+        navigationFailed = false
         webView.load(URLRequest(url: service.dashboard))
     }
 
     public func resetConnection() {
         navigation = UUID()
         directoryCheckedAt = nil
+        userCheckedDirectoryAt = nil
         directoryFailure = nil
+        retryAfter = nil
+        webView.stopLoading()
+        releaseWaiters()
+    }
+
+    public func clearSignIn() async {
+        // This view's data store is exclusively owned by this account flow.
+        _ = webView.loadHTMLString("", baseURL: nil)
+        await webView.configuration.websiteDataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
 
     public func verify() async -> GoWorkspaceAccount.Verification {
@@ -47,9 +80,10 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         guard !verificationInProgress else { return .failed(.timedOut) }
         verificationInProgress = true
         defer { verificationInProgress = false }
+        retryAfter = nil
         let generation = navigation
         let result = await service.verify(now: Date()) { url, workspace in
-            await self.get(url, workspace: workspace, generation: generation)
+            await self.get(url, workspace: workspace, generation: generation, interactive: true)
         }
         return generation == navigation ? result : .failed(.notConfigured)
     }
@@ -60,10 +94,15 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { releaseWaiters() }
 
-    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { releaseWaiters() }
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { pageFailed() }
 
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-                        withError error: Error) { releaseWaiters() }
+                        withError error: Error) { pageFailed() }
+
+    private func pageFailed() {
+        navigationFailed = true
+        releaseWaiters()
+    }
 
     private func releaseWaiters() {
         let waiters = pageWaiters
@@ -72,14 +111,14 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     }
 
     private func prepareDashboard() async -> Bool {
-        if isAtDashboard { return true }
+        if isAtDashboard && !navigationFailed { return true }
         open()
         guard webView.isLoading else { return isAtDashboard }
         let waiter = ClaudeMonthlyCreditEvaluation()
         pageWaiters.append(waiter)
         _ = await waiter.value(waitForTimeout: { try await Task.sleep(for: .seconds(4)) }) { _ in }
         pageWaiters.removeAll { $0 === waiter }
-        return isAtDashboard && !Task.isCancelled
+        return isAtDashboard && !navigationFailed && !Task.isCancelled
     }
 
     static func discoveredProviders(hidden: Set<VendorIdentifier>, force: Bool)
@@ -88,7 +127,18 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         let services = GoWorkspaceAccount.allCases.filter { settings.usesAccount($0) && !hidden.contains($0.vendor) }
         return await withTaskGroup(of: (VendorIdentifier, [any QuotaProvider]).self) { group in
             for service in services {
-                group.addTask { (service.vendor, await session(for: service).providers(force: force)) }
+                group.addTask {
+                    let session = await session(for: service)
+                    let result = await withDeadline(seconds: CachePolicy.default.perProviderTimeout) {
+                        await session.providers(force: force)
+                    }
+                    switch result {
+                    case .success(let providers): return (service.vendor, providers)
+                    case .failure(let failure):
+                        let settings = GoWorkspaceAccountSettings.load()
+                        return (service.vendor, await session.quotaProviders(from: settings, failure: failure))
+                    }
+                }
             }
             var providers: [VendorIdentifier: [any QuotaProvider]] = [:]
             for await (vendor, workspaces) in group { providers[vendor] = workspaces }
@@ -97,12 +147,14 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     }
 
     private func providers(force: Bool) async -> [any QuotaProvider] {
-        guard !TestHost.isActive, GoWorkspaceAccountSettings.load().isLinked(service) else { return [] }
+        let settings = GoWorkspaceAccountSettings.load()
+        guard !TestHost.isActive, settings.isLinked(service) else { return [] }
+        guard !isManaging else { return quotaProviders(from: settings, failure: .timedOut) }
         let now = Date()
-        let vendorBackoff: Bool = if case .rateLimited(let retryAfter)? = directoryFailure {
-            !force && (retryAfter.map { $0 > now } ?? false)
-        } else { false }
-        if !vendorBackoff, directoryCheckedAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true {
+        let checkedAt = force ? userCheckedDirectoryAt : directoryCheckedAt
+        if (force || (retryAfter.map { $0 <= now } ?? true)),
+           checkedAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true {
+            if force { retryAfter = nil }
             if await prepareDashboard() {
                 let captured = navigation
                 let response = await get(service.directoryURL, workspace: nil, generation: captured)
@@ -112,18 +164,21 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
                     return quotaProviders(from: current, failure: .notConfigured)
                 }
                 switch service.directory(from: response, now: now) {
-                case .workspaces(let workspaces):
+                case .workspaces(let workspaces) where !workspaces.isEmpty:
                     directoryFailure = nil
                     if workspaces != current.workspaces(for: service) {
                         current.updateWorkspaces(workspaces, for: service)
                         current.save()
                     }
+                case .workspaces: directoryFailure = .badResponse
                 case .failed(let reason): directoryFailure = reason
                 }
             } else {
-                directoryFailure = .notConfigured
+                guard !Task.isCancelled, !isManaging else { return quotaProviders(from: settings, failure: .timedOut) }
+                directoryFailure = webView.isLoading ? .timedOut : navigationFailed ? .offline : .credentialRejected
             }
             directoryCheckedAt = now
+            if force { userCheckedDirectoryAt = now }
         }
         return quotaProviders(from: GoWorkspaceAccountSettings.load(), failure: directoryFailure)
     }
@@ -140,11 +195,35 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         return await get(service.usageURL(for: workspace), workspace: workspace.id, generation: generation)
     }
 
+    func rememberReading(_ workspace: GoWorkspaceAccount.Workspace, generation: UUID) {
+        var settings = GoWorkspaceAccountSettings.load()
+        guard generation == navigation, settings.isLinked(service) else { return }
+        settings.remember(workspace, for: service)
+        settings.save()
+    }
+
     private var isAtDashboard: Bool {
         !webView.isLoading && webView.url?.scheme == "https" && webView.url?.host == service.dashboard.host
     }
 
-    private func get(_ url: URL, workspace: String?, generation: UUID) async -> OpenDesignResult {
+    private func get(_ url: URL, workspace: String?, generation: UUID, interactive: Bool = false) async -> OpenDesignResult {
+        let previous = requestTail
+        let request = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled, generation == navigation else { return OpenDesignResult.failure(.notConfigured) }
+            guard interactive || !isManaging else { return OpenDesignResult.failure(.timedOut) }
+            if let retryAfter, retryAfter > Date() { return .failure(.rateLimited(retryAfter: retryAfter)) }
+            let result = await performRequest(url, workspace: workspace, generation: generation)
+            if case .response(429, _, let header) = result {
+                retryAfter = QuotaHTTP.retryAfterDate(secondsHeader: header, now: Date()) ?? Date().addingTimeInterval(30)
+            }
+            return result
+        }
+        requestTail = Task { _ = await request.value }
+        return await withTaskCancellationHandler { await request.value } onCancel: { request.cancel() }
+    }
+
+    private func performRequest(_ url: URL, workspace: String?, generation: UUID) async -> OpenDesignResult {
         guard generation == navigation, isAtDashboard, !Task.isCancelled,
               let dashboardHost = service.dashboard.host, let apiHost = service.directoryURL.host else {
             return .failure(.notConfigured)
@@ -165,6 +244,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
             }
         }
         guard generation == navigation, !Task.isCancelled else { return .failure(.notConfigured) }
+        if text == "timeout" { return .failure(.timedOut) }
         return OpenDesignWebSession.result(fromProjection: text)
     }
 
@@ -176,11 +256,13 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     try {
       const headers = {Accept: 'application/json'};
       if (typeof workspace === 'string') headers[workspaceHeader] = workspace;
-      const result = await fetch(target, {credentials: 'include', redirect: 'error', cache: 'no-store',
+      const result = await fetch(target, {credentials: 'include', redirect: 'manual', cache: 'no-store',
                                           headers, signal: controller.signal});
+      if (result.type === 'opaqueredirect') return JSON.stringify({status: 0});
       return JSON.stringify({status: result.status, body: result.ok ? await result.text() : '',
                              retryAfter: result.headers.get('Retry-After') || ''});
-    } catch (_) {
+    } catch (error) {
+      if (error?.name === 'AbortError') return 'timeout';
       return JSON.stringify({transport: true});
     } finally { clearTimeout(timer); }
     """#

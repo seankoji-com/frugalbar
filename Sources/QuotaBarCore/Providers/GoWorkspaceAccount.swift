@@ -52,6 +52,7 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
     public struct Workspace: Codable, Identifiable, Sendable, Equatable {
         public let id: String
         public let name: String
+        var membershipTier: String? = nil
     }
 
     public struct Window: Sendable, Equatable {
@@ -143,7 +144,9 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
             workspaces = rows.map { Workspace(id: $0.id, name: $0.name?.trimmed.nonempty ?? $0.id) }
         case .openDesign:
             guard let directory = try? decoder.decode(OpenDesignDirectory.self, from: data) else { return nil }
-            workspaces = directory.items.map { Workspace(id: $0.workspaceId, name: $0.name ?? $0.workspaceId) }
+            workspaces = directory.items.map {
+                Workspace(id: $0.workspaceId, name: $0.name ?? $0.workspaceId, membershipTier: $0.personalMembershipTier)
+            }
         }
         guard workspaces.allSatisfy({ OpenDesignQuotaProvider.validWorkspaceID($0.id) }),
               Set(workspaces.map(\.id)).count == workspaces.count else { return nil }
@@ -169,7 +172,7 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
               usage.workspaceId == workspace.id, let eligible = usage.eligible else { return .failed(.badResponse) }
         guard eligible else { return .noPlan }
         let linked = OpenDesignWorkspace(workspaceId: workspace.id, workspaceName: workspace.name,
-                                         personalMembershipTier: nil)
+                                         personalMembershipTier: workspace.membershipTier)
         let provider = OpenDesignQuotaProvider(workspace: linked, transport: OpenDesignDisconnectedTransport())
         let snapshot = OpenDesignQuotaProvider.snapshot(from: data, workspace: linked, provider: provider, now: now)
         if let reason = snapshot.status.unavailableReason { return .failed(reason) }
@@ -203,7 +206,7 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
             default: reset.flatMap(DualBarMetrics.monthWindowLength(endingAt:))
             }
             windows.append(Window(label: label, fraction: min(value.used.value / value.limit.value, 1),
-                                  resetsAt: reset, isBlocked: false, windowLength: length))
+                                  resetsAt: reset, isBlocked: value.status == "rate-limited", windowLength: length))
         }
         return windows.isEmpty ? .failed(.badResponse) : .measured(windows)
     }
@@ -232,12 +235,13 @@ public enum GoWorkspaceAccount: String, CaseIterable, Codable, Identifiable, Sen
     }
 
     private struct Meter: Decodable {
+        let status: String?
         let resetsAt: String?
         let limit: Amount
         let used: Amount
 
         private enum CodingKeys: String, CodingKey {
-            case resetsAt, limit = "limitMicroCents", used = "usedMicroCents"
+            case status, resetsAt, limit = "limitMicroCents", used = "usedMicroCents"
         }
     }
 

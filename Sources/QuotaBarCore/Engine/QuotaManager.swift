@@ -273,7 +273,7 @@ public actor QuotaManager {
         let credit = geminiCreditLookup()
         let accountCredits = geminiAccountCreditLookup()
         return cache.filter {
-            !hidden.contains($0.value.snapshot.vendorId) && !Self.isRetiredPool($0.value.snapshot)
+            !hidden.contains($0.value.snapshot.vendorId) && !Self.isHiddenReading($0.value.snapshot)
         }
             .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit, accountCredits: accountCredits) }
     }
@@ -288,6 +288,10 @@ public actor QuotaManager {
     static func isRetiredPool(_ snapshot: QuotaSnapshot) -> Bool {
         snapshot.vendorId == .antigravityArgon
             && snapshot.status.unavailableReason == GeminiQuotaProvider.argonMeteredWithGeminiReason
+    }
+
+    private static func isHiddenReading(_ snapshot: QuotaSnapshot) -> Bool {
+        isRetiredPool(snapshot) || snapshot.status.unavailableReason == GoWorkspaceAccountQuotaProvider.noPlan
     }
 
     /// Adds the user-configured Gemini API credit to the Gemini row.
@@ -353,7 +357,7 @@ public actor QuotaManager {
         return Self.arrange(
             cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit,
                                                           accountCredits: accountCredits) }
-                .filter { !Self.isRetiredPool($0) },
+                .filter { !Self.isHiddenReading($0) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )
@@ -630,18 +634,7 @@ public actor QuotaManager {
         let hidden = displayPreferences().hidden
         for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
         var allProviders: [any QuotaProvider] = providerFactory()
-        if let goAccountDiscovery {
-            let sources = await goAccountDiscovery(hidden, force)
-            for (vendor, accounts) in sources {
-                let position = allProviders.firstIndex { $0.vendorId == vendor } ?? allProviders.count
-                allProviders.removeAll { $0.vendorId == vendor }
-                allProviders.insert(contentsOf: accounts, at: min(position, allProviders.count))
-                let current = Set(accounts.map(\.instanceID))
-                for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor && !current.contains(key) {
-                    cache[key] = nil
-                }
-            }
-        }
+        async let goSources = goAccountDiscovery?(hidden, force) ?? [:]
         if !hidden.contains(.claude), let discover = claudeProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
                 try await QuotaFetchContext.$isUserInitiated.withValue(force) { try await discover() }
@@ -717,6 +710,15 @@ public actor QuotaManager {
             let insertion = allProviders.firstIndex { antigravityVendors.contains($0.vendorId) } ?? allProviders.count
             allProviders.removeAll { antigravityVendors.contains($0.vendorId) }
             allProviders.insert(contentsOf: agyProviders, at: min(insertion, allProviders.count))
+        }
+        for (vendor, accounts) in await goSources {
+            let position = allProviders.firstIndex { $0.vendorId == vendor } ?? allProviders.count
+            allProviders.removeAll { $0.vendorId == vendor }
+            allProviders.insert(contentsOf: accounts, at: min(position, allProviders.count))
+            let current = Set(accounts.map(\.instanceID))
+            for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor && !current.contains(key) {
+                cache[key] = nil
+            }
         }
         let providers: [any QuotaProvider] = allProviders.filter { !hidden.contains($0.vendorId) }
         // A workspace that was removed (or disabled) must not linger in the
@@ -945,7 +947,7 @@ public actor QuotaManager {
         // pool nobody can see, and the bump below then arms its user clock.
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             (snapshot.status.confidence == .measured && snapshot.staleReading == nil)
-                || Self.isRetiredPool(snapshot) ? id : nil
+                || Self.isHiddenReading(snapshot) ? id : nil
         })
         let now = clock()
         for provider in providersToFetch {
@@ -1028,7 +1030,7 @@ public actor QuotaManager {
             // measured reading or the vendor publishing an Argon group with no
             // readable window may bring the row back. The vendor's own backoff
             // is still stored below from the failure itself.
-            if let existing = cache[id], Self.isRetiredPool(existing.snapshot),
+            if let existing = cache[id], Self.isHiddenReading(existing.snapshot),
                let reason = snap.status.unavailableReason,
                reason != GeminiQuotaProvider.argonNoQuotaReason,
                reason != GeminiQuotaProvider.unreadableSummaryReason {

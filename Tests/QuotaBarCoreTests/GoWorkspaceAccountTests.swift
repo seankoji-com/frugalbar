@@ -160,12 +160,13 @@ struct GoWorkspaceAccountTests {
         let workspace = GoWorkspaceAccount.Workspace(id: "org_b", name: "New workspace")
         settings.updateWorkspaces([workspace], for: .openCode)
         #expect(settings.workspaces(for: .openCode) == [workspace])
-        #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_b", "org_a"])
+        #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_a"])
+        settings.remember(workspace, for: .openCode)
         settings.disconnect(.openCode)
         #expect(settings.usesAccount(.openCode))
         #expect(!settings.isLinked(.openCode))
         #expect(settings.workspaces(for: .openCode).isEmpty)
-        #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_b", "org_a"])
+        #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_a", "org_b"])
     }
 
     @Test("Polling replaces legacy rows at cutover and drops the account rows on disconnect")
@@ -178,7 +179,10 @@ struct GoWorkspaceAccountTests {
         let before = await manager.forceRefresh()
         #expect(Set(before.keys) == ["opencode-go:legacy"])
 
-        await discovery.setWorkspaces([FixtureProvider(instanceID: "opencode-go:account")])
+        await discovery.setWorkspaces([
+            FixtureProvider(instanceID: "opencode-go:account"),
+            FixtureProvider(instanceID: "opencode-go:free", reason: GoWorkspaceAccountQuotaProvider.noPlan),
+        ])
         let linked = await manager.forceRefresh()
         #expect(Set(linked.keys) == ["opencode-go:account"])
 
@@ -197,10 +201,11 @@ struct GoWorkspaceAccountTests {
 
     private struct FixtureProvider: QuotaProvider {
         let instanceID: String
+        var reason: UnavailableReason = .badResponse
         let vendorId: VendorIdentifier = .opencode
         let displayName = "Workspace"
         let category: MetricCategory = .aiSubscriptions
-        func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(.badResponse) }
+        func fetchSnapshot() async throws -> QuotaSnapshot { unavailable(reason) }
     }
 
     private func readings(_ ids: [String]) -> GoWorkspaceAccount.Verification {

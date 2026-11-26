@@ -22,11 +22,14 @@ public enum HistoryOverviewPresentation {
         /// inherited the pre-workspace `opencode` key also owns the readings an
         /// install recorded under that key before workspaces existed.
         public let keys: [String]
-        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil) {
+        public let historicalOnly: Bool
+        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil,
+                    historicalOnly: Bool = false) {
             self.id = id
             self.vendor = vendor
             self.name = name
             self.keys = keys ?? [id]
+            self.historicalOnly = historicalOnly
         }
 
         public func owns(_ key: String) -> Bool {
@@ -84,7 +87,8 @@ public enum HistoryOverviewPresentation {
                 let linked = OpenDesignConnection.allCases.compactMap { connection -> Subject? in
                     guard let workspace = openDesignConnections?.workspace(for: connection),
                           !accountIDs.contains(workspace.seriesID) else { return nil }
-                    return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName)
+                    return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName,
+                                   historicalOnly: goAccounts.usesAccount(.openDesign))
                 }
                 let subjects = accountSubjects + linked
                 return subjects.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : subjects
@@ -100,7 +104,8 @@ public enum HistoryOverviewPresentation {
                     name: accountSubjects.isEmpty ? workspace.name : "\(workspace.name) · Earlier connection",
                     keys: workspace.id == OpenCodeGoWorkspaceStore.legacyID
                         ? [workspace.instanceID, VendorIdentifier.opencode.rawValue]
-                        : [workspace.instanceID]
+                        : [workspace.instanceID],
+                    historicalOnly: goAccounts.usesAccount(.openCode)
                 )
             }
         }
@@ -111,6 +116,11 @@ public enum HistoryOverviewPresentation {
         return settings.knownWorkspaces(for: service).map {
             Subject(id: service.seriesID(for: $0), vendor: service.vendor, name: $0.name)
         }
+    }
+
+    static func includingHistoricalSubjects(_ subjects: [Subject], readings: [QuotaHistoryStore.ReadingRecord]) -> [Subject] {
+        let recorded = Set(readings.map(\.vendor))
+        return subjects.filter { !$0.historicalOnly || $0.keys.contains(where: recorded.contains) }
     }
 
     /// Older and disconnected workspace series remain chartable by their own
