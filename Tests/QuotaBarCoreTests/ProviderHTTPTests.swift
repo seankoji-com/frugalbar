@@ -2335,6 +2335,202 @@ struct ProviderHTTPTests {
         #expect(snap.status == .unavailable(.credentialRejected))
     }
 
+    /// The 26 Nov 2026 report: the Claude Code Keychain item held
+    /// `loginEnded: "time_limit"`, an empty access token and an expired
+    /// refresh token, yet both Claude rows said "Unexpected response — vendor
+    /// returned unexpected data". A missing session is not a vendor-payload
+    /// verdict, and the remedy has to tell the owner to sign in again.
+    @Test("an ended Claude login turns a failed read into a credential rejection")
+    func claudeEndedLoginRejects() async throws {
+        let ended = Data(#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","loginEnded":"time_limit"}}"#.utf8)
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                directCredential: { "oauth-token" },
+                loginEnded: { CredentialStore.claudeLoginEnded(from: ended) },
+                directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.credentialRejected))
+        #expect(snap.status.unavailableReason?.remedy.contains("Sign in again") == true)
+    }
+
+    /// The same failed read with a healthy login keeps the vendor's reason.
+    /// A decode failure is still `.badResponse`; only the session's own state
+    /// replaces it.
+    @Test("a healthy Claude login keeps a decode failure as a bad response")
+    func claudeHealthyLoginKeepsBadResponse() async throws {
+        let future = (Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000).rounded()
+        let healthy = Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-live","expiresAt":\#(Int(future))}}"#.utf8)
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                directCredential: { "oauth-token" },
+                loginEnded: { CredentialStore.claudeLoginEnded(from: healthy) },
+                directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+        #expect(snap.status.unavailableReason?.remedy == "Vendor returned unexpected data")
+    }
+
+    /// A missing token with a stored, ended login is "sign in again", not
+    /// "add a key": the credential exists, its session is over.
+    @Test("a blank Claude credential with an ended login is a credential rejection")
+    func claudeBlankTokenWithEndedLogin() async throws {
+        let ended = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                apiKey: "", loginEnded: { true }, directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        #expect(ended.status == .unavailable(.credentialRejected))
+        let absent = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                apiKey: "", loginEnded: { false }, directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        #expect(absent.status == .unavailable(.notConfigured))
+    }
+
+    /// Discovery builds this Mac's row as an `account`-carrying provider, not
+    /// the bare `account == nil` shape the unit test above uses. The local
+    /// session flag must survive that construction; a named account must not
+    /// inherit the app session's state.
+    @Test("a discovered local Antigravity account reports an ended session")
+    func antigravityDiscoveredLocalSessionRejects() async throws {
+        let account = AntigravityAccount(
+            id: "agy-account:test", badge: "", sourceLabel: "This Mac's Google OAuth session",
+            fallbackName: "This Mac", isPrimary: true)
+        let local = try await GeminiQuotaProvider(
+            account: account,
+            transports: [.direct(accessToken: nil, batchKey: "default")],
+            allowance: .gemini,
+            requests: AntigravityRequestBatch(),
+            isLocalSession: true,
+            sessionEnded: { true }
+        ).fetchSnapshot()
+        #expect(local.status == .unavailable(.credentialRejected))
+
+        let named = try await GeminiQuotaProvider(
+            account: account,
+            transports: [.direct(accessToken: nil, batchKey: "proxy-key")],
+            allowance: .gemini,
+            requests: AntigravityRequestBatch(),
+            isLocalSession: false,
+            sessionEnded: { true }
+        ).fetchSnapshot()
+        #expect(named.status == .unavailable(.notConfigured))
+    }
+
+    /// The vendor's own throttle is more useful than a generic sign-in: an
+    /// ended login must not erase the wait it published.
+    @Test("an ended Claude login does not erase the vendor's throttle")
+    func claudeEndedLoginKeepsThrottle() async throws {
+        let snap = try await withStubbedHTTP({ _ in
+            canned(status: 429, body: "{}", headers: ["Retry-After": "300"])
+        }) {
+            try await ClaudeQuotaProvider(
+                directCredential: { "oauth-token" }, loginEnded: { true },
+                directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        guard case .unavailable(.rateLimited(let retryAfter)) = snap.status else {
+            Issue.record("expected rateLimited, got \(snap.status)")
+            return
+        }
+        #expect(retryAfter != nil)
+    }
+
+    /// The proxy's own failure describes the proxy's request. The local login
+    /// having ended must not relabel it — one credential's failure is not
+    /// another's verdict.
+    @Test("an ended local login does not relabel the proxy's failure")
+    func claudeEndedLoginKeepsProxyFailure() async throws {
+        let config = CLIProxyConfig(
+            url: try #require(URL(string: "http://hub.test:8317")), managementKey: "k")
+        let snap = try await withStubbedHTTP({ _ in canned(body: "not a payload") }) {
+            try await ClaudeQuotaProvider(
+                cliProxyConfig: config,
+                directCredential: { nil },
+                loginEnded: { true },
+                directCredentialIsCLI: { true }
+            ).fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+    }
+
+    /// Without provenance the app cannot say where the token came from, so the
+    /// CLI blob's state must not relabel the read. A test host that does not
+    /// inject provenance takes this path.
+    @Test("without provenance, an ended login does not relabel the read")
+    func claudeEndedLoginWithoutProvenanceKeepsReason() async throws {
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                directCredential: { "oauth-token" }, loginEnded: { true }
+            ).fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+    }
+
+    /// A token saved in FrugalBar's vault is a different credential from the
+    /// Claude Code login. The CLI blob's ended state must not describe it.
+    @Test("an ended CLI login does not relabel a saved Claude key's failure")
+    func claudeSavedKeyKeepsItsOwnFailure() async throws {
+        let ended = Data(#"{"claudeAiOauth":{"accessToken":"","loginEnded":"time_limit"}}"#.utf8)
+        let snap = try await withStubbedHTTP({ _ in canned(body: "{}") }) {
+            try await ClaudeQuotaProvider(
+                directCredential: { "saved-key" },
+                loginEnded: { CredentialStore.claudeLoginEnded(from: ended) },
+                directCredentialIsCLI: { false }
+            ).fetchSnapshot()
+        }
+        #expect(snap.status == .unavailable(.badResponse))
+    }
+
+    /// A stored Google session can end in one way this provider can actually
+    /// see: the access token is spent and there is no refresh token to renew
+    /// it. A refresh token, even after a failed renewal, is not that fact.
+    @Test("a stored Google session is ended only when it cannot be renewed")
+    func antigravityStoredSessionEnded() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let live = GeminiOAuthSession(
+            accessToken: "ya29.live", refreshToken: "refresh", expiry: now.addingTimeInterval(3600), clientID: "c")
+        #expect(!GeminiOAuthSession.storedSessionEnded(live, configuredClient: "c", now: now))
+        let ended = GeminiOAuthSession(
+            accessToken: "ya29.spent", refreshToken: "", expiry: now.addingTimeInterval(-1), clientID: "c")
+        #expect(GeminiOAuthSession.storedSessionEnded(ended, configuredClient: "c", now: now))
+        // A renewal may still succeed; "the network failed" is not "sign in".
+        let renewable = GeminiOAuthSession(
+            accessToken: "ya29.spent", refreshToken: "refresh", expiry: now.addingTimeInterval(-1), clientID: "c")
+        #expect(!GeminiOAuthSession.storedSessionEnded(renewable, configuredClient: "c", now: now))
+        let blank = GeminiOAuthSession(
+            accessToken: " ", refreshToken: "", expiry: now.addingTimeInterval(3600), clientID: "c")
+        #expect(GeminiOAuthSession.storedSessionEnded(blank, configuredClient: "c", now: now))
+        // A session for another client cannot authenticate; a vault with no
+        // client configured needs configuration, not a sign-in.
+        #expect(GeminiOAuthSession.storedSessionEnded(ended, configuredClient: "other", now: now))
+        #expect(!GeminiOAuthSession.storedSessionEnded(ended, configuredClient: nil, now: now))
+        #expect(!GeminiOAuthSession.storedSessionEnded(ended, configuredClient: " ", now: now))
+        // A sign-in is impossible without both client halves; that state needs
+        // its configuration fixed, not a sign-in prompt.
+        #expect(!GeminiOAuthSession.storedSessionEnded(
+            ended, configuredClient: "c", clientConfigured: false, now: now))
+    }
+
+    /// A bare Antigravity row with a stored session that cannot authenticate
+    /// says "sign in again"; with no stored session it stays "not configured".
+    /// A named account's route is deliberately out of scope: the proxy
+    /// publishes no session state, so its reason stands.
+    @Test("an ended local Google session is a credential rejection, not notConfigured")
+    func antigravityEndedSessionRejects() async throws {
+        let ended = try await GeminiQuotaProvider(
+            accessToken: nil, allowance: .gemini, requests: AntigravityRequestBatch(), sessionEnded: { true }
+        ).fetchSnapshot()
+        #expect(ended.status == .unavailable(.credentialRejected))
+        let absent = try await GeminiQuotaProvider(
+            accessToken: nil, allowance: .gemini, requests: AntigravityRequestBatch(), sessionEnded: { false }
+        ).fetchSnapshot()
+        #expect(absent.status == .unavailable(.notConfigured))
+    }
+
     /// A model-scoped weekly window caps one model, not the plan. Every bar in
     /// a snapshot is read as plan-wide (exhaustion sorting, advice's worst
     /// bar, the `displayBars` collapse), so a spent Opus window must not

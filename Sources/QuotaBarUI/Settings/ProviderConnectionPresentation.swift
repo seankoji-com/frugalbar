@@ -44,10 +44,24 @@ public enum ProviderConnectionPresentation {
     }
 
     /// One provider instance's state from its latest snapshot.
+    ///
+    /// A measured snapshot can still carry a failed poll: `QuotaManager` keeps
+    /// the last figures and records why the newest read failed in
+    /// `staleReading`. Settings must report that failure, or a rejected
+    /// credential reads as "Connected" and the sign-in remedy is invisible
+    /// exactly where the owner looks.
     public static func status(for snapshot: QuotaSnapshot, now: Date) -> Status {
         if let reason = snapshot.status.unavailableReason {
             return Status(
                 symbol: symbol(for: reason), title: reason.headline, detail: reason.remedy,
+                tone: reason == .notConfigured ? .inactive : .attention)
+        }
+        if let reason = snapshot.staleReading?.reason {
+            return Status(
+                symbol: symbol(for: reason), title: reason.headline,
+                detail: "Last poll failed. \(reason.remedy)",
+                // Mirror the multi-instance rule: a reading that never existed
+                // is inactive, not an alert.
                 tone: reason == .notConfigured ? .inactive : .attention)
         }
         return Status(
@@ -83,18 +97,22 @@ public enum ProviderConnectionPresentation {
         }
         if snapshots.count == 1 { return status(for: snapshots[0], now: now) }
 
-        let unreadable = snapshots.filter { $0.status.unavailableReason != nil }
-        if unreadable.isEmpty {
+        let failing = snapshots.compactMap { snapshot -> (QuotaSnapshot, UnavailableReason)? in
+            if let reason = snapshot.status.unavailableReason { return (snapshot, reason) }
+            if let reason = snapshot.staleReading?.reason { return (snapshot, reason) }
+            return nil
+        }
+        if failing.isEmpty {
             return Status(
                 symbol: "checkmark.circle.fill", title: "Connected",
                 detail: "All \(snapshots.count) read", tone: .connected)
         }
-        let worst = unreadable.first { $0.status.unavailableReason != .notConfigured } ?? unreadable[0]
-        let reason = worst.status.unavailableReason ?? .notConfigured
+        let worst = failing.first { $0.1 != .notConfigured } ?? failing[0]
+        let reason = worst.1
         return Status(
             symbol: symbol(for: reason),
-            title: "\(unreadable.count) of \(snapshots.count) unreadable",
-            detail: "\(worst.rowTitle): \(reason.headline). \(reason.remedy)",
-            tone: unreadable.count == snapshots.count && reason == .notConfigured ? .inactive : .attention)
+            title: "\(failing.count) of \(snapshots.count) unreadable",
+            detail: "\(worst.0.rowTitle): \(reason.headline). \(reason.remedy)",
+            tone: failing.count == snapshots.count && reason == .notConfigured ? .inactive : .attention)
     }
 }

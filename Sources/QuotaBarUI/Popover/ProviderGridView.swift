@@ -173,12 +173,34 @@ struct ProviderGridView: View {
                     }
                 }
                 if pool.isStale || pool.isAwaitingReset || pool.state == .onBonus {
-                    Text(pool.isStale ? "Last reading · refresh failed"
+                    // The failed poll's own remedy, not just "refresh failed":
+                    // a session that ended between polls is the ordinary case,
+                    // and this line is the glance's only chance to say so.
+                    Text(pool.isStale
+                         ? (pool.snapshot.staleReading.map { "Last reading · \($0.reason.remedy)" }
+                            ?? "Last reading · refresh failed")
                          : pool.isAwaitingReset ? "Window reset · awaiting a reading" : "On bonus allowance")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Theme.tertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14)
                         .padding(.leading, 4)
+                }
+                if pool.state == .unreadable, let reason = pool.snapshot.status.unavailableReason {
+                    switch reason {
+                    case .unsupported:
+                        // Its own block below already carries the vendor detail.
+                        EmptyView()
+                    default:
+                        Text(reason.remedy)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.outline)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.leading, 4)
+                    }
                 }
                 if pool.windows.isEmpty, case .unsupported(let detail)? = pool.snapshot.status.unavailableReason {
                     Text(detail)

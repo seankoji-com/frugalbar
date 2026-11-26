@@ -40,6 +40,13 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
     private let apiBaseOverride: String?
     private let configuredAPIBase: (value: String?, invalid: Bool)
+    /// Whether this provider reads this app's own Google session (the primary
+    /// direct route), as opposed to a proxy/named account with its own token.
+    private let isLocalSession: Bool
+    /// Whether that session is stored but can no longer authenticate. Used only
+    /// when `isLocalSession`, where `notConfigured` then means "sign in again",
+    /// not "add a key".
+    private let sessionEnded: @Sendable () -> Bool
 
     static let productionAPIBase = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 
@@ -95,7 +102,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
 
     init(accessToken: String? = nil,
          environment: [String: String] = ProcessInfo.processInfo.environment,
-         allowance: Allowance, requests: AntigravityRequestBatch?) {
+         allowance: Allowance, requests: AntigravityRequestBatch?,
+         sessionEnded: (@Sendable () -> Bool)? = nil) {
         self.account = nil
         self.transports = [.direct(accessToken: accessToken, batchKey: "default")]
         self.initialFailure = nil
@@ -103,6 +111,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         self.configuredAPIBase = Self.apiBase(from: environment["FRUGALBAR_GEMINI_API_BASE"])
         self.allowance = allowance
         self.requests = requests
+        self.isLocalSession = true
+        // Injectable: a test states the stored session's state rather than
+        // reading the tester's real Google session.
+        self.sessionEnded = sessionEnded
+            ?? { TestHost.isActive ? false : GeminiOAuthSession.storedSessionEnded() }
     }
 
     init(accessToken: String?, apiBaseOverride: String?, allowance: Allowance = .gemini) {
@@ -113,6 +126,8 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         self.configuredAPIBase = (nil, false)
         self.allowance = allowance
         self.requests = nil
+        self.isLocalSession = true
+        self.sessionEnded = { false }
     }
 
     init(account: AntigravityAccount,
@@ -121,7 +136,9 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
          environment: [String: String] = ProcessInfo.processInfo.environment,
          apiBaseOverride: String? = nil,
          allowance: Allowance,
-         requests: AntigravityRequestBatch?) {
+         requests: AntigravityRequestBatch?,
+         isLocalSession: Bool = false,
+         sessionEnded: (@Sendable () -> Bool)? = nil) {
         self.account = account
         self.transports = transports
         self.initialFailure = initialFailure
@@ -131,6 +148,11 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
             : (nil, false)
         self.allowance = allowance
         self.requests = requests
+        self.isLocalSession = isLocalSession
+        // A named/proxy account's own route decides; only this Mac's primary
+        // Google sign-in uses the app-owned session's state.
+        self.sessionEnded = sessionEnded
+            ?? { TestHost.isActive ? false : GeminiOAuthSession.storedSessionEnded() }
     }
 
     struct CodeAssist: Decodable, Sendable {
@@ -348,6 +370,12 @@ public final class GeminiQuotaProvider: QuotaProvider, Sendable {
         case .direct(let injected, let batchKey):
             guard let resolved = await requests.token(accountID: batchKey, injected: injected),
                   !resolved.isEmpty else {
+                // This app's own stored Google session, still on disk but no
+                // longer able to authenticate, says "sign in again"; only a
+                // session that was never stored is "not configured". A named
+                // or proxy account's empty route stays its own state — the
+                // app's session is not that account's credential.
+                if isLocalSession, sessionEnded() { return .failed(.credentialRejected) }
                 return .failed(.notConfigured)
             }
             directToken = resolved
@@ -856,6 +884,59 @@ public struct GeminiOAuthSession: Codable, Sendable {
 
     static func load() -> GeminiOAuthSession? {
         readUsableSession()?.session
+    }
+
+    /// Whether a Google session is stored for this app but can never produce a
+    /// token again: its access token is spent and it carries no refresh token
+    /// to renew it.
+    ///
+    /// A session that *does* carry a refresh token is deliberately not called
+    /// ended here, even when a renewal just failed: that failure may be the
+    /// network's, and claiming "sign in again" would be a guess. An absent
+    /// session is not ended either — that is "not configured", a different
+    /// remedy.
+    static func storedSessionEnded(
+        now: Date = Date(),
+        manager: KeychainManager = .shared,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        guard let raw = try? manager.get(label: keychainLabel, allowsAuthenticationPrompt: false),
+              let session = try? JSONDecoder().decode(GeminiOAuthSession.self, from: Data(raw.utf8)),
+              // `.some(nil)` is confirmed absence; a nil baseline means the
+              // vault cannot say, which is not evidence of an ended session.
+              let storedClient = storedClientIDBaseline(manager: manager)
+        else { return false }
+        let fromEnvironment = environment[clientIDEnvVar].flatMap { $0.isEmpty ? nil : $0 }
+        let configuredClient = storedClient.flatMap { $0.isEmpty ? nil : $0 } ?? fromEnvironment
+        // Both halves are required before Settings can sign in at all. With
+        // the ID alone the row would ask for a sign-in the button cannot
+        // perform; that state needs the client configuration fixed first.
+        return storedSessionEnded(
+            session, configuredClient: configuredClient,
+            clientConfigured: isClientConfigured, now: now)
+    }
+
+    /// The decision half, separated so a test never reads or writes the
+    /// production session label.
+    ///
+    /// The configured client is part of the fact: a session belonging to a
+    /// client that is no longer configured cannot authenticate either, but a
+    /// vault with no client configured needs configuration, not sign-in.
+    static func storedSessionEnded(
+        _ session: GeminiOAuthSession,
+        configuredClient: String?,
+        clientConfigured: Bool = true,
+        now: Date
+    ) -> Bool {
+        guard clientConfigured, let configuredClient, !configuredClient.trimmed.isEmpty else {
+            return false
+        }
+        // A session for another client can never work, refresh token or not:
+        // that is a re-sign-in, not a renewal. A same-client session with a
+        // refresh token is not called ended even after a failed renewal.
+        guard isUsable(session, forClientID: configuredClient) else { return true }
+        return session.refreshToken.trimmed.isEmpty
+            && (session.accessToken.trimmed.isEmpty || session.expiry <= now)
     }
 
     /// The stored session with the raw text it was decoded from and the

@@ -84,6 +84,18 @@ struct MetricDetailPresentationTests {
         #expect(!p.provenance.contains { $0.label == "Raw figure" })
     }
 
+    /// The carried-over path is the ordinary one for "signed in yesterday,
+    /// session ended today": the figures stay, and the card must still say
+    /// what the failed poll needs, not only its headline.
+    @Test("a carried-over reading names the failed poll's remedy")
+    func staleReadingNamesRemedy() {
+        var stale = snapshot()
+        stale.staleReading = StaleReading(reason: .credentialRejected, at: now)
+        let p = MetricDetailPresentation(snapshot: stale, now: now)
+        #expect(p.summary.remedy?.contains(UnavailableReason.credentialRejected.headline) == true)
+        #expect(p.summary.remedy?.contains(UnavailableReason.credentialRejected.remedy) == true)
+    }
+
     @Test("a blocked window with no percentage is the focus, says blocked, and invents no share")
     func blockedWithoutReading() {
         let blocked = weekly(used: nil, elapsed: 0.5, isBlocked: true)
@@ -281,6 +293,39 @@ struct ProviderConnectionPresentationTests {
             vendorSnapshots: [], isHidden: false, hasPolled: false, credentialSource: .absent, now: now)
         #expect(absent.title == UnavailableReason.notConfigured.headline)
         #expect(absent.detail == UnavailableReason.notConfigured.remedy)
+    }
+
+    /// A measured snapshot whose newest poll failed still carries the last
+    /// figures. Settings must say why the poll failed — otherwise a rejected
+    /// credential reads as "Connected" and the sign-in remedy is invisible
+    /// exactly where the owner looks.
+    @Test("a failed poll on a measured snapshot shows its reason and remedy")
+    func staleFailureIsReported() {
+        var stale = snapshot(.measured(.none))
+        stale.staleReading = StaleReading(reason: .credentialRejected, at: now)
+        let status = ProviderConnectionPresentation.status(for: stale, now: now)
+        #expect(status.title == UnavailableReason.credentialRejected.headline)
+        #expect(status.detail?.contains(UnavailableReason.credentialRejected.remedy) == true)
+        #expect(status.tone == .attention)
+    }
+
+    @Test("a stale notConfigured reading is inactive, not an alert")
+    func staleNotConfiguredIsInactive() {
+        var stale = snapshot(.measured(.none))
+        stale.staleReading = StaleReading(reason: .notConfigured, at: now)
+        #expect(ProviderConnectionPresentation.status(for: stale, now: now).tone == .inactive)
+    }
+
+    @Test("several workspaces count a stale failure as unreadable")
+    func staleFailureAmongInstances() {
+        var stale = snapshot(.measured(.none), id: "opencode-go:a")
+        stale.staleReading = StaleReading(reason: .credentialRejected, at: now)
+        let status = ProviderConnectionPresentation.status(
+            vendorSnapshots: [stale, snapshot(.measured(.none), id: "opencode-go:b")],
+            isHidden: false, hasPolled: true, now: now)
+        #expect(status.title == "1 of 2 unreadable")
+        #expect(status.detail?.contains(UnavailableReason.credentialRejected.remedy) == true)
+        #expect(status.tone == .attention)
     }
 
     @Test("several workspaces summarise how many could not be read, naming the first")

@@ -42,6 +42,12 @@ private struct ClaudeAccountBinding: Codable, Sendable {
     let accountID: String
     let verified: Bool
     var identity: String? = nil
+    /// Whether this direct source was Claude Code's own login rather than a key
+    /// saved in FrugalBar. Retention for an ended login needs this evidence: a
+    /// saved key that was deleted must let its row go, while the CLI session
+    /// that is known ended keeps its row. Nil on bindings written before the
+    /// field existed, and treated as "not the CLI" — a prune, not a guess.
+    var fromCLI: Bool? = nil
 }
 
 /// A route is transient and never encoded. Only its opaque source key and safe
@@ -54,6 +60,11 @@ struct ClaudeAccountRoute: Sendable {
     let authFile: CLIProxyAuthFile?
     let plan: String?
     let failure: UnavailableReason?
+    /// Why the identity probe failed when that reason is not one the route must
+    /// respect (`rateLimited`/`credentialRejected`). A previously verified row
+    /// keeps this reason when its identity read fails, so a timeout is not
+    /// rewritten as a payload problem — and at midnight not as an ended login.
+    var identityFailure: UnavailableReason? = nil
     let profile: ClaudeAccountProfile?
 }
 
@@ -65,6 +76,13 @@ actor ClaudeAccountDiscovery {
     private let proxyConfig: @Sendable () -> CLIProxyConfig?
     private let directCredential: @Sendable () async -> String?
     private let directPlan: @Sendable () async -> String?
+    /// Whether this Mac's Claude Code login has ended. A previously verified
+    /// direct source whose identity read now fails must say so rather than
+    /// blaming the vendor's payload.
+    private let loginEnded: @Sendable () async -> Bool
+    /// Whether the direct source is Claude Code's login rather than a key the
+    /// user saved here. The login blob only describes the former.
+    private let directCredentialIsCLI: @Sendable () async -> Bool
     private let isVaultLocked: @Sendable () -> Bool
     private let backoff: ClaudeProxyBackoff
     private let grants: ClaudeGrantSchedule
@@ -86,6 +104,16 @@ actor ClaudeAccountDiscovery {
                 directPlan: @escaping @Sendable () async -> String? = {
                     TestHost.isActive ? nil : await CredentialStore.claudePlanNameAsync()
                 },
+                loginEnded: @escaping @Sendable () async -> Bool = {
+                    TestHost.isActive ? false : await CredentialStore.claudeLoginEndedAsync()
+                },
+                directCredentialIsCLI: @escaping @Sendable () async -> Bool = {
+                    if TestHost.isActive { return false }
+                    guard let saved = await CredentialStore.hasSavedCredentialAsync(for: .claude) else {
+                        return false
+                    }
+                    return !saved
+                },
                 isVaultLocked: @escaping @Sendable () -> Bool = {
                     !TestHost.isActive && KeychainVault.shared.statusSnapshot().isLockedOrDenied
                 },
@@ -103,6 +131,8 @@ actor ClaudeAccountDiscovery {
         self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? CredentialStore.preferences
         self.proxyConfig = proxyConfig
         self.directCredential = directCredential; self.directPlan = directPlan
+        self.loginEnded = loginEnded
+        self.directCredentialIsCLI = directCredentialIsCLI
         self.isVaultLocked = isVaultLocked
         self.backoff = backoff ?? (TestHost.isActive ? ClaudeProxyBackoff() : .shared)
         self.grants = grants ?? (TestHost.isActive ? ClaudeGrantSchedule() : .shared)
@@ -167,10 +197,23 @@ actor ClaudeAccountDiscovery {
                     .map { ($0, reason) }
             }
         }
+        let directFromCLI = await directCredentialIsCLI()
+        let endedLogin = directToken == nil && directFromCLI ? await loginEnded() : false
         if let token = directToken {
             routes.append(ClaudeAccountRoute(source: "direct|" + ClaudeAccount.digest(token),
                 sourceLabel: "This Mac's Claude Code session", token: token, proxy: nil, authFile: nil,
                 plan: await directPlan(), failure: nil, profile: nil))
+        } else if endedLogin,
+                  let previous = oldBindings.first(where: {
+                      $0.source.hasPrefix("direct|") && $0.verified && $0.fromCLI == true
+                  }) {
+            // The token is gone because the login ended, not because the
+            // account was removed. Keep its row (and its history) so the
+            // owner sees the sign-in remedy instead of the account silently
+            // disappearing while a proxy account keeps the list nonempty.
+            routes.append(ClaudeAccountRoute(source: previous.source,
+                sourceLabel: "This Mac's Claude Code session", token: nil, proxy: nil, authFile: nil,
+                plan: await directPlan(), failure: .credentialRejected, profile: nil))
         }
         // Profile reads are independent. A slow or rejected account cannot
         // prevent another account's identity being resolved.
@@ -182,6 +225,7 @@ actor ClaudeAccountDiscovery {
                     guard route.failure == nil else { return route }
                     let profile: ClaudeAccountProfile?
                     var failure: UnavailableReason?
+                    var identityFailure: UnavailableReason?
                     do {
                         if !userInitiated, let wait = waits[route.source], now < wait.until {
                             throw ProviderError(wait.reason)
@@ -206,6 +250,7 @@ actor ClaudeAccountDiscovery {
                         // prevent a first unknown source's usage read, but an
                         // explicit rejection or throttle must be respected.
                         let reason = unavailableReason(for: error)
+                        identityFailure = reason
                         switch reason {
                         case .rateLimited, .credentialRejected: failure = reason
                         default: break
@@ -214,7 +259,7 @@ actor ClaudeAccountDiscovery {
                     return ClaudeAccountRoute(source: route.source, sourceLabel: route.sourceLabel,
                         token: route.token, proxy: route.proxy, authFile: route.authFile,
                         plan: profile?.planName ?? route.plan,
-                        failure: failure, profile: profile)
+                        failure: failure, identityFailure: identityFailure, profile: profile)
                 }
             }
             var result: [ClaudeAccountRoute] = []
@@ -253,7 +298,8 @@ actor ClaudeAccountDiscovery {
                 ?? ClaudeAccount.instanceID(identity: "source|" + route.source)
             let verified = route.profile != nil || previous?.verified == true
             bindings.append(ClaudeAccountBinding(source: route.source, accountID: id, verified: verified,
-                identity: identity ?? previous?.identity))
+                identity: identity ?? previous?.identity,
+                fromCLI: route.source.hasPrefix("direct|") ? directFromCLI : nil))
             if let identity, let previous, previous.accountID != id,
                !previous.verified || previous.identity == identity {
                 aliases[id, default: []].insert(previous.accountID)
@@ -264,9 +310,21 @@ actor ClaudeAccountDiscovery {
             if route.profile == nil, previous?.verified == true {
                 // A previously verified source cannot publish fresh quota under
                 // that name until its current credential identifies itself.
+                // The identity read's own reason stands: a timeout is not a
+                // payload problem and must not become sign-in advice.
+                var reason = route.identityFailure ?? route.failure ?? .badResponse
+                // Only this Mac's own login has a session state to read. The
+                // proxy's auth files publish none, so a proxy route keeps its
+                // own failure rather than borrowing the local login's verdict.
+                if directFromCLI, route.source.hasPrefix("direct|"),
+                   reason == .badResponse || reason == .notConfigured,
+                   await loginEnded() {
+                    reason = .credentialRejected
+                }
                 unavailableBindings.append((ClaudeAccountBinding(source: route.source, accountID: id, verified: true,
-                    identity: previous?.identity),
-                    route.failure ?? .badResponse))
+                    identity: previous?.identity,
+                    fromCLI: previous?.fromCLI
+                        ?? (route.source.hasPrefix("direct|") ? directFromCLI : nil)), reason))
             } else {
                 groups[id, default: []].append(route)
             }
@@ -305,11 +363,30 @@ actor ClaudeAccountDiscovery {
         let creditRows = Self.creditRows(accounts: accounts, bindings: bindings)
         let result: [any QuotaProvider] = accounts.map { account in
             ClaudeAccountQuotaProvider(account: account, routes: groups[account.id] ?? [],
-                failure: unavailableBindings.first { $0.0.accountID == account.id }?.1,
+                failure: Self.failure(for: account.id, in: unavailableBindings),
                 backoff: backoff, grants: grants, creditRows: creditRows, monthlyCredit: monthlyCredit,
                 lastMonthlyCredit: lastMonthlyCredit)
         }
         return remember(result, signature: signature, now: now, userInitiated: userInitiated)
+    }
+
+    /// The reason to report when an account has no usable route left.
+    ///
+    /// A sibling's ended local login and a proxy's published cooldown can both
+    /// describe one account. The cooldown names when the account returns; the
+    /// sign-in advice does not date it, and the proxy is the credential that
+    /// actually answered, so a concrete retry window wins. Every other case
+    /// keeps the first binding's reason, as before.
+    private static func failure(
+        for accountID: String,
+        in bindings: [(ClaudeAccountBinding, UnavailableReason)]
+    ) -> UnavailableReason? {
+        let reasons = bindings.filter { $0.0.accountID == accountID }.map(\.1)
+        if let window = reasons.first(where: { reason in
+            if case .rateLimited(let until) = reason { return until != nil }
+            return false
+        }) { return window }
+        return reasons.first
     }
 
     /// Each shown account's verified OAuth identity (account + organisation),
@@ -441,9 +518,14 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
     }
 
     private func fetchUsage() async throws -> QuotaSnapshot {
-        var firstFailure = failure
+        // A route that was tried speaks for itself. The seeded `failure` is a
+        // source that never produced a route this pass (typically the ended
+        // direct login); it must not outrank a throttle the proxy actually
+        // published for the same account, or the user is told to sign in while
+        // the vendor's wait is the actionable fact.
+        var routeFailure: UnavailableReason?
         for route in routes.sorted(by: { ($0.proxy == nil ? 1 : 0) < ($1.proxy == nil ? 1 : 0) }) {
-            if let reason = route.failure { firstFailure = firstFailure ?? reason; continue }
+            if let reason = route.failure { routeFailure = routeFailure ?? reason; continue }
             let provider = ClaudeQuotaProvider(apiKey: route.proxy == nil ? route.token : nil,
                 cliProxyConfig: route.proxy, directCredential: { nil }, proxyBackoff: backoff,
                 grantSchedule: grants, monthlyCredit: { _ in nil }, account: account,
@@ -451,10 +533,10 @@ struct ClaudeAccountQuotaProvider: QuotaProvider {
             do {
                 let snapshot = try await provider.fetchSnapshot()
                 if snapshot.status.confidence == .measured { return snapshot }
-                firstFailure = firstFailure ?? snapshot.status.unavailableReason
-            } catch { firstFailure = firstFailure ?? unavailableReason(for: error) }
+                routeFailure = routeFailure ?? snapshot.status.unavailableReason
+            } catch { routeFailure = routeFailure ?? unavailableReason(for: error) }
         }
-        var snapshot = unavailable(firstFailure ?? .notConfigured)
+        var snapshot = unavailable(routeFailure ?? failure ?? .notConfigured)
         snapshot.claudeAccount = account
         snapshot.planName = account.planName
         return snapshot

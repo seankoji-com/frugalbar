@@ -19,6 +19,13 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
     /// Resolves the *direct* Claude Code OAuth token — the one this Mac's own
     /// `claude` login holds, as opposed to whatever the proxy holds.
     private let directCredential: @Sendable () async -> String?
+    /// Whether this Mac's Claude Code credential blob says its login ended.
+    /// Told apart from a vendor payload verdict by `sessionFailureReason`.
+    private let loginEnded: @Sendable () async -> Bool
+    /// Whether the direct credential came from Claude Code's login rather than
+    /// a key saved in FrugalBar's own vault. The login blob's state describes
+    /// only the former; a saved token's failure is its own.
+    private let directCredentialIsCLI: @Sendable () async -> Bool
 
     public init(
         apiKey: String? = nil,
@@ -27,6 +34,10 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         // without reading the developer's own Claude login out of the Keychain.
         // Nil means the production path: this Mac's Claude Code credential.
         directCredential: (@Sendable () async -> String?)? = nil,
+        // Injectable for the same reason: a test states the session's state
+        // rather than planting a credential in the tester's Keychain.
+        loginEnded: (@Sendable () async -> Bool)? = nil,
+        directCredentialIsCLI: (@Sendable () async -> Bool)? = nil,
         proxyBackoff: ClaudeProxyBackoff? = nil,
         grantSchedule: ClaudeGrantSchedule? = nil,
         monthlyCredit: (@Sendable (Date) async -> ClaudeMonthlyCredit?)? = nil,
@@ -51,6 +62,19 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         self.grantSchedule = grantSchedule ?? (TestHost.isActive ? ClaudeGrantSchedule() : .shared)
         self.directCredential = directCredential
             ?? { await CredentialStore.apiKeyAsync(for: .claude) }
+        self.loginEnded = loginEnded
+            ?? { TestHost.isActive ? false : await CredentialStore.claudeLoginEndedAsync() }
+        self.directCredentialIsCLI = directCredentialIsCLI
+            ?? {
+                if TestHost.isActive { return false }
+                // An unreadable vault is not evidence of the CLI login:
+                // without a definite "no saved key", keep the credential's
+                // own reason rather than relabelling it.
+                guard let saved = await CredentialStore.hasSavedCredentialAsync(for: .claude) else {
+                    return false
+                }
+                return !saved
+            }
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
@@ -115,15 +139,19 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
                     return unavailable(reason)
                 }
             }
-            guard let token = apiKey, !token.isEmpty else { return unavailable(.notConfigured) }
-            return try await fetchSnapshotDirect(token: token, now: now)
+            guard let token = apiKey, !token.isEmpty else {
+                return unavailable(await sessionFailureReason(.notConfigured))
+            }
+            let direct = try await fetchSnapshotDirect(token: token, now: now)
+            guard let reason = direct.status.unavailableReason else { return direct }
+            return unavailable(await sessionFailureReason(reason))
         }
         // If an explicit apiKey is injected, use direct token path.
         if let injectedKey = apiKey, !injectedKey.isEmpty {
             return try await fetchSnapshotDirect(token: injectedKey, now: now)
         }
         if apiKey != nil {
-            return unavailable(.notConfigured)
+            return unavailable(await sessionFailureReason(.notConfigured))
         }
 
         // Check CLI Proxy: explicit config, or discovered from ~/.t3/userdata
@@ -163,22 +191,49 @@ public final class ClaudeQuotaProvider: QuotaProvider, Sendable {
         guard let token = await directCredential().flatMap({ $0.isEmpty ? nil : $0 }) else {
             // Nothing else to try, and the proxy's own reason is the honest
             // one: "Not configured" would send the user looking for a
-            // credential that is right there.
-            return unavailable(proxyFailure ?? .notConfigured)
+            // credential that is right there. Only when the direct credential
+            // is the thing that ended does that fact replace the generic reason.
+            if let proxyFailure { return unavailable(proxyFailure) }
+            return unavailable(await sessionFailureReason(.notConfigured))
         }
         let direct: QuotaSnapshot
         do {
             direct = try await fetchSnapshotDirect(token: token, now: now)
         } catch let error as ProviderError {
-            return unavailable(proxyFailure ?? error.reason)
+            if let proxyFailure { return unavailable(proxyFailure) }
+            return unavailable(await sessionFailureReason(error.reason))
         }
         // A transport failure from the direct call propagates to the engine,
         // which maps it to its own reason — inventing one here would lose that
         // mapping for no gain.
         guard direct.status.confidence == .measured else {
-            return unavailable(proxyFailure ?? direct.status.unavailableReason ?? .badResponse)
+            if let proxyFailure { return unavailable(proxyFailure) }
+            let reason = direct.status.unavailableReason ?? .badResponse
+            return unavailable(await sessionFailureReason(reason))
         }
         return direct
+    }
+
+    /// A failed read of this Mac's Claude Code session is not a verdict on the
+    /// vendor's payload when the credential blob itself says the login ended.
+    /// Only the two reasons that describe a missing or unusable answer are
+    /// replaced — an expired login that produced `badResponse`, or a blank
+    /// token that would otherwise read `notConfigured`. A rejection, throttle
+    /// or transport failure the vendor actually produced stands, and a healthy
+    /// login leaves every reason untouched. A row reading through the proxy
+    /// never reaches this: its own credential's failure is not this blob's
+    /// verdict, and the proxy publishes no login state to read.
+    private func sessionFailureReason(_ reason: UnavailableReason) async -> UnavailableReason {
+        switch reason {
+        case .badResponse, .notConfigured:
+            // The blob describes Claude Code's own login. A token saved in
+            // FrugalBar's vault is a different credential, so its failure
+            // keeps its own reason even when the CLI login has ended.
+            guard await directCredentialIsCLI() else { return reason }
+            return await loginEnded() ? .credentialRejected : reason
+        case .credentialRejected, .unsupported, .offline, .timedOut, .rateLimited:
+            return reason
+        }
     }
 
     private func fetchSnapshotViaProxy(config: CLIProxyConfig, now: Date) async throws -> QuotaSnapshot {

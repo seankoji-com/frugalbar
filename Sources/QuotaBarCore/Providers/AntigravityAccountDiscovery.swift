@@ -483,7 +483,10 @@ actor AntigravityAccountDiscovery {
                     environment: environment,
                     apiBaseOverride: apiBaseOverride?.count == 1 ? apiBaseOverride?[0] : nil,
                     allowance: allowance,
-                    requests: batch
+                    requests: batch,
+                    // This Mac's primary row owns the app's Google session;
+                    // a proxy/named account keeps its own credential state.
+                    isLocalSession: account.isPrimary
                 ))
             }
         }

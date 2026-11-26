@@ -229,7 +229,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             // and "your key was rejected" — the row under the bar has no room
             // for it, and it is the first thing anyone opens this card to find.
             let why = staleReason.map { " (\($0.headline))" } ?? ""
-            let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading\(why). "
+            // The remedy, not only the headline: "Credential rejected" alone
+            // leaves the reader to guess, and a session that ended between
+            // polls is the ordinary path to this card.
+            let remedy = staleReason.map { " \($0.remedy)" } ?? ""
+            let note = "Polled at \(clockText(failedPollAt, now: now)) without a reading\(why).\(remedy) "
                 + "The figures below are from \(clockText(snapshot.lastUpdated, now: now)), before it, "
                 + "and may be out of date."
             return Summary(

@@ -896,6 +896,42 @@ extension CredentialStore {
         }
     }
 
+    /// Whether the user saved a non-empty key for `vendor` in FrugalBar's own
+    /// vault, as opposed to a credential discovered from a CLI login.
+    ///
+    /// Claude's failure mapping uses this to keep the Claude Code login blob's
+    /// state from describing a token the user typed in here: `apiKey(for:)`
+    /// prefers the saved key, so when one exists the direct credential is that
+    /// key and the CLI login's `loginEnded` is about a different credential.
+    /// Non-prompting and never read in a test.
+    public static func hasSavedCredentialAsync(for vendor: VendorIdentifier) async -> Bool? {
+        // Under a test host this is "cannot say", not "no key": a suite that
+        // has not injected provenance must not quietly exercise the CLI branch.
+        guard !TestHost.isActive else { return nil }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                if let cached = KeychainManager.shared.cachedValue(label: vendor.rawValue) {
+                    continuation.resume(returning: !cached.isEmpty)
+                    return
+                }
+                do {
+                    let stored = try KeychainManager.shared.get(
+                        label: vendor.rawValue, allowsAuthenticationPrompt: false)
+                    continuation.resume(returning: !stored.isEmpty)
+                } catch KeychainError.itemNotFound {
+                    continuation.resume(returning: false)
+                } catch {
+                    // Locked or unavailable vault: a key may exist, so this is
+                    // not evidence of the CLI login. Say "cannot say" rather
+                    // than relabel the row from the wrong credential.
+                    NSLog("frugalbar: saved-credential presence unreadable for %@: %@",
+                          vendor.rawValue, String(describing: error))
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
     /// Async accessor for a credential stored under an explicit Keychain label.
     ///
     /// Used by providers that keep one credential per instance (OpenCode Go
@@ -957,6 +993,37 @@ extension CredentialStore {
             return nil
         }
         return token
+    }
+
+    /// Whether the Claude Code credential blob itself says the login is over.
+    ///
+    /// The CLI keeps the item in the Keychain after a session ends, writing
+    /// `loginEnded` (observed as `"time_limit"`) and blanking the tokens. That
+    /// is a fact about the credential, not about a vendor payload: reporting a
+    /// failed read as `.badResponse` sent the user looking for a data problem
+    /// instead of signing in again. An expired access token is deliberately
+    /// *not* this state — it may still be refreshable, and `claudeOAuthToken`
+    /// already withholds it — and a blob that was never written is simply "no
+    /// session", which leads to different advice.
+    static func claudeLoginEnded(from data: Data?) -> Bool {
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any]
+        else { return false }
+        // The CLI has written the marker inside `claudeAiOauth`; accepting it
+        // at the top level too costs nothing and still states the same fact.
+        for ended in [oauth["loginEnded"], json["loginEnded"]] {
+            if let value = ended as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
+        }
+        // Only a key the CLI actually left blank is an ended login. A missing
+        // `accessToken` can mean a renamed field, a partial write or a session
+        // stored elsewhere; guessing "ended" from its absence would ask for a
+        // sign-in the CLI never said was needed.
+        guard let token = oauth["accessToken"] as? String else { return false }
+        return token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Where a provider's credential is actually coming from right now.
@@ -1112,6 +1179,26 @@ extension CredentialStore {
                     }
                 }
                 continuation.resume(returning: name)
+            }
+        }
+    }
+
+    /// Reads the credential blob's own login state off disk or the Keychain,
+    /// on the credential queue. Gated like the plan-name lookup: with CLI
+    /// discovery off, this app never reads the Claude Code credential, so it
+    /// must not describe a session it was told not to use.
+    public static func claudeLoginEndedAsync() async -> Bool {
+        guard isCLIDiscoveryEnabled else { return false }
+        return await withCheckedContinuation { continuation in
+            credentialQueue.async {
+                // Cache-only, and the same cached blob `claudeOAuthToken` read.
+                // The token read that triggered this already filled the cache;
+                // a cold miss must not reach another app's login item from a
+                // status check. A miss is "cannot say", never "ended".
+                let ended = CredentialCache.shared.peekClaudeBlob(now: Date()).map {
+                    claudeLoginEnded(from: $0)
+                } ?? false
+                continuation.resume(returning: ended)
             }
         }
     }
