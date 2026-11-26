@@ -23,6 +23,7 @@ public actor QuotaManager {
         claudeProviderFactory: { await ClaudeAccountDiscovery.shared.providers() },
         knownClaudeAccounts: { ClaudeAccountStore.all() },
         antigravityProviderFactory: { await AntigravityAccountDiscovery.shared.providers() },
+        goAccountDiscovery: { await GoWorkspaceAccountWebSession.discoveredProviders(hidden: $0, force: $1, timeout: $2) },
         monthlyCreditConnection: { await MainActor.run { ClaudeMonthlyCreditSession.shared.connectionGeneration } },
         monthlyCreditIdentities: { await MainActor.run { ClaudeMonthlyCreditSession.shared.webIdentities } },
         vaultWarmUp: { interactive in
@@ -51,6 +52,7 @@ public actor QuotaManager {
     private let claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])?
     private let knownClaudeAccounts: @Sendable () -> [ClaudeAccount]
     private let antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])?
+    private let goAccountDiscovery: (@Sendable (Set<VendorIdentifier>, Bool, TimeInterval) async -> [VendorIdentifier: [any QuotaProvider]])?
     private let cycleLookup: @Sendable (VendorIdentifier) -> SubscriptionCycle?
     private let displayPreferences: @Sendable () -> ProviderDisplayPreferences
     /// The configured Gemini API credit, read on every snapshot read rather
@@ -130,6 +132,7 @@ public actor QuotaManager {
         claudeProviderFactory: (@Sendable () async throws -> [any QuotaProvider])? = nil,
         knownClaudeAccounts: @escaping @Sendable () -> [ClaudeAccount] = { [] },
         antigravityProviderFactory: (@Sendable () async -> [any QuotaProvider])? = nil,
+        goAccountDiscovery: (@Sendable (Set<VendorIdentifier>, Bool, TimeInterval) async -> [VendorIdentifier: [any QuotaProvider]])? = nil,
         // Isolated managers use an injected connection lifetime, never the
         // real web session or preference store. The app opts in above.
         monthlyCreditConnection: @escaping @Sendable () async -> String? = { "injected-connection" },
@@ -152,6 +155,7 @@ public actor QuotaManager {
         self.claudeProviderFactory = claudeProviderFactory
         self.knownClaudeAccounts = knownClaudeAccounts
         self.antigravityProviderFactory = antigravityProviderFactory
+        self.goAccountDiscovery = goAccountDiscovery
         self.cycleLookup = cycleLookup
         self.displayPreferences = displayPreferences
         self.geminiCreditLookup = geminiCreditLookup
@@ -269,7 +273,7 @@ public actor QuotaManager {
         let credit = geminiCreditLookup()
         let accountCredits = geminiAccountCreditLookup()
         return cache.filter {
-            !hidden.contains($0.value.snapshot.vendorId) && !Self.isRetiredPool($0.value.snapshot)
+            !hidden.contains($0.value.snapshot.vendorId) && !Self.isHiddenReading($0.value.snapshot)
         }
             .mapValues { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit, accountCredits: accountCredits) }
     }
@@ -284,6 +288,10 @@ public actor QuotaManager {
     static func isRetiredPool(_ snapshot: QuotaSnapshot) -> Bool {
         snapshot.vendorId == .antigravityArgon
             && snapshot.status.unavailableReason == GeminiQuotaProvider.argonMeteredWithGeminiReason
+    }
+
+    private static func isHiddenReading(_ snapshot: QuotaSnapshot) -> Bool {
+        isRetiredPool(snapshot) || snapshot.status.unavailableReason == GoWorkspaceAccountQuotaProvider.noPlan
     }
 
     /// Adds the user-configured Gemini API credit to the Gemini row.
@@ -349,7 +357,7 @@ public actor QuotaManager {
         return Self.arrange(
             cache.values.map { Self.attachingGeminiCredit(to: $0.snapshot, credit: credit,
                                                           accountCredits: accountCredits) }
-                .filter { !Self.isRetiredPool($0) },
+                .filter { !Self.isHiddenReading($0) },
             preferences: displayPreferences(),
             instanceOrder: instanceOrder
         )
@@ -626,6 +634,7 @@ public actor QuotaManager {
         let hidden = displayPreferences().hidden
         for key in Array(cache.keys) where hidden.contains(cache[key]!.snapshot.vendorId) { cache[key] = nil }
         var allProviders: [any QuotaProvider] = providerFactory()
+        async let goSources = goAccountDiscovery?(hidden, force, cachePolicy.perProviderTimeout) ?? [:]
         if !hidden.contains(.claude), let discover = claudeProviderFactory {
             let discovery = await withDeadline(seconds: cachePolicy.perProviderTimeout) {
                 try await QuotaFetchContext.$isUserInitiated.withValue(force) { try await discover() }
@@ -701,6 +710,15 @@ public actor QuotaManager {
             let insertion = allProviders.firstIndex { antigravityVendors.contains($0.vendorId) } ?? allProviders.count
             allProviders.removeAll { antigravityVendors.contains($0.vendorId) }
             allProviders.insert(contentsOf: agyProviders, at: min(insertion, allProviders.count))
+        }
+        for (vendor, accounts) in await goSources {
+            let position = allProviders.firstIndex { $0.vendorId == vendor } ?? allProviders.count
+            allProviders.removeAll { $0.vendorId == vendor }
+            allProviders.insert(contentsOf: accounts, at: min(position, allProviders.count))
+            let current = Set(accounts.map(\.instanceID))
+            for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor && !current.contains(key) {
+                cache[key] = nil
+            }
         }
         let providers: [any QuotaProvider] = allProviders.filter { !hidden.contains($0.vendorId) }
         // A workspace that was removed (or disabled) must not linger in the
@@ -853,54 +871,67 @@ public actor QuotaManager {
         let openAICreditInvalidation = openAIMonthlyCreditInvalidation
         let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
-        await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
-            for provider in providersToFetch {
-                group.addTask {
-                    // A whole-provider deadline. URLSession's per-request timeout
-                    // does not bound a provider that issues several requests.
-                    let startedAt = DispatchTime.now().uptimeNanoseconds
-                    let deadline = ContinuousClock.now + .seconds(budget)
-                    let retained = Mutex<QuotaSnapshot?>(nil)
-                    let retain: @Sendable (QuotaSnapshot) -> Void = { snapshot in
-                        retained.withLock {
-                            guard ContinuousClock.now <= deadline,
-                                  snapshot.status.confidence == .measured else { return }
-                            $0 = snapshot
+        typealias FetchResult = (String, QuotaSnapshot, Bool)
+        let fetch: @Sendable (any QuotaProvider) async -> FetchResult = { provider in
+            // A whole-provider deadline. URLSession's per-request timeout
+            // does not bound a provider that issues several requests.
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            let deadline = ContinuousClock.now + .seconds(budget)
+            let retained = Mutex<QuotaSnapshot?>(nil)
+            let retain: @Sendable (QuotaSnapshot) -> Void = { snapshot in
+                retained.withLock {
+                    guard ContinuousClock.now <= deadline,
+                          snapshot.status.confidence == .measured else { return }
+                    $0 = snapshot
+                }
+            }
+            var outcome = await withDeadline(seconds: budget) {
+                try await QuotaFetchContext.$retainOnTimeout.withValue(retain) {
+                    try await QuotaFetchContext.$deadline.withValue(deadline) {
+                        try await QuotaFetchContext.$isUserInitiated.withValue(force) {
+                            try await provider.fetchSnapshot()
                         }
-                    }
-                    var outcome = await withDeadline(seconds: budget) {
-                        try await QuotaFetchContext.$retainOnTimeout.withValue(retain) {
-                            try await QuotaFetchContext.$deadline.withValue(deadline) {
-                                try await QuotaFetchContext.$isUserInitiated.withValue(force) {
-                                    try await provider.fetchSnapshot()
-                                }
-                            }
-                        }
-                    }
-                    if case .failure(.timedOut) = outcome, let snapshot = retained.withLock({ $0 }) {
-                        outcome = .success(snapshot)
-                    }
-                    // A vendor-wide hand-entered renewal has no account
-                    // binding. It cannot be copied onto every Claude account.
-                    let cycle = provider.vendorId == .claude && provider.instanceID != "claude"
-                        ? nil : cycleLookup(provider.vendorId)
-                    switch outcome {
-                    case .success(var snapshot):
-                        // Measured here rather than guessed in each provider:
-                        // one real number for every vendor, including the ones
-                        // that issue several requests per refresh.
-                        let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
-                        snapshot.latencyMs = Int(elapsed / 1_000_000)
-                        return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle), false)
-                    case .failure(let reason):
-                        let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
-                        return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle), reason == .timedOut)
                     }
                 }
             }
-            for await (instanceID, snapshot, deadlineFailed) in group {
-                results[instanceID] = snapshot
-                if deadlineFailed { deadlineFailures.insert(instanceID) }
+            if case .failure(.timedOut) = outcome, let snapshot = retained.withLock({ $0 }) {
+                outcome = .success(snapshot)
+            }
+            // A vendor-wide hand-entered renewal has no account
+            // binding. It cannot be copied onto every Claude account.
+            let cycle = provider.vendorId == .claude && provider.instanceID != "claude"
+                ? nil : cycleLookup(provider.vendorId)
+            switch outcome {
+            case .success(var snapshot):
+                // Measured here rather than guessed in each provider:
+                // one real number for every vendor, including the ones
+                // that issue several requests per refresh.
+                let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+                snapshot.latencyMs = Int(elapsed / 1_000_000)
+                return (provider.instanceID, Self.attachingCycleRow(to: snapshot, cycle: cycle), false)
+            case .failure(let reason):
+                let placeholder = Self.unavailableSnapshot(for: provider, reason: reason)
+                return (provider.instanceID, Self.attachingCycleRow(to: placeholder, cycle: cycle), reason == .timedOut)
+            }
+        }
+        // Each Go account shares a session. Queue its workspaces here so a
+        // workspace's deadline starts when its read begins, not while it waits.
+        let accounts = providersToFetch.filter { $0 is GoWorkspaceAccountQuotaProvider }
+        let other = providersToFetch.filter { !($0 is GoWorkspaceAccountQuotaProvider) }
+        let batches = other.map { [$0] } + Array(Dictionary(grouping: accounts, by: \.vendorId).values)
+        await withTaskGroup(of: [FetchResult].self) { group in
+            for batch in batches {
+                group.addTask {
+                    var readings: [FetchResult] = []
+                    for provider in batch { readings.append(await fetch(provider)) }
+                    return readings
+                }
+            }
+            for await readings in group {
+                for (instanceID, snapshot, deadlineFailed) in readings {
+                    results[instanceID] = snapshot
+                    if deadlineFailed { deadlineFailures.insert(instanceID) }
+                }
             }
         }
 
@@ -929,7 +960,7 @@ public actor QuotaManager {
         // pool nobody can see, and the bump below then arms its user clock.
         successfulPassIDs = Set(results.compactMap { id, snapshot in
             (snapshot.status.confidence == .measured && snapshot.staleReading == nil)
-                || Self.isRetiredPool(snapshot) ? id : nil
+                || Self.isHiddenReading(snapshot) ? id : nil
         })
         let now = clock()
         for provider in providersToFetch {
@@ -972,6 +1003,7 @@ public actor QuotaManager {
                 case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,
                !isAntigravityRestriction,
+               reason != GoWorkspaceAccountQuotaProvider.noPlan,
                let previous = cache[id], previous.snapshot.status.confidence == .measured,
                previous.snapshot.id == snap.id {
                 // The retained snapshot's hand-entered cycle row (if any) was
@@ -1011,7 +1043,7 @@ public actor QuotaManager {
             // measured reading or the vendor publishing an Argon group with no
             // readable window may bring the row back. The vendor's own backoff
             // is still stored below from the failure itself.
-            if let existing = cache[id], Self.isRetiredPool(existing.snapshot),
+            if let existing = cache[id], Self.isHiddenReading(existing.snapshot),
                let reason = snap.status.unavailableReason,
                reason != GeminiQuotaProvider.argonNoQuotaReason,
                reason != GeminiQuotaProvider.unreadableSummaryReason {

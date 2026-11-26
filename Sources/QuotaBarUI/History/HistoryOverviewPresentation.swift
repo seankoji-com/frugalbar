@@ -22,11 +22,14 @@ public enum HistoryOverviewPresentation {
         /// inherited the pre-workspace `opencode` key also owns the readings an
         /// install recorded under that key before workspaces existed.
         public let keys: [String]
-        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil) {
+        public let historicalOnly: Bool
+        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil,
+                    historicalOnly: Bool = false) {
             self.id = id
             self.vendor = vendor
             self.name = name
             self.keys = keys ?? [id]
+            self.historicalOnly = historicalOnly
         }
 
         public func owns(_ key: String) -> Bool {
@@ -47,7 +50,8 @@ public enum HistoryOverviewPresentation {
         workspaces: [OpenCodeGoWorkspace],
         claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all(),
         antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all(),
-        openDesignConnections: OpenDesignConnections? = nil
+        openDesignConnections: OpenDesignConnections? = nil,
+        goAccounts: GoWorkspaceAccountSettings = GoWorkspaceAccountSettings()
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
@@ -78,26 +82,47 @@ public enum HistoryOverviewPresentation {
                 return subjects
             }
             if vendor == .opendesign {
+                let accountSubjects = goAccountSubjects(.openDesign, settings: goAccounts)
+                let accountIDs = Set(accountSubjects.map(\.id))
                 let linked = OpenDesignConnection.allCases.compactMap { connection -> Subject? in
-                    guard let workspace = openDesignConnections?.workspace(for: connection) else { return nil }
-                    return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName)
+                    guard let workspace = openDesignConnections?.workspace(for: connection),
+                          !accountIDs.contains(workspace.seriesID) else { return nil }
+                    return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName,
+                                   historicalOnly: goAccounts.usesAccount(.openDesign))
                 }
-                return linked.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : linked
+                let subjects = accountSubjects + linked
+                return subjects.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : subjects
             }
             guard vendor == .opencode else {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)]
             }
-            return workspaces.filter(\.isEnabled).map { workspace in
+            let accountSubjects = goAccountSubjects(.openCode, settings: goAccounts)
+            return accountSubjects + workspaces.filter(\.isEnabled).map { workspace in
                 Subject(
                     id: workspace.instanceID,
                     vendor: .opencode,
-                    name: workspace.name,
+                    name: accountSubjects.isEmpty ? workspace.name : "\(workspace.name) · Earlier connection",
                     keys: workspace.id == OpenCodeGoWorkspaceStore.legacyID
                         ? [workspace.instanceID, VendorIdentifier.opencode.rawValue]
-                        : [workspace.instanceID]
+                        : [workspace.instanceID],
+                    historicalOnly: goAccounts.usesAccount(.openCode)
                 )
             }
         }
+    }
+
+    private static func goAccountSubjects(_ service: GoWorkspaceAccount, settings: GoWorkspaceAccountSettings) -> [Subject] {
+        guard settings.usesAccount(service) else { return [] }
+        let active = settings.activeHistoryIDs(for: service)
+        return settings.knownWorkspaces(for: service).map {
+            let id = service.seriesID(for: $0)
+            return Subject(id: id, vendor: service.vendor, name: $0.name, historicalOnly: !active.contains(id))
+        }
+    }
+
+    static func includingHistoricalSubjects(_ subjects: [Subject], readings: [QuotaHistoryStore.ReadingRecord]) -> [Subject] {
+        let recorded = Set(readings.map(\.vendor))
+        return subjects.filter { !$0.historicalOnly || $0.keys.contains(where: recorded.contains) }
     }
 
     /// Older and disconnected workspace series remain chartable by their own

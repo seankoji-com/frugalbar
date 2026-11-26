@@ -189,7 +189,7 @@ public struct HistoryRootView: View {
             return (
                 HistoryOverviewPresentation.subjects(
                     order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved(),
-                    openDesignConnections: OpenDesignConnections.load()),
+                    openDesignConnections: OpenDesignConnections.load(), goAccounts: GoWorkspaceAccountSettings.load()),
                 HistoryOverviewPresentation.hiddenNames(order: prefs.order, hidden: prefs.hidden)
             )
         }
@@ -298,6 +298,9 @@ public struct HistoryRootView: View {
             if let tabRequest { selectedTab = tabRequest.tab }
         }
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in
+            preferencesSerial += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .frugalbarGoAccountHistoryDidChange)) { _ in
             preferencesSerial += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarHistoryDidRecord)) { _ in
@@ -1277,7 +1280,8 @@ public struct HistoryRootView: View {
                 until: now,
                 bucketSeconds: bucket)
             guard !Task.isCancelled else { return }
-            subjects = HistoryOverviewPresentation.includingOpenDesignHistory(configuredSubjects, readings: sampled)
+            let expanded = HistoryOverviewPresentation.includingOpenDesignHistory(configuredSubjects, readings: sampled)
+            subjects = HistoryOverviewPresentation.includingHistoricalSubjects(expanded, readings: sampled)
             let overview = HistoryOverviewPresentation.overview(
                 subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards

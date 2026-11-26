@@ -102,7 +102,12 @@ public enum OpenCodeGoWorkspaceStore {
     /// legend label and the identical spoken entry. Callers fall back to the
     /// vendor's name when this is nil.
     public static func displayName(forInstanceKey key: String) -> String? {
-        resolved().first { $0.instanceID == key }?.name
+        let accounts = GoWorkspaceAccountSettings.load()
+        if let service = GoWorkspaceAccount.allCases.first(where: { $0.vendor == vendor(forInstanceKey: key) }),
+           let workspace = accounts.knownWorkspaces(for: service).first(where: { service.seriesID(for: $0) == key }) {
+            return workspace.name
+        }
+        return resolved().first { $0.instanceID == key }?.name
     }
 
     /// A workspace instance key's place in the user's list, or `nil` for a key
