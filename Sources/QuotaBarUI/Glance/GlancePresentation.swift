@@ -240,18 +240,16 @@ public struct GlancePresentation: Equatable, Sendable {
         // A dated block returns at the one reset that dates it, never at a
         // sibling window's: a badge-blocked 5H sibling can reset in an hour
         // while the block runs to the month's end.
-        // Back soon's date and its window name come from the same drawn
-        // window, so a dated block can never report a return the row does not
-        // show (`accountBlockDatedWindowLabel` names a plan bar; this also
-        // checks that the pool draws it).
-        let datedWindow = accountBlocked
-            ? windows.first { $0.bar.label == snapshot.accountBlockDatedWindowLabel }
-            : nil
+        // Back soon's date and its window name are the snapshot's own facts
+        // (`accountBlockEnd` / `accountBlockDatedWindowLabel`, both read from
+        // one plan-filtered bar), so they always agree with
+        // `accountBlockHasPublishedReturn` and the label is a window `windows`
+        // holds — it is built from the same plan bars.
         let returnsAt: Date? = accountBlocked
-            ? datedWindow?.bar.resetsAt
+            ? snapshot.accountBlockEnd
             : (spentResets.contains(where: { $0 == nil })
                 ? nil : spentResets.compactMap { $0 }.max())
-        let datedBlockWindowLabel = datedWindow?.bar.label
+        let datedBlockWindowLabel = accountBlocked ? snapshot.accountBlockDatedWindowLabel : nil
         let paidOpen = supplementary.contains {
             $0.allowanceRole == .paidOverage && !$0.isBlocked
                 && ($0.primaryFraction.map { $0 < QuotaSnapshot.exhaustionThreshold } ?? false)

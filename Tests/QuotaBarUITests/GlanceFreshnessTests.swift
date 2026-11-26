@@ -165,6 +165,40 @@ struct GlanceFreshnessTests {
         #expect(summary.resetText == nil)
     }
 
+    @Test("a block dated by a bar the pool cannot draw offers no return anywhere")
+    func nonPlanDatedBarIsIgnored() throws {
+        // No plan window at all: the provider's label names a supplementary
+        // allowance. Nothing may date the block, the inspector must not fall
+        // back to a figure as its return, and the story must not call a
+        // sibling's reset the unblock date.
+        var limited = Fixtures.snapshot("grok", .grok, "Grok", [
+            Fixtures.bar("OD", 1.0, resetsInHours: 500, windowHours: nil, role: .paidOverage),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        limited.accountBlockDatedByBarLabel = "OD"
+
+        #expect(limited.accountBlockEnd == nil)
+        #expect(limited.accountBlockDatedWindowLabel == nil)
+        #expect(limited.accountBlockHasPublishedReturn == false)
+
+        let glance = GlancePresentation(snapshots: [limited], now: now)
+        let pool = try #require(glance.pools.first)
+        #expect(pool.returnsAt == nil)
+        #expect(pool.datedBlockWindowLabel == nil)
+
+        let summary = MetricDetailPresentation(snapshot: limited, now: now).summary
+        #expect(summary.resetText == nil)
+
+        // A window that is not the block's end cannot say "It resets in …".
+        let line = ProviderStoryPresentation.resetLine(
+            name: "weekly", label: "WK", resetWhen: "3h",
+            pool: GlancePresentation(snapshots: [Fixtures.snapshot("x", .kiro, "X", [
+                Fixtures.bar("WK", 0.4, resetsInHours: 3, windowHours: 168),
+            ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)], now: now).pools.first!,
+            tone: .good)
+        #expect(!line.text.hasPrefix("It resets in"))
+        #expect(line.text.contains("no published end"))
+    }
+
     @Test("two vendor-blocked windows agree on one return")
     func twoBlockedWindowsAgree() throws {
         // OpenCode Go can mark more than one window rate-limited. The earliest
