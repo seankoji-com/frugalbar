@@ -2,15 +2,22 @@ import SwiftUI
 import WebKit
 import QuotaBarCore
 
+enum GoWorkspaceConnectionOutcome {
+    case cancelled
+    case connected(String)
+    case replacementRequired
+}
+
 struct GoWorkspaceVerificationView: View {
     let service: GoWorkspaceAccount
     let isLinked: Bool
-    let onConnect: (GoWorkspaceAccount.Verification) async -> String?
+    let onConnect: (GoWorkspaceAccount.Verification, _ replaceEarlierConnections: Bool) async -> GoWorkspaceConnectionOutcome
     @Binding var result: GoWorkspaceAccount.Verification?
     @Environment(\.dismiss) private var dismiss
     @State private var verification: Task<Void, Never>?
     @State private var connectionStatus: String?
     @State private var verifiedGeneration: UUID?
+    @State private var confirmReplacement = false
 
     private var session: GoWorkspaceAccountWebSession { .session(for: service) }
 
@@ -38,7 +45,7 @@ struct GoWorkspaceVerificationView: View {
                     .disabled(verification != nil)
                 Button("Close") { dismiss() }
                 if verifiedGeneration != nil {
-                    Button("Use these workspaces") { confirm() }.disabled(verification != nil)
+                    Button("Use these workspaces") { confirm(replacing: false) }.disabled(verification != nil)
                 } else {
                     Button(isLinked ? "Refresh workspaces" : "Verify workspaces") { verify() }
                     .disabled(verification != nil)
@@ -48,6 +55,12 @@ struct GoWorkspaceVerificationView: View {
         .padding(16)
         .frame(width: 800, height: 700)
         .onAppear { session.beginManaging() }
+        .alert("Replace earlier \(service.name) connections?", isPresented: $confirmReplacement) {
+            Button("Keep existing connections", role: .cancel) { verifiedGeneration = nil }
+            Button("Replace earlier connections", role: .destructive) { confirm(replacing: true) }
+        } message: {
+            Text("This sign-in could not verify every earlier workspace. Replacing the earlier connections will stop their quota updates when the new account takes over. Saved credentials and History stay on this Mac.")
+        }
         .onDisappear {
             verification?.cancel()
             session.endManaging()
@@ -72,18 +85,23 @@ struct GoWorkspaceVerificationView: View {
         }
     }
 
-    private func confirm() {
+    private func confirm(replacing: Bool) {
         guard let result, verifiedGeneration == session.verificationGeneration else {
             verifiedGeneration = nil
             connectionStatus = "The sign-in changed. Verify the workspaces again."
             return
         }
         verification = Task {
-            defer {
-                verification = nil
+            defer { verification = nil }
+            switch await onConnect(result, replacing) {
+            case .cancelled: verifiedGeneration = nil
+            case .connected(let status):
                 verifiedGeneration = nil
+                connectionStatus = status
+            case .replacementRequired:
+                guard !Task.isCancelled else { return }
+                confirmReplacement = true
             }
-            connectionStatus = await onConnect(result)
         }
     }
 

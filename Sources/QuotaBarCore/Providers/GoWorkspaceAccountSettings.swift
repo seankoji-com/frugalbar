@@ -13,6 +13,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     private var remembered: [GoWorkspaceAccount: [GoWorkspaceAccount.Workspace]] = [:]
     private var migrated: Set<GoWorkspaceAccount> = []
     private var planless: [GoWorkspaceAccount: Set<String>]? = nil
+    private var approvedReplacements: Set<GoWorkspaceAccount>? = nil
 
     public init() {}
 
@@ -93,7 +94,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     /// retire the old sources together once every configured service is ready.
     @discardableResult
     public mutating func connect(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification,
-                                 requirements: LegacyRequirements) -> Bool {
+                                 requirements: LegacyRequirements, replaceEarlierConnections: Bool = false) -> Bool {
         guard case .workspaces(let readings) = verification,
               !readings.contains(where: { if case .failed = $0.usage { true } else { false } }) else { return false }
         let measured = readings.compactMap { reading in
@@ -101,13 +102,18 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         }
         guard !measured.isEmpty, Set(measured.map(\.id)).count == measured.count else { return false }
         let minimum = usesAccount(service) ? 0 : requirements.minimum(for: service)
-        guard usesAccount(service) || requirements.covers(measured, service: service) else { return false }
+        let coversEarlier = requirements.covers(measured, service: service)
+        guard usesAccount(service) || coversEarlier || replaceEarlierConnections else { return false }
+        var approvals = approvedReplacements ?? []
+        if !coversEarlier && replaceEarlierConnections { approvals.insert(service) }
+        else { approvals.remove(service) }
+        approvedReplacements = approvals
         updateWorkspaces(measured, for: service)
         for workspace in measured { remember(workspace, for: service) }
         if minimum == 0 { migrated.insert(service) }
         let ready = GoWorkspaceAccount.allCases.allSatisfy { account in
             if usesAccount(account) || requirements.minimum(for: account) == 0 { return true }
-            return requirements.covers(workspaces(for: account), service: account)
+            return isLinked(account) && (approvals.contains(account) || requirements.covers(workspaces(for: account), service: account))
         }
         if ready { migrated.formUnion(linked.keys) }
         return true
@@ -115,6 +121,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
 
     public mutating func disconnect(_ service: GoWorkspaceAccount) {
         linked[service] = nil
+        approvedReplacements?.remove(service)
     }
 
     mutating func updateWorkspaces(_ workspaces: [GoWorkspaceAccount.Workspace], for service: GoWorkspaceAccount) {

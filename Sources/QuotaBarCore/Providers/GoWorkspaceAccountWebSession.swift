@@ -42,7 +42,8 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         isManaging = true
         navigation = UUID()
         releaseWaiters()
-        open()
+        if directoryFailure == .credentialRejected { reloadSignIn() }
+        else { open() }
     }
 
     public func endManaging() { isManaging = false }

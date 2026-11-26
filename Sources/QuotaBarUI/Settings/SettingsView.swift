@@ -431,7 +431,7 @@ public struct SettingsView: View {
         }) { ClaudeMonthlyCreditConnectionView() }
         .sheet(item: $goAccount, onDismiss: refreshConnectedGoAccounts) { service in
             GoWorkspaceVerificationView(service: service, isLinked: goAccountSettings.isLinked(service),
-                onConnect: { await connectGoAccount(service, verification: $0) }, result: Binding(
+                onConnect: { await connectGoAccount(service, verification: $0, replacing: $1) }, result: Binding(
                 get: { goAccountChecks[service] }, set: { goAccountChecks[service] = $0 }))
         }
         .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
@@ -578,14 +578,16 @@ public struct SettingsView: View {
         }
     }
 
-    private func connectGoAccount(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification) async -> String? {
-        guard case .workspaces = verification else { return nil }
+    private func connectGoAccount(_ service: GoWorkspaceAccount, verification: GoWorkspaceAccount.Verification,
+                                  replacing: Bool) async -> GoWorkspaceConnectionOutcome {
+        guard case .workspaces = verification else { return .cancelled }
         let requirements = await GoWorkspaceAccountSettings.LegacyRequirements.read(snapshots: store?.snapshots ?? [])
-        guard !Task.isCancelled else { return nil }
+        guard !Task.isCancelled else { return .cancelled }
         let old = GoWorkspaceAccountSettings.load()
         var next = old
-        guard next.connect(service, verification: verification, requirements: requirements) else {
-            return "Use the account that includes your existing Go workspaces, then verify their quota readings."
+        guard next.connect(service, verification: verification, requirements: requirements,
+                           replaceEarlierConnections: replacing) else {
+            return replacing ? .cancelled : .replacementRequired
         }
         next.save()
         goAccountSettings = next
@@ -593,8 +595,8 @@ public struct SettingsView: View {
             next.usesAccount($0) && (!old.usesAccount($0) || $0 == service)
         }
         goAccountRefreshPending.formUnion(changed)
-        return next.usesAccount(service) ? "Connected. FrugalBar will discover new workspaces automatically."
-            : "Account verified. Connect the other service to switch both sets of readings."
+        return .connected(next.usesAccount(service) ? "Connected. FrugalBar will discover new workspaces automatically."
+            : "Account verified. Connect the other service to switch both sets of readings.")
     }
 
     private func disconnectGoAccount(_ service: GoWorkspaceAccount) async {

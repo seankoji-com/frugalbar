@@ -91,7 +91,7 @@ swift run
    - **Command Code**: Sign in with the `cmd` CLI (`cmd login`); enable CLI discovery and FrugalBar reads `~/.commandcode/auth.json`. A `user_…` API key can also be pasted directly, or set `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`.
    - **ClinePass**: Sign in with the Cline CLI (`cline auth`) or the Cline extension; enable CLI discovery and FrugalBar reads `~/.cline/data/settings/providers.json` (or `$CLINE_DATA_DIR`). A Cline API key from app.cline.bot can also be pasted directly, or set `CLINE_API_KEY` / `CLINEPASS_API_KEY`.
    - **Muse**: Sign in with the Muse Code CLI (`muse login`); enable CLI discovery and FrugalBar reads that login from the macOS Keychain. Paste the OAuth access token to skip discovery — the minted `api_key` is **not** accepted and answers 401. When the CLI response omits usage, connect the read-only portal session under **Settings → Muse → Muse portal quota** and select the team holding your subscription.
-   - **OpenDesign**: In **Settings → OpenDesign**, choose **Connect account** and sign in. Verify and confirm the detected workspaces. When upgrading, FrugalBar keeps the existing OpenCode and OpenDesign readings active until you verify and confirm the replacement account connections.
+   - **OpenDesign**: In **Settings → OpenDesign**, choose **Connect account** and sign in. Verify and confirm the detected workspaces. When upgrading, FrugalBar keeps the existing OpenCode and OpenDesign readings active until you verify and confirm the replacement account connections. If an earlier workspace cannot be matched, its connection stays active unless you explicitly replace it.
 
 Credentials are validated against live vendor endpoints upon saving to immediately catch typos or permission issues.
 

@@ -190,6 +190,26 @@ struct GoWorkspaceAccountTests {
         #expect(settings.usesAccount(.openDesign))
     }
 
+    @Test("Explicit replacement recovers an unreadable legacy connection without skipping another service")
+    func explicitReplacementRecoversMigration() {
+        var requirements = GoWorkspaceAccountSettings.LegacyRequirements(
+            openCodeCount: 5, openDesignCount: 1, openDesignIDs: [])
+        requirements.needsOpenDesignPrimaryReading = true
+        var settings = GoWorkspaceAccountSettings()
+        let automatic = settings.connect(.openDesign, verification: readings(["design-a"]), requirements: requirements)
+        #expect(!automatic)
+        #expect(!settings.isLinked(.openDesign))
+        let optedIn = settings.connect(.openDesign, verification: readings(["design-a"]), requirements: requirements,
+                                        replaceEarlierConnections: true)
+        #expect(optedIn)
+        #expect(settings.isLinked(.openDesign))
+        #expect(!settings.usesAccount(.openDesign))
+        let other = settings.connect(.openCode, verification: readings(["org_a", "org_b", "org_c", "org_d", "org_e"]),
+                                       requirements: requirements)
+        #expect(other)
+        #expect(settings.usesAccount(.openDesign) && settings.usesAccount(.openCode))
+    }
+
     @Test("Polling replaces legacy rows at cutover and drops the account rows on disconnect")
     func pollingUsesOnlyOneSource() async {
         let discovery = DiscoveredSource()
