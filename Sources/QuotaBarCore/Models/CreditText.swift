@@ -16,4 +16,37 @@ public enum CreditText {
         }.joined().reversed()
         return (negative ? "-" : "") + String(grouped)
     }
+
+    /// The same count shortened for a glance: 60,085 → "60k", 1,250,000 →
+    /// "1.3M" (owner, 26 Nov 2026). "60,085 credits" in a Wallet row is a
+    /// precision the vendor's own console does not print, and it forced the
+    /// amount column wider than any other line needs.
+    ///
+    /// Only figures at ten thousand and above shorten; below that the grouped
+    /// number is already short. The exact Decimal is still what the metric, the
+    /// history table and the inspector carry (`format`), so inspecting a figure
+    /// never loses digits.
+    public static func compact(_ value: Decimal) -> String {
+        let negative = value < 0
+        let magnitude = negative ? -value : value
+        let text: String
+        if magnitude >= 1_000_000 {
+            text = short(magnitude / 1_000_000, places: 1) + "M"
+        } else if magnitude >= 10_000 {
+            text = short(magnitude / 1_000, places: 0) + "k"
+        } else {
+            return format(value)
+        }
+        return (negative ? "-" : "") + text
+    }
+
+    /// One rounded figure at `places` decimals, with a trailing ".0" dropped so
+    /// "2M" is not printed as "2.0M".
+    private static func short(_ value: Decimal, places: Int) -> String {
+        var rounded = Decimal()
+        var raw = value
+        NSDecimalRound(&rounded, &raw, places, .plain)
+        let text = NSDecimalNumber(decimal: rounded).stringValue
+        return places > 0 && text.hasSuffix(".0") ? String(text.dropLast(2)) : text
+    }
 }

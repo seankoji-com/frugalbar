@@ -408,7 +408,7 @@ struct UXRenderTests {
         let tagged = WalletPresentation(
             snapshots: [plainGemini, midGemini, longGemini, staleBalance, midStale, staleClaude], now: now)
         #expect(tagged.rows.map(\.title) == [
-            "Gemini API", "Gemini API · Research", "Gemini API · research-burner-account@example.com",
+            "Gemini API cap", "Gemini API cap · Research", "Gemini API cap · research-burner-account@example.com",
             "OpenRouter", "Claude Extra usage · Ops", "Claude Extra usage · Platform Engineering Shared Seat",
         ])
         #expect(tagged.rows.map(\.tag) == ["configured", "configured", "configured",

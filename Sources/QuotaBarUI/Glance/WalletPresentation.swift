@@ -26,8 +26,11 @@ struct WalletPresentation: Equatable, Sendable {
         /// tick appears only when the metrics carry a period (reset and
         /// length); a credit that publishes only its expiry has none.
         case credit(DualBarMetrics)
-        /// Time through a month or billing period, not spend.
-        case elapsed(fraction: Double, countdown: String?)
+        /// Time through a month or billing period, not spend. `resetsAt` and
+        /// `windowLength` are the cycle the share was measured in, so the bar
+        /// can place its even-use mark (`DualBarMetrics.evenPace` needs both).
+        case elapsed(fraction: Double, countdown: String?,
+                     resetsAt: Date?, windowLength: TimeInterval?)
     }
 
     struct Row: Equatable, Sendable, Identifiable {
@@ -132,7 +135,9 @@ struct WalletPresentation: Equatable, Sendable {
                     // billing read, so a quota outage does not stale it and a
                     // failed billing read does even when quota is fresh.
                     tag: promo.isStale ? "last reading" : nil,
-                    figure: promo.amountText.map { "\($0)/mo" },
+                    // No "/mo" (owner, 26 Nov 2026): the meter under it is the
+                    // billing month and the spoken label still says monthly.
+                    figure: promo.amountText,
                     figureRole: promo.amountText == nil ? nil : "grant",
                     tone: promo.isExhausted ? .exhausted : .normal,
                     // The promo's own bar metrics: its period, so its tick.
@@ -141,14 +146,20 @@ struct WalletPresentation: Equatable, Sendable {
             }
             if let credit = p.monthlyCredit {
                 rows.append(Row(
-                    id: snapshot.id + "#console", vendor: snapshot.vendorId, title: titled("\(provider) Console"),
+                    // "Claude · Primary", not "Claude Console · Primary": the
+                    // Console is where the figure is read, not a second service
+                    // (owner, 26 Nov 2026).
+                    id: snapshot.id + "#console", vendor: snapshot.vendorId, title: titled(provider),
                     // Read by the Console billing session, not the quota
                     // poll: only its own failed read makes it stale.
                     tag: credit.isStale ? "last reading" : nil,
-                    figure: "\(credit.amountText)/mo",
+                    figure: credit.amountText,
                     figureRole: "credit",
                     // Time through the billing month, not spend (no spend is published).
-                    meter: credit.fraction.map { .elapsed(fraction: $0, countdown: credit.countdown) },
+                    meter: credit.fraction.map {
+                        .elapsed(fraction: $0, countdown: credit.countdown,
+                                 resetsAt: credit.periodEnd, windowLength: credit.periodLength)
+                    },
                     spoken: credit.spoken))
             }
             // Tickets ride the quota poll, so a failed poll carries them over:
@@ -156,10 +167,16 @@ struct WalletPresentation: Equatable, Sendable {
             // they wear its LAST READING tag like the rest of that read.
             let staleSuffix = staleTag != nil ? ", last reading, the last poll failed" : ""
             for (label, credits) in Self.planTicketGroups(p, snapshot: snapshot, now: now) {
+                // "Claude Fable", not "Claude Fable reset ticket" (owner,
+                // 26 Nov 2026): the gold ticket glyph already says what it is,
+                // and the row is not a second place to explain a reset. A
+                // plan-wide ticket keeps a word for the scope it clears.
+                let scope = label.hasSuffix(" reset") ? String(label.dropLast(" reset".count)) : label
+                let name = scope == "plan" ? "\(provider) reset" : "\(provider) \(scope)"
                 for index in 0..<credits.tickets {
                     rows.append(Row(
                         id: "\(snapshot.id)#ticket-\(label)-\(index)", vendor: snapshot.vendorId,
-                        title: titled("\(provider) \(label) ticket"),
+                        title: titled(name),
                         tag: staleTag,
                         figure: credits.expiryPhrase(at: index, now: credits.now),
                         symbol: "ticket.fill",
@@ -167,7 +184,7 @@ struct WalletPresentation: Equatable, Sendable {
                 }
                 if credits.overflow > 0 {
                     rows.append(Row(id: "\(snapshot.id)#ticket-\(label)-more", vendor: snapshot.vendorId,
-                                    title: titled("\(provider) \(label) tickets"), tag: staleTag,
+                                    title: titled(name), tag: staleTag,
                                     figure: "+\(credits.overflow) more", symbol: "ticket.fill",
                                     spoken: "\(credits.overflow) more" + staleSuffix))
                 }
@@ -176,19 +193,26 @@ struct WalletPresentation: Equatable, Sendable {
             // Each Google account's AI Studio key bills to its own Cloud
             // Billing account, so each has its own line (owner, 24 Nov 2026),
             // named for the account: one line per account however many of its
-            // routes carry the credit. Always tagged configured: it is the
-            // user's figure, never a reading.
+            // routes carry the credit. No CONFIGURED tag (owner, 26 Nov 2026):
+            // the row is only ever drawn for a figure the user typed, so the
+            // tag distinguished it from nothing, and the tooltip still says so.
             let geminiKey = snapshot.antigravityAccount?.id ?? "gemini"
             if !geminiCreditAccounts.contains(geminiKey), let credit = p.geminiAPICredit {
                 geminiCreditAccounts.insert(geminiKey)
                 let b = credit.budget
                 rows.append(Row(
                     id: "gemini-api-key:\(geminiKey)", vendor: .gemini,
-                    title: snapshot.antigravityAccount.map { "Gemini API · \($0.name)" } ?? "Gemini API",
-                    tag: "configured",
-                    figure: "\(b.amountText)/mo",
+                    // The title names the figure for what it is (owner, 26 Nov
+                    // 2026): the amount is the *cap* the account holder typed
+                    // from AI Studio, and the meter under it is elapsed calendar
+                    // time — never spend and never a remaining balance. Without
+                    // the word, "A$14.00" beside "MO 45%" read as credit left,
+                    // which is exactly the console figure it is not.
+                    title: snapshot.antigravityAccount.map { "Gemini API cap · \($0.name)" } ?? "Gemini API cap",
+                    figure: b.amountText,
                     figureRole: "cap",
-                    meter: .elapsed(fraction: b.fraction, countdown: b.countdown),
+                    meter: .elapsed(fraction: b.fraction, countdown: b.countdown,
+                                    resetsAt: b.periodEnd, windowLength: b.periodLength),
                     spoken: credit.spoken))
             }
         }

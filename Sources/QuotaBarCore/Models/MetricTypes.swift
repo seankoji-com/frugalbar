@@ -661,6 +661,20 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// so neither existing initializer, nor any other provider's call site, has
     /// to change.
     public var staleReading: StaleReading? = nil
+    /// The vendor dated its own account-level block: the block is a metered
+    /// pool running out, and that pool publishes when it refills, so its reset
+    /// is when the account can be used again.
+    ///
+    /// Command Code's `limited` is this. Its documentation says the monthly
+    /// credit pool is what gates requests ("your request budget refreshes at
+    /// the start of every billing cycle") and that the rolling windows only
+    /// throttle that included pool until on-demand credits take over, so with
+    /// the credit gauge spent the published cycle end is when work resumes.
+    /// OpenCode Go's `rate-limited` names no end: its windows' resets say when
+    /// each window turns over, never when the account-wide block lifts, which
+    /// is why that block keeps the default `false` and every surface withholds
+    /// its countdown.
+    public var accountBlockIsDated: Bool = false
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
@@ -710,6 +724,28 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// popover, the group subtitle and the inspector cannot disagree.
     public static let accountBlockedBadge = "Blocked"
     public var isAccountBlocked: Bool { badgeText == Self.accountBlockedBadge }
+
+    /// Whether `bar`'s published reset is the account block's own end: the
+    /// window the vendor itself blocked (OpenCode Go marks the monthly window
+    /// `rate-limited` and still sends when it frees), or any window when the
+    /// provider dated the block by the pool it used up (Command Code's credit
+    /// cycle, `accountBlockIsDated`).
+    ///
+    /// The one rule every surface reads before drawing a countdown under an
+    /// account block. The owner asked for exactly this twice (26 Nov 2026):
+    /// "⊘ MO 9d" on Command Code, then the same on OpenCode Go — withholding a
+    /// reset the vendor published left both rows with no way back.
+    public func accountBlockResetIsTheBlocksEnd(_ bar: DualBarMetrics) -> Bool {
+        guard isAccountBlocked else { return false }
+        return accountBlockIsDated || (bar.isBlocked && bar.resetsAt != nil)
+    }
+
+    /// The account block is dated by a reset we hold. False for a block on a
+    /// window that published no reset: then its end is unpublished, and no
+    /// surface may offer one.
+    public var accountBlockHasPublishedReturn: Bool {
+        isAccountBlocked && quotaBars.contains { accountBlockResetIsTheBlocksEnd($0) }
+    }
 
     /// `bar` as this account's block leaves it: blocked when the vendor
     /// blocked the whole account, whatever its own flag says. A billing
@@ -863,7 +899,8 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         latencyMs: Int? = nil,
         keyMasked: String? = nil,
         cliSource: String? = nil,
-        currencyBasis: CurrencyBasis? = nil
+        currencyBasis: CurrencyBasis? = nil,
+        accountBlockIsDated: Bool = false
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -883,6 +920,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.keyMasked = keyMasked
         self.cliSource = cliSource
         self.currencyBasis = currencyBasis
+        self.accountBlockIsDated = accountBlockIsDated
     }
 
 

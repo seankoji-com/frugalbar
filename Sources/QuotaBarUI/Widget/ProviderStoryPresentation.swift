@@ -194,13 +194,16 @@ struct ProviderStoryPresentation: Equatable, Sendable {
     /// The story window's reset. Under an account-wide block (Command Code's
     /// `limited`, set on the badge whether or not a window is blocked) the
     /// standing says the block's end is unpublished, so this names the window
-    /// the reset belongs to rather than reading as the account's return.
+    /// the reset belongs to rather than reading as the account's return —
+    /// unless the vendor dated the block (`accountBlockHasPublishedReturn`), in
+    /// which case the pool's own reset is that return.
     static func resetLine(name: String, resetWhen: String, pool: GlancePresentation.Pool, tone: Tone) -> Line {
-        Line(symbol: "arrow.clockwise",
-             text: pool.snapshot.isAccountBlocked
-                 ? "The \(name) window resets in \(resetWhen); the account block has no published end."
-                 : "It resets in \(resetWhen).",
-             tone: pool.snapshot.isAccountBlocked ? .unknown : tone)
+        let undatedBlock = pool.snapshot.isAccountBlocked && !pool.snapshot.accountBlockHasPublishedReturn
+        return Line(symbol: "arrow.clockwise",
+                    text: undatedBlock
+                        ? "The \(name) window resets in \(resetWhen); the account block has no published end."
+                        : "It resets in \(resetWhen).",
+                    tone: undatedBlock ? .unknown : tone)
     }
 
     /// ", resets in 4h", or, once that reset has passed, a clause that says the

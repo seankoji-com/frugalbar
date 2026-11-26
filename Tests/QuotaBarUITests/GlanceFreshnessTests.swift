@@ -96,6 +96,66 @@ struct GlanceFreshnessTests {
         #expect(summary.remedy?.contains("has not published when the block lifts") == true)
     }
 
+    @Test("a block the vendor dated shows its pool's reset, and every surface agrees")
+    func datedAccountBlockKeepsItsReset() throws {
+        // Command Code's real shape: both rolling windows read zero with no
+        // reset, the credit gauge is spent and publishes its billing-cycle end,
+        // and `limited` is set by that pool running out.
+        var limited = Fixtures.snapshot("commandcode", .commandcode, "Command Code", [
+            Fixtures.bar("5H", 0.0, resetsInHours: nil, windowHours: 5),
+            Fixtures.bar("WK", 0.0, resetsInHours: nil, windowHours: 168),
+            Fixtures.bar("MO", 0.9995, resetsInHours: 240, windowHours: 720),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        limited.accountBlockIsDated = true
+        let reset = now.addingTimeInterval(240 * 3600)
+
+        let glance = GlancePresentation(snapshots: [limited], now: now)
+        let pool = try #require(glance.pools.first)
+        #expect(pool.state == .spent)
+        #expect(pool.isBlocked)
+        #expect(pool.returnsAt == reset)
+        let back = try #require(glance.backSoon.first)
+        #expect(back.returnText == GlancePresentation.countdown(reset, now: now))
+
+        let grid = ProviderGridPresentation(snapshots: [limited], serviceOrder: [], now: now)
+        let gridPool = try #require(grid.groups.first?.pools.first)
+        // The cell keeps the reset (so its countdown is drawn) and still reads
+        // as the block, not as a healthy bar.
+        #expect(gridPool.windows[.monthly]?.bar.resetsAt == reset)
+        #expect(gridPool.windows[.monthly]?.bar.isBlocked == true)
+        #expect(grid.groups.first?.nextReturn == reset)
+
+        let summary = MetricDetailPresentation(snapshot: limited, now: now).summary
+        #expect(summary.state == .blocked)
+        #expect(summary.resetText != nil)
+        #expect(summary.remedy?.contains("until the pool it used up resets") == true)
+    }
+
+    @Test("a window the vendor blocked itself keeps its published reset in the cell")
+    func vendorBlockedWindowKeepsItsCellReset() throws {
+        // The reported OpenCode Go row: the account badge is set and the
+        // monthly window the vendor marked `rate-limited` (and still gave a
+        // percentage and a reset) drew "⊘ MO" with no countdown at all.
+        let limited = Fixtures.snapshot("opencode-go:legacy", .opencode, "OpenCode Go", [
+            Fixtures.bar("5H", 0.0, resetsInHours: 5, windowHours: 5),
+            Fixtures.bar("WK", 0.0, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 1.0, resetsInHours: 336, windowHours: 720, blocked: true),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        let reset = now.addingTimeInterval(336 * 3600)
+
+        let grid = ProviderGridPresentation(snapshots: [limited], serviceOrder: [], now: now)
+        let group = try #require(grid.groups.first)
+        let pool = try #require(group.pools.first)
+        let month = try #require(pool.windows[.monthly])
+        // Still the block, and now its own date.
+        #expect(month.bar.isBlocked)
+        #expect(month.bar.resetsAt == reset)
+        #expect(grid.countdown(month.bar.resetsAt) != nil)
+        #expect(group.nextReturn == reset)
+        // The sibling windows the badge alone blocked keep no countdown.
+        #expect(pool.windows[.weekly]?.bar.resetsAt == nil)
+    }
+
     @Test("the burndown draws no projection for a pool that is blocked or stale now")
     func burndownCurrentForSnapshot() {
         let reset = now.addingTimeInterval(120 * 3600)

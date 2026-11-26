@@ -60,7 +60,9 @@ public struct APICreditEntryPresentation: Equatable, Sendable {
     static func figure(for metric: MetricType) -> String {
         switch metric {
         case .credits(let remaining, let unitName):
-            remaining.map { "\(CreditText.format($0)) \(unitName)" } ?? "Unlimited"
+            // Compact at a glance (owner, 26 Nov 2026): "60k credits", not
+            // "60,085 credits". The inspector still prints the exact count.
+            remaining.map { "\(CreditText.compact($0)) \(unitName)" } ?? "Unlimited"
         case .currency(let balance, _, _, let code):
             // The same rule the money rows print with, so the card's figure and
             // its own detail note ("$200.00 monthly limit") cannot disagree.

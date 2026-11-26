@@ -264,8 +264,12 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         let percent = focus?.primaryFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) }
         // Under an account block no window's reset is the account's return,
         // so the hero names none and says the unblock time is unpublished.
+        // A block the vendor dated (`accountBlockHasPublishedReturn`) is the
+        // exception: the pool it ran out of — or the window it blocked itself —
+        // publishes when it refills, and that date is the account's return.
         let accountBlocked = snapshot.isAccountBlocked
-        let reset = accountBlocked ? nil
+        let blockIsDated = accountBlocked && snapshot.accountBlockHasPublishedReturn
+        let reset = accountBlocked && !blockIsDated ? nil
             : (focus?.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) }
                ?? (focus == nil ? snapshot.resetsAt.map { ResetCountdownBadge.compactDescription($0, now: now) } : nil))
         let pace: String? = {
@@ -273,7 +277,9 @@ public struct MetricDetailPresentation: Equatable, Sendable {
             return accountBlocked ? nil : focus.flatMap(paceVerdict(for:))
         }()
         let remedy: String? = accountBlocked
-            ? "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own."
+            ? (blockIsDated
+                ? "The vendor blocked this account until the pool it used up resets. The reset above is that pool's own published date."
+                : "The vendor blocked this account and has not published when the block lifts. The window resets below are each window's own.")
             : nil
         // A provider with no window still has a measured figure worth leading
         // with: a balance, a count. A subscription tier is not a figure.

@@ -58,8 +58,11 @@ Billing tab and enters in **Settings → Antigravity → Gemini API prepaid cred
 | Monthly spend cap | The project's spend limit | AI Studio → Billing |
 
 Settings records all three figures. The popover draws only the spend cap, as
-the account's own **Gemini API · <account>** line in the **Wallet**, tagged
-CONFIGURED. The prepaid balance and monthly credit remain Settings values and
+the account's own **Gemini API cap · <account>** line in the
+**Wallet**. The title names the figure for what it is, because the amount is
+the cap and never a remaining balance (the CONFIGURED tag was removed on 26
+November 2026; the tooltip and VoiceOver label still say "configured" and give
+the date it was saved). The prepaid balance and monthly credit remain Settings values and
 are not drawn.
 
 The spend cap is drawn as one Wallet line: the title, an elapsed-month meter
@@ -69,7 +72,10 @@ key, and the prepaid balance is a separate pool drawn down after the monthly
 grant, so neither can serve as the numerator. The visible figure is `MO 63%`;
 the tooltip and VoiceOver label say "63% of the calendar month elapsed", and
 the countdown says how many days are left in the month. The line uses the
-informational colour and draws no quota pace marker.
+informational colour like every Wallet meter and draws no fill — there is no
+spend to fill it with — so its track carries only the even-use marker, placed
+at the elapsed share of the month (the month's own position, measured from the
+cycle's start and end, not a spend figure).
 
 For example, a project with an A$30 monthly spend cap records that cap as an
 A$30 API credit line; the bar shows where in the calendar month you are, not a

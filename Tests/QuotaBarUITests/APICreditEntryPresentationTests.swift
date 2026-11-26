@@ -56,16 +56,15 @@ struct APICreditEntryPresentationTests {
         #expect(p.spoken(stale: true) != p.spoken)
     }
 
-    /// A six-figure count keeps its grouping so it can be read at a glance, and
-    /// strips back to exactly the figure the vendor published — whatever
-    /// separator this machine's locale uses.
-    @Test("a large credit count round-trips and is still not money")
-    func largeCreditCountRoundTrips() {
+    /// A large count is shortened for a glance ("63k credits", owner, 26 Nov
+    /// 2026) and is never money. The exact Decimal stays on the metric, which
+    /// `CreditText.format` still prints for the inspector.
+    @Test("a large credit count is compact at a glance and is still not money")
+    func largeCreditCountIsCompact() {
         let p = APICreditEntryPresentation(entry: entry(.credits(remaining: 62_500, unitName: "credits")))
-        #expect(p.figure.hasSuffix("credits"))
+        #expect(p.figure == "63k credits")
         #expect(!p.figure.contains("$"))
-        let digits = p.figure.compactMap { $0.isNumber ? $0 : nil }
-        #expect(Int(String(digits)) == 62_500)
+        #expect(CreditText.format(62_500) == "62,500")
     }
 
     /// The vendor saying the pool is unlimited is stated, not counted: a count

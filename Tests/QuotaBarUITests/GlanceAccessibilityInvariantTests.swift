@@ -178,7 +178,6 @@ struct GlanceAccessibilityInvariantTests {
              resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(card)),
             ("spent stripes on spent wash (row hover)", resolve(Theme.errorBold),
              resolve(Theme.errorBold.opacity(SpentTrack.baseOpacity)).over(resolve(Theme.rowHover).over(card))),
-            ("elapsed meter outline on card", resolve(Theme.primary.opacity(GlanceColors.elapsedOutlineOpacity)).over(card), card),
             // A track's extent: its hairline edge against the row and hover.
             ("usage track edge on card", resolve(Theme.outline.opacity(GlanceColors.trackEdgeOpacity)).over(card), card),
             ("usage track edge on hovered row",

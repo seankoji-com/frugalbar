@@ -116,12 +116,36 @@ struct GlanceDeliveryFixTests {
 
     @Test("an account-blocked story names the window its reset belongs to")
     func storyAccountBlockedNamesWindowReset() throws {
-        let snapshot = GlanceFixtures.snapshot("commandcode", .commandcode, "Command Code", [
-            GlanceFixtures.bar("MO", 0.4, resetsInHours: 39, windowHours: 720, blocked: true),
+        // A badge block no window explains: nothing published when it lifts.
+        let snapshot = GlanceFixtures.snapshot("opencode-go:alpha", .opencode, "Alpha", [
+            GlanceFixtures.bar("MO", 0.4, resetsInHours: 39, windowHours: 720),
         ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
         let s = try story(snapshot)
         #expect(!s.lines.contains { $0.text.hasPrefix("It resets in") })
         #expect(s.lines.contains { $0.text.contains("the account block has no published end") })
+    }
+
+    @Test("a block the vendor dated by a window tells that reset as the block's end")
+    func storyVendorBlockedWindowDatesTheBlock() throws {
+        // OpenCode Go's rate-limited month: the vendor blocked the window and
+        // published when it frees.
+        let snapshot = GlanceFixtures.snapshot("opencode-go:alpha", .opencode, "Alpha", [
+            GlanceFixtures.bar("MO", 1.0, resetsInHours: 39, windowHours: 720, blocked: true),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        let s = try story(snapshot)
+        #expect(s.lines.contains { $0.text.hasPrefix("It resets in") })
+        #expect(!s.lines.contains { $0.text.contains("the account block has no published end") })
+    }
+
+    @Test("a block the vendor dated tells its pool's reset as the block's end")
+    func storyDatedAccountBlock() throws {
+        var snapshot = GlanceFixtures.snapshot("commandcode", .commandcode, "Command Code", [
+            GlanceFixtures.bar("MO", 0.9995, resetsInHours: 39, windowHours: 720),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        snapshot.accountBlockIsDated = true
+        let s = try story(snapshot)
+        #expect(s.lines.contains { $0.text.hasPrefix("It resets in") })
+        #expect(!s.lines.contains { $0.text.contains("the account block has no published end") })
     }
 
     private func read(points: [BalancePoint]?) -> MetricDetailModalView.BalanceSeriesRead {

@@ -230,7 +230,12 @@ public struct GlancePresentation: Equatable, Sendable {
         // An account the vendor blocked on its badge has no published return:
         // its windows' resets say when each window turns over, not when the
         // account-wide block lifts, so neither is offered as the pool's return.
-        let returnsAt: Date? = accountBlocked || spentResets.contains(where: { $0 == nil })
+        // Unless the vendor dated the block — the pool it ran out of
+        // (`accountBlockIsDated`) or the window it blocked itself — then the
+        // reset we hold is exactly that date, and withholding it left Command
+        // Code and OpenCode Go showing a block with no reset at all.
+        let blockIsDated = accountBlocked && snapshot.accountBlockHasPublishedReturn
+        let returnsAt: Date? = (accountBlocked && !blockIsDated) || spentResets.contains(where: { $0 == nil })
             ? nil : spentResets.compactMap { $0 }.max()
         let paidOpen = supplementary.contains {
             $0.allowanceRole == .paidOverage && !$0.isBlocked
