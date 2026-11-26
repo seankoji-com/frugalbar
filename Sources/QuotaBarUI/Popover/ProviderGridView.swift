@@ -32,9 +32,12 @@ struct ProviderGridView: View {
                     Text("% used").foregroundStyle(Theme.outline)
                 } figures: {
                     columns { column in
+                        // Centred over its column (owner, 26 Nov 2026): the
+                        // trailing edge sat over the next column's dashes and
+                        // read as a label for the wrong window.
                         Text(column.label)
                             .foregroundStyle(Theme.outline)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                 }
                 .font(.system(size: 10, weight: .semibold))
@@ -96,22 +99,20 @@ struct ProviderGridView: View {
                         group.summary(for: column).map { (column, $0) }
                     }
                     if published.count == 1, let only = published.first {
-                        // The token travels with the bar (owner, 26 Nov 2026):
-                        // across the whole grid the column no longer says
-                        // which period the one published window is.
-                        HStack(spacing: 7) {
-                            Text(only.0.label)
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.outline)
-                            summaryCell(only.1, column: only.0,
-                                        coverage: group.coverage(for: only.0),
-                                        stale: group.pools.count == 1 && group.pools[0].isStale,
-                                        dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
-                        }
+                        // No token beside the bar (owner, 26 Nov 2026): the
+                        // countdown says which window it is — 6d is weekly,
+                        // 29d monthly, 3h the 5-hour one — and the spoken
+                        // label still names it. The bar keeps the whole grid.
+                        summaryCell(only.1, column: only.0,
+                                    coverage: group.coverage(for: only.0),
+                                    spent: group.spentCount(for: only.0),
+                                    stale: group.pools.count == 1 && group.pools[0].isStale,
+                                    dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                     } else {
                         columns { column in
                             if let summary = group.summary(for: column) {
                                 summaryCell(summary, column: column, coverage: group.coverage(for: column),
+                                            spent: group.spentCount(for: column),
                                             stale: group.pools.count == 1 && group.pools[0].isStale,
                                             dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                             }
@@ -384,7 +385,9 @@ struct ProviderGridView: View {
             let reset: Date?
             switch summary {
             case .average(let remaining, let reported, let count):
+                let spent = group.spentCount(for: column)
                 result = "\(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
+                    + (spent > 0 ? ", \(spent) of them spent" : "")
                 reset = nil
             case .spent(let next, let exhausted, let blocked):
                 result = exhausted && !blocked ? "all spent" : "all blocked or spent"
@@ -408,7 +411,7 @@ struct ProviderGridView: View {
 
     @ViewBuilder
     private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn,
-                             coverage: [Bool], stale: Bool, dimmed: Bool = false) -> some View {
+                             coverage: [Bool], spent: Int, stale: Bool, dimmed: Bool = false) -> some View {
         switch summary {
         case .window(let window):
             windowCell(window, label: column.label, stale: stale, dimmed: dimmed || stale)
@@ -419,33 +422,44 @@ struct ProviderGridView: View {
         case .average(let remaining, let reported, let count):
             // A bar, not a percentage (owner, 26 Nov 2026): the group's share
             // used is the same figure every pool row draws as a track, and the
-            // "avg · 2/4" caption becomes one dot per pool — green where it
-            // reported this window, red where it did not.
+            // "avg · 2/4" caption becomes one dot per pool — green where that
+            // pool brings headroom to this window, red where it brings none.
             let window = GlancePresentation.window(
                 for: DualBarMetrics(primaryFraction: 1 - remaining, label: column.label),
                 now: presentation.now)
             VStack(alignment: .leading, spacing: 3) {
                 UsageBar(window: window, height: trackHeight)
                 // The dots follow the pools' own order, so each one maps to a
-                // row; a count alone would colour the first N by index.
-                coverageDots(coverage.count == count
-                    ? coverage
-                    : Array(repeating: true, count: reported)
-                        + Array(repeating: false, count: max(count - reported, 0)))
+                // row; a count alone would colour the first N by index. A short
+                // array pads red, never green: an unknown pool does not get the
+                // colour that claims headroom (review of #226).
+                coverageDots(coverage.count >= count
+                    ? Array(coverage.prefix(count))
+                    : coverage + Array(repeating: false, count: count - coverage.count))
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools")
+            .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
+                + (spent > 0 ? ", \(spent) of them spent" : ""))
         }
     }
 
-    /// One dot per pool in an averaged column: green where it reported the
-    /// window, red where it did not. The count is what "avg · 2/4" said, in a
-    /// mark rather than a second line of 9.5pt text.
+    /// One dot per pool in an averaged column: filled where the pool brings
+    /// headroom of its own to this window, a hollow ring where it brings none —
+    /// no reading, a blocked or stale one, or spent on a window at least as
+    /// long. A pool spent on a longer window still counts toward the average,
+    /// at zero; its dot is the ring all the same. The shape carries the state
+    /// as well as the colour, which is what the row's spoken label says in
+    /// words (WCAG 1.4.1: colour alone is not a channel).
     private func coverageDots(_ coverage: [Bool]) -> some View {
         HStack(spacing: 2.5) {
             ForEach(Array(coverage.enumerated()), id: \.offset) { _, reported in
                 Circle()
-                    .fill(reported ? Theme.healthy : Theme.error)
+                    .fill(reported ? Theme.healthy : .clear)
+                    .overlay {
+                        if !reported {
+                            Circle().strokeBorder(Theme.error, lineWidth: 1)
+                        }
+                    }
                     .frame(width: 4.5, height: 4.5)
             }
         }

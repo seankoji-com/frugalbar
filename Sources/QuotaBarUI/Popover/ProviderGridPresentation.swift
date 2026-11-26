@@ -52,10 +52,38 @@ struct ProviderGridPresentation {
             return nil
         }
 
+        /// What the row draws: a 5H column a spent week hides from its row.
+        /// The group's columns do not read this — a window the row hides is
+        /// still counted there, at zero (`headroom(for:)`).
         var displayWindows: [WindowColumn: Window] {
             guard let week = windows[.weekly], WindowGridPresentation.isExhausted(week.bar),
                   windows[.fiveHour]?.isSpent != true else { return windows }
             return windows.filter { $0.key != .fiveHour }
+        }
+
+        /// The share of `column` this pool brings to the group's average: its
+        /// own published figure, or 0 when a longer window is spent or blocked
+        /// — a pool that cannot take a job has no shorter headroom either, so
+        /// a spent month empties the week and the 5H window, and a spent week
+        /// empties the 5H window (owner, 26 Nov 2026). Exhaustion runs downward
+        /// only: a spent 5H window resets within the hour and leaves the week
+        /// and the month alone.
+        ///
+        /// Nil when the pool published nothing for the column, is not current,
+        /// or the vendor blocked that window itself: a blocked figure is the
+        /// vendor's, not headroom.
+        func headroom(for column: WindowColumn) -> Double? {
+            guard isCurrent, let window = windows[column], !window.bar.isBlocked else { return nil }
+            let empties = window.isSpent
+                || windows.contains { $0.key.rawValue > column.rawValue && $0.value.isSpent }
+            return empties ? 0 : window.remaining
+        }
+
+        /// Whether this pool brings headroom of its own to `column` — the
+        /// green dot under the group's bar. Red is "nothing here": no reading,
+        /// a stale or blocked one, or spent on a window at least this long.
+        func offersHeadroom(for column: WindowColumn) -> Bool {
+            (headroom(for: column) ?? 0) > 0
         }
 
         init(snapshot: QuotaSnapshot, group: VendorIdentifier, now: Date) {
@@ -188,26 +216,27 @@ struct ProviderGridPresentation {
                 .compactMap { $0 }
         }
 
-        /// Which pools' figures fed the average for `column`, in the order the
-        /// group lists them — the same order the expanded rows use, and the same
-        /// set the cell's "across N of M pools" counts. The averaged cell draws
-        /// one dot per pool from this, so a dot maps to a pool instead of
-        /// colouring the first N of them by count alone.
+        /// One dot per pool, in the order the group lists them — the same order
+        /// the expanded rows use. Green where the pool brings headroom of its
+        /// own to the window, red where it gives you nothing here.
         func coverage(for column: WindowColumn) -> [Bool] {
-            pools.map { pool in
-                guard pool.freshness == .current,
-                      let window = pool.displayWindows[column] else { return false }
-                // A blocked window's figure is the vendor's, not headroom, so
-                // it is not averaged (`summary(for:)`).
-                return !window.bar.isBlocked && window.remaining != nil
-            }
+            pools.map { $0.offersHeadroom(for: column) }
+        }
+
+        /// Pools counted in the column's average at 0 — spent, or emptied by a
+        /// spent longer window. They are the red dots that still count toward
+        /// the average, and the spoken label says how many there are.
+        func spentCount(for column: WindowColumn) -> Int {
+            pools.filter { $0.headroom(for: column) == 0 }.count
         }
 
         func summary(for column: WindowColumn) -> Summary? {
             if pools.count == 1 { return pools[0].windows[column].map(Summary.window) }
-            // What the rows draw (`displayWindows`): a 5H column a spent week
-            // hides from its row must not be averaged into the group's 5H.
-            let published = pools.filter { $0.freshness == .current }.compactMap { $0.displayWindows[column] }
+            // What every column counts (`headroom(for:)`), not what a row
+            // draws: a pool whose month is spent fills its row's lane alone,
+            // but its week and 5H windows still count here as exhausted.
+            let current = pools.filter { $0.freshness == .current }
+            let published = current.compactMap { $0.windows[column] }
             guard !published.isEmpty else { return nil }
             if published.count == pools.count, published.allSatisfy(\.isSpent) {
                 return .spent(
@@ -216,12 +245,10 @@ struct ProviderGridPresentation {
                     includesBlocked: published.contains { $0.bar.isBlocked }
                 )
             }
-            // A blocked window's figure is what the vendor reported, not
-            // capacity anyone can use, so it is not averaged as headroom.
-            let remaining = published.filter { !$0.bar.isBlocked }.compactMap(\.remaining)
-            guard !remaining.isEmpty else { return nil }
-            return .average(remaining: remaining.reduce(0, +) / Double(remaining.count),
-                            reported: remaining.count, count: pools.count)
+            let headroom = current.compactMap { $0.headroom(for: column) }
+            guard !headroom.isEmpty else { return nil }
+            return .average(remaining: headroom.reduce(0, +) / Double(headroom.count),
+                            reported: headroom.count, count: pools.count)
         }
     }
 

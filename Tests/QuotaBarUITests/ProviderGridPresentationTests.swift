@@ -18,9 +18,10 @@ struct ProviderGridPresentationTests {
             return
         }
         #expect(abs(amount - 0.3425) < 0.0001)
-        // Secondary's spent week hides its 5H column from its row, so the
-        // group's 5H averages only the 5H figure a row actually draws.
-        #expect(claude.summary(for: .fiveHour) == .average(remaining: 1, reported: 1, count: 4))
+        // Secondary's spent week hides its 5H column from its row and empties
+        // it in the group: a pool spent on the week has no 5H headroom, so the
+        // group's 5H is Account 2's full window plus Secondary's zero.
+        #expect(claude.summary(for: .fiveHour) == .average(remaining: 0.5, reported: 2, count: 4))
         #expect(claude.summary(for: .monthly) == nil)
 
         let deepSeek = try #require(grid.groups.first { $0.id == .deepseek })
@@ -36,17 +37,15 @@ struct ProviderGridPresentationTests {
             return
         }
         // The three blocked OpenCode workspaces' reported figures are not
-        // headroom, so they are not averaged; they still count toward the
-        // pools, and the cell's "3/7" coverage says so.
+        // headroom, so they are not averaged; the spent Command Code month is
+        // counted, at zero. All six publishers still count toward the pools.
         #expect(measured == 3 && poolCount == 7)
-        // The averaged cell's dots follow the pools' own order, so each dot
-        // maps to a row: the four blocked workspaces are false even where a
-        // mid-list pool reported (review advisory on #224).
-        // A dot per pool, in pool order: green exactly where that pool's figure
-        // is in the average, so the dots and the spoken "N of M" agree.
+        // One dot per pool, in pool order: green exactly where that pool
+        // brings headroom of its own to the window. A spent month is red even
+        // though it counts toward the average at zero (owner, 26 Nov 2026).
         let coverage = deepSeek.coverage(for: .monthly)
-        #expect(coverage.filter { $0 }.count == measured)
-        #expect(coverage.enumerated().filter { $0.element }.map(\.offset) == [2, 4, 6])
+        #expect(coverage.enumerated().filter { $0.element }.map(\.offset) == [2, 4])
+        #expect(deepSeek.spentCount(for: .monthly) == 1)
     }
 
     @Test("all confirmed spent uses the first window reset, and stale or missing readings cannot exhaust the group")
@@ -144,6 +143,76 @@ struct ProviderGridPresentationTests {
         let gemini = try #require(grid.groups.first)
         #expect(gemini.title == "Gemini")
         #expect(gemini.pools.map(\.source) == ["Argon · AGY", "Argon · CLI Proxy", "Gemini · CLI Proxy"])
+    }
+
+    @Test("a pool spent on a longer window counts as exhausted in every shorter column")
+    func longerWindowExhaustionCarriesDown() throws {
+        let monthBlocked = Fixtures.snapshot("opencode-go:month-blocked", .opencode, "Month blocked", [
+            Fixtures.bar("5H", 0.0, resetsInHours: 3, windowHours: 5),
+            Fixtures.bar("WK", 0.1, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 1.0, resetsInHours: 400, windowHours: 720, blocked: true),
+        ])
+        let half = Fixtures.snapshot("opencode-go:half", .opencode, "Half", [
+            Fixtures.bar("5H", 0.5, resetsInHours: 3, windowHours: 5),
+            Fixtures.bar("WK", 0.5, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 0.5, resetsInHours: 400, windowHours: 720),
+        ])
+        let month = try #require(presentation([monthBlocked, half]).groups.first { $0.id == .deepseek })
+
+        // A blocked figure is still not averaged as headroom in its own
+        // column: the month bar is the usable pools' month, and its dot is red.
+        #expect(month.summary(for: .monthly) == .average(remaining: 0.5, reported: 1, count: 2))
+        #expect(month.coverage(for: .monthly) == [false, true])
+        // But the blocked month empties the week and the 5-hour window too: a
+        // plan that cannot run has no shorter headroom, so both averages count
+        // that pool as exhausted (0) instead of averaging its comfortable 0%
+        // and 10% figures (owner, 26 Nov 2026).
+        #expect(month.summary(for: .weekly) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(month.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(month.coverage(for: .weekly) == [false, true])
+        #expect(month.coverage(for: .fiveHour) == [false, true])
+
+        // Same downward rule for a spent week: the 5-hour column counts it as
+        // exhausted, and the month is untouched by a shorter window.
+        let weekSpent = Fixtures.snapshot("opencode-go:week-spent", .opencode, "Week spent", [
+            Fixtures.bar("5H", 0.0, resetsInHours: 3, windowHours: 5),
+            Fixtures.bar("WK", 1.0, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 0.1, resetsInHours: 400, windowHours: 720),
+        ])
+        let week = try #require(presentation([weekSpent, half]).groups.first { $0.id == .deepseek })
+        #expect(week.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(week.coverage(for: .fiveHour) == [false, true])
+        #expect(week.summary(for: .monthly) == .average(remaining: 0.7, reported: 2, count: 2))
+        #expect(week.coverage(for: .monthly) == [true, true])
+
+        // A spent 5-hour window is exhausted in its own column and nowhere
+        // else: it resets within the hour.
+        let fiveSpent = Fixtures.snapshot("opencode-go:5h-spent", .opencode, "5H spent", [
+            Fixtures.bar("5H", 1.0, resetsInHours: 0.5, windowHours: 5),
+            Fixtures.bar("WK", 0.2, resetsInHours: 100, windowHours: 168),
+            Fixtures.bar("MO", 0.1, resetsInHours: 400, windowHours: 720),
+        ])
+        let five = try #require(presentation([fiveSpent, half]).groups.first { $0.id == .deepseek })
+        #expect(five.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(five.coverage(for: .fiveHour) == [false, true])
+        #expect(five.summary(for: .weekly) == .average(remaining: 0.65, reported: 2, count: 2))
+
+        // A month the vendor blocked while reporting 40% used is no headroom
+        // either: the block, not the percentage, is what stops the pool. This
+        // case would stay green if only measured exhaustion carried downward.
+        let monthBlockedBelowThreshold = Fixtures.snapshot(
+            "opencode-go:month-blocked-low", .opencode, "Month blocked 40%", [
+                Fixtures.bar("5H", 0.0, resetsInHours: 3, windowHours: 5),
+                Fixtures.bar("WK", 0.1, resetsInHours: 100, windowHours: 168),
+                Fixtures.bar("MO", 0.4, resetsInHours: 400, windowHours: 720, blocked: true),
+            ])
+        let blockedLow = try #require(presentation([monthBlockedBelowThreshold, half])
+            .groups.first { $0.id == .deepseek })
+        #expect(blockedLow.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(blockedLow.summary(for: .weekly) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(blockedLow.coverage(for: .fiveHour) == [false, true])
+        // Its own blocked month is still not averaged at all (#224's rule).
+        #expect(blockedLow.summary(for: .monthly) == .average(remaining: 0.5, reported: 1, count: 2))
     }
 
     private func presentation(_ snapshots: [QuotaSnapshot]) -> ProviderGridPresentation {
