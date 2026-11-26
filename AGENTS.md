@@ -555,10 +555,12 @@ below two readings.
 The group
 averages use only fresh figures in the same window and are drawn as bars, not
 as percentages (owner, 26 Nov 2026): an averaged column draws the same
-`UsageBar` a pool row draws, with one dot per pool underneath — green where
-that pool brings headroom of its own to the window, red where it brings none
-(no reading, a stale or blocked one, or spent on a window at least as long) —
-in place of the old "avg · 2/4" caption. Exhaustion carries downward only: a
+`UsageBar` a pool row draws, with one dot per pool underneath — filled where
+that pool brings headroom of its own to the window, a hollow ring where it
+brings none (no reading, a stale or blocked one, or spent on a window at least
+as long) — in place of the old "avg · 2/4" caption. The shape carries the state
+as well as the colour, so the mark does not rest on colour alone. Exhaustion
+carries downward only: a
 pool spent on its month counts as 100% exhausted in the week and 5H averages
 (and a spent week in the 5H one), so a group's short windows cannot look
 comfortable because the pools that could serve them are dead; a spent 5H

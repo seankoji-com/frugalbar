@@ -408,11 +408,12 @@ struct ProviderGridView: View {
             VStack(alignment: .leading, spacing: 3) {
                 UsageBar(window: window, height: trackHeight)
                 // The dots follow the pools' own order, so each one maps to a
-                // row; a count alone would colour the first N by index.
-                coverageDots(coverage.count == count
-                    ? coverage
-                    : Array(repeating: true, count: reported)
-                        + Array(repeating: false, count: max(count - reported, 0)))
+                // row; a count alone would colour the first N by index. A short
+                // array pads red, never green: an unknown pool does not get the
+                // colour that claims headroom (review of #226).
+                coverageDots(coverage.count >= count
+                    ? Array(coverage.prefix(count))
+                    : coverage + Array(repeating: false, count: count - coverage.count))
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
@@ -420,16 +421,23 @@ struct ProviderGridView: View {
         }
     }
 
-    /// One dot per pool in an averaged column: green where the pool brings
-    /// headroom of its own to this window, red where it brings none — no
-    /// reading, a blocked or stale one, or spent on a window at least as long.
-    /// A pool spent on a longer window still counts toward the average, at
-    /// zero; its dot is red all the same.
+    /// One dot per pool in an averaged column: filled where the pool brings
+    /// headroom of its own to this window, a hollow ring where it brings none —
+    /// no reading, a blocked or stale one, or spent on a window at least as
+    /// long. A pool spent on a longer window still counts toward the average,
+    /// at zero; its dot is the ring all the same. The shape carries the state
+    /// as well as the colour, which is what the row's spoken label says in
+    /// words (WCAG 1.4.1: colour alone is not a channel).
     private func coverageDots(_ coverage: [Bool]) -> some View {
         HStack(spacing: 2.5) {
             ForEach(Array(coverage.enumerated()), id: \.offset) { _, reported in
                 Circle()
-                    .fill(reported ? Theme.healthy : Theme.error)
+                    .fill(reported ? Theme.healthy : .clear)
+                    .overlay {
+                        if !reported {
+                            Circle().strokeBorder(Theme.error, lineWidth: 1)
+                        }
+                    }
                     .frame(width: 4.5, height: 4.5)
             }
         }

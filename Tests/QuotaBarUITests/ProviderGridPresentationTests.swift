@@ -196,6 +196,23 @@ struct ProviderGridPresentationTests {
         #expect(five.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
         #expect(five.coverage(for: .fiveHour) == [false, true])
         #expect(five.summary(for: .weekly) == .average(remaining: 0.65, reported: 2, count: 2))
+
+        // A month the vendor blocked while reporting 40% used is no headroom
+        // either: the block, not the percentage, is what stops the pool. This
+        // case would stay green if only measured exhaustion carried downward.
+        let monthBlockedBelowThreshold = Fixtures.snapshot(
+            "opencode-go:month-blocked-low", .opencode, "Month blocked 40%", [
+                Fixtures.bar("5H", 0.0, resetsInHours: 3, windowHours: 5),
+                Fixtures.bar("WK", 0.1, resetsInHours: 100, windowHours: 168),
+                Fixtures.bar("MO", 0.4, resetsInHours: 400, windowHours: 720, blocked: true),
+            ])
+        let blockedLow = try #require(presentation([monthBlockedBelowThreshold, half])
+            .groups.first { $0.id == .deepseek })
+        #expect(blockedLow.summary(for: .fiveHour) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(blockedLow.summary(for: .weekly) == .average(remaining: 0.25, reported: 2, count: 2))
+        #expect(blockedLow.coverage(for: .fiveHour) == [false, true])
+        // Its own blocked month is still not averaged at all (#224's rule).
+        #expect(blockedLow.summary(for: .monthly) == .average(remaining: 0.5, reported: 1, count: 2))
     }
 
     private func presentation(_ snapshots: [QuotaSnapshot]) -> ProviderGridPresentation {
