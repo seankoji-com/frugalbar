@@ -727,36 +727,42 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// or the vendor blocked this very window and still published when it
     /// frees (OpenCode Go marks the monthly window `rate-limited`).
     ///
-    /// A window the *badge* alone blocked never qualifies — its reset says
-    /// when that window turns over, not when the account comes back. The owner
-    /// asked for the dated case twice (26 Nov 2026): "⊘ MO 9d" on Command Code,
-    /// then the same on OpenCode Go; withholding a published reset left both
-    /// rows with no way back.
+    /// Only a **plan** window qualifies. A bonus or paid-overage allowance is
+    /// not the plan that was stopped, and a return hint built from its expiry
+    /// would name a date the pool row never draws. A window the *badge* alone
+    /// blocked never qualifies either: its reset says when that window turns
+    /// over, not when the account comes back. The owner asked for the dated
+    /// case twice (26 Nov 2026): "⊘ MO 9d" on Command Code, then the same on
+    /// OpenCode Go; withholding a published reset left both rows with no way
+    /// back.
     public func accountBlockResetIsTheBlocksEnd(_ bar: DualBarMetrics) -> Bool {
-        guard isAccountBlocked, bar.resetsAt != nil else { return false }
+        guard isAccountBlocked, bar.allowanceRole == .plan, bar.resetsAt != nil else { return false }
         if let label = accountBlockDatedByBarLabel { return bar.label == label }
         return bar.isBlocked
     }
 
-    /// When the account block lifts, as the vendor published it. Nil when no
-    /// window dates it: then its end is unpublished and no surface may offer
-    /// one. A provider-named bar wins; otherwise the earliest reset among the
-    /// windows the vendor blocked itself is when the first of them frees.
-    public var accountBlockEnd: Date? {
+    /// The one window whose published reset dates the block: the provider-named
+    /// plan window when there is one, else the plan window the vendor blocked
+    /// itself whose reset comes first. The date and the window's name both come
+    /// from this bar, so a countdown can never be attributed to a different
+    /// window than the one it belongs to.
+    private var accountBlockDatedBar: DualBarMetrics? {
         guard isAccountBlocked else { return nil }
+        let plan = quotaBars.filter { $0.allowanceRole == .plan }
         if let label = accountBlockDatedByBarLabel {
-            return quotaBars.first { $0.label == label }?.resetsAt
+            return plan.first { $0.label == label && $0.resetsAt != nil }
         }
-        return quotaBars.filter { $0.isBlocked && $0.resetsAt != nil }.compactMap(\.resetsAt).min()
+        return plan.filter { $0.isBlocked && $0.resetsAt != nil }
+            .min { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }
     }
 
-    /// The bar whose reset dates the block, for naming it in a return hint.
-    public var accountBlockDatedWindowLabel: String? {
-        guard isAccountBlocked else { return nil }
-        if let label = accountBlockDatedByBarLabel { return label }
-        return quotaBars.filter { $0.isBlocked && $0.resetsAt != nil }
-            .min { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }?.label
-    }
+    /// When the account block lifts, as the vendor published it. Nil when no
+    /// plan window dates it: then its end is unpublished and no surface may
+    /// offer one.
+    public var accountBlockEnd: Date? { accountBlockDatedBar?.resetsAt }
+
+    /// The window the block's end came from, for naming it in a return hint.
+    public var accountBlockDatedWindowLabel: String? { accountBlockDatedBar?.label }
 
     /// The account block is dated by a reset we hold.
     public var accountBlockHasPublishedReturn: Bool { accountBlockEnd != nil }

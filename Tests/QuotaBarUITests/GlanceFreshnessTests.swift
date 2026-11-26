@@ -141,6 +141,30 @@ struct GlanceFreshnessTests {
         #expect(summary.remedy?.contains("until the pool it used up resets") == true)
     }
 
+    @Test("a bonus allowance never dates the account block")
+    func bonusAllowanceCannotDateTheBlock() throws {
+        // A blocked account whose only reset sits on a bonus allowance: that
+        // expiry is not when the plan comes back, and the pool row does not
+        // draw the bonus as the block, so no return may be offered.
+        var limited = Fixtures.snapshot("kiro", .kiro, "Kiro", [
+            Fixtures.bar("MO", 1.0, resetsInHours: nil, windowHours: 720),
+            // The bonus is blocked too, so the pool is spent rather than
+            // running on an open bonus, and its expiry is the only reset here.
+            Fixtures.bar("BN", 0.3, resetsInHours: 100, windowHours: nil, blocked: true, role: .bonus),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        limited.accountBlockDatedByBarLabel = "BN"
+
+        let glance = GlancePresentation(snapshots: [limited], now: now)
+        let pool = try #require(glance.pools.first)
+        #expect(pool.state == .spent)
+        #expect(pool.returnsAt == nil)
+        #expect(pool.datedBlockWindowLabel == nil)
+        #expect(glance.backSoon.first?.returnText == "Return not published")
+
+        let summary = MetricDetailPresentation(snapshot: limited, now: now).summary
+        #expect(summary.resetText == nil)
+    }
+
     @Test("two vendor-blocked windows agree on one return")
     func twoBlockedWindowsAgree() throws {
         // OpenCode Go can mark more than one window rate-limited. The earliest
@@ -156,6 +180,8 @@ struct GlanceFreshnessTests {
         let pool = try #require(glance.pools.first)
         #expect(pool.returnsAt == soonest)
         #expect(pool.datedBlockWindowLabel == "WK")
+        // The name always refers to a window this pool draws.
+        #expect(pool.windows.map(\.bar.label).contains("WK"))
         #expect(glance.backSoon.first?.windowLabel == "WK")
 
         let summary = MetricDetailPresentation(snapshot: limited, now: now).summary

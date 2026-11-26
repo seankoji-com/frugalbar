@@ -688,7 +688,12 @@ beside its percentage. Only those bars keep a reset and a countdown; every
 other window the badge merely blocked stays without one, so a sibling that
 resets in an hour is never read as an unblock date by the grid, Back soon
 (which names the dating window), the inspector (whose focus is that bar) or the
-Story (which tells it).
+Story (which tells it). The dating bar must be a **plan** window, chosen once by
+`accountBlockDatedBar` and read by both `accountBlockEnd` and
+`accountBlockDatedWindowLabel`: a bonus or overage allowance is not the plan
+that was stopped, so its expiry can never date the block, and the date and the
+window's name can never come from different bars. Back soon additionally takes
+both from a window the pool actually draws (`GlancePresentation.pool`).
 Whether a pool's figures describe now is `GlancePresentation.Freshness`
 (current, stale, or awaitingReset when a window's published reset has passed
 with no reading since). Only a current pool is a pick; the grid notes
