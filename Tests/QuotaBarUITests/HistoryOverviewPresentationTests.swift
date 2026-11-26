@@ -37,26 +37,43 @@ struct HistoryOverviewPresentationTests {
         #expect(HistoryOverviewPresentation.hiddenNames(order: order, hidden: [.grok]) == ["Grok"])
     }
 
-    /// OpenDesign files each workspace under its own `opendesign:` key; an
-    /// exact-key subject found none of them and History showed no usage.
-    @Test("the OpenDesign subject owns every workspace key, and the store's vendor read includes them")
-    func openDesignWorkspaceKeys() {
+    @Test("OpenDesign workspaces keep their own History charts, including older unlinked series")
+    func openDesignWorkspaceKeys() throws {
+        let a = OpenDesignWorkspace(workspaceId: "ws-a", workspaceName: nil, personalMembershipTier: nil)
+        let b = OpenDesignWorkspace(workspaceId: "ws-b", workspaceName: nil, personalMembershipTier: nil)
+        let old = OpenDesignQuotaProvider.seriesID(workspaceID: "ws-old")
+        var links = OpenDesignConnections()
+        try links.link(a, to: .primary)
+        try links.link(b, to: .secondary)
         let subjects = HistoryOverviewPresentation.subjects(
-            order: [.opendesign], hidden: [], workspaces: [], claudeAccounts: [])
-        let subject = subjects.first
-        let key = OpenDesignQuotaProvider.seriesID(workspaceID: "ws-a")
-        #expect(subject?.owns(key) == true)
-        #expect(subject?.owns("opendesign") == true)
-        #expect(subject?.owns("opencode") == false)
+            order: [.opendesign], hidden: [], workspaces: [], claudeAccounts: [], openDesignConnections: links)
+        #expect(subjects.map(\.name) == ["OpenDesign · Primary", "OpenDesign · Secondary"])
+        #expect(subjects.first?.owns(b.seriesID) == false)
+        #expect(subjects.last?.owns(a.seriesID) == false)
         let clause = QuotaHistoryStore.vendorClause(for: .opendesign)
         #expect(clause.values == ["opendesign", OpenDesignQuotaProvider.instancePrefix + "%"])
-        #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: key) == .opendesign)
+        #expect(OpenCodeGoWorkspaceStore.vendor(forInstanceKey: a.seriesID) == .opendesign)
 
-        let (cards, _, _) = HistoryOverviewPresentation.overview(subjects: subjects, readings: [
-            record(key, "5H", at: 0, 0.2, windowLength: 5 * 3600),
-            record(key, "5H", at: 600, 0.3, windowLength: 5 * 3600),
-        ])
-        #expect(cards.count == 1)
+        let readings = [record(a.seriesID, at: 0, 0.2), record(b.seriesID, at: 0, 0.7), record(old, at: 0, 0.9)]
+        let withUnlinked = HistoryOverviewPresentation.includingOpenDesignHistory(subjects, readings: readings)
+        let (cards, _, _) = HistoryOverviewPresentation.overview(subjects: withUnlinked, readings: readings)
+        #expect(cards.map(\.id) == [a.seriesID, b.seriesID, old])
+        #expect(cards.map(\.latestPercent) == [20, 70, 90])
+        #expect(cards.map(\.sampleCount) == [1, 1, 1])
+    }
+
+    @Test("A single legacy OpenDesign series keeps the familiar History name")
+    func legacyOpenDesignHistoryName() {
+        let subjects = HistoryOverviewPresentation.subjects(order: [.opendesign], hidden: [], workspaces: [],
+            claudeAccounts: [], openDesignConnections: OpenDesignConnections(followsLegacyPrimary: true))
+        let workspace = OpenDesignQuotaProvider.seriesID(workspaceID: "legacy")
+        let readings = [record(workspace, at: 0, 0.2), record("opendesign", at: 60, nil)]
+        let expanded = HistoryOverviewPresentation.includingOpenDesignHistory(subjects, readings: readings)
+        let (cards, _, _) = HistoryOverviewPresentation.overview(subjects: expanded, readings: readings)
+
+        #expect(expanded.map(\.name) == ["OpenDesign", "OpenDesign · Unattributed"])
+        #expect(expanded.first?.keys == [workspace])
+        #expect(cards.first?.latestPercent == 20)
     }
 
     // MARK: - Cards

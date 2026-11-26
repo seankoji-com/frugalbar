@@ -341,6 +341,10 @@ public struct GlancePresentation: Equatable, Sendable {
     }
 
     static func accountTag(for snapshot: QuotaSnapshot, fallback: String) -> String {
+        if snapshot.vendorId == .opendesign,
+           let connection = OpenDesignConnection(displayName: snapshot.rowTitle) {
+            return connection.title
+        }
         let raw = snapshot.claudeAccount?.name ?? snapshot.antigravityAccount?.name ?? fallback
         return raw.count > 12 ? String(raw.prefix(11)) + "…" : raw
     }

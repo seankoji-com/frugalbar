@@ -188,7 +188,8 @@ public struct HistoryRootView: View {
             let prefs = CredentialStore.providerDisplayPreferences
             return (
                 HistoryOverviewPresentation.subjects(
-                    order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved()),
+                    order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved(),
+                    openDesignConnections: OpenDesignConnections.load()),
                 HistoryOverviewPresentation.hiddenNames(order: prefs.order, hidden: prefs.hidden)
             )
         }
@@ -1101,10 +1102,6 @@ public struct HistoryRootView: View {
         let source = subjectSource()
         subjects = source.subjects
         hiddenNames = source.hidden
-        if !subjects.contains(where: { $0.id == selectedSubjectID }) {
-            selectedSubjectID = subjects.first?.id
-            userChoseSubject = false
-        }
 
         if isSampleMode {
             do {
@@ -1120,7 +1117,12 @@ public struct HistoryRootView: View {
             }
         }
 
-        await reloadOverview(now: referenceDate)
+        await reloadOverview(now: referenceDate, range: key.range, configuredSubjects: source.subjects)
+        guard !Task.isCancelled else { return }
+        if !subjects.contains(where: { $0.id == selectedSubjectID }) {
+            selectedSubjectID = subjects.first?.id
+            userChoseSubject = false
+        }
         // Until the user picks one, lead with the first provider that has
         // something to show rather than an empty chart.
         if !userChoseSubject, let first = overviewCards.first,
@@ -1262,15 +1264,20 @@ public struct HistoryRootView: View {
     /// stays a few thousand rows. It is never served from a cache: a cached
     /// strip kept showing readings older than the chart beneath it, and kept
     /// a failed read failed.
-    private func reloadOverview(now: Date) async {
+    private func reloadOverview(
+        now: Date, range: HistoryPresentation.TimeRange, configuredSubjects: [HistoryOverviewPresentation.Subject]
+    ) async {
+        guard !Task.isCancelled else { return }
         let store = activeStore
         let retention = await store.retentionInterval
-        let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: timeRange, retention: retention)
+        let bucket = HistoryOverviewPresentation.sampleBucketSeconds(range: range, retention: retention)
         do {
             let sampled = try await store.fetchSampledReadings(
-                since: timeRange.startDate(from: now),
+                since: range.startDate(from: now),
                 until: now,
                 bucketSeconds: bucket)
+            guard !Task.isCancelled else { return }
+            subjects = HistoryOverviewPresentation.includingOpenDesignHistory(configuredSubjects, readings: sampled)
             let overview = HistoryOverviewPresentation.overview(
                 subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards
@@ -1278,6 +1285,7 @@ public struct HistoryRootView: View {
             overviewEmpty = overview.empty
             overviewFailed = false
         } catch {
+            guard !Task.isCancelled else { return }
             NSLog("frugalbar: history overview read failed: %@", error.localizedDescription)
             overviewCards = []
             overviewUnread = []

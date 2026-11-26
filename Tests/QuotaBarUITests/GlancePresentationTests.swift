@@ -90,6 +90,20 @@ struct GlancePresentationTests {
         #expect(glance.menuTitle.tone == .normal)
     }
 
+    @Test("OpenDesign recommendations distinguish the primary and secondary workspace")
+    func openDesignWorkspaceTags() {
+        let primary = F.snapshot("opendesign:a", .opendesign, OpenDesignConnection.primary.displayName,
+                                 [F.bar("WK", 0.1, resetsInHours: 100, windowHours: 168)])
+        let secondary = F.snapshot("opendesign:b", .opendesign, OpenDesignConnection.secondary.displayName,
+                                   [F.bar("WK", 0.3, resetsInHours: 100, windowHours: 168)])
+        let glance = GlancePresentation(snapshots: [primary, secondary], now: now)
+
+        #expect(glance.pools.map(\.accountTag) == ["Primary", "Secondary"])
+        #expect(glance.menuTitle.text.hasPrefix("Primary · "))
+        #expect(glance.menuTitle.spoken.contains("OpenDesign · Primary"))
+        #expect(UseNowPresentation(glance: glance).headline == "Use OpenDesign · Primary")
+    }
+
     /// Review R1: at an exact tie the title must print what the pick's
     /// Subscriptions cell prints. The cell's percent formatter rounds 12.5%
     /// half-to-even, to 12%; `Double.rounded()` made the title say 13%.

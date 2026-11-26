@@ -185,30 +185,28 @@ retirement, and retirement requires every verified route to agree: a second
 route that publishes an Argon group, refuses the credential or fails outright
 must not be hidden by the first route's merge verdict.
 
-**OpenDesign is read through its web sign-in, not an API key.** An OpenDesign
-inference key gets `401 unauthenticated` from the usage endpoints (checked with
-a real key on 22 November 2026 AEDT, 21 November UTC), so there is no key slot. `OpenDesignWebSession`
-is an in-app WebKit sign-in; the provider's two GETs
-(`/api/v1/workspaces/current`, then `/{id}/billing/coding-plan-usage` with
-`X-Vela-Workspace-Id`) run inside that page, and only the status and JSON body
-reach Swift. Windows are chosen by `durationSeconds` (18000 → 5H, 604800 → WK,
-28–31 days → MO), never by order, and MO is drawn only when published. A
-mismatched workspace id, a duplicate window, or a zero or unparseable limit
-fails the read rather than drawing a bar, and so does a figure that is not a
-finite count (a 400-digit string parses to infinity, and a ratio of two traps
-the percentage's `Int` conversion). A reading is filed under its workspace
-(`OpenDesignQuotaProvider.seriesID`), and a failure under the bare vendor id;
-`QuotaManager` retains figures only within one series, so a workspace switch
-or a failed poll never shows another workspace's quota, and a switch never
-reads as a usage drop to the event detectors. History finds every workspace
-key by the `opendesign:` prefix (`vendorClause`, `Subject.keyPrefix`,
-`vendor(forInstanceKey:)`); the one OpenDesign History subject draws them as a
-single line, so a workspace switch shows as a step there. Both GETs carry one
-connection generation. Disconnect bumps it (an in-flight read is discarded),
-drops the cached reading without running the history recorder, and a pass
-already in flight drops OpenDesign's result at commit (`forgetReadings`). The payload contract comes from
-token-monitor PR 1366's synthetic fixtures and has not been checked against a
-captured response.
+**OpenDesign coding-plan usage requires a WebKit sign-in.** The inference key
+returned `401 unauthenticated` on 22 November 2026 AEDT. Keep the primary on
+WebKit's default data store so upgrades can reuse its sign-in. The secondary
+uses a stable, separate store. Link a workspace from the authenticated
+`/api/v1/workspaces/current` response. A legacy primary follows the current
+workspace until linked. Adding the secondary verifies and pins a legacy
+primary first, and both links must resolve to distinct IDs.
+
+Usage polls use the linked workspace ID in both the URL and
+`X-Vela-Workspace-Id`. Require the same ID in the response. Keep the existing
+`seriesID` for quota, history and events so linking the primary preserves its
+readings. A legacy primary failure uses the bare vendor key because there is
+no verified workspace to attach it to. History uses one exact key per
+OpenDesign workspace. Disconnect or relink discards that connection's in-flight
+read and invalidates its old cache entry without running the history recorder.
+
+Use `durationSeconds` for window labels (18000 → 5H, 604800 → WK, 28–31 days →
+MO). Duplicate windows, invalid limits and non-finite values fail the read.
+A 400-digit numeric string can parse to infinity and trap the percentage's
+`Int` conversion. The payload contract comes from token-monitor PR 1366's
+synthetic fixtures. Live OpenDesign sign-in and the usage response still need
+verification with the linked workspaces.
 
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
