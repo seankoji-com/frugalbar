@@ -62,6 +62,20 @@ struct HistoryOverviewPresentationTests {
         #expect(cards.map(\.sampleCount) == [1, 1, 1])
     }
 
+    @Test("A single legacy OpenDesign series keeps the familiar History name")
+    func legacyOpenDesignHistoryName() {
+        let subjects = HistoryOverviewPresentation.subjects(order: [.opendesign], hidden: [], workspaces: [],
+            claudeAccounts: [], openDesignConnections: OpenDesignConnections(followsLegacyPrimary: true))
+        let workspace = OpenDesignQuotaProvider.seriesID(workspaceID: "legacy")
+        let readings = [record(workspace, at: 0, 0.2), record("opendesign", at: 60, nil)]
+        let expanded = HistoryOverviewPresentation.includingOpenDesignHistory(subjects, readings: readings)
+        let (cards, _, _) = HistoryOverviewPresentation.overview(subjects: expanded, readings: readings)
+
+        #expect(expanded.map(\.name) == ["OpenDesign", "OpenDesign · Unattributed"])
+        #expect(expanded.first?.keys == [workspace])
+        #expect(cards.first?.latestPercent == 20)
+    }
+
     // MARK: - Cards
 
     @Test("each card is its own longest window, in subject order, with no figure carried over")

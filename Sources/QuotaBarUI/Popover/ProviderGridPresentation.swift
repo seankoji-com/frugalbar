@@ -115,7 +115,7 @@ struct ProviderGridPresentation {
                 source = snapshot.planName ?? "OpenCode Go"
             } else if snapshot.vendorId == .opendesign {
                 name = snapshot.vendorId.displayName
-                source = OpenDesignConnection.allCases.first { $0.displayName == snapshot.rowTitle }?.title
+                source = OpenDesignConnection(displayName: snapshot.rowTitle)?.title
             } else {
                 name = snapshot.rowTitle
                 source = group == snapshot.vendorId || snapshot.rowTitle == snapshot.vendorId.displayName

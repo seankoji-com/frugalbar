@@ -8,6 +8,11 @@ public enum OpenDesignConnection: String, CaseIterable, Identifiable, Sendable {
 
     public var displayName: String { "OpenDesign · \(title)" }
 
+    public init?(displayName: String) {
+        guard let connection = Self.allCases.first(where: { $0.displayName == displayName }) else { return nil }
+        self = connection
+    }
+
     var other: Self { self == .primary ? .secondary : .primary }
 }
 
@@ -76,6 +81,7 @@ public enum OpenDesignLinkError: LocalizedError, Equatable {
     case primarySelectionUnavailable(UnavailableReason)
     case duplicate(OpenDesignConnection)
     case connectionChanged
+    case refreshInProgress
 
     public var errorDescription: String? {
         switch self {
@@ -87,6 +93,8 @@ public enum OpenDesignLinkError: LocalizedError, Equatable {
             "This workspace is already linked as \(other.title.lowercased()). Select the other workspace in OpenDesign."
         case .connectionChanged:
             "The connection changed while verifying the workspace. Try again."
+        case .refreshInProgress:
+            "OpenDesign is refreshing. Try linking the workspace again in a moment."
         }
     }
 }

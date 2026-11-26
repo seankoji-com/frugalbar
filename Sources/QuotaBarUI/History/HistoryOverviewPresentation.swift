@@ -104,18 +104,27 @@ public enum HistoryOverviewPresentation {
     /// keys, even when the current connections no longer name them.
     static func includingOpenDesignHistory(_ subjects: [Subject], readings: [QuotaHistoryStore.ReadingRecord]) -> [Subject] {
         let vendor = VendorIdentifier.opendesign
-        guard let insertion = subjects.lastIndex(where: { $0.vendor == vendor }) else { return subjects }
-        let known = Set(subjects.filter { $0.vendor == vendor }.flatMap(\.keys))
-        let unlinked = Set(readings.map(\.vendor)).subtracting(known).sorted().compactMap { key -> Subject? in
-            if key == vendor.rawValue {
-                return Subject(id: key, vendor: vendor, name: "OpenDesign · Unattributed")
-            }
-            guard key.hasPrefix(OpenDesignQuotaProvider.instancePrefix) else { return nil }
-            let reference = key.dropFirst(OpenDesignQuotaProvider.instancePrefix.count).prefix(8)
-            return Subject(id: key, vendor: vendor, name: "OpenDesign · Workspace \(reference)")
-        }
+        guard var insertion = subjects.lastIndex(where: { $0.vendor == vendor }) else { return subjects }
+        let recorded = Set(readings.map(\.vendor))
+        let workspaceKeys = recorded.filter { $0.hasPrefix(OpenDesignQuotaProvider.instancePrefix) }
         var result = subjects
-        result.insert(contentsOf: unlinked, at: insertion + 1)
+        let replacesLegacyPlaceholder = result[insertion].id == vendor.rawValue && !workspaceKeys.isEmpty
+        if replacesLegacyPlaceholder {
+            result.remove(at: insertion)
+        } else {
+            insertion += 1
+        }
+        let known = Set(result.filter { $0.vendor == vendor }.flatMap(\.keys))
+        var unlinked = workspaceKeys.subtracting(known).sorted().map { key in
+            let reference = key.dropFirst(OpenDesignQuotaProvider.instancePrefix.count).prefix(8)
+            let name = replacesLegacyPlaceholder && workspaceKeys.count == 1
+                ? vendor.displayName : "OpenDesign · Workspace \(reference)"
+            return Subject(id: key, vendor: vendor, name: name)
+        }
+        if recorded.contains(vendor.rawValue), !known.contains(vendor.rawValue) {
+            unlinked.append(Subject(id: vendor.rawValue, vendor: vendor, name: "OpenDesign · Unattributed"))
+        }
+        result.insert(contentsOf: unlinked, at: insertion)
         return result
     }
 

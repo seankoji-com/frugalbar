@@ -55,12 +55,12 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
         // reject duplicates and keep that same primary when both are active.
         if slot == .secondary, original.followsLegacyPrimary {
             let primary = Self.primary
-            switch await primary.currentWorkspace(connection: primary.generation) {
+            switch try await primary.currentWorkspace(connection: primary.generation) {
             case .selected(let workspace): try updated.link(workspace, to: .primary)
             case .failed(let reason): throw .primarySelectionUnavailable(reason)
             }
         }
-        switch await currentWorkspace(connection: started) {
+        switch try await currentWorkspace(connection: started) {
         case .selected(let workspace): try updated.link(workspace, to: slot)
         case .failed(let reason): throw .selectionUnavailable(reason)
         }
@@ -94,7 +94,9 @@ public final class OpenDesignWebSession: NSObject, WKNavigationDelegate {
         return generation
     }
 
-    private func currentWorkspace(connection: UUID) async -> OpenDesignQuotaProvider.WorkspaceSelection {
+    private func currentWorkspace(connection: UUID) async throws(OpenDesignLinkError)
+        -> OpenDesignQuotaProvider.WorkspaceSelection {
+        guard !pending else { throw .refreshInProgress }
         let result = await get(url: OpenDesignQuotaProvider.apiBase + "current", workspaceID: nil,
                                connection: connection)
         return OpenDesignQuotaProvider.workspaceSelection(from: result, now: Date())

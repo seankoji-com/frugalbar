@@ -205,7 +205,8 @@ Use `durationSeconds` for window labels (18000 → 5H, 604800 → WK, 28–31 da
 MO). Duplicate windows, invalid limits and non-finite values fail the read.
 A 400-digit numeric string can parse to infinity and trap the percentage's
 `Int` conversion. The payload contract comes from token-monitor PR 1366's
-synthetic fixtures.
+synthetic fixtures. Live OpenDesign sign-in and the usage response still need
+verification with the linked workspaces.
 
 **`consumptionFraction` is `Double?` and nil means "no denominator."** Never
 coerce it to 0 or 1 — those read as "plenty left" and "exhausted".
