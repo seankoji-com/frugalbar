@@ -571,7 +571,9 @@ the drawn legend made the card taller for a sentence nobody reads twice. The
 group's status counts ("2 usable · 3 blocked · 2 spent") are spoken, not drawn
 either: the dots already say which pools answered. A group that
 publishes only one column draws that bar across the whole grid rather than
-leaving two columns of dashes. Each pool keeps its service identity and opens
+leaving two columns of dashes, with no window token beside it (owner, 26 Nov
+2026): the countdown says which window it is, and the spoken label names it.
+Each pool keeps its service identity and opens
 its own inspector.
 - Use now ranks by **headroom at risk**: remaining share ÷ share of the window
   still to run, on long windows (≥ 7 days, or WK/MO) only. Soonest-reset
