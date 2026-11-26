@@ -556,8 +556,16 @@ The group
 averages use only fresh figures in the same window and are drawn as bars, not
 as percentages (owner, 26 Nov 2026): an averaged column draws the same
 `UsageBar` a pool row draws, with one dot per pool underneath — green where
-that pool reported this window, red where it did not — in place of the old
-"avg · 2/4" caption. Nothing on the card explains the dots or the ticks any
+that pool brings headroom of its own to the window, red where it brings none
+(no reading, a stale or blocked one, or spent on a window at least as long) —
+in place of the old "avg · 2/4" caption. Exhaustion carries downward only: a
+pool spent on its month counts as 100% exhausted in the week and 5H averages
+(and a spent week in the 5H one), so a group's short windows cannot look
+comfortable because the pools that could serve them are dead; a spent 5H
+window leaves the week and month alone, since it resets within the hour
+(`Pool.headroom(for:)`). The count still includes those pools, at zero, and
+the spoken label says how many of them are spent. A blocked window's own
+figure is still not averaged at all. Nothing on the card explains the dots or the ticks any
 more (owner, 26 Nov 2026): the row's spoken label says what each mark means, and
 the drawn legend made the card taller for a sentence nobody reads twice. The
 group's status counts ("2 usable · 3 blocked · 2 spent") are spoken, not drawn

@@ -105,6 +105,7 @@ struct ProviderGridView: View {
                                 .foregroundStyle(Theme.outline)
                             summaryCell(only.1, column: only.0,
                                         coverage: group.coverage(for: only.0),
+                                        spent: group.spentCount(for: only.0),
                                         stale: group.pools.count == 1 && group.pools[0].isStale,
                                         dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                         }
@@ -112,6 +113,7 @@ struct ProviderGridView: View {
                         columns { column in
                             if let summary = group.summary(for: column) {
                                 summaryCell(summary, column: column, coverage: group.coverage(for: column),
+                                            spent: group.spentCount(for: column),
                                             stale: group.pools.count == 1 && group.pools[0].isStale,
                                             dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                             }
@@ -362,7 +364,9 @@ struct ProviderGridView: View {
             let reset: Date?
             switch summary {
             case .average(let remaining, let reported, let count):
+                let spent = group.spentCount(for: column)
                 result = "\(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
+                    + (spent > 0 ? ", \(spent) of them spent" : "")
                 reset = nil
             case .spent(let next, let exhausted, let blocked):
                 result = exhausted && !blocked ? "all spent" : "all blocked or spent"
@@ -386,7 +390,7 @@ struct ProviderGridView: View {
 
     @ViewBuilder
     private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn,
-                             coverage: [Bool], stale: Bool, dimmed: Bool = false) -> some View {
+                             coverage: [Bool], spent: Int, stale: Bool, dimmed: Bool = false) -> some View {
         switch summary {
         case .window(let window):
             windowCell(window, label: column.label, stale: stale, dimmed: dimmed || stale)
@@ -397,8 +401,8 @@ struct ProviderGridView: View {
         case .average(let remaining, let reported, let count):
             // A bar, not a percentage (owner, 26 Nov 2026): the group's share
             // used is the same figure every pool row draws as a track, and the
-            // "avg · 2/4" caption becomes one dot per pool — green where it
-            // reported this window, red where it did not.
+            // "avg · 2/4" caption becomes one dot per pool — green where that
+            // pool brings headroom to this window, red where it brings none.
             let window = GlancePresentation.window(
                 for: DualBarMetrics(primaryFraction: 1 - remaining, label: column.label),
                 now: presentation.now)
@@ -412,13 +416,16 @@ struct ProviderGridView: View {
                         + Array(repeating: false, count: max(count - reported, 0)))
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools")
+            .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools"
+                + (spent > 0 ? ", \(spent) of them spent" : ""))
         }
     }
 
-    /// One dot per pool in an averaged column: green where it reported the
-    /// window, red where it did not. The count is what "avg · 2/4" said, in a
-    /// mark rather than a second line of 9.5pt text.
+    /// One dot per pool in an averaged column: green where the pool brings
+    /// headroom of its own to this window, red where it brings none — no
+    /// reading, a blocked or stale one, or spent on a window at least as long.
+    /// A pool spent on a longer window still counts toward the average, at
+    /// zero; its dot is red all the same.
     private func coverageDots(_ coverage: [Bool]) -> some View {
         HStack(spacing: 2.5) {
             ForEach(Array(coverage.enumerated()), id: \.offset) { _, reported in
