@@ -141,6 +141,31 @@ struct GlanceFreshnessTests {
         #expect(summary.remedy?.contains("until the pool it used up resets") == true)
     }
 
+    @Test("two vendor-blocked windows agree on one return")
+    func twoBlockedWindowsAgree() throws {
+        // OpenCode Go can mark more than one window rate-limited. The earliest
+        // of their resets is the block's end, and Back soon, the inspector and
+        // the Story all have to name that window — never a longer one.
+        let limited = Fixtures.snapshot("opencode-go:legacy", .opencode, "OpenCode Go", [
+            Fixtures.bar("WK", 1.0, resetsInHours: 30, windowHours: 168, blocked: true),
+            Fixtures.bar("MO", 1.0, resetsInHours: 216, windowHours: 720, blocked: true),
+        ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
+        let soonest = now.addingTimeInterval(30 * 3600)
+
+        let glance = GlancePresentation(snapshots: [limited], now: now)
+        let pool = try #require(glance.pools.first)
+        #expect(pool.returnsAt == soonest)
+        #expect(pool.datedBlockWindowLabel == "WK")
+        #expect(glance.backSoon.first?.windowLabel == "WK")
+
+        let summary = MetricDetailPresentation(snapshot: limited, now: now).summary
+        #expect(summary.focusLabel == "WK")
+        #expect(summary.resetText != nil)
+
+        let story = ProviderStoryPresentation(pool: pool, glance: glance, readings: nil, now: now)
+        #expect(story.windowName == "weekly")
+    }
+
     @Test("a window the vendor blocked itself keeps its published reset in the cell")
     func vendorBlockedWindowKeepsItsCellReset() throws {
         // The reported OpenCode Go row: the account badge is set and the

@@ -188,7 +188,10 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // A block the provider dated is about that bar; a badge-blocked
         // account's bars carry no flag of their own, so the fullest one is the
         // subject (the pool that ran out).
-        if let label = snapshot.accountBlockDatedByBarLabel,
+        // The window whose published reset dates the block: the provider-named
+        // pool, or (no named pool) the earliest vendor-blocked reset — the same
+        // window Back soon and the Story use.
+        if let label = snapshot.accountBlockDatedWindowLabel,
            let dated = bars.first(where: { $0.label == label }) {
             return dated
         }

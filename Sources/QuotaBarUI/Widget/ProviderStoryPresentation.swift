@@ -49,13 +49,23 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         // The window the story follows: the pick's binding window, else the
         // spent window, else the pool's least-remaining long window.
         // A block the vendor dated is about one window: tell that window, or
-        // the story would name a sibling's reset as the block's end.
-        let datedWindow = pool.datedBlockWindowLabel
-            .flatMap { label in pool.windows.first { $0.bar.label == label } }
+        // the story would name a sibling's reset as the block's end. Each step
+        // is typed separately: one chained expression here exceeded Xcode 16's
+        // type-checking limit and failed CI before the tests ran.
+        let datedWindow: GlancePresentation.Window? = pool.datedBlockWindowLabel.flatMap { label in
+            pool.windows.first(where: { $0.bar.label == label })
+        }
+        let rankedWindow: GlancePresentation.Window? = rank.map { index in
+            glance.ranking[index].binding
+        }
+        let spentWindow: GlancePresentation.Window? = pool.windows.first(where: { $0.isSpent })
+        let longWindow: GlancePresentation.Window? = pool.windows
+            .filter({ $0.isLong })
+            .min(by: { lhs, rhs in (lhs.remaining ?? 2) < (rhs.remaining ?? 2) })
         let chosen: GlancePresentation.Window? = datedWindow
-            ?? rank.map { glance.ranking[$0].binding }
-            ?? pool.windows.first(where: \.isSpent)
-            ?? pool.windows.filter(\.isLong).min { ($0.remaining ?? 2) < ($1.remaining ?? 2) }
+            ?? rankedWindow
+            ?? spentWindow
+            ?? longWindow
             ?? pool.windows.first
         window = chosen
         heroRemaining = chosen.flatMap { !$0.isSpent && !$0.isExpired ? $0.remaining : nil }

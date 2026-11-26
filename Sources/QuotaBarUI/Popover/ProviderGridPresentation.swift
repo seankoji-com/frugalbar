@@ -188,6 +188,21 @@ struct ProviderGridPresentation {
                 .compactMap { $0 }
         }
 
+        /// Which pools' figures fed the average for `column`, in the order the
+        /// group lists them — the same order the expanded rows use, and the same
+        /// set the cell's "across N of M pools" counts. The averaged cell draws
+        /// one dot per pool from this, so a dot maps to a pool instead of
+        /// colouring the first N of them by count alone.
+        func coverage(for column: WindowColumn) -> [Bool] {
+            pools.map { pool in
+                guard pool.freshness == .current,
+                      let window = pool.displayWindows[column] else { return false }
+                // A blocked window's figure is the vendor's, not headroom, so
+                // it is not averaged (`summary(for:)`).
+                return !window.bar.isBlocked && window.remaining != nil
+            }
+        }
+
         func summary(for column: WindowColumn) -> Summary? {
             if pools.count == 1 { return pools[0].windows[column].map(Summary.window) }
             // What the rows draw (`displayWindows`): a 5H column a spent week

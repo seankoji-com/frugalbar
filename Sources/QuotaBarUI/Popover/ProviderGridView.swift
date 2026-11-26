@@ -104,13 +104,15 @@ struct ProviderGridView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.outline)
                             summaryCell(only.1, column: only.0,
+                                        coverage: group.coverage(for: only.0),
                                         stale: group.pools.count == 1 && group.pools[0].isStale,
                                         dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                         }
                     } else {
                         columns { column in
                             if let summary = group.summary(for: column) {
-                                summaryCell(summary, column: column, stale: group.pools.count == 1 && group.pools[0].isStale,
+                                summaryCell(summary, column: column, coverage: group.coverage(for: column),
+                                            stale: group.pools.count == 1 && group.pools[0].isStale,
                                             dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
                             }
                         }
@@ -383,8 +385,8 @@ struct ProviderGridView: View {
     }
 
     @ViewBuilder
-    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn, stale: Bool,
-                             dimmed: Bool = false) -> some View {
+    private func summaryCell(_ summary: ProviderGridPresentation.Summary, column: WindowColumn,
+                             coverage: [Bool], stale: Bool, dimmed: Bool = false) -> some View {
         switch summary {
         case .window(let window):
             windowCell(window, label: column.label, stale: stale, dimmed: dimmed || stale)
@@ -402,7 +404,12 @@ struct ProviderGridView: View {
                 now: presentation.now)
             VStack(alignment: .leading, spacing: 3) {
                 UsageBar(window: window, height: trackHeight)
-                coverageDots(reported: reported, count: count)
+                // The dots follow the pools' own order, so each one maps to a
+                // row; a count alone would colour the first N by index.
+                coverageDots(coverage.count == count
+                    ? coverage
+                    : Array(repeating: true, count: reported)
+                        + Array(repeating: false, count: max(count - reported, 0)))
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(column.spokenName): \(GlancePresentation.usedPercentSpoken(1 - remaining)) used across \(reported) of \(count) pools")
@@ -412,11 +419,11 @@ struct ProviderGridView: View {
     /// One dot per pool in an averaged column: green where it reported the
     /// window, red where it did not. The count is what "avg · 2/4" said, in a
     /// mark rather than a second line of 9.5pt text.
-    private func coverageDots(reported: Int, count: Int) -> some View {
+    private func coverageDots(_ coverage: [Bool]) -> some View {
         HStack(spacing: 2.5) {
-            ForEach(0..<max(count, 0), id: \.self) { index in
+            ForEach(Array(coverage.enumerated()), id: \.offset) { _, reported in
                 Circle()
-                    .fill(index < reported ? Theme.healthy : Theme.error)
+                    .fill(reported ? Theme.healthy : Theme.error)
                     .frame(width: 4.5, height: 4.5)
             }
         }
