@@ -184,7 +184,7 @@ public enum UnavailableReason: Sendable, Equatable {
     public var remedy: String {
         switch self {
         case .notConfigured:      return "Add a key in Settings"
-        case .credentialRejected: return "Check the key in Settings"
+        case .credentialRejected: return "Sign in again, or check the credential in Settings"
         case .unsupported(let d): return d
         case .offline:            return "Check your connection"
         case .timedOut:           return "Vendor slow — will retry"

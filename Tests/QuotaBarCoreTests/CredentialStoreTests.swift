@@ -40,6 +40,45 @@ struct CredentialStoreTests {
         #expect(CredentialStore.claudeOAuthToken(from: Data(#"{"oauthAccount":{"organizationType":"max"}}"#.utf8)) == nil)
     }
 
+    /// The CLI keeps the item after a session ends, writing `loginEnded`
+    /// (observed as `"time_limit"`) and blanking the tokens. That is a fact
+    /// about the credential, and the row must be able to say so instead of
+    /// blaming the vendor's payload.
+    @Test("an ended Claude login is read from the credential blob")
+    func claudeEndedLoginIsRead() {
+        let ended = Data(#"""
+        {"claudeAiOauth":{"accessToken":"","refreshToken":"","loginEnded":"time_limit","refreshTokenExpiresAt":"2026-11-21T00:00:00Z"}}
+        """#.utf8)
+        #expect(CredentialStore.claudeLoginEnded(from: ended))
+        #expect(CredentialStore.claudeLoginEnded(
+            from: Data(#"{"claudeAiOauth":{"accessToken":"  ","refreshToken":""}}"#.utf8)))
+        // The marker is the same fact if the CLI ever writes it at the top level.
+        #expect(CredentialStore.claudeLoginEnded(
+            from: Data(#"{"loginEnded":"time_limit","claudeAiOauth":{"accessToken":"x"}}"#.utf8)))
+    }
+
+    @Test("a healthy or absent Claude blob is not an ended login")
+    func claudeHealthyOrAbsentIsNotEnded() {
+        let future = (Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000).rounded()
+        #expect(!CredentialStore.claudeLoginEnded(
+            from: Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-live","expiresAt":\#(Int(future))}}"#.utf8)))
+        // An expired token may still be refreshable; that is not this state, and
+        // `claudeOAuthToken` already withholds it.
+        let past = (Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000).rounded()
+        #expect(!CredentialStore.claudeLoginEnded(
+            from: Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stale","expiresAt":\#(Int(past))}}"#.utf8)))
+        #expect(!CredentialStore.claudeLoginEnded(from: nil))
+        #expect(!CredentialStore.claudeLoginEnded(from: Data("not json".utf8)))
+        #expect(!CredentialStore.claudeLoginEnded(
+            from: Data(#"{"oauthAccount":{"organizationType":"max"}}"#.utf8)))
+        #expect(!CredentialStore.claudeLoginEnded(
+            from: Data(#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-live","loginEnded":"  "}}"#.utf8)))
+        // A missing field is not the CLI blanking a token: it may be a renamed
+        // key or a session stored elsewhere. Only a present blank token counts.
+        #expect(!CredentialStore.claudeLoginEnded(
+            from: Data(#"{"claudeAiOauth":{"refreshToken":"r","expiresAt":0}}"#.utf8)))
+    }
+
     // MARK: OpenCode's Copilot entry
 
     /// `refresh` is the durable GitHub OAuth token; `access` is the short-lived

@@ -11,6 +11,9 @@ private final class ClaudeAccountHTTP: URLProtocol {
         guard let server = Self.server, let url = request.url else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
         }
+        if server.profileTimesOut, url.path.hasSuffix("/profile") {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut)); return
+        }
         let response = server.respond(request)
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: response.0,
             httpVersion: nil, headerFields: response.1)!, cacheStoragePolicy: .notAllowed)
@@ -25,6 +28,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     private var _throttleA = false
     private var _inventoryDown = false
     private var _profileDown = false
+    private var _profileTimesOut = false
     private var _reverse = false
     private var _duplicate = false
     private var _unknown = false
@@ -35,6 +39,7 @@ private final class ClaudeAccountFixture: @unchecked Sendable {
     var throttleA: Bool { get { lock.withLock { _throttleA } } set { lock.withLock { _throttleA = newValue } } }
     var inventoryDown: Bool { get { lock.withLock { _inventoryDown } } set { lock.withLock { _inventoryDown = newValue } } }
     var profileDown: Bool { get { lock.withLock { _profileDown } } set { lock.withLock { _profileDown = newValue } } }
+    var profileTimesOut: Bool { get { lock.withLock { _profileTimesOut } } set { lock.withLock { _profileTimesOut = newValue } } }
     var reverse: Bool { get { lock.withLock { _reverse } } set { lock.withLock { _reverse = newValue } } }
     var duplicate: Bool { get { lock.withLock { _duplicate } } set { lock.withLock { _duplicate = newValue } } }
     var unknown: Bool { get { lock.withLock { _unknown } } set { lock.withLock { _unknown = newValue } } }
@@ -204,6 +209,200 @@ struct ClaudeAccountTests {
         let a = try ClaudeAccountProfile.decode(Data("{\"account\":{\"uuid\":\"\(ClaudeAccountFixture.accountA)\"},\"organization\":{\"uuid\":\"\(ClaudeAccountFixture.org)\"}}".utf8))
         let otherOrg = try ClaudeAccountProfile.decode(Data("{\"account\":{\"uuid\":\"\(ClaudeAccountFixture.accountA)\"},\"organization\":{\"uuid\":\"\(ClaudeAccountFixture.accountB)\"}}".utf8))
         #expect(a.instanceID != otherOrg.instanceID)
+    }
+
+    /// A direct row whose identity was verified last pass and whose profile
+    /// read now returns an unusable body is an ended session, not a vendor
+    /// payload problem. This is the unavailable-binding path that bypasses
+    /// `ClaudeQuotaProvider`'s own read, so it must carry the mapping too.
+    @Test("a previously verified direct row says sign in again when its login ended")
+    func endedDirectLoginIsCredentialRejected() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        fixture.directOther = true
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { true }
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let directID = ClaudeAccountFixture.id(ClaudeAccountFixture.accountC)
+            #expect(firstSnaps[directID]?.status.confidence == .measured)
+
+            // The profile read now answers a body that is not a profile, and
+            // the credential blob says the login ended.
+            fixture.profileDown = true
+            let second = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { true }, directCredentialIsCLI: { true }
+            ).providers(now: now.addingTimeInterval(60))
+            let secondSnaps = try await read(second)
+            #expect(secondSnaps[directID]?.status == .unavailable(.credentialRejected))
+        }
+    }
+
+    /// When the login ends the direct source has no token, so discovery must
+    /// not drop the row: a proxy account keeps the descriptor list nonempty,
+    /// and the owner would never see the sign-in remedy for the local account.
+    @Test("an ended local login keeps its row while a proxy account remains")
+    func endedDirectLoginKeepsRowWithoutToken() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        fixture.directOther = true
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { true }
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let directID = ClaudeAccountFixture.id(ClaudeAccountFixture.accountC)
+            let proxyID = ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)
+            #expect(firstSnaps[directID]?.status.confidence == .measured)
+
+            let second = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { nil }, directPlan: { "Max (5x)" },
+                loginEnded: { true }, directCredentialIsCLI: { true }
+            ).providers(now: now.addingTimeInterval(60))
+            let secondSnaps = try await read(second)
+            #expect(secondSnaps[directID]?.status == .unavailable(.credentialRejected))
+            // The proxy account is unaffected by the local login's state.
+            #expect(secondSnaps[proxyID]?.status.confidence == .measured)
+        }
+    }
+
+    /// A saved key is not Claude Code's login. Deleting it is a real deletion,
+    /// so its row must go even though an unrelated CLI login has ended.
+    @Test("deleting a saved Claude key lets its row go")
+    func deletedSavedKeyDoesNotRetainRow() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        fixture.directOther = true
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "saved-key" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { false }
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let directID = ClaudeAccountFixture.id(ClaudeAccountFixture.accountC)
+            #expect(firstSnaps[directID]?.status.confidence == .measured)
+
+            let second = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { nil }, directPlan: { "Max (5x)" },
+                loginEnded: { true }, directCredentialIsCLI: { true }
+            ).providers(now: now.addingTimeInterval(60))
+            let secondSnaps = try await read(second)
+            #expect(secondSnaps[directID] == nil)
+        }
+    }
+
+    /// The proxy is the credential that actually answered. Its published wait
+    /// must not be replaced by the ended local login's seeded reason.
+    @Test("a proxy throttle outranks the ended local login's seeded reason")
+    func proxyThrottleOutranksEndedLocalLogin() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { true }
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let id = ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)
+            #expect(firstSnaps[id]?.status.confidence == .measured)
+
+            fixture.throttleA = true
+            let second = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { nil }, directPlan: { "Max (5x)" },
+                loginEnded: { true }, directCredentialIsCLI: { true }
+            ).providers(now: now.addingTimeInterval(60))
+            let secondSnaps = try await read(second)
+            let status = try #require(secondSnaps[id]?.status)
+            guard case .unavailable(.rateLimited) = status else {
+                Issue.record("expected rateLimited, got \(status)")
+                return
+            }
+        }
+    }
+
+    /// The local login and the proxy can share one account. When the local
+    /// login ended and the proxy is in a published cooldown, the cooldown is
+    /// the actionable fact: it says when the account returns, while sign-in
+    /// advice describes the other credential.
+    @Test("a proxy cooldown outranks the ended local login on a shared account")
+    func proxyCooldownOutranksEndedLocalLogin() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        let backoff = ClaudeProxyBackoff()
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { true }, backoff: backoff
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let id = ClaudeAccountFixture.id(ClaudeAccountFixture.accountA)
+            #expect(firstSnaps[id]?.status.confidence == .measured)
+
+            let until = now.addingTimeInterval(300)
+            await backoff.record(.rateLimited(retryAfter: until), config: self.config, account: "a")
+            let second = await QuotaFetchContext.$isUserInitiated.withValue(false) {
+                await ClaudeAccountDiscovery(
+                    defaultsSuiteName: suite, proxyConfig: { self.config },
+                    directCredential: { nil }, directPlan: { "Max (5x)" },
+                    loginEnded: { true }, directCredentialIsCLI: { true }, backoff: backoff
+                ).providers(now: now.addingTimeInterval(120))
+            }
+            let secondSnaps = try await read(second)
+            let status = try #require(secondSnaps[id]?.status)
+            guard case .unavailable(.rateLimited(let retryAfter)) = status else {
+                Issue.record("expected rateLimited, got \(status)")
+                return
+            }
+            #expect(retryAfter == until)
+        }
+    }
+
+    /// An identity read that timed out is the vendor's absence of an answer,
+    /// not a payload problem. It must not become sign-in advice just because
+    /// the login blob also says the session ended.
+    @Test("a timed-out direct identity read keeps its timeout")
+    func endedLoginDoesNotRewriteTimeout() async throws {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = ClaudeAccountFixture()
+        fixture.directOther = true
+        try await withServer(fixture) {
+            let first = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { false }, directCredentialIsCLI: { true }
+            ).providers(now: now)
+            let firstSnaps = try await read(first)
+            let directID = ClaudeAccountFixture.id(ClaudeAccountFixture.accountC)
+            #expect(firstSnaps[directID]?.status.confidence == .measured)
+
+            fixture.profileTimesOut = true
+            let second = await ClaudeAccountDiscovery(
+                defaultsSuiteName: suite, proxyConfig: { self.config },
+                directCredential: { "fixture-direct" }, directPlan: { "Max (5x)" },
+                loginEnded: { true }, directCredentialIsCLI: { true }
+            ).providers(now: now.addingTimeInterval(60))
+            let secondSnaps = try await read(second)
+            #expect(secondSnaps[directID]?.status == .unavailable(.timedOut))
+        }
     }
 
     @Test("a named proxy throttle is account scoped and never borrows an unrelated direct reading")

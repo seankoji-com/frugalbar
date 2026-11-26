@@ -80,6 +80,76 @@ them at a day (`maximumRetryAfter`): `TimeInterval("inf")` parses, and an
 infinite or 21-digit wait parked the automatic poll for good and trapped
 `remedy`'s `Int(_:)` conversion.
 
+**A missing Claude Code session is not a vendor-payload verdict.** The CLI
+keeps the credential item after a session ends, writing `loginEnded` (observed
+as `"time_limit"`) and blanking the tokens. `claudeOAuthToken` correctly withholds
+that token, but a read the provider still attempted then reported
+`.badResponse` — "Unexpected response · Vendor returned unexpected data" — which
+sent the owner looking for a data problem on a Mac whose only real state was
+"sign in again" (26 Nov 2026). `KeychainManager.claudeLoginEnded(from:)` reads
+`loginEnded` (inside `claudeAiOauth`, and at the top level for the same fact) and
+a **present but blank** `accessToken`; a missing field is not this state (the CLI
+may have renamed it, written a partial item, or stored the token elsewhere), and
+an *expired* non-blank token is not either, because it may still be refreshable.
+`claudeLoginEndedAsync()` reads the same cached blob on the credential queue and
+respects CLI discovery. It is **cache-only**: a cold miss is "cannot say", never
+"ended", so a status check never opens another app's Keychain item. It also
+deliberately does not fall back to a second store (the macOS login item beside an
+older on-disk copy): the fact must describe the credential the request actually
+used, and two blobs are not evidence of one login.
+When a direct Claude read fails with `.badResponse` or `.notConfigured` and that
+fact is true, `ClaudeQuotaProvider.sessionFailureReason` reports
+`.credentialRejected`, whose remedy now says "Sign in again, or check the
+credential in Settings". The fact is consulted only when the direct credential
+is the CLI login (`directCredentialIsCLI`, false when FrugalBar holds a saved
+key): a token typed into this app is a different credential, so its failure
+keeps its own reason. `hasSavedCredentialAsync` answers `Bool?`: a locked or
+unreadable vault — and a test host that did not inject provenance — is "cannot
+say", which also keeps the credential's own reason rather than guessing. A
+proxy's own reason also stands even when the local login has ended — one
+credential's failure is not another's verdict — and the proxy's
+auth files publish no session state to read. `ClaudeAccountDiscovery` applies
+the same mapping to the unavailable-binding it keeps for a previously verified
+direct row whose identity read fails, because that path never reaches the
+provider's read; when the login ended and its token is gone, that route is
+retained (it is not dropped just because a proxy account keeps the list
+nonempty), so the row and its history survive with the sign-in remedy. Retention
+requires the stored binding's `fromCLI` evidence: a saved key that was deleted
+is a real deletion, not an ended session, and its row must go. The
+identity read's own reason is kept separately (`identityFailure`): a timeout is
+not a payload problem and must not become sign-in advice. A 401/403/429 or a
+transport failure the vendor actually produced is likewise more useful than a
+generic sign-in, and a healthy login leaves `.badResponse` alone. The Settings
+row already names the service ("Claude Code"), so the remedy does not repeat it.
+
+**A carried-over reading still says why the newest poll failed.** `QuotaManager`
+keeps the last figures and records the failed read in `staleReading`, which is
+the ordinary path for "signed in yesterday, session ended today".
+`ProviderConnectionPresentation` therefore reports a measured snapshot with
+`staleReading` as its reason and remedy (normally "Connected"), the popover's
+stale note carries the remedy instead of only "refresh failed", and the
+inspector's carried-over note names both the reason and its remedy. The popover
+also draws an unreadable row's remedy beneath its headline; previous wording
+made the owner open Settings to discover the next step.
+
+**Antigravity's ended session is only visible where the provider owns it.**
+`GeminiQuotaProvider` maps this Mac's primary row's `.notConfigured` to
+`.credentialRejected` when `GeminiOAuthSession.storedSessionEnded` says a Google
+session is stored but can never authenticate — no refresh token and a spent or
+blank access token. The flag is `isLocalSession`, threaded from discovery as the
+account's `isPrimary`, because discovery builds even the local row as an
+account-carrying provider (`account == nil` alone would miss production). A
+vault with no client configured is not evidence of an ended session: that needs
+configuration, not a sign-in, and the same holds when the client secret is
+missing (`isClientConfigured`), because Settings cannot open a sign-in without
+both halves. Once both are configured, a stored session belonging to a different
+client is ended regardless of its refresh token — it can never authenticate, so
+the answer is a re-sign-in. A same-client session with a refresh token is not
+"ended" even after a failed renewal, because that failure may be the network's,
+and an absent session stays "Not configured". A named account's route, proxy or
+direct-with-its-own-token, is never relabelled from this app's session: the
+proxy publishes no session state, so its own reason is the honest one.
+
 **Neither Cloud Code host is authoritative for Antigravity's Gemini windows.**
 `GeminiQuotaProvider` walks `productionAPIHosts` — `daily-` first, then the
 plain host, the order `agy` and T3 Code's Antigravity probe use — and takes the

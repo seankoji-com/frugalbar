@@ -240,7 +240,7 @@ struct MetricRowPresentationAllCases {
             now: now
         )
         #expect(p.valueLabel == "Credential rejected")
-        #expect(p.accessibilityLabel.contains("Check the key in Settings"))
+        #expect(p.accessibilityLabel.contains(UnavailableReason.credentialRejected.remedy))
     }
 
     @Test("badResponse shows headline and remedy")
