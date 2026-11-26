@@ -1709,7 +1709,7 @@ struct CommandCodeQuotaProviderTests {
         ) {
             let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
             #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
-            #expect(snap.accountBlockIsDated)
+            #expect(snap.accountBlockDatedByBarLabel == "MO")
             #expect(snap.row3?.resetsAt == ISO8601DateFormatter().date(from: "2099-12-04T23:22:43Z"))
         }
     }
@@ -1724,7 +1724,7 @@ struct CommandCodeQuotaProviderTests {
         ) {
             let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
             #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
-            #expect(!snap.accountBlockIsDated)
+            #expect(snap.accountBlockDatedByBarLabel == nil)
             // The reading still carries the cycle; only the block's end is unstated.
             #expect(snap.row3?.resetsAt != nil)
         }
@@ -1738,7 +1738,7 @@ struct CommandCodeQuotaProviderTests {
         ) {
             let snap = try await CommandCodeQuotaProvider(apiKey: "user_ok").fetchSnapshot()
             #expect(snap.badgeText == QuotaSnapshot.accountBlockedBadge)
-            #expect(!snap.accountBlockIsDated)
+            #expect(snap.accountBlockDatedByBarLabel == nil)
             #expect(snap.row3?.resetsAt == nil)
         }
     }

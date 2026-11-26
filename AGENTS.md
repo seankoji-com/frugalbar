@@ -677,16 +677,18 @@ for an account blocked on its badge whose block nothing dates: its windows'
 resets say when each window turns over, not when the block lifts, so its return
 is "not published" and the grid's cells show the block with no countdown. A
 block the vendor dates is the exception (`QuotaSnapshot.accountBlockResetIsTheBlocksEnd`,
-read through `accountBlockHasPublishedReturn`), and there are two ways it is
-dated: the provider names the pool whose exhaustion raised the block — Command
-Code's `limited` is its monthly credit pool running out, and the vendor
-documents that "your request budget refreshes at the start of every billing
-cycle", so the pool's published cycle end *is* the block's end
-(`accountBlockIsDated`) — or the vendor blocked the window itself and still
-published when it frees, which is OpenCode Go's `rate-limited` month beside its
-percentage. The grid cell, Back soon, the inspector's reset and the widget's
-Story all name that date; only windows the badge alone blocked stay without a
-countdown, so a sibling window's reset is never offered as the account's return.
+read through `accountBlockEnd` / `accountBlockHasPublishedReturn`), and it is
+dated per bar, never for the whole account: `accountBlockDatedByBarLabel` names
+the bar whose exhaustion raised the block — Command Code's `limited` is its
+monthly credit pool running out, and the vendor documents that "your request
+budget refreshes at the start of every billing cycle", so that row's published
+cycle end is the block's end — or the vendor blocked the window itself and
+still published when it frees, which is OpenCode Go's `rate-limited` month
+beside its percentage. Only those bars keep a reset and a countdown; every
+other window the badge merely blocked stays without one, so a sibling that
+resets in an hour is never read as an unblock date by the grid, Back soon
+(which names the dating window), the inspector (whose focus is that bar) or the
+Story (which tells it).
 Whether a pool's figures describe now is `GlancePresentation.Freshness`
 (current, stale, or awaitingReset when a window's published reset has passed
 with no reading since). Only a current pool is a pick; the grid notes

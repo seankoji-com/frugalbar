@@ -77,7 +77,11 @@ public struct OpenAIUsageCreditPresentation: Equatable, Sendable {
                 expectedPaceFraction: length.flatMap { DualBarMetrics.proRataPace(resetsAt: end, windowLength: $0, now: now) },
                 label: "EXP", resetsAt: end, windowLength: length)
         }
-        var parts = ["Usage credits", percentText, "\(totalText) credits", expiryText]
+        // The drawn figure is compact ("60k credits"); the exact count the
+        // vendor published is spoken and in the tooltip, because the inspector
+        // only shows it once the series has two readings.
+        var parts = ["Usage credits", "\(CreditText.format(remaining)) credits left",
+                     percentText, "\(totalText) credits", expiryText]
         if let pace = barMetrics?.paceMarker {
             parts.append("even use by now is \(Int((pace * 100).rounded()))% used")
         }

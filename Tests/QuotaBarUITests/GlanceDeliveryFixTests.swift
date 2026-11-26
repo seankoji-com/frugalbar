@@ -142,7 +142,7 @@ struct GlanceDeliveryFixTests {
         var snapshot = GlanceFixtures.snapshot("commandcode", .commandcode, "Command Code", [
             GlanceFixtures.bar("MO", 0.9995, resetsInHours: 39, windowHours: 720),
         ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
-        snapshot.accountBlockIsDated = true
+        snapshot.accountBlockDatedByBarLabel = "MO"
         let s = try story(snapshot)
         #expect(s.lines.contains { $0.text.hasPrefix("It resets in") })
         #expect(!s.lines.contains { $0.text.contains("the account block has no published end") })

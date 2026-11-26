@@ -173,6 +173,10 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
         // both keep the undated block, which promises no return.
         let blockIsDated = limited && credits?.resetsAt != nil
             && (credits?.primaryFraction ?? 0) >= QuotaSnapshot.exhaustionThreshold
+        // Name the bar that dated it, not just that it is dated: a sibling
+        // window's reset is not when this block lifts, and the grid keeps a
+        // window's countdown only when it is the block's own end.
+        let datedBy = blockIsDated ? credits?.label : nil
 
         // Neither a window nor a credit bucket is nothing we can report. A
         // structurally valid response carrying no figure must not render as a
@@ -217,7 +221,7 @@ public final class CommandCodeQuotaProvider: QuotaProvider, Sendable {
             badgeText: badge,
             planName: planName,
             cliSource: nil,
-            accountBlockIsDated: blockIsDated
+            accountBlockDatedByBarLabel: datedBy
         )
     }
 

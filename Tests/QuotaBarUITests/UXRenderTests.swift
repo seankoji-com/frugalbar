@@ -411,7 +411,9 @@ struct UXRenderTests {
             "Gemini API cap", "Gemini API cap · Research", "Gemini API cap · research-burner-account@example.com",
             "OpenRouter", "Claude Extra usage · Ops", "Claude Extra usage · Platform Engineering Shared Seat",
         ])
-        #expect(tagged.rows.map(\.tag) == ["configured", "configured", "configured",
+        // No CONFIGURED tag any more (owner, 26 Nov 2026): a typed figure's line
+        // is only ever drawn for itself, so only carried-over reads are tagged.
+        #expect(tagged.rows.map(\.tag) == [nil, nil, nil,
                                            "last reading", "last reading", "last reading"])
         try await save(WalletSection(presentation: tagged, now: now)
             .padding(Theme.edgeMargin)
@@ -420,7 +422,7 @@ struct UXRenderTests {
         // The word is drawn only where the title leaves room for it: once
         // each. The mid-length names stay whole beside their glyphs.
         let tagText = try renderedText("wallet-tags", directory: directory)
-        #expect(tagText.filter { $0.contains("CONFIGURED") }.count == 1, "\(tagText)")
+        #expect(!tagText.contains { $0.contains("CONFIGURED") }, "\(tagText)")
         #expect(tagText.filter { $0.contains("LAST READING") }.count == 1, "\(tagText)")
         #expect(tagText.contains { $0.contains("Research") }, "\(tagText)")
         #expect(tagText.contains { $0.contains("usage · Ops") || $0.contains("usage • Ops") }, "\(tagText)")

@@ -96,9 +96,17 @@ struct ProviderGridView: View {
                         group.summary(for: column).map { (column, $0) }
                     }
                     if published.count == 1, let only = published.first {
-                        summaryCell(only.1, column: only.0,
-                                    stale: group.pools.count == 1 && group.pools[0].isStale,
-                                    dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
+                        // The token travels with the bar (owner, 26 Nov 2026):
+                        // across the whole grid the column no longer says
+                        // which period the one published window is.
+                        HStack(spacing: 7) {
+                            Text(only.0.label)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.outline)
+                            summaryCell(only.1, column: only.0,
+                                        stale: group.pools.count == 1 && group.pools[0].isStale,
+                                        dimmed: group.pools.count == 1 && !group.pools[0].isCurrent)
+                        }
                     } else {
                         columns { column in
                             if let summary = group.summary(for: column) {

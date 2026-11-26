@@ -98,15 +98,16 @@ struct GlanceFreshnessTests {
 
     @Test("a block the vendor dated shows its pool's reset, and every surface agrees")
     func datedAccountBlockKeepsItsReset() throws {
-        // Command Code's real shape: both rolling windows read zero with no
-        // reset, the credit gauge is spent and publishes its billing-cycle end,
-        // and `limited` is set by that pool running out.
+        // Command Code's shape: the credit gauge is spent and publishes its
+        // billing-cycle end, and `limited` is set by that pool running out. The
+        // rolling windows also publish resets here, sooner than the block's, and
+        // those must never reach the cell, the return or the inspector.
         var limited = Fixtures.snapshot("commandcode", .commandcode, "Command Code", [
-            Fixtures.bar("5H", 0.0, resetsInHours: nil, windowHours: 5),
-            Fixtures.bar("WK", 0.0, resetsInHours: nil, windowHours: 168),
+            Fixtures.bar("5H", 0.0, resetsInHours: 2, windowHours: 5),
+            Fixtures.bar("WK", 0.0, resetsInHours: 30, windowHours: 168),
             Fixtures.bar("MO", 0.9995, resetsInHours: 240, windowHours: 720),
         ], badge: QuotaSnapshot.accountBlockedBadge, urgency: .critical)
-        limited.accountBlockIsDated = true
+        limited.accountBlockDatedByBarLabel = "MO"
         let reset = now.addingTimeInterval(240 * 3600)
 
         let glance = GlancePresentation(snapshots: [limited], now: now)
@@ -123,10 +124,19 @@ struct GlanceFreshnessTests {
         // as the block, not as a healthy bar.
         #expect(gridPool.windows[.monthly]?.bar.resetsAt == reset)
         #expect(gridPool.windows[.monthly]?.bar.isBlocked == true)
+        // A sibling that resets sooner is not the block's end: its own reset is
+        // withheld so it cannot read as an unblock date.
+        #expect(gridPool.windows[.fiveHour]?.bar.resetsAt == nil)
+        #expect(gridPool.windows[.weekly]?.bar.resetsAt == nil)
         #expect(grid.groups.first?.nextReturn == reset)
 
+        #expect(glance.backSoon.first?.windowLabel == "MO")
+
+        // The inspector's subject is the dated window, never the 2-hour
+        // sibling that has also been marked blocked by the badge.
         let summary = MetricDetailPresentation(snapshot: limited, now: now).summary
         #expect(summary.state == .blocked)
+        #expect(summary.focusLabel == "MO")
         #expect(summary.resetText != nil)
         #expect(summary.remedy?.contains("until the pool it used up resets") == true)
     }

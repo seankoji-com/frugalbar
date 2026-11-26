@@ -101,7 +101,7 @@ struct ProviderGridPresentation {
             // lifts, and "⊘ MO 2d" beside "1 blocked" read as the unblock date.
             // The cells then show the block and no countdown; the inspector's
             // window lines still give each window's own reset, labelled as such.
-            // A block the vendor dated (`accountBlockIsDated`, or a window it
+            // A block the vendor dated (`accountBlockDatedByBarLabel`, or a window it
             // blocked itself) is the exception: that reset *is* the block's
             // end, so the cell keeps it.
             let poolWindows = (pool?.windows ?? []).map { window -> Window in

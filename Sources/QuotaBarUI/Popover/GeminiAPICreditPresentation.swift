@@ -97,7 +97,7 @@ public struct GeminiAPICreditPresentation: Equatable, Sendable {
         var parts = ["API credit \(amount)",
                      "\(percent)% of the calendar month elapsed"]
         if let dayPhrase { parts.append(dayPhrase) }
-        parts.append("not spend, the fill is elapsed calendar time")
+        parts.append("not spend, the mark is where the calendar month has reached")
         return Budget(amountText: amount, fraction: fraction,
                       percentText: "\(percent)%", countdown: countdown,
                       periodEnd: end, periodLength: length,

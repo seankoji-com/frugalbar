@@ -30,7 +30,9 @@ public enum CreditText {
         let negative = value < 0
         let magnitude = negative ? -value : value
         let text: String
-        if magnitude >= 1_000_000 {
+        // 999,500 rounds to a thousand thousand: take the million branch so
+        // the rollover cannot print "1000k".
+        if magnitude >= 999_500 {
             text = short(magnitude / 1_000_000, places: 1) + "M"
         } else if magnitude >= 10_000 {
             text = short(magnitude / 1_000, places: 0) + "k"

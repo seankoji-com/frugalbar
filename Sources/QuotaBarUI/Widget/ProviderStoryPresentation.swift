@@ -48,7 +48,12 @@ struct ProviderStoryPresentation: Equatable, Sendable {
         let entry = glance.backSoon.first { $0.pool.id == pool.id }
         // The window the story follows: the pick's binding window, else the
         // spent window, else the pool's least-remaining long window.
-        let chosen: GlancePresentation.Window? = rank.map { glance.ranking[$0].binding }
+        // A block the vendor dated is about one window: tell that window, or
+        // the story would name a sibling's reset as the block's end.
+        let datedWindow = pool.datedBlockWindowLabel
+            .flatMap { label in pool.windows.first { $0.bar.label == label } }
+        let chosen: GlancePresentation.Window? = datedWindow
+            ?? rank.map { glance.ranking[$0].binding }
             ?? pool.windows.first(where: \.isSpent)
             ?? pool.windows.filter(\.isLong).min { ($0.remaining ?? 2) < ($1.remaining ?? 2) }
             ?? pool.windows.first

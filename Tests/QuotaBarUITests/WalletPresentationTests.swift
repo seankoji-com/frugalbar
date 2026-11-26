@@ -25,6 +25,9 @@ struct WalletPresentationTests {
     func chatGPTCredits() throws {
         let bonus = try #require(wallet.rows.first { $0.title == "ChatGPT bonus" })
         #expect(bonus.figure == "60k credits" && bonus.figureRole == "left")
+        // The drawn count is compact; the exact one the vendor published has to
+        // survive where the number can be read in full.
+        #expect(bonus.spoken.contains("60,085 credits left"))
         let api = try #require(wallet.rows.first { $0.title == "ChatGPT API" })
         #expect(api.figure == "$100.00" && api.figureRole == "grant")
     }
@@ -81,11 +84,17 @@ struct WalletPresentationTests {
     func elapsedMeters() throws {
         for title in ["Claude · Primary", "Gemini API cap · Account 1"] {
             let row = try #require(wallet.rows.first { $0.title == title })
-            guard case .elapsed(let fraction, let countdown, _, _)? = row.meter else {
+            guard case .elapsed(let fraction, let countdown, let resetsAt, let windowLength)? = row.meter else {
                 Issue.record("\(title) has no elapsed meter"); continue
             }
             #expect(fraction > 0 && fraction < 1)
             #expect(countdown != nil)
+            // The cycle travels with the share, or the bar has no tick: a
+            // position with nothing behind it is exactly what `evenPace` refuses.
+            #expect(resetsAt != nil && (windowLength ?? 0) > 0)
+            let bar = DualBarMetrics(primaryFraction: nil, expectedPaceFraction: fraction,
+                                     label: "MO", resetsAt: resetsAt, windowLength: windowLength)
+            #expect(bar.paceMarker != nil)
         }
     }
 

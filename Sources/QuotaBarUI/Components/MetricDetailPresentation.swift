@@ -185,6 +185,13 @@ public struct MetricDetailPresentation: Equatable, Sendable {
     /// Billing cycles measure elapsed time and are never the focus.
     static func focusBar(of snapshot: QuotaSnapshot) -> DualBarMetrics? {
         let bars = verdictBars(of: snapshot)
+        // A block the provider dated is about that bar; a badge-blocked
+        // account's bars carry no flag of their own, so the fullest one is the
+        // subject (the pool that ran out).
+        if let label = snapshot.accountBlockDatedByBarLabel,
+           let dated = bars.first(where: { $0.label == label }) {
+            return dated
+        }
         return bars.first(where: \.isBlocked)
             ?? bars.max { $0.primaryFractionForWorstBarRanking < $1.primaryFractionForWorstBarRanking }
     }
@@ -232,7 +239,11 @@ public struct MetricDetailPresentation: Equatable, Sendable {
         // the verdict's subject when there is one: its figure is the ended
         // window's, so the hero shows that window and its "reset due", not a
         // still-running window's amount and pace under a waiting headline.
-        let expired = verdictBars(of: snapshot).filter { $0.resetsAt.map { $0 <= now } ?? false }
+        // An account block's subject is the block, not a sibling window that
+        // happens to have reset: taking the expired sibling would let its date
+        // stand in for the block's return.
+        let expired = snapshot.isAccountBlocked ? [] : verdictBars(of: snapshot)
+            .filter { $0.resetsAt.map { $0 <= now } ?? false }
         let expiredFocus = expired.max { ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast) }
         let focus = expiredFocus ?? focusBar(of: snapshot)
         let state: State

@@ -661,20 +661,16 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     /// so neither existing initializer, nor any other provider's call site, has
     /// to change.
     public var staleReading: StaleReading? = nil
-    /// The vendor dated its own account-level block: the block is a metered
-    /// pool running out, and that pool publishes when it refills, so its reset
-    /// is when the account can be used again.
+    /// The bar whose exhaustion raised the account block, when the provider
+    /// dated the block by that pool's own reset — Command Code's `limited` is
+    /// its monthly credit pool running out ("your request budget refreshes at
+    /// the start of every billing cycle"), so its "MO" row's cycle end is when
+    /// the account can work again.
     ///
-    /// Command Code's `limited` is this. Its documentation says the monthly
-    /// credit pool is what gates requests ("your request budget refreshes at
-    /// the start of every billing cycle") and that the rolling windows only
-    /// throttle that included pool until on-demand credits take over, so with
-    /// the credit gauge spent the published cycle end is when work resumes.
-    /// OpenCode Go's `rate-limited` names no end: its windows' resets say when
-    /// each window turns over, never when the account-wide block lifts, which
-    /// is why that block keeps the default `false` and every surface withholds
-    /// its countdown.
-    public var accountBlockIsDated: Bool = false
+    /// Naming the *bar* rather than just "dated" is what stops a sibling
+    /// window's reset being read as the block's end: only this label qualifies
+    /// in `accountBlockResetIsTheBlocksEnd`.
+    public var accountBlockDatedByBarLabel: String? = nil
 
     /// The vendor's windows, longest period first — month, then week, then
     /// the five-hour bucket.
@@ -725,27 +721,45 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
     public static let accountBlockedBadge = "Blocked"
     public var isAccountBlocked: Bool { badgeText == Self.accountBlockedBadge }
 
-    /// Whether `bar`'s published reset is the account block's own end: the
-    /// window the vendor itself blocked (OpenCode Go marks the monthly window
-    /// `rate-limited` and still sends when it frees), or any window when the
-    /// provider dated the block by the pool it used up (Command Code's credit
-    /// cycle, `accountBlockIsDated`).
+    /// Whether `bar`'s published reset is the account block's own end. Two
+    /// ways it can be: the provider named this bar as the pool whose
+    /// exhaustion raised the block (Command Code, `accountBlockDatedByBarLabel`),
+    /// or the vendor blocked this very window and still published when it
+    /// frees (OpenCode Go marks the monthly window `rate-limited`).
     ///
-    /// The one rule every surface reads before drawing a countdown under an
-    /// account block. The owner asked for exactly this twice (26 Nov 2026):
-    /// "⊘ MO 9d" on Command Code, then the same on OpenCode Go — withholding a
-    /// reset the vendor published left both rows with no way back.
+    /// A window the *badge* alone blocked never qualifies — its reset says
+    /// when that window turns over, not when the account comes back. The owner
+    /// asked for the dated case twice (26 Nov 2026): "⊘ MO 9d" on Command Code,
+    /// then the same on OpenCode Go; withholding a published reset left both
+    /// rows with no way back.
     public func accountBlockResetIsTheBlocksEnd(_ bar: DualBarMetrics) -> Bool {
-        guard isAccountBlocked else { return false }
-        return accountBlockIsDated || (bar.isBlocked && bar.resetsAt != nil)
+        guard isAccountBlocked, bar.resetsAt != nil else { return false }
+        if let label = accountBlockDatedByBarLabel { return bar.label == label }
+        return bar.isBlocked
     }
 
-    /// The account block is dated by a reset we hold. False for a block on a
-    /// window that published no reset: then its end is unpublished, and no
-    /// surface may offer one.
-    public var accountBlockHasPublishedReturn: Bool {
-        isAccountBlocked && quotaBars.contains { accountBlockResetIsTheBlocksEnd($0) }
+    /// When the account block lifts, as the vendor published it. Nil when no
+    /// window dates it: then its end is unpublished and no surface may offer
+    /// one. A provider-named bar wins; otherwise the earliest reset among the
+    /// windows the vendor blocked itself is when the first of them frees.
+    public var accountBlockEnd: Date? {
+        guard isAccountBlocked else { return nil }
+        if let label = accountBlockDatedByBarLabel {
+            return quotaBars.first { $0.label == label }?.resetsAt
+        }
+        return quotaBars.filter { $0.isBlocked && $0.resetsAt != nil }.compactMap(\.resetsAt).min()
     }
+
+    /// The bar whose reset dates the block, for naming it in a return hint.
+    public var accountBlockDatedWindowLabel: String? {
+        guard isAccountBlocked else { return nil }
+        if let label = accountBlockDatedByBarLabel { return label }
+        return quotaBars.filter { $0.isBlocked && $0.resetsAt != nil }
+            .min { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }?.label
+    }
+
+    /// The account block is dated by a reset we hold.
+    public var accountBlockHasPublishedReturn: Bool { accountBlockEnd != nil }
 
     /// `bar` as this account's block leaves it: blocked when the vendor
     /// blocked the whole account, whatever its own flag says. A billing
@@ -900,7 +914,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         keyMasked: String? = nil,
         cliSource: String? = nil,
         currencyBasis: CurrencyBasis? = nil,
-        accountBlockIsDated: Bool = false
+        accountBlockDatedByBarLabel: String? = nil
     ) {
         self.id = id
         self.vendorId = vendorId
@@ -920,7 +934,7 @@ public struct QuotaSnapshot: Sendable, Identifiable, Equatable {
         self.keyMasked = keyMasked
         self.cliSource = cliSource
         self.currencyBasis = currencyBasis
-        self.accountBlockIsDated = accountBlockIsDated
+        self.accountBlockDatedByBarLabel = accountBlockDatedByBarLabel
     }
 
 
