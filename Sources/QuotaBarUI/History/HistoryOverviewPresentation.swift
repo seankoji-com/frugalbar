@@ -22,21 +22,15 @@ public enum HistoryOverviewPresentation {
         /// inherited the pre-workspace `opencode` key also owns the readings an
         /// install recorded under that key before workspaces existed.
         public let keys: [String]
-        /// Stored keys this subject owns by prefix: OpenDesign files each
-        /// workspace it reads under its own `opendesign:` key.
-        public let keyPrefix: String?
-
-        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil,
-                    keyPrefix: String? = nil) {
+        public init(id: String, vendor: VendorIdentifier, name: String, keys: [String]? = nil) {
             self.id = id
             self.vendor = vendor
             self.name = name
             self.keys = keys ?? [id]
-            self.keyPrefix = keyPrefix
         }
 
         public func owns(_ key: String) -> Bool {
-            keys.contains(key) || keyPrefix.map(key.hasPrefix) == true
+            keys.contains(key)
         }
     }
 
@@ -52,7 +46,8 @@ public enum HistoryOverviewPresentation {
         hidden: Set<VendorIdentifier>,
         workspaces: [OpenCodeGoWorkspace],
         claudeAccounts: [ClaudeAccount] = ClaudeAccountStore.all(),
-        antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all()
+        antigravityAccounts: [AntigravityAccount] = AntigravityAccountStore.all(),
+        openDesignConnections: OpenDesignConnections? = nil
     ) -> [Subject] {
         order.filter { !hidden.contains($0) }.flatMap { vendor -> [Subject] in
             if vendor == .claude, !claudeAccounts.isEmpty {
@@ -83,8 +78,11 @@ public enum HistoryOverviewPresentation {
                 return subjects
             }
             if vendor == .opendesign {
-                return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName,
-                                keyPrefix: OpenDesignQuotaProvider.instancePrefix)]
+                let linked = OpenDesignConnection.allCases.compactMap { connection -> Subject? in
+                    guard let workspace = openDesignConnections?.workspace(for: connection) else { return nil }
+                    return Subject(id: workspace.seriesID, vendor: vendor, name: connection.displayName)
+                }
+                return linked.isEmpty ? [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)] : linked
             }
             guard vendor == .opencode else {
                 return [Subject(id: vendor.rawValue, vendor: vendor, name: vendor.displayName)]
@@ -100,6 +98,25 @@ public enum HistoryOverviewPresentation {
                 )
             }
         }
+    }
+
+    /// Older and disconnected workspace series remain chartable by their own
+    /// keys, even when the current connections no longer name them.
+    static func includingOpenDesignHistory(_ subjects: [Subject], readings: [QuotaHistoryStore.ReadingRecord]) -> [Subject] {
+        let vendor = VendorIdentifier.opendesign
+        guard let insertion = subjects.lastIndex(where: { $0.vendor == vendor }) else { return subjects }
+        let known = Set(subjects.filter { $0.vendor == vendor }.flatMap(\.keys))
+        let unlinked = Set(readings.map(\.vendor)).subtracting(known).sorted().compactMap { key -> Subject? in
+            if key == vendor.rawValue {
+                return Subject(id: key, vendor: vendor, name: "OpenDesign · Unattributed")
+            }
+            guard key.hasPrefix(OpenDesignQuotaProvider.instancePrefix) else { return nil }
+            let reference = key.dropFirst(OpenDesignQuotaProvider.instancePrefix.count).prefix(8)
+            return Subject(id: key, vendor: vendor, name: "OpenDesign · Workspace \(reference)")
+        }
+        var result = subjects
+        result.insert(contentsOf: unlinked, at: insertion + 1)
+        return result
     }
 
     /// Local Claude Code activity does not identify the subscription account.

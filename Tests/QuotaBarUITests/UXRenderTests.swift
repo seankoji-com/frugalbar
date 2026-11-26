@@ -13,7 +13,7 @@ import WebKit
 struct UXRenderTests {
     /// Design B avatars, the single spent red across Command Code and OpenCode
     /// Go, a named Claude row carrying the linked monthly credit, and an
-    /// OpenDesign Go row.
+    /// two OpenDesign Go workspace rows.
     @Test func renderExhaustedAndNewRows() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FRUGALBAR_RENDER_DIR"]!)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -28,8 +28,8 @@ struct UXRenderTests {
                 resetsAt: now.addingTimeInterval(hours * 3600), windowLength: length)
         }
         func snapshot(_ id: String, _ vendor: VendorIdentifier, _ plan: String?,
-                      _ rows: [DualBarMetrics]) -> QuotaSnapshot {
-            QuotaSnapshot(id: id, vendorId: vendor, displayName: id, category: .aiSubscriptions,
+                      _ rows: [DualBarMetrics], name: String? = nil) -> QuotaSnapshot {
+            QuotaSnapshot(id: id, vendorId: vendor, displayName: name ?? id, category: .aiSubscriptions,
                 metric: .subscription(tierName: plan, renewalDate: nil), status: .measured(.none),
                 resetsAt: nil, lastUpdated: now, auxiliaryInfo: nil,
                 row1: rows.first, row2: rows.dropFirst().first, row3: rows.dropFirst(2).first, planName: plan)
@@ -44,11 +44,19 @@ struct UXRenderTests {
             snapshot("Alpha", .opencode, "OpenCode Go", [bar("WK", 1, 20, blocked: true), bar("MO", 0.50, 25 * 24)]),
             snapshot("Beta", .opencode, "OpenCode Go", [bar("5H", 0.16, 0.6), bar("WK", 0.20, 24)]),
         ]
-        let openDesign = snapshot("OpenDesign", .opendesign, "OpenDesign Go · Pro",
-                                  [bar("5H", 0.08, 2), bar("WK", 0.31, 3 * 24)])
-        try await save(livePopover([primary, commandCode] + workspaces + [openDesign], expanded: .deepseek, now: now)
+        let openDesign = [
+            snapshot(OpenDesignQuotaProvider.seriesID(workspaceID: "render-primary"), .opendesign,
+                     "OpenDesign Go · Pro", [bar("5H", 0.08, 2), bar("WK", 0.31, 3 * 24)],
+                     name: OpenDesignConnection.primary.displayName),
+            snapshot(OpenDesignQuotaProvider.seriesID(workspaceID: "render-secondary"), .opendesign,
+                     "OpenDesign Go · Pro", [bar("5H", 0.52, 1), bar("WK", 0.74, 4 * 24)],
+                     name: OpenDesignConnection.secondary.displayName),
+        ]
+        try await save(livePopover([primary, commandCode] + workspaces + openDesign, expanded: .deepseek, now: now)
             .padding(Theme.edgeMargin).frame(width: PopoverRootView.popoverWidth).background(Theme.surface),
             name: "exhausted-and-new-rows", directory: directory)
+        try await save(SettingsView(store: nil, initialPane: .service(.opendesign), readsCredentials: false),
+                       name: "settings-opendesign", directory: directory)
         try await save(HStack(spacing: 24) {
             VendorAvatarView(vendorId: .claude, status: .healthy, size: 28)
             VendorAvatarView(vendorId: .claude, status: .healthy, isExhausted: true,

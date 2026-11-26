@@ -175,6 +175,105 @@ struct OpenDesignQuotaProviderTests {
         #expect(s.calls.count == 3)
     }
 
+    @Test("Two linked rows use their own path, workspace header and quota figures")
+    func independentWorkspaceReadings() async throws {
+        let a = OpenDesignWorkspace(workspaceId: "ws-a", workspaceName: "Studio", personalMembershipTier: nil)
+        let b = OpenDesignWorkspace(workspaceId: "ws-b", workspaceName: "Studio", personalMembershipTier: nil)
+        let usageB = OpenDesignQuotaProvider.apiBase + "ws-b/billing/coding-plan-usage"
+        let aTransport = Stub(answers: [Self.usage: ok(#"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":2,"limitCredits":10}]}"#)])
+        let bTransport = Stub(answers: [usageB: ok(#"{"workspaceId":"ws-b","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":35,"limitCredits":50}]}"#)])
+        let primary = OpenDesignQuotaProvider(slot: .primary, workspace: a, transport: aTransport)
+        let secondary = OpenDesignQuotaProvider(slot: .secondary, workspace: b, transport: bTransport)
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [primary, secondary] })
+
+        let first = await manager.forceRefresh()
+        #expect(first[a.seriesID]?.row1?.primaryFraction == 0.2)
+        #expect(first[b.seriesID]?.row1?.primaryFraction == 0.7)
+        #expect(first[a.seriesID]?.rowTitle == "OpenDesign · Primary")
+        #expect(first[b.seriesID]?.rowTitle == "OpenDesign · Secondary")
+        #expect(aTransport.calls.map(\.url) == [Self.usage])
+        #expect(aTransport.calls.map(\.workspace) == ["ws-a"])
+        #expect(bTransport.calls.map(\.url) == [usageB])
+        #expect(bTransport.calls.map(\.workspace) == ["ws-b"])
+
+        bTransport.answers = [usageB: ok(#"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":4,"limitCredits":10}]}"#)]
+        let next = await manager.forceRefresh()
+        #expect(next[a.seriesID]?.staleReading == nil)
+        #expect(next[b.seriesID]?.staleReading?.reason == .badResponse)
+        #expect(next[b.seriesID]?.row1?.primaryFraction == 0.7)
+    }
+
+    @Test("Disconnecting one workspace during commit discards only that workspace's result")
+    func forgetOneWorkspaceDuringPass() async throws {
+        let a = OpenDesignWorkspace(workspaceId: "ws-a", workspaceName: nil, personalMembershipTier: nil)
+        let b = OpenDesignWorkspace(workspaceId: "ws-b", workspaceName: nil, personalMembershipTier: nil)
+        let usageB = OpenDesignQuotaProvider.apiBase + "ws-b/billing/coding-plan-usage"
+        let aTransport = Stub(answers: [Self.usage: ok(#"{"workspaceId":"ws-a","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":1,"limitCredits":2}]}"#)])
+        let bTransport = Stub(answers: [usageB: ok(#"{"workspaceId":"ws-b","eligible":true,"windows":[{"durationSeconds":18000,"usedCredits":1,"limitCredits":4}]}"#)])
+        let primary = OpenDesignQuotaProvider(slot: .primary, workspace: a, transport: aTransport)
+        let secondary = OpenDesignQuotaProvider(slot: .secondary, workspace: b, transport: bTransport)
+        let gate = CommitGate()
+        let manager = QuotaManager(
+            cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, perProviderTimeout: 2, minPollInterval: 0),
+            providerFactory: { [primary, secondary] },
+            monthlyCreditConnection: { await gate.waitAtCommit(); return nil })
+
+        let pass = Task { await manager.forceRefresh() }
+        var ready = gate.ready.stream.makeAsyncIterator()
+        _ = await ready.next()
+        await manager.forgetReadings(for: [b.seriesID])
+        gate.resume.continuation.finish()
+        let result = await pass.value
+        #expect(result[a.seriesID]?.row1?.primaryFraction == 0.5)
+        #expect(result[b.seriesID] == nil)
+        #expect(bTransport.calls.count == 1)
+    }
+
+    private actor CommitGate {
+        let ready = AsyncStream<Void>.makeStream()
+        let resume = AsyncStream<Void>.makeStream()
+        private var started = false
+
+        func waitAtCommit() async {
+            guard started else { started = true; return }
+            ready.continuation.finish()
+            var iterator = resume.stream.makeAsyncIterator()
+            _ = await iterator.next()
+        }
+    }
+
+    @Test("Existing primary defaults migrate and a verified workspace cannot fill both connections")
+    func workspaceLinks() throws {
+        let suite = "FrugalBar.OpenDesign.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: OpenDesignConnections.legacyEnabledKey)
+        var connections = OpenDesignConnections.load(from: preferences)
+        #expect(connections.isConnected(.primary))
+        #expect(connections.workspace(for: .primary) == nil)
+        #expect(!connections.isConnected(.secondary))
+
+        let primary = OpenDesignWorkspace(workspaceId: "ws-a", workspaceName: "Studio", personalMembershipTier: nil)
+        let secondary = OpenDesignWorkspace(workspaceId: "ws-b", workspaceName: "Studio", personalMembershipTier: nil)
+        try connections.link(primary, to: .primary)
+        #expect(throws: OpenDesignLinkError.duplicate(.primary)) { try connections.link(primary, to: .secondary) }
+        try connections.link(secondary, to: .secondary)
+        connections.save(to: preferences)
+        #expect(OpenDesignConnections.load(from: preferences) == connections)
+        #expect(OpenDesignQuotaProvider.configuredProviders(connections: connections).map(\.instanceID)
+                == [primary.seriesID, secondary.seriesID])
+
+        connections.unlink(.primary)
+        connections.save(to: preferences)
+        let relaunched = OpenDesignConnections.load(from: preferences)
+        #expect(!relaunched.isConnected(.primary))
+        #expect(relaunched.workspace(for: .secondary) == secondary)
+        #expect(OpenDesignQuotaProvider.configuredProviders(connections: relaunched).map(\.instanceID)
+                == [secondary.seriesID])
+    }
+
     /// The read finished while the pass waited on another provider, then the
     /// user disconnected; the pass's commit wrote the reading back.
     @Test("A disconnect during a pass keeps the pass from writing the reading back")

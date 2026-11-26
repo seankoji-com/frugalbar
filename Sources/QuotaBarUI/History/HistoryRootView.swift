@@ -188,7 +188,8 @@ public struct HistoryRootView: View {
             let prefs = CredentialStore.providerDisplayPreferences
             return (
                 HistoryOverviewPresentation.subjects(
-                    order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved()),
+                    order: prefs.order, hidden: prefs.hidden, workspaces: OpenCodeGoWorkspaceStore.resolved(),
+                    openDesignConnections: OpenDesignConnections.load()),
                 HistoryOverviewPresentation.hiddenNames(order: prefs.order, hidden: prefs.hidden)
             )
         }
@@ -1101,10 +1102,6 @@ public struct HistoryRootView: View {
         let source = subjectSource()
         subjects = source.subjects
         hiddenNames = source.hidden
-        if !subjects.contains(where: { $0.id == selectedSubjectID }) {
-            selectedSubjectID = subjects.first?.id
-            userChoseSubject = false
-        }
 
         if isSampleMode {
             do {
@@ -1121,6 +1118,10 @@ public struct HistoryRootView: View {
         }
 
         await reloadOverview(now: referenceDate)
+        if !subjects.contains(where: { $0.id == selectedSubjectID }) {
+            selectedSubjectID = subjects.first?.id
+            userChoseSubject = false
+        }
         // Until the user picks one, lead with the first provider that has
         // something to show rather than an empty chart.
         if !userChoseSubject, let first = overviewCards.first,
@@ -1271,6 +1272,7 @@ public struct HistoryRootView: View {
                 since: timeRange.startDate(from: now),
                 until: now,
                 bucketSeconds: bucket)
+            subjects = HistoryOverviewPresentation.includingOpenDesignHistory(subjects, readings: sampled)
             let overview = HistoryOverviewPresentation.overview(
                 subjects: subjects, readings: sampled, bucketSeconds: bucket)
             overviewCards = overview.cards

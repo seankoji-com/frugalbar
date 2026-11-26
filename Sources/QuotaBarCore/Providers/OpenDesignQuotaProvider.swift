@@ -1,9 +1,9 @@
 import Foundation
 
-/// OpenDesign Go coding-plan usage for the signed-in user's current workspace.
+/// OpenDesign Go coding-plan usage for one verified workspace and web sign-in.
 ///
-/// Two read-only GETs against `amr-api.open-design.ai`: `/api/v1/workspaces/current`,
-/// then `/api/v1/workspaces/{id}/billing/coding-plan-usage` with the matching
+/// The linked workspace comes from `/api/v1/workspaces/current`. Usage reads
+/// `/api/v1/workspaces/{id}/billing/coding-plan-usage` with the matching
 /// `X-Vela-Workspace-Id` header. Both are authenticated by the open-design.ai web
 /// session; an OpenDesign inference API key is answered `401 unauthenticated`
 /// (checked against a real key on 22 November 2026 AEDT, 21 November UTC), so
@@ -16,7 +16,8 @@ import Foundation
 /// publishes that window. Credits are allowance units, not money.
 public struct OpenDesignQuotaProvider: QuotaProvider {
     public let vendorId: VendorIdentifier = .opendesign
-    public var displayName: String { vendorId.displayName }
+    public var displayName: String { workspace == nil ? vendorId.displayName : slot.displayName }
+    public var instanceID: String { workspace?.seriesID ?? vendorId.rawValue }
     public let category: MetricCategory = .aiSubscriptions
 
     static let apiBase = "https://amr-api.open-design.ai/api/v1/workspaces/"
@@ -24,13 +25,29 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
     static let notConnected = UnavailableReason.notConfigured
 
     private let transport: any OpenDesignTransport
+    private let slot: OpenDesignConnection
+    private let workspace: OpenDesignWorkspace?
 
     public init() {
-        self.transport = TestHost.isActive ? OpenDesignDisconnectedTransport() : OpenDesignWebTransport()
+        self.init(slot: .primary, workspace: TestHost.isActive ? nil : OpenDesignConnections.load().workspace(for: .primary))
     }
 
-    init(transport: any OpenDesignTransport) {
-        self.transport = transport
+    init(slot: OpenDesignConnection = .primary, workspace: OpenDesignWorkspace? = nil,
+         transport: (any OpenDesignTransport)? = nil) {
+        self.slot = slot
+        self.workspace = workspace
+        self.transport = transport ?? (TestHost.isActive ? OpenDesignDisconnectedTransport() :
+            OpenDesignWebTransport(slot: slot, workspaceID: workspace?.workspaceId))
+    }
+
+    static func configuredProviders(
+        connections: OpenDesignConnections = TestHost.isActive ? OpenDesignConnections() : OpenDesignConnections.load()
+    ) -> [Self] {
+        return OpenDesignConnection.allCases.compactMap { slot in
+            let showUnconfigured = slot == .primary && !connections.isConnected(.secondary)
+            guard connections.isConnected(slot) || showUnconfigured else { return nil }
+            return Self(slot: slot, workspace: connections.workspace(for: slot))
+        }
     }
 
     public func fetchSnapshot() async throws -> QuotaSnapshot {
@@ -39,25 +56,43 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
 
     func fetchSnapshot(now: Date) async throws -> QuotaSnapshot {
         guard let connection = await transport.connection else { return unavailable(Self.notConnected) }
-        let workspace: Workspace
-        switch await transport.get(url: Self.apiBase + "current", workspaceID: nil, connection: connection) {
-        case .failure(let reason): return unavailable(reason)
-        case .response(let status, let data, let retryAfter):
-            if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
-                return unavailable(reason)
+        let selected: OpenDesignWorkspace
+        if let workspace {
+            selected = workspace
+        } else {
+            // Until explicitly linked, an existing primary still follows the
+            // dashboard's current workspace, with no cross-series retention.
+            switch Self.workspaceSelection(from: await transport.get(
+                url: Self.apiBase + "current", workspaceID: nil, connection: connection), now: now) {
+            case .selected(let workspace): selected = workspace
+            case .failed(let reason): return unavailable(reason)
             }
-            guard let decoded = try? JSONDecoder().decode(Workspace.self, from: data),
-                  Self.validWorkspaceID(decoded.workspaceId) else { return unavailable(.badResponse) }
-            workspace = decoded
         }
-        let path = Self.apiBase + workspace.workspaceId + "/billing/coding-plan-usage"
-        switch await transport.get(url: path, workspaceID: workspace.workspaceId, connection: connection) {
+        guard Self.validWorkspaceID(selected.workspaceId) else { return unavailable(.badResponse) }
+        let path = Self.apiBase + selected.workspaceId + "/billing/coding-plan-usage"
+        switch await transport.get(url: path, workspaceID: selected.workspaceId, connection: connection) {
         case .failure(let reason): return unavailable(reason)
         case .response(let status, let data, let retryAfter):
             if let reason = Self.failureReason(status: status, retryAfter: retryAfter, now: now) {
                 return unavailable(reason)
             }
-            return Self.snapshot(from: data, workspace: workspace, provider: self, now: now)
+            return Self.snapshot(from: data, workspace: selected, provider: self, now: now)
+        }
+    }
+
+    enum WorkspaceSelection {
+        case selected(OpenDesignWorkspace)
+        case failed(UnavailableReason)
+    }
+
+    static func workspaceSelection(from result: OpenDesignResult, now: Date) -> WorkspaceSelection {
+        switch result {
+        case .failure(let reason): return .failed(reason)
+        case .response(let status, let data, let retryAfter):
+            if let reason = failureReason(status: status, retryAfter: retryAfter, now: now) { return .failed(reason) }
+            guard let workspace = try? JSONDecoder().decode(OpenDesignWorkspace.self, from: data),
+                  validWorkspaceID(workspace.workspaceId) else { return .failed(.badResponse) }
+            return .selected(workspace)
         }
     }
 
@@ -69,10 +104,9 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
         QuotaHTTP.failureReason(for: status, retryAfter: retryAfter, now: now)
     }
 
-    /// History and retention belong to one workspace. A successful reading is
-    /// filed under the workspace it was read for, so switching workspaces
-    /// starts a new series, and a failed poll (filed under the bare vendor id)
-    /// never keeps another workspace's figures on screen.
+    /// History and retention belong to one workspace. Only a legacy primary
+    /// can report a failure under the bare vendor ID before it knows which
+    /// workspace it is reading.
     /// Every workspace series key starts with this, so vendor-wide history
     /// reads find all of them.
     public static let instancePrefix = "opendesign:"
@@ -84,12 +118,6 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
     /// The id becomes a path component, so only a plain token is accepted.
     static func validWorkspaceID(_ id: String) -> Bool {
         (1...128).contains(id.count) && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
-    }
-
-    struct Workspace: Decodable, Sendable {
-        let workspaceId: String
-        let workspaceName: String?
-        let personalMembershipTier: String?
     }
 
     struct Usage: Decodable {
@@ -139,7 +167,7 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
         return nil
     }
 
-    static func snapshot(from data: Data, workspace: Workspace,
+    static func snapshot(from data: Data, workspace: OpenDesignWorkspace,
                          provider: OpenDesignQuotaProvider, now: Date) -> QuotaSnapshot {
         guard let usage = try? JSONDecoder().decode(Usage.self, from: data),
               usage.workspaceId == workspace.workspaceId,
@@ -165,7 +193,7 @@ public struct OpenDesignQuotaProvider: QuotaProvider {
             .compactMap { $0?.trimmed }.first { !$0.isEmpty }
             .map { "OpenDesign Go · " + $0.capitalized }
         return QuotaSnapshot(
-            id: seriesID(workspaceID: workspace.workspaceId),
+            id: workspace.seriesID,
             vendorId: provider.vendorId,
             displayName: provider.displayName,
             category: provider.category,
@@ -220,9 +248,7 @@ enum OpenDesignResult: Sendable {
 /// How the provider reaches OpenDesign. Production goes through the signed-in
 /// in-app web session; tests inject a stub and assert it was called.
 protocol OpenDesignTransport: Sendable {
-    /// The current connection's generation, or nil when not signed in. Both
-    /// GETs of one read carry it, so workspace discovery and usage cannot come
-    /// from two different connections.
+    /// The current connection's generation, or nil when disabled or replaced.
     var connection: UUID? { get async }
     func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult
 }
@@ -233,10 +259,13 @@ struct OpenDesignDisconnectedTransport: OpenDesignTransport {
 }
 
 struct OpenDesignWebTransport: OpenDesignTransport {
+    let slot: OpenDesignConnection
+    let workspaceID: String?
+
     var connection: UUID? {
-        get async { await MainActor.run { OpenDesignWebSession.shared.isEnabled ? OpenDesignWebSession.shared.generation : nil } }
+        get async { await OpenDesignWebSession.session(for: slot).pollGeneration(workspaceID: workspaceID) }
     }
     func get(url: String, workspaceID: String?, connection: UUID) async -> OpenDesignResult {
-        await OpenDesignWebSession.shared.get(url: url, workspaceID: workspaceID, connection: connection)
+        await OpenDesignWebSession.session(for: slot).get(url: url, workspaceID: workspaceID, connection: connection)
     }
 }

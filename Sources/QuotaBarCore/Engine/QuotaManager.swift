@@ -193,10 +193,10 @@ public actor QuotaManager {
             CommandCodeQuotaProvider(),
             ClinePassQuotaProvider(),
             MuseQuotaProvider(),
-            OpenDesignQuotaProvider(),
-            GitHubRestProvider(),
-            GitHubGraphQLProvider(),
         ] as [any QuotaProvider])
+        providers.append(contentsOf: OpenDesignQuotaProvider.configuredProviders())
+        providers.append(GitHubRestProvider())
+        providers.append(GitHubGraphQLProvider())
         return providers
     }
 
@@ -225,10 +225,20 @@ public actor QuotaManager {
         for key in Array(cache.keys) where cache[key]?.snapshot.vendorId == vendor { cache[key] = nil }
     }
 
+    /// Disconnecting or relinking one workspace leaves its sibling's cache,
+    /// retry deadline and any in-flight result intact.
+    public func forgetReadings(for instanceIDs: Set<String>) {
+        for id in instanceIDs {
+            forgottenInstances[id, default: 0] += 1
+            cache[id] = nil
+        }
+    }
+
     /// Bumped by `forgetReadings`. A pass that started before the bump drops
     /// that vendor's result at commit, so a read that completed just before
     /// the disconnect cannot write the forgotten reading back.
     private var forgottenVendors: [VendorIdentifier: Int] = [:]
+    private var forgottenInstances: [String: Int] = [:]
 
     /// Disconnecting the OpenAI billing session is a local state change, not a
     /// reason to poll quota. Clear the independently read grant immediately so
@@ -607,6 +617,8 @@ public actor QuotaManager {
         allowInteractiveUnlock: Bool = false,
         excluding: Set<String> = []
     ) async -> [String: QuotaSnapshot] {
+        let forgottenAtStart = forgottenVendors
+        let forgottenInstancesAtStart = forgottenInstances
         // Read once, so a preference change mid-fetch cannot split the pass.
         // A hidden provider is not polled at all, and its cache entry goes so
         // it vanishes from every surface and, once shown again, is fetched at
@@ -839,7 +851,6 @@ public actor QuotaManager {
 
         let creditInvalidation = monthlyCreditInvalidation
         let openAICreditInvalidation = openAIMonthlyCreditInvalidation
-        let forgottenAtStart = forgottenVendors
         let creditConnection = await monthlyCreditConnection()
         var deadlineFailures: Set<String> = []
         await withTaskGroup(of: (String, QuotaSnapshot, Bool).self) { group in
@@ -902,11 +913,12 @@ public actor QuotaManager {
         let acceptsMonthlyCredit = creditConnection != nil && creditConnection == currentCreditConnection
             && creditInvalidation == monthlyCreditInvalidation
         let acceptsOpenAIMonthlyCredit = openAICreditInvalidation == openAIMonthlyCreditInvalidation
-        // A vendor forgotten during this pass (a disconnect) has no result:
+        // A vendor or workspace forgotten during this pass has no result:
         // it is neither committed nor counted as read, so a pass queued
         // behind this one fetches it afresh rather than skipping it.
         for provider in providersToFetch
-        where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId] {
+        where forgottenVendors[provider.vendorId] != forgottenAtStart[provider.vendorId]
+            || forgottenInstances[provider.instanceID] != forgottenInstancesAtStart[provider.instanceID] {
             results[provider.instanceID] = nil
         }
         // A retired pool is kept in the cache (see `isRetiredPool`) so the poll
@@ -954,10 +966,8 @@ public actor QuotaManager {
             // failures in a row must report the newest reason rather than
             // freeze the first one indefinitely, and a placeholder carries no
             // figures worth keeping.
-            // Retention also stays inside one series: a provider that files
-            // readings per discovered workspace (OpenDesign) reports a failure
-            // under its bare id, and another workspace's figures must not stand
-            // in for it.
+            // A legacy OpenDesign connection can switch series without changing
+            // its cache key. Never retain an earlier workspace's figures for it.
             let isAntigravityRestriction: Bool = if AntigravityAccount.allowance(for: provider.vendorId) != nil,
                 case .unsupported = snap.status.unavailableReason { true } else { false }
             if let reason = snap.status.unavailableReason,

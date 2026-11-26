@@ -127,8 +127,8 @@ public struct SettingsView: View {
     @State private var expanded: Set<VendorIdentifier> = []
     @State private var showClaudeMonthlyCredit = false
     @State private var claudeCreditRows: [ClaudeMonthlyCreditBinding.Row] = []
-    @State private var openDesignEnabled = false
-    @State private var showOpenDesign = false
+    @State private var openDesignConnections: OpenDesignConnections?
+    @State private var openDesignConnection: OpenDesignConnection?
 
     /// Which Claude row the linked monthly credit is drawn under, or why it is
     /// drawn under none. Nil when Claude has no named account rows: the single
@@ -438,7 +438,7 @@ public struct SettingsView: View {
             guard readsCredentials else { return }
             claudeMonthlyEnabled = ClaudeMonthlyCreditSession.shared.isEnabled
             openAIMonthlyEnabled = OpenAIMonthlyCreditSession.shared.isEnabled
-            openDesignEnabled = OpenDesignWebSession.shared.isEnabled
+            openDesignConnections = OpenDesignConnections.load()
             claudeCreditRows = ClaudeMonthlyCreditBinding.storedRows()
         }
         .sheet(isPresented: $showClaudeMonthlyCredit, onDismiss: {
@@ -448,9 +448,15 @@ public struct SettingsView: View {
                 await store?.load()
             }
         }) { ClaudeMonthlyCreditConnectionView() }
-        .sheet(isPresented: $showOpenDesign, onDismiss: {
-            Task { await store?.forceRefresh() }
-        }) { OpenDesignConnectionView() }
+        .sheet(item: $openDesignConnection) { connection in
+            OpenDesignConnectionView(connection: connection) { invalidated in
+                openDesignConnections = OpenDesignConnections.load()
+                Task {
+                    await store?.forgetReadings(for: invalidated)
+                    await store?.applyProviderPreferences()
+                }
+            }
+        }
         .sheet(isPresented: $showOpenAIMonthlyCredit, onDismiss: {
             Task { await store?.forceRefresh() }
         }) { OpenAIMonthlyCreditConnectionView() }
@@ -578,18 +584,29 @@ public struct SettingsView: View {
 
     private var openDesignSection: some View {
         Section("OpenDesign Go usage") {
-            Text("Sign in to OpenDesign to read your current workspace's 5-hour and weekly coding-plan usage, and its monthly window when OpenDesign publishes one. An OpenDesign API key cannot read usage, so there is no key slot.")
+            Text("Link each workspace through its own OpenDesign sign-in to see its coding-plan usage.")
                 .font(.caption)
-            Button(openDesignEnabled ? "Open OpenDesign sign-in" : "Connect OpenDesign") {
-                OpenDesignWebSession.shared.connect()
-                openDesignEnabled = true
-                showOpenDesign = true
-            }
-            if openDesignEnabled {
-                Button("Disconnect OpenDesign") {
-                    OpenDesignWebSession.shared.disconnect()
-                    openDesignEnabled = false
-                    Task { await store?.forgetReadings(of: .opendesign) }
+            ForEach(OpenDesignConnection.allCases) { connection in
+                let connected = openDesignConnections?.isConnected(connection) == true
+                LabeledContent(connection.title) {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if let name = openDesignConnections?.workspace(for: connection)?.name {
+                            Text(name).font(.caption)
+                        }
+                        HStack {
+                            Button(connected ? "Open \(connection.title.lowercased()) sign-in" : "Connect \(connection.title.lowercased())") {
+                                OpenDesignWebSession.session(for: connection).open()
+                                openDesignConnection = connection
+                            }
+                            if connected {
+                                Button("Disconnect \(connection.title.lowercased())") {
+                                    let oldID = OpenDesignWebSession.session(for: connection).disconnect()
+                                    openDesignConnections = OpenDesignConnections.load()
+                                    if let oldID { Task { await store?.forgetReadings(for: [oldID]) } }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

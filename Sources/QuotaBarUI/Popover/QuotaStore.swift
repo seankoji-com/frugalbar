@@ -208,6 +208,15 @@ public final class QuotaStore {
     /// poll at the moment of the disconnect.
     public func forgetReadings(of vendor: VendorIdentifier) async {
         await manager.forgetReadings(of: vendor)
+        await publishCachedReadings()
+    }
+
+    public func forgetReadings(for instanceIDs: Set<String>) async {
+        await manager.forgetReadings(for: instanceIDs)
+        await publishCachedReadings()
+    }
+
+    private func publishCachedReadings() async {
         let snaps = await manager.sortedSnapshots()
         snapshots = snaps
         summary = SystemHealthSummary.compute(from: snaps)
