@@ -25,7 +25,9 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
     private var directoryFailure: UnavailableReason?
     private var navigationFailed = false
     private var requestTail: Task<Void, Never>?
-    private var retryAfter: Date?
+    private var backoff: (until: Date, published: Date?)?
+
+    public var verificationGeneration: UUID { navigation }
 
     private init(_ service: GoWorkspaceAccount, profile: UUID) {
         self.service = service
@@ -63,7 +65,8 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         directoryCheckedAt = nil
         userCheckedDirectoryAt = nil
         directoryFailure = nil
-        retryAfter = nil
+        backoff = nil
+        navigationFailed = false
         webView.stopLoading()
         releaseWaiters()
     }
@@ -80,7 +83,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         guard !verificationInProgress else { return .failed(.timedOut) }
         verificationInProgress = true
         defer { verificationInProgress = false }
-        retryAfter = nil
+        backoff = nil
         let generation = navigation
         let result = await service.verify(now: Date()) { url, workspace in
             await self.get(url, workspace: workspace, generation: generation, interactive: true)
@@ -92,14 +95,19 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         self.navigation = UUID()
     }
 
-    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { releaseWaiters() }
+    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationFailed = false
+        releaseWaiters()
+    }
 
-    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { pageFailed() }
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { pageFailed(error) }
 
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-                        withError error: Error) { pageFailed() }
+                        withError error: Error) { pageFailed(error) }
 
-    private func pageFailed() {
+    private func pageFailed(_ error: Error) {
+        let failure = error as NSError
+        guard failure.domain != NSURLErrorDomain || failure.code != URLError.cancelled.rawValue else { return }
         navigationFailed = true
         releaseWaiters()
     }
@@ -121,7 +129,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         return isAtDashboard && !navigationFailed && !Task.isCancelled
     }
 
-    static func discoveredProviders(hidden: Set<VendorIdentifier>, force: Bool)
+    static func discoveredProviders(hidden: Set<VendorIdentifier>, force: Bool, timeout: TimeInterval)
         async -> [VendorIdentifier: [any QuotaProvider]] {
         let settings = GoWorkspaceAccountSettings.load()
         let services = GoWorkspaceAccount.allCases.filter { settings.usesAccount($0) && !hidden.contains($0.vendor) }
@@ -129,7 +137,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
             for service in services {
                 group.addTask {
                     let session = await session(for: service)
-                    let result = await withDeadline(seconds: CachePolicy.default.perProviderTimeout) {
+                    let result = await withDeadline(seconds: timeout) {
                         await session.providers(force: force)
                     }
                     switch result {
@@ -152,9 +160,9 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         guard !isManaging else { return quotaProviders(from: settings, failure: .timedOut) }
         let now = Date()
         let checkedAt = force ? userCheckedDirectoryAt : directoryCheckedAt
-        if (force || (retryAfter.map { $0 <= now } ?? true)),
+        if (force || (backoff.map { $0.until <= now } ?? true)),
            checkedAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true {
-            if force { retryAfter = nil }
+            if force { backoff = nil }
             if await prepareDashboard() {
                 let captured = navigation
                 let response = await get(service.directoryURL, workspace: nil, generation: captured)
@@ -195,15 +203,21 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
         return await get(service.usageURL(for: workspace), workspace: workspace.id, generation: generation)
     }
 
-    func rememberReading(_ workspace: GoWorkspaceAccount.Workspace, generation: UUID) {
+    func rememberReading(_ workspace: GoWorkspaceAccount.Workspace, generation: UUID, hasPlan: Bool) {
         var settings = GoWorkspaceAccountSettings.load()
-        guard generation == navigation, settings.isLinked(service) else { return }
-        settings.remember(workspace, for: service)
+        guard !Task.isCancelled, generation == navigation, settings.isLinked(service) else { return }
+        if hasPlan { settings.remember(workspace, for: service) }
+        else { settings.markNoPlan(workspace, for: service) }
         settings.save()
     }
 
     private var isAtDashboard: Bool {
-        !webView.isLoading && webView.url?.scheme == "https" && webView.url?.host == service.dashboard.host
+        guard !webView.isLoading, let page = webView.url, page.scheme == "https",
+              page.host == service.dashboard.host else { return false }
+        let prefix = service == .openCode ? "/console" : "/cloud"
+        let signInRoutes = ["auth", "login", "sign-in", "signin", "oauth"]
+        return (page.path == prefix || page.path.hasPrefix(prefix + "/"))
+            && !page.pathComponents.dropFirst(2).contains(where: signInRoutes.contains)
     }
 
     private func get(_ url: URL, workspace: String?, generation: UUID, interactive: Bool = false) async -> OpenDesignResult {
@@ -212,10 +226,12 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
             await previous?.value
             guard !Task.isCancelled, generation == navigation else { return OpenDesignResult.failure(.notConfigured) }
             guard interactive || !isManaging else { return OpenDesignResult.failure(.timedOut) }
-            if let retryAfter, retryAfter > Date() { return .failure(.rateLimited(retryAfter: retryAfter)) }
+            if let backoff, backoff.until > Date() { return .failure(.rateLimited(retryAfter: backoff.published)) }
             let result = await performRequest(url, workspace: workspace, generation: generation)
             if case .response(429, _, let header) = result {
-                retryAfter = QuotaHTTP.retryAfterDate(secondsHeader: header, now: Date()) ?? Date().addingTimeInterval(30)
+                let now = Date()
+                let published = QuotaHTTP.retryAfterDate(secondsHeader: header, now: now)
+                backoff = (published ?? now.addingTimeInterval(30), published)
             }
             return result
         }
@@ -258,7 +274,7 @@ public final class GoWorkspaceAccountWebSession: NSObject, WKNavigationDelegate 
       if (typeof workspace === 'string') headers[workspaceHeader] = workspace;
       const result = await fetch(target, {credentials: 'include', redirect: 'manual', cache: 'no-store',
                                           headers, signal: controller.signal});
-      if (result.type === 'opaqueredirect') return JSON.stringify({status: 0});
+      if (result.type === 'opaqueredirect') return JSON.stringify({status: 401});
       return JSON.stringify({status: result.status, body: result.ok ? await result.text() : '',
                              retryAfter: result.headers.get('Retry-After') || ''});
     } catch (error) {

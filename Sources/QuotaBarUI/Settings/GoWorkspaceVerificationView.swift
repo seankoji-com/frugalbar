@@ -10,6 +10,7 @@ struct GoWorkspaceVerificationView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var verification: Task<Void, Never>?
     @State private var connectionStatus: String?
+    @State private var verifiedGeneration: UUID?
 
     private var session: GoWorkspaceAccountWebSession { .session(for: service) }
 
@@ -19,7 +20,7 @@ struct GoWorkspaceVerificationView: View {
             Text("Sign in once to connect the workspaces on this account.")
                 .font(.caption)
             AccountWebView(session: session)
-                .allowsHitTesting(verification == nil)
+                .allowsHitTesting(verification == nil && verifiedGeneration == nil)
             if let result { verificationReport(result) }
             if let connectionStatus { Text(connectionStatus).font(.caption) }
             HStack {
@@ -28,11 +29,20 @@ struct GoWorkspaceVerificationView: View {
                     Text("Reading workspaces…").font(.caption)
                 }
                 Spacer()
-                Button("Reload sign-in page") { session.reloadSignIn() }
+                Button("Reload sign-in page") {
+                    verifiedGeneration = nil
+                    result = nil
+                    connectionStatus = nil
+                    session.reloadSignIn()
+                }
                     .disabled(verification != nil)
                 Button("Close") { dismiss() }
-                Button(isLinked ? "Refresh workspaces" : "Connect account") { verify() }
+                if verifiedGeneration != nil {
+                    Button("Use these workspaces") { confirm() }.disabled(verification != nil)
+                } else {
+                    Button(isLinked ? "Refresh workspaces" : "Verify workspaces") { verify() }
                     .disabled(verification != nil)
+                }
             }
         }
         .padding(16)
@@ -47,12 +57,33 @@ struct GoWorkspaceVerificationView: View {
     private func verify() {
         result = nil
         connectionStatus = nil
+        verifiedGeneration = nil
         verification = Task {
             defer { verification = nil }
             let checked = await session.verify()
             guard !Task.isCancelled else { return }
             result = checked
-            connectionStatus = await onConnect(checked)
+            if case .workspaces(let readings) = checked,
+               readings.contains(where: { if case .measured = $0.usage { true } else { false } }),
+               !readings.contains(where: { if case .failed = $0.usage { true } else { false } }) {
+                verifiedGeneration = session.verificationGeneration
+                connectionStatus = "Confirm these are the workspaces you want FrugalBar to monitor."
+            }
+        }
+    }
+
+    private func confirm() {
+        guard let result, verifiedGeneration == session.verificationGeneration else {
+            verifiedGeneration = nil
+            connectionStatus = "The sign-in changed. Verify the workspaces again."
+            return
+        }
+        verification = Task {
+            defer {
+                verification = nil
+                verifiedGeneration = nil
+            }
+            connectionStatus = await onConnect(result)
         }
     }
 

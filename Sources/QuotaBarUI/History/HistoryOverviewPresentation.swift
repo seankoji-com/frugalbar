@@ -113,8 +113,10 @@ public enum HistoryOverviewPresentation {
 
     private static func goAccountSubjects(_ service: GoWorkspaceAccount, settings: GoWorkspaceAccountSettings) -> [Subject] {
         guard settings.usesAccount(service) else { return [] }
+        let active = settings.activeHistoryIDs(for: service)
         return settings.knownWorkspaces(for: service).map {
-            Subject(id: service.seriesID(for: $0), vendor: service.vendor, name: $0.name)
+            let id = service.seriesID(for: $0)
+            return Subject(id: id, vendor: service.vendor, name: $0.name, historicalOnly: !active.contains(id))
         }
     }
 

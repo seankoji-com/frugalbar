@@ -300,6 +300,9 @@ public struct HistoryRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarProviderPreferencesDidChange)) { _ in
             preferencesSerial += 1
         }
+        .onReceive(NotificationCenter.default.publisher(for: .frugalbarGoAccountHistoryDidChange)) { _ in
+            preferencesSerial += 1
+        }
         .onReceive(NotificationCenter.default.publisher(for: .frugalbarHistoryDidRecord)) { _ in
             dataSerial += 1
         }

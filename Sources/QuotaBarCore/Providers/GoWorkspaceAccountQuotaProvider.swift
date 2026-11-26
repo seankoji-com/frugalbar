@@ -19,10 +19,14 @@ struct GoWorkspaceAccountQuotaProvider: QuotaProvider {
             .readWorkspace(workspace, generation: navigation)
         let now = Date()
         switch service.parseUsage(response, workspace: workspace, now: now) {
-        case .noPlan: return unavailable(Self.noPlan)
+        case .noPlan:
+            await GoWorkspaceAccountWebSession.session(for: service)
+                .rememberReading(workspace, generation: navigation, hasPlan: false)
+            return unavailable(Self.noPlan)
         case .failed(let reason): return unavailable(reason)
         case .measured(let windows):
-            await GoWorkspaceAccountWebSession.session(for: service).rememberReading(workspace, generation: navigation)
+            await GoWorkspaceAccountWebSession.session(for: service)
+                .rememberReading(workspace, generation: navigation, hasPlan: true)
             return snapshot(windows: windows, planName: planName(from: response), now: now)
         }
     }

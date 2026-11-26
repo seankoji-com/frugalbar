@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    /// History reads preferences from this notification without requesting a quota poll.
+    public static let frugalbarGoAccountHistoryDidChange = Notification.Name("frugalbarGoAccountHistoryDidChange")
+}
+
 /// Only workspace metadata is stored here. Each service's WebKit profile owns
 /// the sign-in. Retired legacy settings and history are left on disk.
 public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
@@ -7,6 +12,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     private var linked: [GoWorkspaceAccount: [GoWorkspaceAccount.Workspace]] = [:]
     private var remembered: [GoWorkspaceAccount: [GoWorkspaceAccount.Workspace]] = [:]
     private var migrated: Set<GoWorkspaceAccount> = []
+    private var planless: [GoWorkspaceAccount: Set<String>]? = nil
 
     public init() {}
 
@@ -19,7 +25,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     @MainActor public func save() {
         guard Self.load() != self, let data = try? JSONEncoder().encode(self) else { return }
         CredentialStore.preferences.set(data, forKey: Self.key)
-        NotificationCenter.default.post(name: .frugalbarProviderPreferencesDidChange, object: nil)
+        NotificationCenter.default.post(name: .frugalbarGoAccountHistoryDidChange, object: nil)
     }
 
     public func isLinked(_ service: GoWorkspaceAccount) -> Bool { linked[service] != nil }
@@ -29,10 +35,17 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         remembered[service] ?? []
     }
 
+    public func activeHistoryIDs(for service: GoWorkspaceAccount) -> Set<String> {
+        let excluded = planless?[service] ?? []
+        return Set(workspaces(for: service).lazy.filter { !excluded.contains($0.id) }.map { service.seriesID(for: $0) })
+    }
+
     public struct LegacyRequirements: Sendable {
         let openCodeCount: Int
         let openDesignCount: Int
         let openDesignIDs: Set<String>
+        var openDesignPrimarySeries: String? = nil
+        var needsOpenDesignPrimaryReading = false
 
         func minimum(for service: GoWorkspaceAccount) -> Int {
             service == .openCode ? openCodeCount : openDesignCount
@@ -44,7 +57,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
             if workspaces.contains(where: { $0.isEnabled && $0.id == OpenCodeGoWorkspaceStore.legacyID }) {
                 let saved = await CredentialStore.hasSavedCredentialAsync(for: .opencode)
                 let resolved = await CredentialStore.apiKeyAsync(for: .opencode) != nil
-                hasLegacy = saved != false || resolved
+                hasLegacy = saved == true || resolved
             } else {
                 hasLegacy = false
             }
@@ -55,9 +68,24 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
                     || snapshots.contains { $0.id == workspace.instanceID && $0.status.unavailableReason != .notConfigured }
             }
             let openDesign = OpenDesignConnections.load()
+            let pinned = OpenDesignConnection.allCases.compactMap { openDesign.workspace(for: $0) }
+            let primary = snapshots.first { snapshot in
+                snapshot.vendorId == .opendesign && snapshot.id.hasPrefix(OpenDesignQuotaProvider.instancePrefix)
+                    && snapshot.status.confidence == .measured && snapshot.staleReading == nil
+                    && !pinned.contains(where: { $0.seriesID == snapshot.id })
+            }?.id
             return Self(openCodeCount: openCode.count,
                         openDesignCount: OpenDesignConnection.allCases.count(where: openDesign.isConnected),
-                        openDesignIDs: Set(OpenDesignConnection.allCases.compactMap { openDesign.workspace(for: $0)?.workspaceId }))
+                        openDesignIDs: Set(pinned.map(\.workspaceId)),
+                        openDesignPrimarySeries: openDesign.followsLegacyPrimary ? primary : nil,
+                        needsOpenDesignPrimaryReading: openDesign.followsLegacyPrimary && primary == nil)
+        }
+
+        func covers(_ workspaces: [GoWorkspaceAccount.Workspace], service: GoWorkspaceAccount) -> Bool {
+            guard workspaces.count >= minimum(for: service) else { return false }
+            guard service == .openDesign else { return true }
+            return !needsOpenDesignPrimaryReading && openDesignIDs.isSubset(of: Set(workspaces.map(\.id)))
+                && (openDesignPrimarySeries.map { id in workspaces.contains { service.seriesID(for: $0) == id } } ?? true)
         }
     }
 
@@ -73,17 +101,13 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
         }
         guard !measured.isEmpty, Set(measured.map(\.id)).count == measured.count else { return false }
         let minimum = usesAccount(service) ? 0 : requirements.minimum(for: service)
-        guard measured.count >= minimum else { return false }
-        if service == .openDesign, !usesAccount(service),
-           !requirements.openDesignIDs.isSubset(of: Set(measured.map(\.id))) { return false }
+        guard usesAccount(service) || requirements.covers(measured, service: service) else { return false }
         updateWorkspaces(measured, for: service)
         for workspace in measured { remember(workspace, for: service) }
         if minimum == 0 { migrated.insert(service) }
         let ready = GoWorkspaceAccount.allCases.allSatisfy { account in
             if usesAccount(account) || requirements.minimum(for: account) == 0 { return true }
-            let workspaces = workspaces(for: account)
-            return workspaces.count >= requirements.minimum(for: account) &&
-                (account != .openDesign || requirements.openDesignIDs.isSubset(of: Set(workspaces.map(\.id))))
+            return requirements.covers(workspaces(for: account), service: account)
         }
         if ready { migrated.formUnion(linked.keys) }
         return true
@@ -98,6 +122,7 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
     }
 
     mutating func remember(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {
+        planless?[service]?.remove(workspace.id)
         var history = knownWorkspaces(for: service)
         if let index = history.firstIndex(where: { $0.id == workspace.id }) {
             history[index] = workspace
@@ -105,5 +130,12 @@ public struct GoWorkspaceAccountSettings: Codable, Equatable, Sendable {
             history.append(workspace)
         }
         remembered[service] = history
+    }
+
+    mutating func markNoPlan(_ workspace: GoWorkspaceAccount.Workspace, for service: GoWorkspaceAccount) {
+        guard knownWorkspaces(for: service).contains(where: { $0.id == workspace.id }) else { return }
+        var noPlan = planless ?? [:]
+        noPlan[service, default: []].insert(workspace.id)
+        planless = noPlan
     }
 }

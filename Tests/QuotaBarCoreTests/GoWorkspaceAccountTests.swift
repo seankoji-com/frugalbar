@@ -162,11 +162,32 @@ struct GoWorkspaceAccountTests {
         #expect(settings.workspaces(for: .openCode) == [workspace])
         #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_a"])
         settings.remember(workspace, for: .openCode)
+        #expect(settings.activeHistoryIDs(for: .openCode) == [GoWorkspaceAccount.openCode.seriesID(for: workspace)])
+        settings.markNoPlan(workspace, for: .openCode)
+        #expect(settings.activeHistoryIDs(for: .openCode).isEmpty)
         settings.disconnect(.openCode)
         #expect(settings.usesAccount(.openCode))
         #expect(!settings.isLinked(.openCode))
         #expect(settings.workspaces(for: .openCode).isEmpty)
         #expect(settings.knownWorkspaces(for: .openCode).map(\.id) == ["org_a", "org_b"])
+    }
+
+    @Test("An older unpinned OpenDesign login needs a matching measured series before cutover")
+    func unpinnedOpenDesignMustMatchPriorSeries() {
+        let workspace = GoWorkspaceAccount.Workspace(id: "design-a", name: "Studio")
+        var requirements = GoWorkspaceAccountSettings.LegacyRequirements(openCodeCount: 0, openDesignCount: 1,
+                                                                          openDesignIDs: [])
+        requirements.needsOpenDesignPrimaryReading = true
+        var settings = GoWorkspaceAccountSettings()
+        let unverified = settings.connect(.openDesign, verification: readings(["design-a"]), requirements: requirements)
+        #expect(!unverified)
+        requirements.needsOpenDesignPrimaryReading = false
+        requirements.openDesignPrimarySeries = GoWorkspaceAccount.openDesign.seriesID(for: workspace)
+        let mismatch = settings.connect(.openDesign, verification: readings(["design-b"]), requirements: requirements)
+        #expect(!mismatch)
+        let matched = settings.connect(.openDesign, verification: readings(["design-a"]), requirements: requirements)
+        #expect(matched)
+        #expect(settings.usesAccount(.openDesign))
     }
 
     @Test("Polling replaces legacy rows at cutover and drops the account rows on disconnect")
@@ -175,7 +196,7 @@ struct GoWorkspaceAccountTests {
         let manager = QuotaManager(
             cachePolicy: CachePolicy(cacheTTL: 0, backgroundRefreshInterval: 120, minPollInterval: 0),
             providerFactory: { [FixtureProvider(instanceID: "opencode-go:legacy")] },
-            goAccountDiscovery: { _, _ in await discovery.providers() })
+            goAccountDiscovery: { _, _, _ in await discovery.providers() })
         let before = await manager.forceRefresh()
         #expect(Set(before.keys) == ["opencode-go:legacy"])
 
